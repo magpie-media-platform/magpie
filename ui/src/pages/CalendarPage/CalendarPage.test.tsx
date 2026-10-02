@@ -865,6 +865,29 @@ describe('CalendarPage list view', () => {
 
         expect(screen.getByText('Final day event')).toBeInTheDocument();
     });
+
+    it('shows the empty state in list view when no events', async () => {
+        const user = userEvent.setup();
+        mockUseCalendar.mockReturnValue({
+            events: [],
+            isLoading: false,
+            isFetching: false,
+            error: null,
+            refetch: mockRefetch,
+        });
+
+        render(
+            <MemoryRouter>
+                <CalendarPage />
+            </MemoryRouter>,
+            { wrapper: TooltipProvider },
+        );
+
+        await user.click(document.querySelector('[data-view="list"]')!);
+
+        expect(screen.getByText('No upcoming events')).toBeInTheDocument();
+        expect(screen.getByText('Content will appear here as premiere dates approach')).toBeInTheDocument();
+    });
 });
 
 describe('CalendarPage empty state', () => {
@@ -905,9 +928,12 @@ describe('CalendarPage empty state', () => {
         );
 
         const prevBtn = document.querySelector('[data-action="prev"]');
-        for (let i = 0; i < 6; i++) {
-            await user.click(prevBtn!);
-        }
+        await user.click(prevBtn!);
+        await user.click(prevBtn!);
+        await user.click(prevBtn!);
+        await user.click(prevBtn!);
+        await user.click(prevBtn!);
+        await user.click(prevBtn!);
 
         const dayBtn = document.querySelector('[data-view="day"]');
         await user.click(dayBtn!);
@@ -928,9 +954,12 @@ describe('CalendarPage empty state', () => {
         );
 
         const prevBtn = document.querySelector('[data-action="prev"]');
-        for (let i = 0; i < 6; i++) {
-            await user.click(prevBtn!);
-        }
+        await user.click(prevBtn!);
+        await user.click(prevBtn!);
+        await user.click(prevBtn!);
+        await user.click(prevBtn!);
+        await user.click(prevBtn!);
+        await user.click(prevBtn!);
 
         expect(document.querySelector('[data-component="month-view"] [data-component="empty-state"]')).toBeNull();
 
@@ -950,9 +979,12 @@ describe('CalendarPage empty state', () => {
         );
 
         const prevBtn = document.querySelector('[data-action="prev"]');
-        for (let i = 0; i < 6; i++) {
-            await user.click(prevBtn!);
-        }
+        await user.click(prevBtn!);
+        await user.click(prevBtn!);
+        await user.click(prevBtn!);
+        await user.click(prevBtn!);
+        await user.click(prevBtn!);
+        await user.click(prevBtn!);
 
         const dayBtn = document.querySelector('[data-view="day"]');
         await user.click(dayBtn!);

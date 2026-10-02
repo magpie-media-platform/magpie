@@ -16,8 +16,6 @@ export interface HeaderProps extends ComponentPropsWithoutRef<'header'> {
 
     sidebarNavId?: string;
 
-    slotContent?: ReactNode;
-
     leftSlot?: ReactNode;
 
     rightSlot?: ReactNode;
@@ -33,7 +31,6 @@ const Header = forwardRef<HTMLElement, HeaderProps>(
             onSidebarToggle,
             sidebarOpen = false,
             sidebarNavId = 'navigation-menu',
-            slotContent,
             leftSlot,
             rightSlot,
             actions,
@@ -65,8 +62,6 @@ const Header = forwardRef<HTMLElement, HeaderProps>(
                         {status && <div className="header__status">{status}</div>}
                         {leftSlot && <div className="header__left-slot">{leftSlot}</div>}
                     </div>
-
-                    {slotContent && <div className="header__slot">{slotContent}</div>}
 
                     {(rightSlot || actions) && (
                         <div className="header__end">

@@ -170,11 +170,14 @@ const domains: DomainFixture[] = [
                     ordinal: number,
                     alignmentKey: `episode:1:${number}`,
                     externalIds: { tvdb: `acquire-episode-${number}` },
-                    initialContribution: contribution(
-                        `acquire-episode-${number}`,
-                        `Acquisition Journey Episode ${number}`,
-                        number,
-                    ),
+                    initialContribution: {
+                        ...contribution(
+                            `acquire-episode-${number}`,
+                            `Acquisition Journey Episode ${number}`,
+                            number,
+                        ),
+                        publishDate: '2025-04-05T00:00:00Z',
+                    },
                 })),
             },
         ],

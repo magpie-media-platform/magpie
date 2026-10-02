@@ -28,7 +28,7 @@ internal sealed class MagpieSystem(
 
     public SystemInfo GetInfo()
     {
-        return new SystemInfo
+        return new()
         {
             Version = Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "0.0.0",
             Runtime = RuntimeInformation.FrameworkDescription,
@@ -73,13 +73,10 @@ internal sealed class MagpieSystem(
         {
             if (hostStatus.IsShutdownRequested)
             {
-                throw new MagpieShutdownException(
-                    "A shutdown is already in progress.",
-                    hostStatus.ShutdownRequestedByUserId,
-                    hostStatus.ShutdownRequestedAtUtc);
+                throw new MagpieShutdownException("A shutdown is already in progress.");
             }
 
-            hostStatus.SetShutdownRequest(true, actingUserId, timeProvider.GetUtcNow().UtcDateTime);
+            hostStatus.IsShutdownRequested = true;
         }
 
         try
@@ -98,7 +95,7 @@ internal sealed class MagpieSystem(
         }
         catch (Exception exception)
         {
-            logger.LogWarning(exception, "The {Operation} audit record could not be written.", operation);
+            logger.LogWarning(exception, "The {Operation} audit record could not be written", operation);
         }
 
         try
@@ -114,7 +111,7 @@ internal sealed class MagpieSystem(
         {
             lock (hostStatus)
             {
-                hostStatus.SetShutdownRequest(false, null, null);
+                hostStatus.IsShutdownRequested = false;
             }
 
             throw;

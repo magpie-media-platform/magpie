@@ -128,7 +128,7 @@ public sealed class MagpieSystemSetupTests
     }
 
     [Test]
-    public async Task IsSetupCompleteAsync_ReturnsFalse_WhenSetupUnset()
+    public async Task IsCompleteAsync_ReturnsFalse_WhenSetupUnset()
     {
         // Act
         var isComplete = await _subject.IsCompleteAsync().ConfigureAwait(false);
@@ -138,7 +138,7 @@ public sealed class MagpieSystemSetupTests
     }
 
     [Test]
-    public async Task IsSetupCompleteAsync_ReturnsTrue_WhenSentinelTrue()
+    public async Task IsCompleteAsync_ReturnsTrue_WhenSentinelTrue()
     {
         // Arrange
         var group = new SettingsGroup { Name = "setup" };
@@ -176,7 +176,7 @@ public sealed class MagpieSystemSetupTests
     }
 
     [Test]
-    public async Task CreateSetupAdminAsync_CreatesLocalAdmin_WhenClaimRequired()
+    public async Task CreateAdministratorAsync_CreatesLocalAdmin_WhenClaimRequired()
     {
         // Arrange
         var created = new User
@@ -220,7 +220,7 @@ public sealed class MagpieSystemSetupTests
     }
 
     [Test]
-    public async Task CreateSetupAdminAsync_LocksSystemUser_BeforeCheckingAndCreating()
+    public async Task CreateAdministratorAsync_LocksSystemUser_BeforeCheckingAndCreating()
     {
         // Arrange
         var calls = new List<string>();
@@ -261,7 +261,7 @@ public sealed class MagpieSystemSetupTests
     }
 
     [Test]
-    public void CreateSetupAdminAsync_Throws_WhenConcurrentClaimWinsBeforeLock()
+    public void CreateAdministratorAsync_Throws_WhenConcurrentClaimWinsBeforeLock()
     {
         // Arrange
         var locked = false;
@@ -297,7 +297,7 @@ public sealed class MagpieSystemSetupTests
     }
 
     [Test]
-    public void CreateSetupAdminAsync_Throws_WhenAdminAlreadyExists()
+    public void CreateAdministratorAsync_Throws_WhenAdminAlreadyExists()
     {
         // Arrange
         _userService
@@ -331,7 +331,7 @@ public sealed class MagpieSystemSetupTests
     }
 
     [Test]
-    public async Task CompleteSetupAsync_MarksComplete_WhenAdminExists()
+    public async Task CompleteAsync_MarksComplete_WhenAdminExists()
     {
         // Arrange
         _userService
@@ -380,7 +380,7 @@ public sealed class MagpieSystemSetupTests
     }
 
     [Test]
-    public void CompleteSetupAsync_Throws_WhenAdminMissing()
+    public void CompleteAsync_Throws_WhenAdminMissing()
     {
         // Act
         // Assert
@@ -413,7 +413,7 @@ public sealed class MagpieSystemSetupTests
     }
 
     [Test]
-    public void CreateSetupAdminAsync_Throws_WhenSetupStatusCannotBeRead()
+    public void CreateAdministratorAsync_Throws_WhenSetupStatusCannotBeRead()
     {
         // Arrange
         _settingsService
@@ -437,7 +437,7 @@ public sealed class MagpieSystemSetupTests
     }
 
     [Test]
-    public void CreateSetupAdminAsync_Throws_WhenAdministratorListCannotBeRead()
+    public void CreateAdministratorAsync_Throws_WhenAdministratorListCannotBeRead()
     {
         // Arrange
         _userService
@@ -465,7 +465,7 @@ public sealed class MagpieSystemSetupTests
     }
 
     [Test]
-    public void CompleteSetupAsync_Throws_WhenAdministratorListCannotBeRead()
+    public void CompleteAsync_Throws_WhenAdministratorListCannotBeRead()
     {
         // Arrange
         _userService

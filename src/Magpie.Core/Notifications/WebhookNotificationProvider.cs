@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Net;
 using System.Net.Http;
-using System.Net.Http.Headers;
 using System.Reflection;
 using System.Text;
 using System.Text.Json;
@@ -22,7 +21,7 @@ namespace Magpie.Core.Notifications;
 internal sealed class WebhookNotificationProvider(
     IHttpClientFactory httpClientFactory,
     MagpieHostEnvironment hostEnvironment,
-    ILogger<WebhookNotificationProvider> logger) : INotificationProvider, IValidatesIntegrationSettings, IDisposable
+    ILogger<WebhookNotificationProvider> logger) : INotificationProvider, IValidatesIntegrationSettings
 {
     private static readonly string MagpieVersion =
         typeof(WebhookNotificationProvider).Assembly
@@ -41,10 +40,6 @@ internal sealed class WebhookNotificationProvider(
     public const string SettingMethod = "method";
 
     public const string SettingHeaders = "headers";
-
-    public const int MaxConcurrency = 8;
-
-    private readonly SemaphoreSlim _concurrency = new(MaxConcurrency, MaxConcurrency);
 
     public string ProviderType => ProviderTypeName;
 
@@ -97,7 +92,7 @@ internal sealed class WebhookNotificationProvider(
         if (method != HttpMethod.Get)
         {
             request.Content = new ByteArrayContent(payload);
-            request.Content.Headers.ContentType = new MediaTypeHeaderValue("application/json")
+            request.Content.Headers.ContentType = new("application/json")
             {
                 CharSet = "utf-8"
             };
@@ -129,7 +124,7 @@ internal sealed class WebhookNotificationProvider(
             return HttpMethod.Post;
         }
 
-        return method!.Trim().ToUpperInvariant() switch
+        return method.Trim().ToUpperInvariant() switch
         {
             "GET" => HttpMethod.Get,
             "PUT" => HttpMethod.Put,
@@ -200,7 +195,6 @@ internal sealed class WebhookNotificationProvider(
         MagpieEvent magpieEvent,
         CancellationToken cancellationToken)
     {
-        await _concurrency.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             var client = httpClientFactory.CreateClient(HttpClientName);
@@ -213,8 +207,8 @@ internal sealed class WebhookNotificationProvider(
                 if (IsTransientStatus(response.StatusCode))
                 {
                     logger.LogWarning(
-                        "Webhook rule {RuleName} ({RuleId}) returned transient status {StatusCode} for " +
-                        "event {EventName} and will retry",
+                        "Webhook rule {RuleName} ({RuleId}) returned transient status {StatusCode} for event " +
+                        "{EventName}",
                         ruleName,
                         ruleId,
                         statusCode,
@@ -224,8 +218,8 @@ internal sealed class WebhookNotificationProvider(
                 }
 
                 logger.LogWarning(
-                    "Webhook rule {RuleName} ({RuleId}) returned non-success status {StatusCode} for " +
-                    "event {EventName} and dropped the notification",
+                    "Webhook rule {RuleName} ({RuleId}) returned non-success status {StatusCode} for event " +
+                    "{EventName}; the notification was dropped",
                     ruleName,
                     ruleId,
                     statusCode,
@@ -240,8 +234,7 @@ internal sealed class WebhookNotificationProvider(
         {
             logger.LogWarning(
                 ex,
-                "The webhook request for rule {RuleName} ({RuleId}) timed out for event {EventName} and " +
-                "will retry",
+                "The webhook request for rule {RuleName} ({RuleId}) timed out for event {EventName}",
                 ruleName,
                 ruleId,
                 magpieEvent.Name);
@@ -251,26 +244,18 @@ internal sealed class WebhookNotificationProvider(
         {
             logger.LogWarning(
                 ex,
-                "The webhook request for rule {RuleName} ({RuleId}) failed for event {EventName} and " +
-                "will retry",
+                "The webhook request for rule {RuleName} ({RuleId}) failed for event {EventName}",
                 ruleName,
                 ruleId,
                 magpieEvent.Name);
             throw new HttpRequestException("Webhook delivery failed due to a transport error.", ex);
-        }
-        finally
-        {
-            _concurrency.Release();
         }
     }
 
     private byte[] SerializePayload(MagpieEvent magpieEvent)
     {
         var envelope = new WebhookPayload(
-            new WebhookPayloadEvent(
-                magpieEvent.Name,
-                magpieEvent.OccurredAt,
-                magpieEvent.Context),
+            new WebhookPayloadEvent(magpieEvent.Name, magpieEvent.OccurredAt, magpieEvent.Context),
             new WebhookPayloadMagpie(
                 string.IsNullOrWhiteSpace(magpieEvent.NodeId) ? hostEnvironment.NodeId : magpieEvent.NodeId,
                 MagpieVersion));
@@ -293,18 +278,12 @@ internal sealed class WebhookNotificationProvider(
         {
             logger.LogWarning(
                 ex,
-                "The webhook provider ignored invalid JSON in {SettingHeaders} for rule {RuleName} " +
-                "({RuleId})",
+                "The webhook provider ignored invalid JSON in {SettingHeaders} for rule {RuleName} ({RuleId})",
                 SettingHeaders,
                 rule.Name,
                 rule.Id);
             return null;
         }
-    }
-
-    public void Dispose()
-    {
-        _concurrency.Dispose();
     }
 
     private sealed record WebhookPayload(WebhookPayloadEvent Event, WebhookPayloadMagpie Magpie);

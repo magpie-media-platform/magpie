@@ -267,10 +267,6 @@
         border-radius: var(--radius-md);
     }
 
-    .downloads-page__mobile-toolbar {
-        margin-bottom: var(--space-sm);
-    }
-
     .downloads-page__mobile-list {
         display: flex;
         flex-direction: column;

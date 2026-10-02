@@ -91,7 +91,6 @@ export function useHostRestart() {
     useEventStream(checkRecovered, {
         eventName: 'stream.reconnected',
         enabled: phase === 'reconnecting',
-        owner: 'host-restart',
     });
 
     useEffect(() => {

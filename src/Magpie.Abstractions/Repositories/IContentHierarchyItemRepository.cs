@@ -44,7 +44,7 @@ public interface IContentHierarchyItemRepository :
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Finds the earliest root item for each effective external identity without loading content data.
+    /// Finds the root items by their external identities.
     /// </summary>
     /// <param name="identities">The content types, hierarchy levels, sources and external ids to match without case sensitivity</param>
     /// <param name="cancellationToken">The token that cancels the operation</param>
@@ -72,7 +72,7 @@ public interface IContentHierarchyItemRepository :
     Task LockAsync(Guid contentHierarchyItemId, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Creates an item, or does nothing when its unique key exists already.
+    /// Creates an item.
     /// </summary>
     /// <param name="model">The content hierarchy item to create</param>
     /// <param name="createdByUserId">The id of the user that creates the item, or <see langword="null"/> for the system</param>

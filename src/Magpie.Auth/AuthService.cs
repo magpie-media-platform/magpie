@@ -203,59 +203,70 @@ internal sealed class AuthService(
         };
     }
 
-    public Task<AuthSession?> RefreshAsync(
-        string refreshToken,
-        CancellationToken cancellationToken = default)
+    public Task<AuthSession?> RefreshAsync(string refreshToken, CancellationToken cancellationToken = default)
     {
         return transactionManager.ExecuteWithTransactionAsync(
-            token => RefreshCoreAsync(refreshToken, token), cancellationToken);
+            token => RefreshCoreAsync(refreshToken, token),
+            cancellationToken);
     }
 
     /// <inheritdoc />
     public Task<AuthSession?> RefreshAsync(
-        string refreshToken, string renewalKey, CancellationToken cancellationToken = default)
+        string refreshToken,
+        string renewalKey,
+        CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(renewalKey);
-        return transactionManager.ExecuteWithTransactionAsync(async token =>
-        {
-            var recovered = await RecoverRenewalAsync(refreshToken, renewalKey, token).ConfigureAwait(false);
-            if (recovered is not null)
+        return transactionManager.ExecuteWithTransactionAsync(
+            async token =>
             {
-                return recovered;
-            }
+                var recovered = await RecoverRenewalAsync(refreshToken, renewalKey, token).ConfigureAwait(false);
+                if (recovered is not null)
+                {
+                    return recovered;
+                }
 
-            var previous = await refreshTokenRepository.GetByHashAsync(Hash(refreshToken), token)
-                .ConfigureAwait(false);
-            var session = await RefreshCoreAsync(refreshToken, token).ConfigureAwait(false);
-            if (session is null)
-            {
-                // A concurrent request can commit the same rotation while this request waits for its write lock.
-                return await RecoverRenewalAsync(refreshToken, renewalKey, token).ConfigureAwait(false);
-            }
+                var previous = await refreshTokenRepository.GetByHashAsync(Hash(refreshToken), token)
+                    .ConfigureAwait(false);
+                var session = await RefreshCoreAsync(refreshToken, token).ConfigureAwait(false);
+                if (session is null)
+                {
+                    // A concurrent request can commit the same rotation while this request waits for its write lock.
+                    return await RecoverRenewalAsync(refreshToken, renewalKey, token).ConfigureAwait(false);
+                }
 
-            if (previous is null)
-            {
-                throw new InvalidOperationException("The consumed refresh token is missing.");
-            }
+                if (previous is null)
+                {
+                    throw new InvalidOperationException("The consumed refresh token is missing.");
+                }
 
-            var current = await refreshTokenRepository.GetByHashAsync(Hash(session.RefreshToken), token)
-                .ConfigureAwait(false)
-                ?? throw new InvalidOperationException("The rotated refresh token is missing.");
-            await refreshTokenRepository.StoreRenewalAsync(current with
-            {
-                PreviousTokenHash = previous.TokenHash,
-                RenewalKeyHash = Hash(renewalKey),
-                RenewalExpiresAt = previous.ExpiresAt,
-                ProtectedRenewal = protector.Protect(JsonSerializer.Serialize(new RenewalTokens(
-                    session.AccessToken, session.AccessTokenExpiresAt,
-                    session.RefreshToken, session.RefreshTokenExpiresAt)))
-            }, token).ConfigureAwait(false);
-            return session;
-        }, cancellationToken);
+                var current = await refreshTokenRepository.GetByHashAsync(Hash(session.RefreshToken), token)
+                    .ConfigureAwait(false)
+                    ?? throw new InvalidOperationException("The rotated refresh token is missing.");
+                await refreshTokenRepository
+                    .StoreRenewalAsync(
+                        current with
+                        {
+                            PreviousTokenHash = previous.TokenHash,
+                            RenewalKeyHash = Hash(renewalKey),
+                            RenewalExpiresAt = previous.ExpiresAt,
+                            ProtectedRenewal = protector.Protect(JsonSerializer.Serialize(new RenewalTokens(
+                                session.AccessToken,
+                                session.AccessTokenExpiresAt,
+                                session.RefreshToken,
+                                session.RefreshTokenExpiresAt)))
+                        },
+                        token)
+                    .ConfigureAwait(false);
+                return session;
+            },
+            cancellationToken);
     }
 
     private async Task<AuthSession?> RecoverRenewalAsync(
-        string refreshToken, string renewalKey, CancellationToken cancellationToken)
+        string refreshToken,
+        string renewalKey,
+        CancellationToken cancellationToken)
     {
         var receipt = await refreshTokenRepository
             .GetRenewalAsync(Hash(refreshToken), Hash(renewalKey), cancellationToken)
@@ -323,38 +334,37 @@ internal sealed class AuthService(
         };
     }
 
-    public async Task<bool> LogoutAsync(
-        string refreshToken,
-        CancellationToken cancellationToken = default)
+    public async Task<bool> LogoutAsync(string refreshToken, CancellationToken cancellationToken = default)
     {
         await tokenService.RevokeRefreshTokenAsync(refreshToken, cancellationToken).ConfigureAwait(false);
         return true;
     }
 
     /// <inheritdoc />
-    public Task<bool> LogoutAsync(
-        string refreshToken, string renewalKey, CancellationToken cancellationToken = default)
+    public Task<bool> LogoutAsync(string refreshToken, string renewalKey, CancellationToken cancellationToken = default)
     {
-        return transactionManager.ExecuteWithTransactionAsync(async token =>
-        {
-            var receipt = await refreshTokenRepository.GetRenewalAsync(Hash(refreshToken), Hash(renewalKey), token)
-                .ConfigureAwait(false);
-            if (receipt is not null)
+        return transactionManager.ExecuteWithTransactionAsync(
+            async token =>
             {
-                await refreshTokenRepository.DeleteAsync(receipt.TokenHash, token).ConfigureAwait(false);
-            }
-            else
-            {
-                var current = await refreshTokenRepository.GetByHashAsync(Hash(refreshToken), token)
+                var receipt = await refreshTokenRepository.GetRenewalAsync(Hash(refreshToken), Hash(renewalKey), token)
                     .ConfigureAwait(false);
-                if (current is not null && !HasAccessTokenId(renewalKey, current.AccessTokenJti))
+                if (receipt is not null)
                 {
-                    return false;
+                    await refreshTokenRepository.DeleteAsync(receipt.TokenHash, token).ConfigureAwait(false);
                 }
-            }
+                else
+                {
+                    var current = await refreshTokenRepository.GetByHashAsync(Hash(refreshToken), token)
+                        .ConfigureAwait(false);
+                    if (current is not null && !HasAccessTokenId(renewalKey, current.AccessTokenJti))
+                    {
+                        return false;
+                    }
+                }
 
-            return await LogoutAsync(refreshToken, token).ConfigureAwait(false);
-        }, cancellationToken);
+                return await LogoutAsync(refreshToken, token).ConfigureAwait(false);
+            },
+            cancellationToken);
     }
 
     public EffectivePermissions GetEffectivePermissions(Role role)
@@ -369,11 +379,7 @@ internal sealed class AuthService(
             };
         }
 
-        return new EffectivePermissions
-        {
-            Role = role,
-            Permissions = permissions,
-        };
+        return new EffectivePermissions { Role = role, Permissions = permissions };
     }
 
     public Task<IReadOnlyList<string>> ListCredentialProviderTypesAsync(CancellationToken cancellationToken = default)
@@ -387,5 +393,8 @@ internal sealed class AuthService(
     }
 
     private sealed record RenewalTokens(
-        string AccessToken, DateTime AccessTokenExpiresAt, string RefreshToken, DateTime RefreshTokenExpiresAt);
+        string AccessToken,
+        DateTime AccessTokenExpiresAt,
+        string RefreshToken,
+        DateTime RefreshTokenExpiresAt);
 }

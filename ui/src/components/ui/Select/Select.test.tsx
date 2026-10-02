@@ -2,16 +2,7 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
-import {
-    Select,
-    SelectContent,
-    SelectItem,
-    SelectTrigger,
-    SelectValue,
-    SelectGroup,
-    SelectLabel,
-    SelectSeparator,
-} from './Select';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue, SelectGroup, SelectLabel } from './Select';
 
 function renderSelect(props: {
     value?: string;
@@ -283,7 +274,6 @@ describe('Select', () => {
                         <SelectItem value="apple">Apple</SelectItem>
                         <SelectItem value="banana">Banana</SelectItem>
                     </SelectGroup>
-                    <SelectSeparator />
                     <SelectGroup>
                         <SelectLabel>Vegetables</SelectLabel>
                         <SelectItem value="carrot">Carrot</SelectItem>

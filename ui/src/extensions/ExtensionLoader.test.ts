@@ -14,60 +14,6 @@ interface ContextualScriptElement extends HTMLScriptElement {
     magpieExtensionContext?: ExtensionAssetContext;
 }
 
-function mockJsonResponse(
-    body: unknown,
-    status = 200,
-): {
-    ok: boolean;
-    status: number;
-    headers: Headers;
-    json: () => Promise<unknown>;
-} {
-    return {
-        ok: status >= 200 && status < 300,
-        status,
-        headers: new Headers({ 'content-type': 'application/json' }),
-        json: () => Promise.resolve(body),
-    };
-}
-
-function mockErrorResponse(
-    status: number,
-    statusText: string,
-): {
-    ok: false;
-    status: number;
-    statusText: string;
-    headers: Headers;
-    text: () => Promise<string>;
-} {
-    return {
-        ok: false,
-        status,
-        statusText,
-        headers: new Headers({ 'content-type': 'text/plain' }),
-        text: () => Promise.resolve(statusText),
-    };
-}
-
-function mockTextResponse(
-    body: string,
-    contentType: string,
-    status = 200,
-): {
-    ok: boolean;
-    status: number;
-    headers: Headers;
-    text: () => Promise<string>;
-} {
-    return {
-        ok: status >= 200 && status < 300,
-        status,
-        headers: new Headers({ 'content-type': contentType }),
-        text: () => Promise.resolve(body),
-    };
-}
-
 describe('isValidCustomElementName', () => {
     it('returns true for names with a hyphen', () => {
         expect(isValidCustomElementName('my-widget')).toBe(true);
@@ -163,7 +109,12 @@ describe('ExtensionLoader', () => {
                 extensions: [],
             };
 
-            mockFetch.mockResolvedValueOnce(mockJsonResponse(manifest));
+            mockFetch.mockResolvedValueOnce({
+                ok: true,
+                status: 200,
+                headers: new Headers({ 'content-type': 'application/json' }),
+                json: () => Promise.resolve(manifest),
+            });
 
             const loader = new ExtensionLoader();
             const states: string[] = [];
@@ -176,7 +127,13 @@ describe('ExtensionLoader', () => {
         });
 
         it('transitions to error on fetch failure', async () => {
-            mockFetch.mockResolvedValueOnce(mockErrorResponse(500, 'Internal Server Error'));
+            mockFetch.mockResolvedValueOnce({
+                ok: false as const,
+                status: 500,
+                statusText: 'Internal Server Error',
+                headers: new Headers({ 'content-type': 'text/plain' }),
+                text: () => Promise.resolve('Internal Server Error'),
+            });
 
             const loader = new ExtensionLoader();
             const states: string[] = [];
@@ -200,7 +157,12 @@ describe('ExtensionLoader', () => {
         });
 
         it('returns same promise when called multiple times', async () => {
-            mockFetch.mockResolvedValueOnce(mockJsonResponse({ assets: [], extensions: [] }));
+            mockFetch.mockResolvedValueOnce({
+                ok: true,
+                status: 200,
+                headers: new Headers({ 'content-type': 'application/json' }),
+                json: () => Promise.resolve({ assets: [], extensions: [] }),
+            });
 
             const loader = new ExtensionLoader();
 
@@ -213,7 +175,12 @@ describe('ExtensionLoader', () => {
         });
 
         it('does nothing if already ready', async () => {
-            mockFetch.mockResolvedValueOnce(mockJsonResponse({ assets: [], extensions: [] }));
+            mockFetch.mockResolvedValueOnce({
+                ok: true,
+                status: 200,
+                headers: new Headers({ 'content-type': 'application/json' }),
+                json: () => Promise.resolve({ assets: [], extensions: [] }),
+            });
 
             const loader = new ExtensionLoader();
             await loader.init();
@@ -221,7 +188,12 @@ describe('ExtensionLoader', () => {
             mockFetch.mockClear();
 
             new ExtensionLoader();
-            mockFetch.mockResolvedValueOnce(mockJsonResponse({ assets: [], extensions: [] }));
+            mockFetch.mockResolvedValueOnce({
+                ok: true,
+                status: 200,
+                headers: new Headers({ 'content-type': 'application/json' }),
+                json: () => Promise.resolve({ assets: [], extensions: [] }),
+            });
 
             expect(loader.state.state).toBe('ready');
         });
@@ -245,8 +217,18 @@ describe('ExtensionLoader', () => {
             };
 
             mockFetch
-                .mockResolvedValueOnce(mockJsonResponse(manifest))
-                .mockResolvedValueOnce(mockTextResponse('window.__magpieAssetLoaded = 1;', 'text/javascript'));
+                .mockResolvedValueOnce({
+                    ok: true,
+                    status: 200,
+                    headers: new Headers({ 'content-type': 'application/json' }),
+                    json: () => Promise.resolve(manifest),
+                })
+                .mockResolvedValueOnce({
+                    ok: true,
+                    status: 200,
+                    headers: new Headers({ 'content-type': 'text/javascript' }),
+                    text: () => Promise.resolve('window.__magpieAssetLoaded = 1;'),
+                });
 
             localStorage.setItem('magpie_auth_token', 'test-token');
 
@@ -294,10 +276,30 @@ describe('ExtensionLoader', () => {
             };
             const correctedSource = 'document.currentScript.magpieExtensionContext.waitUntil(Promise.resolve());';
             mockFetch
-                .mockResolvedValueOnce(mockJsonResponse(manifest))
-                .mockResolvedValueOnce(mockTextResponse(failingSource, 'text/javascript'))
-                .mockResolvedValueOnce(mockJsonResponse(manifest))
-                .mockResolvedValueOnce(mockTextResponse(correctedSource, 'text/javascript'));
+                .mockResolvedValueOnce({
+                    ok: true,
+                    status: 200,
+                    headers: new Headers({ 'content-type': 'application/json' }),
+                    json: () => Promise.resolve(manifest),
+                })
+                .mockResolvedValueOnce({
+                    ok: true,
+                    status: 200,
+                    headers: new Headers({ 'content-type': 'text/javascript' }),
+                    text: () => Promise.resolve(failingSource),
+                })
+                .mockResolvedValueOnce({
+                    ok: true,
+                    status: 200,
+                    headers: new Headers({ 'content-type': 'application/json' }),
+                    json: () => Promise.resolve(manifest),
+                })
+                .mockResolvedValueOnce({
+                    ok: true,
+                    status: 200,
+                    headers: new Headers({ 'content-type': 'text/javascript' }),
+                    text: () => Promise.resolve(correctedSource),
+                });
 
             const loader = new ExtensionLoader({ apiBaseUrl: '/api' });
             const failure = await loader.init().then(
@@ -306,9 +308,7 @@ describe('ExtensionLoader', () => {
             );
 
             expect(failure).toBeInstanceOf(Error);
-            if (expectedMessage) {
-                expect(failure).toHaveProperty('message', expect.stringContaining(expectedMessage));
-            }
+            expect(failure).toHaveProperty('message', expect.stringContaining(expectedMessage ?? ''));
             expect(loader.state.state).toBe('error');
             const failedScript = injectedElements.find(
                 (element): element is ContextualScriptElement => element instanceof HTMLScriptElement,
@@ -375,7 +375,12 @@ describe('ExtensionLoader', () => {
                 ],
                 extensions: [],
             };
-            mockFetch.mockResolvedValueOnce(mockJsonResponse(manifest));
+            mockFetch.mockResolvedValueOnce({
+                ok: true,
+                status: 200,
+                headers: new Headers({ 'content-type': 'application/json' }),
+                json: () => Promise.resolve(manifest),
+            });
 
             const loader = new ExtensionLoader({ apiBaseUrl: '/api' });
 
@@ -423,8 +428,18 @@ describe('ExtensionLoader', () => {
                 extensions: [],
             };
             mockFetch
-                .mockResolvedValueOnce(mockJsonResponse(manifest))
-                .mockResolvedValueOnce(mockTextResponse(source, 'text/javascript'));
+                .mockResolvedValueOnce({
+                    ok: true,
+                    status: 200,
+                    headers: new Headers({ 'content-type': 'application/json' }),
+                    json: () => Promise.resolve(manifest),
+                })
+                .mockResolvedValueOnce({
+                    ok: true,
+                    status: 200,
+                    headers: new Headers({ 'content-type': 'text/javascript' }),
+                    text: () => Promise.resolve(source),
+                });
 
             const loader = new ExtensionLoader({ apiBaseUrl: '/api' });
             await loader.init();
@@ -458,9 +473,24 @@ describe('ExtensionLoader', () => {
                 extensions: [],
             };
             mockFetch
-                .mockResolvedValueOnce(mockJsonResponse(manifest))
-                .mockResolvedValueOnce(mockTextResponse(source, 'text/javascript'))
-                .mockResolvedValueOnce(mockTextResponse('<template></template>', 'text/html'));
+                .mockResolvedValueOnce({
+                    ok: true,
+                    status: 200,
+                    headers: new Headers({ 'content-type': 'application/json' }),
+                    json: () => Promise.resolve(manifest),
+                })
+                .mockResolvedValueOnce({
+                    ok: true,
+                    status: 200,
+                    headers: new Headers({ 'content-type': 'text/javascript' }),
+                    text: () => Promise.resolve(source),
+                })
+                .mockResolvedValueOnce({
+                    ok: true,
+                    status: 200,
+                    headers: new Headers({ 'content-type': 'text/html' }),
+                    text: () => Promise.resolve('<template></template>'),
+                });
 
             const loader = new ExtensionLoader({ apiBaseUrl: '/api' });
             await loader.init();
@@ -491,8 +521,18 @@ describe('ExtensionLoader', () => {
             };
 
             mockFetch
-                .mockResolvedValueOnce(mockJsonResponse(manifest))
-                .mockResolvedValueOnce(mockTextResponse('window.__magpieNumericAssetLoaded = 1;', 'text/javascript'));
+                .mockResolvedValueOnce({
+                    ok: true,
+                    status: 200,
+                    headers: new Headers({ 'content-type': 'application/json' }),
+                    json: () => Promise.resolve(manifest),
+                })
+                .mockResolvedValueOnce({
+                    ok: true,
+                    status: 200,
+                    headers: new Headers({ 'content-type': 'text/javascript' }),
+                    text: () => Promise.resolve('window.__magpieNumericAssetLoaded = 1;'),
+                });
 
             const loader = new ExtensionLoader({ apiBaseUrl: '/api' });
             await loader.init();
@@ -530,8 +570,18 @@ describe('ExtensionLoader', () => {
             };
 
             mockFetch
-                .mockResolvedValueOnce(mockJsonResponse(manifest))
-                .mockResolvedValueOnce(mockTextResponse('.magpie-test { color: red; }', 'text/css'));
+                .mockResolvedValueOnce({
+                    ok: true,
+                    status: 200,
+                    headers: new Headers({ 'content-type': 'application/json' }),
+                    json: () => Promise.resolve(manifest),
+                })
+                .mockResolvedValueOnce({
+                    ok: true,
+                    status: 200,
+                    headers: new Headers({ 'content-type': 'text/css' }),
+                    text: () => Promise.resolve('.magpie-test { color: red; }'),
+                });
 
             localStorage.setItem('magpie_auth_token', 'test-token');
 
@@ -574,7 +624,12 @@ describe('ExtensionLoader', () => {
                 extensions: [],
             };
 
-            mockFetch.mockResolvedValueOnce(mockJsonResponse(manifest));
+            mockFetch.mockResolvedValueOnce({
+                ok: true,
+                status: 200,
+                headers: new Headers({ 'content-type': 'application/json' }),
+                json: () => Promise.resolve(manifest),
+            });
 
             const loader = new ExtensionLoader();
             await loader.init();
@@ -606,7 +661,12 @@ describe('ExtensionLoader', () => {
             };
 
             mockCreateObjectURL.mockReturnValue('blob:magpie-icon');
-            mockFetch.mockResolvedValueOnce(mockJsonResponse(manifest));
+            mockFetch.mockResolvedValueOnce({
+                ok: true,
+                status: 200,
+                headers: new Headers({ 'content-type': 'application/json' }),
+                json: () => Promise.resolve(manifest),
+            });
             mockFetch.mockResolvedValueOnce({
                 ok: true,
                 status: 200,
@@ -660,7 +720,12 @@ describe('ExtensionLoader', () => {
                 extensions: [],
             };
 
-            mockFetch.mockResolvedValueOnce(mockJsonResponse(manifest));
+            mockFetch.mockResolvedValueOnce({
+                ok: true,
+                status: 200,
+                headers: new Headers({ 'content-type': 'application/json' }),
+                json: () => Promise.resolve(manifest),
+            });
 
             const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
             const loader = new ExtensionLoader();
@@ -703,8 +768,18 @@ describe('ExtensionLoader', () => {
             };
 
             mockFetch
-                .mockResolvedValueOnce(mockJsonResponse(manifest))
-                .mockResolvedValueOnce(mockTextResponse('.magpie-numeric { color: blue; }', 'text/css'));
+                .mockResolvedValueOnce({
+                    ok: true,
+                    status: 200,
+                    headers: new Headers({ 'content-type': 'application/json' }),
+                    json: () => Promise.resolve(manifest),
+                })
+                .mockResolvedValueOnce({
+                    ok: true,
+                    status: 200,
+                    headers: new Headers({ 'content-type': 'text/css' }),
+                    text: () => Promise.resolve('.magpie-numeric { color: blue; }'),
+                });
 
             const loader = new ExtensionLoader({ apiBaseUrl: '/api' });
             await loader.init();
@@ -744,7 +819,12 @@ describe('ExtensionLoader', () => {
                 extensions: [],
             };
 
-            mockFetch.mockResolvedValueOnce(mockJsonResponse(manifest));
+            mockFetch.mockResolvedValueOnce({
+                ok: true,
+                status: 200,
+                headers: new Headers({ 'content-type': 'application/json' }),
+                json: () => Promise.resolve(manifest),
+            });
 
             const loader = new ExtensionLoader();
             const initPromise = loader.init();
@@ -782,7 +862,12 @@ describe('ExtensionLoader', () => {
                 extensions: [],
             };
 
-            mockFetch.mockResolvedValueOnce(mockJsonResponse(manifest));
+            mockFetch.mockResolvedValueOnce({
+                ok: true,
+                status: 200,
+                headers: new Headers({ 'content-type': 'application/json' }),
+                json: () => Promise.resolve(manifest),
+            });
 
             const loader = new ExtensionLoader();
             const initPromise = loader.init();
@@ -830,7 +915,12 @@ describe('ExtensionLoader', () => {
                 extensions: [],
             };
 
-            mockFetch.mockResolvedValueOnce(mockJsonResponse(manifest));
+            mockFetch.mockResolvedValueOnce({
+                ok: true,
+                status: 200,
+                headers: new Headers({ 'content-type': 'application/json' }),
+                json: () => Promise.resolve(manifest),
+            });
 
             const loader = new ExtensionLoader();
             await loader.init();
@@ -882,7 +972,12 @@ describe('ExtensionLoader', () => {
                 extensions: [],
             };
 
-            mockFetch.mockResolvedValueOnce(mockJsonResponse(manifest));
+            mockFetch.mockResolvedValueOnce({
+                ok: true,
+                status: 200,
+                headers: new Headers({ 'content-type': 'application/json' }),
+                json: () => Promise.resolve(manifest),
+            });
 
             const loader = new ExtensionLoader();
             await loader.init();
@@ -897,7 +992,13 @@ describe('ExtensionLoader', () => {
 
     describe('reset', () => {
         it('clears cached promise so init can be retried', async () => {
-            mockFetch.mockResolvedValueOnce(mockErrorResponse(503, 'Service Unavailable'));
+            mockFetch.mockResolvedValueOnce({
+                ok: false as const,
+                status: 503,
+                statusText: 'Service Unavailable',
+                headers: new Headers({ 'content-type': 'text/plain' }),
+                text: () => Promise.resolve('Service Unavailable'),
+            });
 
             const loader = new ExtensionLoader();
             await expect(loader.init()).rejects.toThrow();
@@ -907,7 +1008,12 @@ describe('ExtensionLoader', () => {
             expect(loader.state.state).toBe('idle');
             expect(loader.state.error).toBeNull();
 
-            mockFetch.mockResolvedValueOnce(mockJsonResponse({ assets: [], extensions: [] }));
+            mockFetch.mockResolvedValueOnce({
+                ok: true,
+                status: 200,
+                headers: new Headers({ 'content-type': 'application/json' }),
+                json: () => Promise.resolve({ assets: [], extensions: [] }),
+            });
 
             await loader.init();
             expect(loader.state.state).toBe('ready');
@@ -943,8 +1049,18 @@ describe('ExtensionLoader', () => {
             };
 
             mockFetch
-                .mockResolvedValueOnce(mockJsonResponse(manifest))
-                .mockResolvedValueOnce(mockTextResponse('window.__magpieAssetLoaded = 1;', 'text/javascript'));
+                .mockResolvedValueOnce({
+                    ok: true,
+                    status: 200,
+                    headers: new Headers({ 'content-type': 'application/json' }),
+                    json: () => Promise.resolve(manifest),
+                })
+                .mockResolvedValueOnce({
+                    ok: true,
+                    status: 200,
+                    headers: new Headers({ 'content-type': 'text/javascript' }),
+                    text: () => Promise.resolve('window.__magpieAssetLoaded = 1;'),
+                });
 
             const loader = new ExtensionLoader({ apiBaseUrl: '/api' });
             await loader.init();
@@ -977,8 +1093,18 @@ describe('ExtensionLoader', () => {
             };
 
             mockFetch
-                .mockResolvedValueOnce(mockJsonResponse(manifest))
-                .mockResolvedValueOnce(mockTextResponse('.magpie-test { color: red; }', 'text/css'));
+                .mockResolvedValueOnce({
+                    ok: true,
+                    status: 200,
+                    headers: new Headers({ 'content-type': 'application/json' }),
+                    json: () => Promise.resolve(manifest),
+                })
+                .mockResolvedValueOnce({
+                    ok: true,
+                    status: 200,
+                    headers: new Headers({ 'content-type': 'text/css' }),
+                    text: () => Promise.resolve('.magpie-test { color: red; }'),
+                });
 
             const loader = new ExtensionLoader({ apiBaseUrl: '/api' });
             await loader.init();
@@ -1010,7 +1136,12 @@ describe('ExtensionLoader', () => {
                 extensions: [],
             };
 
-            mockFetch.mockResolvedValueOnce(mockJsonResponse(manifest));
+            mockFetch.mockResolvedValueOnce({
+                ok: true,
+                status: 200,
+                headers: new Headers({ 'content-type': 'application/json' }),
+                json: () => Promise.resolve(manifest),
+            });
 
             const loader = new ExtensionLoader();
             await loader.init();
@@ -1044,7 +1175,12 @@ describe('ExtensionLoader', () => {
                 extensions: [],
             };
 
-            mockFetch.mockResolvedValueOnce(mockJsonResponse(manifest));
+            mockFetch.mockResolvedValueOnce({
+                ok: true,
+                status: 200,
+                headers: new Headers({ 'content-type': 'application/json' }),
+                json: () => Promise.resolve(manifest),
+            });
             const loader = new ExtensionLoader();
             await loader.init();
 
@@ -1054,7 +1190,12 @@ describe('ExtensionLoader', () => {
             expect(linksBefore.length).toBe(1);
 
             loader.reset();
-            mockFetch.mockResolvedValueOnce(mockJsonResponse(manifest));
+            mockFetch.mockResolvedValueOnce({
+                ok: true,
+                status: 200,
+                headers: new Headers({ 'content-type': 'application/json' }),
+                json: () => Promise.resolve(manifest),
+            });
             await loader.init();
 
             const linksInHead = document.head.querySelectorAll('link[rel="preconnect"]');
@@ -1062,7 +1203,12 @@ describe('ExtensionLoader', () => {
         });
 
         it('clears manifest on reset', async () => {
-            mockFetch.mockResolvedValueOnce(mockJsonResponse({ assets: [], extensions: [] }));
+            mockFetch.mockResolvedValueOnce({
+                ok: true,
+                status: 200,
+                headers: new Headers({ 'content-type': 'application/json' }),
+                json: () => Promise.resolve({ assets: [], extensions: [] }),
+            });
 
             const loader = new ExtensionLoader();
             await loader.init();
@@ -1116,7 +1262,12 @@ describe('ExtensionLoader', () => {
                 ],
             };
 
-            mockFetch.mockResolvedValueOnce(mockJsonResponse(manifest));
+            mockFetch.mockResolvedValueOnce({
+                ok: true,
+                status: 200,
+                headers: new Headers({ 'content-type': 'application/json' }),
+                json: () => Promise.resolve(manifest),
+            });
 
             const loader = new ExtensionLoader();
             await loader.init();
@@ -1144,7 +1295,12 @@ describe('ExtensionLoader', () => {
                 ],
             };
 
-            mockFetch.mockResolvedValueOnce(mockJsonResponse(manifest));
+            mockFetch.mockResolvedValueOnce({
+                ok: true,
+                status: 200,
+                headers: new Headers({ 'content-type': 'application/json' }),
+                json: () => Promise.resolve(manifest),
+            });
 
             const loader = new ExtensionLoader();
             await loader.init();
@@ -1181,7 +1337,12 @@ describe('ExtensionLoader', () => {
                 ],
             };
 
-            mockFetch.mockResolvedValueOnce(mockJsonResponse(manifest));
+            mockFetch.mockResolvedValueOnce({
+                ok: true,
+                status: 200,
+                headers: new Headers({ 'content-type': 'application/json' }),
+                json: () => Promise.resolve(manifest),
+            });
 
             const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
             const loader = new ExtensionLoader();

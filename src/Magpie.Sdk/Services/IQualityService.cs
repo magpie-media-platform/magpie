@@ -33,7 +33,9 @@ public interface IQualityService
     /// <param name="tierList">The values for the new tier list</param>
     /// <param name="actingUserId">The user to record as the actor, or <see langword="null"/> for the system</param>
     /// <param name="cancellationToken">The token that cancels the operation</param>
-    Task<QualityTierListCreateResult> CreateTierListAsync(QualityTierList tierList, Guid? actingUserId,
+    Task<QualityTierListCreateResult> CreateTierListAsync(
+        QualityTierList tierList,
+        Guid? actingUserId,
         CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -43,7 +45,10 @@ public interface IQualityService
     /// <param name="patch">The fields to change</param>
     /// <param name="actingUserId">The user to record as the actor, or <see langword="null"/> for the system</param>
     /// <param name="cancellationToken">The token that cancels the operation</param>
-    Task<QualityTierListPatchResult> PatchTierListAsync(Guid id, QualityTierListPatch patch, Guid? actingUserId,
+    Task<QualityTierListPatchResult> PatchTierListAsync(
+        Guid id,
+        QualityTierListPatch patch,
+        Guid? actingUserId,
         CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -73,7 +78,9 @@ public interface IQualityService
     /// <param name="tier">The values for the new tier</param>
     /// <param name="actingUserId">The user to record as the actor, or <see langword="null"/> for the system</param>
     /// <param name="cancellationToken">The token that cancels the operation</param>
-    Task<QualityTier> CreateTierAsync(QualityTier tier, Guid? actingUserId,
+    Task<QualityTier> CreateTierAsync(
+        QualityTier tier,
+        Guid? actingUserId,
         CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -83,7 +90,10 @@ public interface IQualityService
     /// <param name="patch">The fields to change</param>
     /// <param name="actingUserId">The user to record as the actor, or <see langword="null"/> for the system</param>
     /// <param name="cancellationToken">The token that cancels the operation</param>
-    Task<bool> PatchTierAsync(Guid id, QualityTierPatch patch, Guid? actingUserId,
+    Task<bool> PatchTierAsync(
+        Guid id,
+        QualityTierPatch patch,
+        Guid? actingUserId,
         CancellationToken cancellationToken = default);
 
     /// <summary>

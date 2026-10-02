@@ -28,7 +28,7 @@ internal readonly record struct ParsedReleaseTitle
     {
         if (string.IsNullOrWhiteSpace(title))
         {
-            Revision = new ReleaseRevision(1, false, false);
+            Revision = new(1, false, false);
             Group = null;
             return;
         }
@@ -47,7 +47,7 @@ internal readonly record struct ParsedReleaseTitle
             version = Math.Max(version, parsedVersion);
         }
 
-        Revision = new ReleaseRevision(version, proper.Success, repack.Success);
+        Revision = new(version, proper.Success, repack.Success);
         var group = GroupRegex.Match(title);
         Group = group.Success ? group.Groups["group"].Value : null;
     }

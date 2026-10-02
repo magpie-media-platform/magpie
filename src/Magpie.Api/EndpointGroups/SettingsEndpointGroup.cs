@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -40,14 +41,10 @@ internal sealed class SettingsEndpointGroup : IApiEndpointGroup
             };
         }
 
-        var secretKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var definition in detail.Schema)
-        {
-            if (definition.Secret)
-            {
-                secretKeys.Add(definition.Key);
-            }
-        }
+        var secretKeys = detail.Schema
+            .Where(d => d.Secret)
+            .Select(d => d.Key)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
         var stored = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var visible = new List<Setting>(group.Settings.Count);
@@ -60,14 +57,12 @@ internal sealed class SettingsEndpointGroup : IApiEndpointGroup
             }
         }
 
-        var secretSettings = new Dictionary<string, SecretSettingState>();
-        foreach (var key in secretKeys)
-        {
-            secretSettings[key] = new SecretSettingState
+        var secretSettings = secretKeys.ToDictionary(
+            key => key,
+            key => new SecretSettingState
             {
                 IsSet = stored.TryGetValue(key, out var value) && !string.IsNullOrWhiteSpace(value)
-            };
-        }
+            });
 
         return new SettingsGroupResponse
         {
@@ -126,13 +121,7 @@ internal sealed class SettingsEndpointGroup : IApiEndpointGroup
     {
         var groups = await settingsService.ListGroupsAsync(cancellationToken).ConfigureAwait(false);
 
-        var wireGroups = new List<SettingsGroupResponse>(groups.Count);
-        foreach (var group in groups)
-        {
-            wireGroups.Add(ToResponse(group));
-        }
-
-        return Results.Ok(wireGroups);
+        return Results.Ok(groups.Select(ToResponse).ToList());
     }
 
     [MagpieCommand("get-system", "GET", "groups/system/{name}", "Show a system settings group")]
@@ -198,11 +187,7 @@ internal sealed class SettingsEndpointGroup : IApiEndpointGroup
         CancellationToken cancellationToken)
     {
         var result = await settingsService
-            .TestGroupAsync(
-                extensionId,
-                name,
-                request.Settings ?? new Dictionary<string, string>(),
-                cancellationToken)
+            .TestGroupAsync(extensionId, name, request.Settings ?? new Dictionary<string, string>(), cancellationToken)
             .ConfigureAwait(false);
 
         return result is null ? Results.NotFound() : Results.Ok(result);

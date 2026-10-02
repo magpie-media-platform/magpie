@@ -69,7 +69,7 @@
             const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
             const auth = { isAuthenticated: true, isLoading: false, user: { id: 'fixture', username: 'fixture', role: 3 },
                 hasRole: () => true, hasPermission: () => true, getRequiredRole: () => 0,
-                signIn() {}, async signOut() {}, async login() {} };
+                async signOut() {}, async login() {} };
             const h = React.createElement;
             createRoot(document.getElementById('root')).render(
                 h(QueryClientProvider, { client }, h(AuthContext.Provider, { value: auth },

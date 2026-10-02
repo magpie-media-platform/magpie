@@ -103,7 +103,6 @@ public sealed class RemotePathMappingRepositoryTests
     [TearDown]
     public void TearDown()
     {
-        _context.Database.CloseConnection();
         _context.Dispose();
     }
 

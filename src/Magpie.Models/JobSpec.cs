@@ -92,6 +92,17 @@ public sealed record JobSpec
         new Dictionary<string, string>();
 
     /// <summary>
+    /// The boolean parameters that a queued execution sets to true when an enqueue that sets them to true coalesces
+    /// onto it.
+    /// </summary>
+    public IReadOnlyList<string> CoalesceTrueWinsFields { get; set; } = [];
+
+    /// <summary>
+    /// The parameters that coalescing removes to widen an execution.
+    /// </summary>
+    public IReadOnlyList<string> CoalesceWideningFields { get; set; } = [];
+
+    /// <summary>
     /// The parameters that the job accepts.
     /// </summary>
     public IReadOnlyList<JobParameter> Parameters { get; init; } = [];

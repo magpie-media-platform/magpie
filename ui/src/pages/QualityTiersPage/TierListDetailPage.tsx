@@ -3,7 +3,9 @@ import { useParams } from 'react-router-dom';
 import { FunnelIcon, PlusIcon, SlidersHorizontalIcon, WarningCircleIcon } from '@phosphor-icons/react';
 
 import { useAuth, Role } from '@/auth';
+import { Alert } from '@/components/ui/Alert';
 import { Breadcrumb, type BreadcrumbItem } from '@/components/ui/Breadcrumb';
+import { Button } from '@/components/ui/Button';
 import { DeleteConfirmDialog } from '@/components/ui/DeleteConfirmDialog/DeleteConfirmDialog';
 import { PullToRefresh } from '@/components/ui/PullToRefresh';
 import { QuickActionsButton, type QuickAction } from '@/components/ui/QuickActionsButton';
@@ -77,7 +79,7 @@ export function TierListDetailPage() {
     const cleanListSourceRulesRef = useRef<ApiQualityTierRule[]>([]);
 
     const { data: apiTierList, isLoading, error, refetch } = useQualityTierList(tierListId);
-    const { tierLists, updateTierList } = useQualityTierLists();
+    const { tierLists, error: tierListsError, refetch: refetchTierLists, updateTierList } = useQualityTierLists();
     const { createTier, updateTier, deleteTier } = useQualityTiers();
 
     const tierList = useMemo(() => {
@@ -86,6 +88,21 @@ export function TierListDetailPage() {
         }
         return mapTierListToDisplay(apiTierList);
     }, [apiTierList]);
+    const sharedListNames = useMemo(() => {
+        if (!tierLists.some((list) => list.id === tierListId)) {
+            return null;
+        }
+        const names = new Map<string, string[]>();
+        for (const list of tierLists) {
+            if (list.id === tierListId) {
+                continue;
+            }
+            for (const rank of list.qualityTierRanks) {
+                names.set(rank.qualityTierId, [...(names.get(rank.qualityTierId) ?? []), list.name]);
+            }
+        }
+        return names;
+    }, [tierLists, tierListId]);
     const currentEditingTier = useMemo(() => {
         if (!editingTier?.id) {
             return editingTier;
@@ -263,14 +280,8 @@ export function TierListDetailPage() {
             };
             await updateTierList(tierListId, patch);
 
-            const listsLoaded = tierLists.some((list) => list.id === tierListId);
-            const rankedElsewhere = tierLists.some(
-                (list) =>
-                    list.id !== tierListId &&
-                    list.qualityTierRanks.some((rank) => rank.qualityTierId === deletingTier.id),
-            );
             let tierRowKept = false;
-            if (listsLoaded && !rankedElsewhere) {
+            if (sharedListNames && !sharedListNames.has(deletingTier.id)) {
                 try {
                     await deleteTier(deletingTier.id);
                 } catch {
@@ -304,7 +315,7 @@ export function TierListDetailPage() {
             setIsDeleting(false);
             setDeletingTier(null);
         }
-    }, [deletingTier, tierListId, tierLists, updateTierList, deleteTier, refetch, toast]);
+    }, [deletingTier, tierListId, sharedListNames, updateTierList, deleteTier, refetch, toast]);
 
     const handleCancelDelete = useCallback(() => {
         setDeletingTier(null);
@@ -547,6 +558,8 @@ export function TierListDetailPage() {
     }, [saveListRules]);
 
     const tiers = useMemo(() => tierList?.tiers ?? [], [tierList?.tiers]);
+    const editingTierId = currentEditingTier?.id;
+    const editingSharedWith = sharedListNames && editingTierId ? (sharedListNames.get(editingTierId) ?? []) : null;
 
     const handleReorder = useCallback(
         async (orderedIds: string[]) => {
@@ -662,12 +675,29 @@ export function TierListDetailPage() {
                     onSaveMimeTypes={handleSaveMimeTypes}
                 />
 
+                {tierListsError && !sharedListNames && (
+                    <Alert
+                        variant="error"
+                        title="Failed to load the tier lists"
+                        className="tier-list-detail-page__lists-error"
+                        data-testid="shared-tiers-error"
+                    >
+                        <p className="tier-list-detail-page__notice-text">
+                            The lists that use these tiers are unknown.
+                        </p>
+                        <Button type="button" variant="secondary" size="sm" onClick={() => void refetchTierLists()}>
+                            Retry
+                        </Button>
+                    </Alert>
+                )}
+
                 <TierListTiersSection
                     canManage={canManage}
                     sortable={sortable}
                     deletingTierId={deletingTier?.id ?? null}
                     isDeleting={isDeleting}
                     cloningTierId={cloningTierId}
+                    sharedListNames={sharedListNames}
                     onEditTier={handleEditTier}
                     onCloneTier={handleCloneTier}
                     onDeleteTier={handleDeleteTier}
@@ -685,6 +715,11 @@ export function TierListDetailPage() {
                 tierListId={tierList.id}
                 onSubmit={handleFormSubmit}
                 isSubmitting={isSubmitting}
+                sharedWith={editingSharedWith}
+                sharedWithFailed={!!tierListsError}
+                onRetrySharedWith={() => void refetchTierLists()}
+                onClone={editingTierId ? () => void handleCloneTier(editingTierId) : undefined}
+                isCloning={!!editingTierId && cloningTierId === editingTierId}
             />
 
             <ListRulesSheet

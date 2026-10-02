@@ -94,7 +94,6 @@ internal sealed class TmdbClient(IHttpClientFactory httpClientFactory, ILogger<T
             SearchEnvelopeDto<MovieSearchHitDto> envelope => envelope.Results?.Count ?? 0,
             SearchEnvelopeDto<TvSearchHitDto> envelope => envelope.Results?.Count ?? 0,
             SearchEnvelopeDto<NamedSearchHitDto> envelope => envelope.Results?.Count ?? 0,
-            PersonMovieCreditsDto credits => (credits.Cast?.Count ?? 0) + (credits.Crew?.Count ?? 0),
             PersonTvCreditsDto credits => (credits.Cast?.Count ?? 0) + (credits.Crew?.Count ?? 0),
             FindEnvelopeDto envelope => (envelope.MovieResults?.Count ?? 0) +
                 (envelope.TvResults?.Count ?? 0) +
@@ -178,12 +177,12 @@ internal sealed class TmdbClient(IHttpClientFactory httpClientFactory, ILogger<T
                 return null;
             }
 
-            var result = JsonSerializer.Deserialize<T>(body!, JsonOptions);
+            var result = JsonSerializer.Deserialize<T>(body, JsonOptions);
             var rows = ResponseCount(result);
             context.Telemetry?.RecordRequest(rows);
             activity?.SetTag("magpie.request.status", "complete");
             activity?.SetTag("magpie.request.rows", rows);
-            activity?.SetTag("magpie.request.payload_bytes", Encoding.UTF8.GetByteCount(body!));
+            activity?.SetTag("magpie.request.payload_bytes", Encoding.UTF8.GetByteCount(body));
             return result;
         }
         catch (OperationCanceledException)
@@ -227,7 +226,7 @@ internal sealed class TmdbClient(IHttpClientFactory httpClientFactory, ILogger<T
 
             if (response.StatusCode == HttpStatusCode.TooManyRequests)
             {
-                logger.LogWarning("TMDb rejected the request with HTTP 429 after its resilience retries");
+                logger.LogWarning("TMDb returned HTTP 429 for {Path}", path);
             }
 
             response.EnsureSuccessStatusCode();

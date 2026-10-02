@@ -95,7 +95,8 @@ internal sealed class SubjectRepository(
                 CriteriaValueOperator.In => query.Where(i => uris.Contains(i.Url)),
                 CriteriaValueOperator.NotIn => query.Where(i => !uris.Contains(i.Url)),
                 var op => throw new ArgumentException(
-                    $"Operator {op} is not supported for image URL.", nameof(criteria))
+                    $"Operator {op} is not supported for image URL.",
+                    nameof(criteria))
             };
         }
 
@@ -200,7 +201,8 @@ internal sealed class SubjectRepository(
                 .WithCancellation(cancellationToken).ConfigureAwait(false))
             {
                 if (!string.IsNullOrWhiteSpace(row.Source) && !string.IsNullOrWhiteSpace(row.Value) &&
-                    identities.Contains((row.Source.NormalizeExternalIdentifierName(),
+                    identities.Contains((
+                        row.Source.NormalizeExternalIdentifierName(),
                         row.Value.NormalizeExternalIdentifierValue())))
                 {
                     matches.Add(row.Id);
@@ -211,7 +213,9 @@ internal sealed class SubjectRepository(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "The subject repository failed to match external identities for kind {SubjectKind}.",
+            logger.LogError(
+                ex,
+                "The subject repository failed to match external identities for kind {SubjectKind}.",
                 kind);
             throw;
         }
@@ -246,9 +250,7 @@ internal sealed class SubjectRepository(
         }
     }
 
-    private async Task<IQueryable<Subject>> BuildFilteredAsync(
-        SubjectQuery query,
-        CancellationToken cancellationToken)
+    private async Task<IQueryable<Subject>> BuildFilteredAsync(SubjectQuery query, CancellationToken cancellationToken)
     {
         var filtered = context.Subjects.AsNoTracking();
 
@@ -414,7 +416,9 @@ internal sealed class SubjectRepository(
         return ordered.ThenBy(s => s.Id);
     }
 
-    [System.Diagnostics.CodeAnalysis.SuppressMessage("Globalization", "CA1310",
+    [System.Diagnostics.CodeAnalysis.SuppressMessage(
+        "Globalization",
+        "CA1310",
         Justification = "EF Core cannot translate the StringComparison overloads, and both operands are lower-cased.")]
     private static IQueryable<Subject> ApplyTitleCriteria(
         IQueryable<Subject> query,
@@ -912,7 +916,8 @@ internal sealed class SubjectRepository(
                     {
                         await transactionManager.OnCommittedAsync(
                             token => eventBus.PublishAsync(
-                                SubjectEventBuilder.BuildSubjectUpdatedEvent(model.Id, changedFields), token),
+                                SubjectEventBuilder.BuildSubjectUpdatedEvent(model.Id, changedFields),
+                                token),
                             cancellationToken).ConfigureAwait(false);
                     }
 
@@ -1189,7 +1194,8 @@ internal sealed class SubjectRepository(
             {
                 await transactionManager.OnCommittedAsync(
                     token => eventBus.PublishAsync(
-                        SubjectEventBuilder.BuildSubjectUpdatedEvent(patch.Id, changedFields), token),
+                        SubjectEventBuilder.BuildSubjectUpdatedEvent(patch.Id, changedFields),
+                        token),
                     cancellationToken)
                     .ConfigureAwait(false);
             }

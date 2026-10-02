@@ -16,7 +16,7 @@ import { DownloadQueueWidget } from '@/components/ui/DownloadQueueWidget';
 import { RecentJobsWidget } from '@/components/ui/RecentJobsWidget';
 import { ContentStatsWidget } from '@/components/ui/ContentStatsWidget';
 import { UpcomingContentWidget } from '@/components/dashboard/UpcomingContentWidget';
-import { DashboardMainSlot, DashboardWidgetsSlot } from '@/components/ui/Slot/DashboardSlots';
+import { Slot } from '@/components/ui/Slot';
 import { OnboardingChecklist } from '@/components/dashboard/OnboardingChecklist';
 import {
     useDownloadClientHealth,
@@ -73,7 +73,11 @@ export function DashboardPage() {
 
     const getJobUrl = useCallback((job: { id: string }) => `${jobsBasePath}?job=${job.id}`, [jobsBasePath]);
 
-    const getContentStatusUrl = useCallback((status: FulfillmentStatus) => `/library/all?fulfillment=${status}`, []);
+    const getContentStatusUrl = useCallback(
+        (status: FulfillmentStatus) =>
+            `/library/all?${new URLSearchParams({ fulfillment: status, levels: 'all' }).toString()}`,
+        [],
+    );
 
     const getContentItemUrl = useCallback((item: { id: string }) => `/library/${item.id}`, []);
 
@@ -149,7 +153,7 @@ export function DashboardPage() {
     return (
         <div className="dashboard-page" data-page="dashboard">
             <PullToRefresh onRefresh={handleRefresh} className="dashboard-page__pull-to-refresh">
-                <DashboardMainSlot>
+                <Slot slot="dashboard.main">
                     <PageHeader
                         className="dashboard-page__header"
                         title="Dashboard"
@@ -226,10 +230,10 @@ export function DashboardPage() {
                         </section>
 
                         <div data-testid="dashboard-page__extension-widgets">
-                            <DashboardWidgetsSlot className="dashboard-page__extension-widgets" />
+                            <Slot slot="dashboard.widgets" className="dashboard-page__extension-widgets" />
                         </div>
                     </div>
-                </DashboardMainSlot>
+                </Slot>
             </PullToRefresh>
         </div>
     );

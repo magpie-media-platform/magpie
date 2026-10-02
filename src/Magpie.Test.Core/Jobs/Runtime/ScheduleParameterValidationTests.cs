@@ -592,6 +592,204 @@ public sealed class ScheduleParameterValidationTests
     [TestCase(null)]
     [TestCase("")]
     [TestCase(" ")]
+    public void CreateScheduleTriggerAsync_RejectsName_WhenNameIsNullOrBlank(string? name)
+    {
+        // Arrange
+        _specs.Add(DownloadImportScanJob.Spec);
+        var create = new ScheduleTriggerCreate
+        {
+            JobType = DownloadImportScanJob.Spec.JobType,
+            Scope = DownloadImportScanJob.Spec.Scope,
+            Name = name!,
+            Schedule = "0 0 1 1 *"
+        };
+
+        // Act
+        var error = Assert.ThrowsAsync<MagpieException>(() =>
+            _subject.CreateScheduleTriggerAsync(create, Guid.Empty, Role.Admin));
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(error!.Message, Is.EqualTo("Name is required."));
+            _repository.Verify(repository => repository.CreateAsync(It.IsAny<ScheduleTrigger>(),
+                It.IsAny<Guid?>(), It.IsAny<CancellationToken>()), Times.Never);
+        }
+    }
+
+    [TestCase(null)]
+    [TestCase("")]
+    [TestCase(" ")]
+    public void CreateScheduleTriggerAsync_RejectsJobType_WhenJobTypeIsNullOrBlank(string? jobType)
+    {
+        // Arrange
+        _specs.Add(DownloadImportScanJob.Spec);
+        var create = new ScheduleTriggerCreate
+        {
+            JobType = jobType!,
+            Scope = DownloadImportScanJob.Spec.Scope,
+            Name = "Nightly scan",
+            Schedule = "0 0 1 1 *"
+        };
+
+        // Act
+        var error = Assert.ThrowsAsync<MagpieException>(() =>
+            _subject.CreateScheduleTriggerAsync(create, Guid.Empty, Role.Admin));
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(error!.Message, Is.EqualTo("Job type is required."));
+            _repository.Verify(repository => repository.CreateAsync(It.IsAny<ScheduleTrigger>(),
+                It.IsAny<Guid?>(), It.IsAny<CancellationToken>()), Times.Never);
+        }
+    }
+
+    [TestCase(null)]
+    [TestCase("")]
+    [TestCase(" ")]
+    public void CreateScheduleTriggerAsync_RejectsSchedule_WhenScheduleIsNullOrBlank(string? schedule)
+    {
+        // Arrange
+        _specs.Add(DownloadImportScanJob.Spec);
+        var create = new ScheduleTriggerCreate
+        {
+            JobType = DownloadImportScanJob.Spec.JobType,
+            Scope = DownloadImportScanJob.Spec.Scope,
+            Name = "Nightly scan",
+            Schedule = schedule!
+        };
+
+        // Act
+        var error = Assert.ThrowsAsync<MagpieException>(() =>
+            _subject.CreateScheduleTriggerAsync(create, Guid.Empty, Role.Admin));
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(error!.Message, Is.EqualTo("Schedule is required."));
+            _repository.Verify(repository => repository.CreateAsync(It.IsAny<ScheduleTrigger>(),
+                It.IsAny<Guid?>(), It.IsAny<CancellationToken>()), Times.Never);
+        }
+    }
+
+    [TestCase(null)]
+    [TestCase("")]
+    [TestCase(" ")]
+    public void CreateScheduleTriggerAsync_RejectsCaller_WhenCallerLacksPermissionAndNameIsNullOrBlank(string? name)
+    {
+        // Arrange
+        _specs.Add(DownloadImportScanJob.Spec);
+        var create = new ScheduleTriggerCreate
+        {
+            JobType = DownloadImportScanJob.Spec.JobType,
+            Scope = DownloadImportScanJob.Spec.Scope,
+            Name = name!,
+            Schedule = "0 0 1 1 *"
+        };
+
+        // Act
+        var error = Assert.ThrowsAsync<MagpieException>(() =>
+            _subject.CreateScheduleTriggerAsync(create, Guid.Empty, Role.Viewer));
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(error!.Message, Is.EqualTo("The owner role cannot create this trigger for this job type."));
+            _repository.Verify(repository => repository.CreateAsync(It.IsAny<ScheduleTrigger>(),
+                It.IsAny<Guid?>(), It.IsAny<CancellationToken>()), Times.Never);
+        }
+    }
+
+    [TestCase(null)]
+    [TestCase("")]
+    [TestCase(" ")]
+    public void PatchScheduleTriggerAsync_RejectsName_WhenNameIsNullOrBlank(string? name)
+    {
+        // Arrange
+        _specs.Add(DownloadImportScanJob.Spec);
+        var stored = new ScheduleTrigger
+        {
+            Id = Guid.Empty,
+            JobType = DownloadImportScanJob.Spec.JobType,
+            Scope = DownloadImportScanJob.Spec.Scope,
+            Name = "Original",
+            Enabled = true,
+            Schedule = "0 0 1 1 *",
+            Parameters = []
+        };
+        _repository.Setup(repository => repository.GetByIdAsync(Guid.Empty, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(stored);
+        var patch = new ScheduleTriggerPatch { Name = new() { Value = name! } };
+
+        // Act
+        var error = Assert.ThrowsAsync<MagpieException>(() =>
+            _subject.PatchScheduleTriggerAsync(Guid.Empty, patch, Guid.Empty, callerRole: Role.Admin));
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(error!.Message, Is.EqualTo("Name is required."));
+            Assert.That(stored.Name, Is.EqualTo("Original"));
+            _repository.Verify(repository => repository.PatchAsync(It.IsAny<ScheduleTriggerPatch>(),
+                It.IsAny<Guid?>(), It.IsAny<CancellationToken>()), Times.Never);
+        }
+    }
+
+    [Test]
+    public async Task PatchScheduleTriggerAsync_PatchesTrigger_WhenNameIsValid()
+    {
+        // Arrange
+        _specs.Add(DownloadImportScanJob.Spec);
+        var stored = new ScheduleTrigger
+        {
+            Id = Guid.Empty,
+            JobType = DownloadImportScanJob.Spec.JobType,
+            Scope = DownloadImportScanJob.Spec.Scope,
+            Name = "Original",
+            Enabled = true,
+            Schedule = "0 0 1 1 *",
+            Parameters = []
+        };
+        _repository.Setup(repository => repository.GetByIdAsync(Guid.Empty, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(stored);
+        var patch = new ScheduleTriggerPatch { Name = new() { Value = "Renamed" } };
+
+        // Act
+        await _subject.PatchScheduleTriggerAsync(Guid.Empty, patch, Guid.Empty, callerRole: Role.Admin)
+            .ConfigureAwait(false);
+
+        // Assert
+        _repository.Verify(repository => repository.PatchAsync(
+            It.Is<ScheduleTriggerPatch>(applied => applied.Name!.Value == "Renamed"),
+            It.IsAny<Guid?>(), It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Test]
+    public async Task CreateScheduleTriggerAsync_CreatesTrigger_WhenNameIsValid()
+    {
+        // Arrange
+        _specs.Add(DownloadImportScanJob.Spec);
+        var create = new ScheduleTriggerCreate
+        {
+            JobType = DownloadImportScanJob.Spec.JobType,
+            Scope = DownloadImportScanJob.Spec.Scope,
+            Name = "Nightly scan",
+            Schedule = "0 0 1 1 *"
+        };
+
+        // Act
+        await _subject.CreateScheduleTriggerAsync(create, Guid.Empty, Role.Admin).ConfigureAwait(false);
+
+        // Assert
+        _repository.Verify(repository => repository.CreateAsync(
+            It.Is<ScheduleTrigger>(trigger => trigger.Name == "Nightly scan"),
+            It.IsAny<Guid?>(), It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [TestCase(null)]
+    [TestCase("")]
+    [TestCase(" ")]
     [TestCase("FAIL")]
     [TestCase("skip")]
     [TestCase("replace")]

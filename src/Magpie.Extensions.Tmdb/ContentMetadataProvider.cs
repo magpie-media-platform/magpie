@@ -63,14 +63,14 @@ internal sealed class ContentMetadataProvider(
         var tmdbId = existingMetadata.FindTmdbId();
         if (tmdbId is null)
         {
-            logger.LogDebug("TMDb provider has no TMDb id for ContentHierarchyItem {Id}", contentHierarchyItem.Id);
+            logger.LogInformation("TMDb id missing for ContentHierarchyItem {Id}", contentHierarchyItem.Id);
             return null;
         }
 
         if (!int.TryParse(tmdbId, out _))
         {
-            logger.LogDebug(
-                "TMDb provider found a non-numeric TMDb id {TmdbId} for ContentHierarchyItem {Id}",
+            logger.LogInformation(
+                "TMDb id {TmdbId} is not numeric for ContentHierarchyItem {Id}",
                 tmdbId,
                 contentHierarchyItem.Id);
             return null;

@@ -5,6 +5,7 @@ using System.Linq;
 using System.Net;
 using System.Reflection;
 using System.Security.Claims;
+using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading;
 using System.Threading.Tasks;
@@ -101,7 +102,7 @@ public static class MagpieHostBuilderExtensions
         }
 
         var options = builder.Configuration.GetSection(MagpieHostOptions.SectionName).Get<MagpieHostOptions>()
-            ?? new MagpieHostOptions();
+            ?? new();
 
         var contentRoot = builder.Environment.ContentRootPath;
         var extensionsRoot = ResolveExtensionsRoot(options.Extensions.Path, contentRoot);
@@ -141,10 +142,7 @@ public static class MagpieHostBuilderExtensions
 
     private static ForwardedHeadersOptions BuildForwardedHeadersOptions(IReadOnlyList<string> knownProxies)
     {
-        var options = new ForwardedHeadersOptions
-        {
-            ForwardedHeaders = ForwardedHeaders.XForwardedProto
-        };
+        var options = new ForwardedHeadersOptions { ForwardedHeaders = ForwardedHeaders.XForwardedProto };
         options.KnownIPNetworks.Clear();
         options.KnownProxies.Clear();
 
@@ -223,7 +221,7 @@ public static class MagpieHostBuilderExtensions
                     var applied = await recoverable.ApplyPendingRestoreAsync(cancellationToken).ConfigureAwait(false);
                     if (applied)
                     {
-                        logger.LogInformation("The host applied the pending database restore before the migration");
+                        logger.LogInformation("Applied pending database restore before migration");
                     }
                 }
 
@@ -281,7 +279,8 @@ public static class MagpieHostBuilderExtensions
     private static void AddMagpieClusterBackplane(this IHostApplicationBuilder builder)
     {
         var (provider, connectionString) = ResolveDatabaseConfiguration(
-            builder.Configuration, builder.Environment.ContentRootPath);
+            builder.Configuration,
+            builder.Environment.ContentRootPath);
         switch (provider)
         {
             case "postgresql":
@@ -306,9 +305,7 @@ public static class MagpieHostBuilderExtensions
         return dataRoot;
     }
 
-    private static void ConfigureBootstrapConsoleLogging(
-        IHostApplicationBuilder builder,
-        ILoggingBuilder logging)
+    private static void ConfigureBootstrapConsoleLogging(IHostApplicationBuilder builder, ILoggingBuilder logging)
     {
         logging.AddConsole(options =>
         {
@@ -347,12 +344,7 @@ public static class MagpieHostBuilderExtensions
         builder.Services.AddSingleton(jobRuntimeOptions);
         builder.Services.AddSingleton(searchOptions);
 
-        builder.Services.ConfigureHttpJsonOptions(o =>
-        {
-            o.SerializerOptions.ReferenceHandler = ReferenceHandler.IgnoreCycles;
-            o.SerializerOptions.UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow;
-            o.SerializerOptions.Converters.Add(new JsonStringEnumConverter());
-        });
+        builder.Services.ConfigureHttpJsonOptions(o => ConfigureApiJsonOptions(o.SerializerOptions));
         builder.Services.Configure<RouteHandlerOptions>(options => options.ThrowOnBadRequest = true);
         builder.Services.AddCors();
 
@@ -371,7 +363,8 @@ public static class MagpieHostBuilderExtensions
         AddMagpieObservability(builder, hostOptions);
 
         var (provider, connectionString) = ResolveDatabaseConfiguration(
-            builder.Configuration, builder.Environment.ContentRootPath);
+            builder.Configuration,
+            builder.Environment.ContentRootPath);
         switch (provider)
         {
             case "sqlite":
@@ -397,6 +390,13 @@ public static class MagpieHostBuilderExtensions
         return builder;
     }
 
+    internal static void ConfigureApiJsonOptions(JsonSerializerOptions options)
+    {
+        options.ReferenceHandler = ReferenceHandler.IgnoreCycles;
+        options.UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow;
+        options.Converters.Add(new JsonStringEnumConverter());
+    }
+
     internal static void AddMagpieObservability(IHostApplicationBuilder builder, MagpieHostOptions hostOptions)
     {
         if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_ENDPOINT")))
@@ -417,10 +417,8 @@ public static class MagpieHostBuilderExtensions
                 .AddService(serviceName: "magpie", serviceVersion: serviceVersion)
                 .AddAttributes(
                 [
-                    new KeyValuePair<string, object>("magpie.node_id", nodeId),
-                    new KeyValuePair<string, object>(
-                        "magpie.clustered",
-                        hostOptions.Cluster.Mode != ExtensionClusterMode.SingleNode),
+                    new("magpie.node_id", nodeId),
+                    new("magpie.clustered", hostOptions.Cluster.Mode != ExtensionClusterMode.SingleNode),
                 ]))
             .WithTracing(tracing =>
             {
@@ -515,7 +513,7 @@ public static class MagpieHostBuilderExtensions
         CancellationToken cancellationToken)
     {
         var options = builder.Configuration.GetSection(MagpieHostOptions.SectionName).Get<MagpieHostOptions>()
-            ?? new MagpieHostOptions();
+            ?? new();
         var extensionsRoot = ResolveExtensionsRoot(options.Extensions.Path, builder.Environment.ContentRootPath);
         if (!Directory.Exists(extensionsRoot))
         {
@@ -546,7 +544,7 @@ public static class MagpieHostBuilderExtensions
             if (depsPath is null)
             {
                 logger.LogWarning(
-                    "Extension directory {Directory} has no deps.json, so the host skipped it",
+                    "Extension directory {Directory} has no deps.json, skipped",
                     directory);
                 continue;
             }
@@ -556,7 +554,7 @@ public static class MagpieHostBuilderExtensions
             if (!File.Exists(assemblyPath))
             {
                 logger.LogWarning(
-                    "Extension assembly {AssemblyPath} does not exist, so the host skipped the extension",
+                    "Extension assembly {AssemblyPath} does not exist, skipped",
                     assemblyPath);
                 continue;
             }
@@ -609,7 +607,7 @@ public static class MagpieHostBuilderExtensions
         if (connectionString is null && provider == "sqlite")
         {
             var options = configuration.GetSection(MagpieHostOptions.SectionName).Get<MagpieHostOptions>()
-                ?? new MagpieHostOptions();
+                ?? new();
             connectionString = new SqliteConnectionStringBuilder
             {
                 DataSource = Path.Combine(ResolveDataRoot(options.Data.Path, contentRootPath), "magpie.db"),

@@ -50,7 +50,6 @@ export function useApiKeys() {
     useInvalidateQueriesOnEvents(API_KEY_CHANGE_EVENTS, [apiKeyQueryKeys.my()], {
         entityIds: user?.id ? [user.id] : [],
         exact: true,
-        owner: 'api-keys:mine',
     });
     const queryClient = useQueryClient();
 
@@ -109,7 +108,6 @@ export function useApiKeys() {
 export function useAllApiKeys(enabled = true) {
     useInvalidateQueriesOnEvents(enabled ? API_KEY_CHANGE_EVENTS : [], [apiKeyQueryKeys.everyone()], {
         exact: true,
-        owner: 'api-keys:admin',
     });
     const queryClient = useQueryClient();
 

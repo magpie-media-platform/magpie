@@ -33,8 +33,7 @@ public static class MagpieAuthServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(configuration);
 
-        services.AddSingleton(
-            configuration.GetSection(ConfigurationSectionName).Get<TokenServiceOptions>() ?? new());
+        services.AddSingleton(configuration.GetSection(ConfigurationSectionName).Get<TokenServiceOptions>() ?? new());
         services.AddSingleton(static provider => provider.GetRequiredService<TokenServiceOptions>().LockoutOptions);
 
         services.AddSingleton<CryptoProviderFactory, KeyStoreHmacCryptoProviderFactory>();

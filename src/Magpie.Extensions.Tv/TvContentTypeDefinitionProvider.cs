@@ -128,10 +128,12 @@ internal sealed class TvContentTypeDefinitionProvider(ILogger<TvContentTypeDefin
     private const string SeasonSignal = "season";
     private const string EpisodeSignal = "episode";
 
+    private static readonly TimeSpan PublishDateTimeZoneSlack = TimeSpan.FromDays(1);
+
     public ContentTypeDefinition Definition => TvDefinition;
 
     /// <inheritdoc />
-    public Guid? ResolveFileChild(
+    public IReadOnlyList<Guid> ResolveFileChildren(
         ContentHierarchyItem parent,
         IReadOnlyList<ContentHierarchyItem> children,
         IReadOnlyDictionary<string, List<string>> signals)
@@ -142,14 +144,29 @@ internal sealed class TvContentTypeDefinitionProvider(ILogger<TvContentTypeDefin
             Constants.SeasonLevelSlug => (EpisodeSignal, Constants.EpisodeLevelSlug),
             _ => (string.Empty, string.Empty)
         };
-        if (!signals.TryGetValue(signal, out var values) || values.Count != 1 ||
-            !int.TryParse(values[0], NumberStyles.None, CultureInfo.InvariantCulture, out var ordinal))
+        if (!signals.TryGetValue(signal, out var values))
         {
-            return null;
+            return [];
         }
 
-        var matches = children.Where(child => child.Level == childLevel && child.Ordinal == ordinal).ToArray();
-        return matches.Length == 1 ? matches[0].Id : null;
+        var resolved = new List<Guid>();
+        foreach (var value in values)
+        {
+            if (!int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var ordinal))
+            {
+                return [];
+            }
+
+            var matches = children.Where(child => child.Level == childLevel && child.Ordinal == ordinal).ToArray();
+            if (matches.Length != 1)
+            {
+                return [];
+            }
+
+            resolved.Add(matches[0].Id);
+        }
+
+        return resolved;
     }
 
     public ReleaseMatchResult IsMatch(
@@ -273,9 +290,14 @@ internal sealed class TvContentTypeDefinitionProvider(ILogger<TvContentTypeDefin
 
         if (isSeriesPack)
         {
-            return target.Item.Level != Constants.EpisodeLevelSlug || IsPublishedBy(target, season, release)
+            return target.Item.Level != Constants.EpisodeLevelSlug
                 ? ReleaseMatchResult.Confident
-                : ReleaseMatchResult.NoMatch;
+                : IsPublishedBy(target, release) switch
+                {
+                    true => ReleaseMatchResult.Confident,
+                    false => ReleaseMatchResult.NoMatch,
+                    null => ReleaseMatchResult.Indeterminate,
+                };
         }
 
         if (parsed.Seasons.Count == 0)
@@ -351,29 +373,26 @@ internal sealed class TvContentTypeDefinitionProvider(ILogger<TvContentTypeDefin
             return ReleaseMatchResult.Indeterminate;
         }
 
-        if (parsed.Episodes.Count > 0
-            ? !parsed.Episodes.Contains(episodeOrdinal)
-            : !IsPublishedBy(target, season, release))
+        var included = parsed.Episodes.Count > 0
+            ? parsed.Episodes.Contains(episodeOrdinal)
+            : IsPublishedBy(target, release);
+        return included switch
         {
-            return ReleaseMatchResult.NoMatch;
-        }
-
-        return hasAmbiguousTitle
-            ? ReleaseMatchResult.Indeterminate
-            : ReleaseMatchResult.Confident;
+            false => ReleaseMatchResult.NoMatch,
+            null => ReleaseMatchResult.Indeterminate,
+            true => hasAmbiguousTitle ? ReleaseMatchResult.Indeterminate : ReleaseMatchResult.Confident,
+        };
     }
 
-    private static bool IsPublishedBy(ContentTarget target, ContentHierarchyItem season, Release release)
+    private static bool? IsPublishedBy(ContentTarget target, Release release)
     {
-        if (release.PublishDate == default)
+        if (target.Metadata.GetValueOrDefault(target.Item.Id)?.PublishDate is not { } published || published == default)
         {
-            return true;
+            return null;
         }
 
-        return target.Metadata.GetValueOrDefault(target.Item.Id)?.PublishDate is { } published
-            ? published.Date <= release.PublishDate.Date.AddDays(1)
-            : target.Metadata.GetValueOrDefault(season.Id)?.PublishDate is not { } seasonPublished ||
-                seasonPublished.Date.AddDays(365) < release.PublishDate.Date;
+        return release.PublishDate == default ||
+            published.Date <= release.PublishDate.Date + PublishDateTimeZoneSlack;
     }
 
     private static bool IsIgnorableInterveningToken(string token) =>
@@ -407,15 +426,19 @@ internal sealed class TvContentTypeDefinitionProvider(ILogger<TvContentTypeDefin
             ? parsed.Title + " " + year.ToString(CultureInfo.InvariantCulture)
             : parsed.Title;
 
-        levelSlug = parsed.Season is not null && parsed.Episode is not null ? Constants.ShowLevelSlug : null;
-        return new SignalBagBuilder()
+        levelSlug = parsed.Season is not null && parsed.Episodes.Count > 0 ? Constants.ShowLevelSlug : null;
+        var signals = new SignalBagBuilder()
                 .AddValue(ParsedFileSignalKeys.Title, parsed.Title)
                 .AddValue(ParsedFileSignalKeys.Year, parsed.Year)
                 .AddValue(SeasonSignal, parsed.Season)
-                .AddValue(EpisodeSignal, parsed.Episode)
                 .AddValue(ParsedFileSignalKeys.TitleToken, title)
-                .AddValue(ParsedFileSignalKeys.RootTitle, title)
-                .Build();
+                .AddValue(ParsedFileSignalKeys.RootTitle, title);
+        foreach (var episode in parsed.Episodes)
+        {
+            signals.AddValue(EpisodeSignal, episode);
+        }
+
+        return signals.Build();
     }
 
     public string? BuildPath(

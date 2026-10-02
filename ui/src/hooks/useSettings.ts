@@ -101,7 +101,6 @@ export function settingsToRecord(settings: ApiSetting[]): Record<string, string>
 export function useSystemSettingsGroup(name: string) {
     useInvalidateQueriesOnEvents(SETTINGS_CHANGE_EVENTS, [settingsQueryKeys.groups], {
         exact: true,
-        owner: 'system-settings-group',
     });
     const query = useQuery({
         queryKey: settingsQueryKeys.groups,
@@ -113,7 +112,7 @@ export function useSystemSettingsGroup(name: string) {
     return {
         group: query.data ?? null,
         refetch: query.refetch,
-        isLoading: query.isLoading,
+        isLoading: query.isPending,
         error: query.error ?? null,
         dataUpdatedAt: query.dataUpdatedAt,
     };
@@ -167,7 +166,6 @@ export function useUpdateSystemSettingsGroup(name: string) {
 export function useExtensionSettingsGroups(extensionId: string | null) {
     useInvalidateQueriesOnEvents(extensionId ? SETTINGS_CHANGE_EVENTS : [], [settingsQueryKeys.groups], {
         exact: true,
-        owner: 'extension-settings-groups',
     });
     const query = useQuery({
         queryKey: settingsQueryKeys.groups,

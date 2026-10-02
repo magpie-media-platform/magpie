@@ -131,12 +131,10 @@ public sealed class SubjectRepositoryTests
 
         _metadataContainerId = metadataContainer.Id;
 
-        var loggerFactory = NullLoggerFactory.Instance;
-
         var auditRecordRepository = new AuditRecordRepository(
             _context,
             Mock.Of<IEventBus>(),
-            loggerFactory.CreateLogger<AuditRecordRepository>(),
+            NullLogger<AuditRecordRepository>.Instance,
             new TransactionManager(_context, NullLogger<TransactionManager>.Instance),
             Mock.Of<IJobExecutionScopeFactory>(),
             timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
@@ -148,7 +146,7 @@ public sealed class SubjectRepositoryTests
             auditRecordRepository,
             _transactionManager,
             _eventBus.Object,
-            loggerFactory.CreateLogger<SubjectRepository>(),
+            NullLogger<SubjectRepository>.Instance,
             timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
         _subject = subject;
 
@@ -157,14 +155,13 @@ public sealed class SubjectRepositoryTests
             auditRecordRepository,
             _subject,
             _transactionManager,
-            loggerFactory.CreateLogger<MetadataContainerRepository>(),
+            NullLogger<MetadataContainerRepository>.Instance,
             timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
     }
 
     [TearDown]
     public void TearDown()
     {
-        _context.Database.CloseConnection();
         _context.Dispose();
     }
 
@@ -860,13 +857,8 @@ public sealed class SubjectRepositoryTests
             Title = "Bryan Cranston",
             CreatedAt = DateTime.UtcNow
         });
-        var favoriteTag = _context.Tags.Local.FirstOrDefault(t => t.Name == "favorite")
-            ?? _context.Tags.FirstOrDefault(t => t.Name == "favorite");
-        if (favoriteTag is null)
-        {
-            favoriteTag = new Tag { Name = "favorite" };
-            _context.Tags.Add(favoriteTag);
-        }
+        var favoriteTag = new Tag { Name = "favorite" };
+        _context.Tags.Add(favoriteTag);
 
         favoriteTag.MetadataContainers.Add(taggedContainer);
         await _context.SaveChangesAsync().ConfigureAwait(false);
@@ -891,13 +883,8 @@ public sealed class SubjectRepositoryTests
             Title = "Denis Villeneuve",
             CreatedAt = DateTime.UtcNow
         });
-        var otherTag = _context.Tags.Local.FirstOrDefault(t => t.Name == "other")
-            ?? _context.Tags.FirstOrDefault(t => t.Name == "other");
-        if (otherTag is null)
-        {
-            otherTag = new Tag { Name = "other" };
-            _context.Tags.Add(otherTag);
-        }
+        var otherTag = new Tag { Name = "other" };
+        _context.Tags.Add(otherTag);
 
         otherTag.MetadataContainers.Add(otherContainer);
         await _context.SaveChangesAsync().ConfigureAwait(false);
@@ -937,28 +924,63 @@ public sealed class SubjectRepositoryTests
     public async Task QueryAsync_ReturnsAllSubjectsPaged_WhenNoFilter()
     {
         // Arrange
-        foreach (var (kind, title) in new[] { ("person", "Alice"), ("person", "Bob"), ("studio", "Carol") })
+        var container1 = new MetadataContainer { CreatedAt = DateTime.UtcNow };
+        _context.MetadataContainers.Add(container1);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.Subjects.Add(new Subject
         {
-            var container = new MetadataContainer { CreatedAt = DateTime.UtcNow };
-            _context.MetadataContainers.Add(container);
-            await _context.SaveChangesAsync().ConfigureAwait(false);
-            _context.Subjects.Add(new Subject
-            {
-                MetadataContainerId = container.Id,
-                Kind = kind,
-                CreatedAt = DateTime.UtcNow
-            });
-            _context.MetadataContributions.Add(new MetadataContribution
-            {
-                MetadataContainerId = container.Id,
-                ProviderType = "user",
-                Source = "user",
-                Ordinal = 0,
-                Title = title,
-                CreatedAt = DateTime.UtcNow
-            });
-            await _context.SaveChangesAsync().ConfigureAwait(false);
-        }
+            MetadataContainerId = container1.Id,
+            Kind = "person",
+            CreatedAt = DateTime.UtcNow
+        });
+        _context.MetadataContributions.Add(new MetadataContribution
+        {
+            MetadataContainerId = container1.Id,
+            ProviderType = "user",
+            Source = "user",
+            Ordinal = 0,
+            Title = "Alice",
+            CreatedAt = DateTime.UtcNow
+        });
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        var container2 = new MetadataContainer { CreatedAt = DateTime.UtcNow };
+        _context.MetadataContainers.Add(container2);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.Subjects.Add(new Subject
+        {
+            MetadataContainerId = container2.Id,
+            Kind = "person",
+            CreatedAt = DateTime.UtcNow
+        });
+        _context.MetadataContributions.Add(new MetadataContribution
+        {
+            MetadataContainerId = container2.Id,
+            ProviderType = "user",
+            Source = "user",
+            Ordinal = 0,
+            Title = "Bob",
+            CreatedAt = DateTime.UtcNow
+        });
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        var container3 = new MetadataContainer { CreatedAt = DateTime.UtcNow };
+        _context.MetadataContainers.Add(container3);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.Subjects.Add(new Subject
+        {
+            MetadataContainerId = container3.Id,
+            Kind = "studio",
+            CreatedAt = DateTime.UtcNow
+        });
+        _context.MetadataContributions.Add(new MetadataContribution
+        {
+            MetadataContainerId = container3.Id,
+            ProviderType = "user",
+            Source = "user",
+            Ordinal = 0,
+            Title = "Carol",
+            CreatedAt = DateTime.UtcNow
+        });
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
         var result = await _subject.QueryAsync(
@@ -1081,28 +1103,101 @@ public sealed class SubjectRepositoryTests
     public async Task QueryAsync_PagesItemsAndReportsTotal_WhenPagingIsSet()
     {
         // Arrange
-        for (var i = 0; i < 5; i++)
+        var container1 = new MetadataContainer { CreatedAt = DateTime.UtcNow };
+        _context.MetadataContainers.Add(container1);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.Subjects.Add(new Subject
         {
-            var container = new MetadataContainer { CreatedAt = DateTime.UtcNow };
-            _context.MetadataContainers.Add(container);
-            await _context.SaveChangesAsync().ConfigureAwait(false);
-            _context.Subjects.Add(new Subject
-            {
-                MetadataContainerId = container.Id,
-                Kind = "person",
-                CreatedAt = DateTime.UtcNow
-            });
-            _context.MetadataContributions.Add(new MetadataContribution
-            {
-                MetadataContainerId = container.Id,
-                ProviderType = "user",
-                Source = "user",
-                Ordinal = 0,
-                Title = $"Person {i}",
-                CreatedAt = DateTime.UtcNow
-            });
-            await _context.SaveChangesAsync().ConfigureAwait(false);
-        }
+            MetadataContainerId = container1.Id,
+            Kind = "person",
+            CreatedAt = DateTime.UtcNow
+        });
+        _context.MetadataContributions.Add(new MetadataContribution
+        {
+            MetadataContainerId = container1.Id,
+            ProviderType = "user",
+            Source = "user",
+            Ordinal = 0,
+            Title = "Person 0",
+            CreatedAt = DateTime.UtcNow
+        });
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        var container2 = new MetadataContainer { CreatedAt = DateTime.UtcNow };
+        _context.MetadataContainers.Add(container2);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.Subjects.Add(new Subject
+        {
+            MetadataContainerId = container2.Id,
+            Kind = "person",
+            CreatedAt = DateTime.UtcNow
+        });
+        _context.MetadataContributions.Add(new MetadataContribution
+        {
+            MetadataContainerId = container2.Id,
+            ProviderType = "user",
+            Source = "user",
+            Ordinal = 0,
+            Title = "Person 1",
+            CreatedAt = DateTime.UtcNow
+        });
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        var container3 = new MetadataContainer { CreatedAt = DateTime.UtcNow };
+        _context.MetadataContainers.Add(container3);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.Subjects.Add(new Subject
+        {
+            MetadataContainerId = container3.Id,
+            Kind = "person",
+            CreatedAt = DateTime.UtcNow
+        });
+        _context.MetadataContributions.Add(new MetadataContribution
+        {
+            MetadataContainerId = container3.Id,
+            ProviderType = "user",
+            Source = "user",
+            Ordinal = 0,
+            Title = "Person 2",
+            CreatedAt = DateTime.UtcNow
+        });
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        var container4 = new MetadataContainer { CreatedAt = DateTime.UtcNow };
+        _context.MetadataContainers.Add(container4);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.Subjects.Add(new Subject
+        {
+            MetadataContainerId = container4.Id,
+            Kind = "person",
+            CreatedAt = DateTime.UtcNow
+        });
+        _context.MetadataContributions.Add(new MetadataContribution
+        {
+            MetadataContainerId = container4.Id,
+            ProviderType = "user",
+            Source = "user",
+            Ordinal = 0,
+            Title = "Person 3",
+            CreatedAt = DateTime.UtcNow
+        });
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        var container5 = new MetadataContainer { CreatedAt = DateTime.UtcNow };
+        _context.MetadataContainers.Add(container5);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.Subjects.Add(new Subject
+        {
+            MetadataContainerId = container5.Id,
+            Kind = "person",
+            CreatedAt = DateTime.UtcNow
+        });
+        _context.MetadataContributions.Add(new MetadataContribution
+        {
+            MetadataContainerId = container5.Id,
+            ProviderType = "user",
+            Source = "user",
+            Ordinal = 0,
+            Title = "Person 4",
+            CreatedAt = DateTime.UtcNow
+        });
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
         var firstPage = await _subject.QueryAsync(
@@ -1136,28 +1231,63 @@ public sealed class SubjectRepositoryTests
     public async Task QueryAsync_SortsByKindDescending_WhenMultiplePagesExist()
     {
         // Arrange
-        foreach (var (kind, title) in new[] { ("network", "N"), ("person", "P"), ("studio", "S") })
+        var container1 = new MetadataContainer { CreatedAt = DateTime.UtcNow };
+        _context.MetadataContainers.Add(container1);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.Subjects.Add(new Subject
         {
-            var container = new MetadataContainer { CreatedAt = DateTime.UtcNow };
-            _context.MetadataContainers.Add(container);
-            await _context.SaveChangesAsync().ConfigureAwait(false);
-            _context.Subjects.Add(new Subject
-            {
-                MetadataContainerId = container.Id,
-                Kind = kind,
-                CreatedAt = DateTime.UtcNow
-            });
-            _context.MetadataContributions.Add(new MetadataContribution
-            {
-                MetadataContainerId = container.Id,
-                ProviderType = "user",
-                Source = "user",
-                Ordinal = 0,
-                Title = title,
-                CreatedAt = DateTime.UtcNow
-            });
-            await _context.SaveChangesAsync().ConfigureAwait(false);
-        }
+            MetadataContainerId = container1.Id,
+            Kind = "network",
+            CreatedAt = DateTime.UtcNow
+        });
+        _context.MetadataContributions.Add(new MetadataContribution
+        {
+            MetadataContainerId = container1.Id,
+            ProviderType = "user",
+            Source = "user",
+            Ordinal = 0,
+            Title = "N",
+            CreatedAt = DateTime.UtcNow
+        });
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        var container2 = new MetadataContainer { CreatedAt = DateTime.UtcNow };
+        _context.MetadataContainers.Add(container2);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.Subjects.Add(new Subject
+        {
+            MetadataContainerId = container2.Id,
+            Kind = "person",
+            CreatedAt = DateTime.UtcNow
+        });
+        _context.MetadataContributions.Add(new MetadataContribution
+        {
+            MetadataContainerId = container2.Id,
+            ProviderType = "user",
+            Source = "user",
+            Ordinal = 0,
+            Title = "P",
+            CreatedAt = DateTime.UtcNow
+        });
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        var container3 = new MetadataContainer { CreatedAt = DateTime.UtcNow };
+        _context.MetadataContainers.Add(container3);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.Subjects.Add(new Subject
+        {
+            MetadataContainerId = container3.Id,
+            Kind = "studio",
+            CreatedAt = DateTime.UtcNow
+        });
+        _context.MetadataContributions.Add(new MetadataContribution
+        {
+            MetadataContainerId = container3.Id,
+            ProviderType = "user",
+            Source = "user",
+            Ordinal = 0,
+            Title = "S",
+            CreatedAt = DateTime.UtcNow
+        });
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
         var sort = new SortParameter { PropertyName = nameof(Subject.Kind), Direction = SortDirection.Descending };
@@ -1180,28 +1310,63 @@ public sealed class SubjectRepositoryTests
     public async Task QueryAsync_SortsByTitleAscendingByDefault_WhenMultiplePagesExist()
     {
         // Arrange
-        foreach (var (kind, title) in new[] { ("person", "Charlie"), ("studio", "Alice"), ("person", "Bob") })
+        var container1 = new MetadataContainer { CreatedAt = DateTime.UtcNow };
+        _context.MetadataContainers.Add(container1);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.Subjects.Add(new Subject
         {
-            var container = new MetadataContainer { CreatedAt = DateTime.UtcNow };
-            _context.MetadataContainers.Add(container);
-            await _context.SaveChangesAsync().ConfigureAwait(false);
-            _context.Subjects.Add(new Subject
-            {
-                MetadataContainerId = container.Id,
-                Kind = kind,
-                CreatedAt = DateTime.UtcNow
-            });
-            _context.MetadataContributions.Add(new MetadataContribution
-            {
-                MetadataContainerId = container.Id,
-                ProviderType = "user",
-                Source = "user",
-                Ordinal = 0,
-                Title = title,
-                CreatedAt = DateTime.UtcNow
-            });
-            await _context.SaveChangesAsync().ConfigureAwait(false);
-        }
+            MetadataContainerId = container1.Id,
+            Kind = "person",
+            CreatedAt = DateTime.UtcNow
+        });
+        _context.MetadataContributions.Add(new MetadataContribution
+        {
+            MetadataContainerId = container1.Id,
+            ProviderType = "user",
+            Source = "user",
+            Ordinal = 0,
+            Title = "Charlie",
+            CreatedAt = DateTime.UtcNow
+        });
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        var container2 = new MetadataContainer { CreatedAt = DateTime.UtcNow };
+        _context.MetadataContainers.Add(container2);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.Subjects.Add(new Subject
+        {
+            MetadataContainerId = container2.Id,
+            Kind = "studio",
+            CreatedAt = DateTime.UtcNow
+        });
+        _context.MetadataContributions.Add(new MetadataContribution
+        {
+            MetadataContainerId = container2.Id,
+            ProviderType = "user",
+            Source = "user",
+            Ordinal = 0,
+            Title = "Alice",
+            CreatedAt = DateTime.UtcNow
+        });
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        var container3 = new MetadataContainer { CreatedAt = DateTime.UtcNow };
+        _context.MetadataContainers.Add(container3);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.Subjects.Add(new Subject
+        {
+            MetadataContainerId = container3.Id,
+            Kind = "person",
+            CreatedAt = DateTime.UtcNow
+        });
+        _context.MetadataContributions.Add(new MetadataContribution
+        {
+            MetadataContainerId = container3.Id,
+            ProviderType = "user",
+            Source = "user",
+            Ordinal = 0,
+            Title = "Bob",
+            CreatedAt = DateTime.UtcNow
+        });
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
         var firstPage = await _subject.QueryAsync(
@@ -1234,28 +1399,63 @@ public sealed class SubjectRepositoryTests
     public async Task QueryAsync_SortsByTitleDescending_WhenNameSortRequested()
     {
         // Arrange
-        foreach (var (kind, title) in new[] { ("person", "Alice"), ("person", "Bob"), ("studio", "Charlie") })
+        var container1 = new MetadataContainer { CreatedAt = DateTime.UtcNow };
+        _context.MetadataContainers.Add(container1);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.Subjects.Add(new Subject
         {
-            var container = new MetadataContainer { CreatedAt = DateTime.UtcNow };
-            _context.MetadataContainers.Add(container);
-            await _context.SaveChangesAsync().ConfigureAwait(false);
-            _context.Subjects.Add(new Subject
-            {
-                MetadataContainerId = container.Id,
-                Kind = kind,
-                CreatedAt = DateTime.UtcNow
-            });
-            _context.MetadataContributions.Add(new MetadataContribution
-            {
-                MetadataContainerId = container.Id,
-                ProviderType = "user",
-                Source = "user",
-                Ordinal = 0,
-                Title = title,
-                CreatedAt = DateTime.UtcNow
-            });
-            await _context.SaveChangesAsync().ConfigureAwait(false);
-        }
+            MetadataContainerId = container1.Id,
+            Kind = "person",
+            CreatedAt = DateTime.UtcNow
+        });
+        _context.MetadataContributions.Add(new MetadataContribution
+        {
+            MetadataContainerId = container1.Id,
+            ProviderType = "user",
+            Source = "user",
+            Ordinal = 0,
+            Title = "Alice",
+            CreatedAt = DateTime.UtcNow
+        });
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        var container2 = new MetadataContainer { CreatedAt = DateTime.UtcNow };
+        _context.MetadataContainers.Add(container2);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.Subjects.Add(new Subject
+        {
+            MetadataContainerId = container2.Id,
+            Kind = "person",
+            CreatedAt = DateTime.UtcNow
+        });
+        _context.MetadataContributions.Add(new MetadataContribution
+        {
+            MetadataContainerId = container2.Id,
+            ProviderType = "user",
+            Source = "user",
+            Ordinal = 0,
+            Title = "Bob",
+            CreatedAt = DateTime.UtcNow
+        });
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        var container3 = new MetadataContainer { CreatedAt = DateTime.UtcNow };
+        _context.MetadataContainers.Add(container3);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.Subjects.Add(new Subject
+        {
+            MetadataContainerId = container3.Id,
+            Kind = "studio",
+            CreatedAt = DateTime.UtcNow
+        });
+        _context.MetadataContributions.Add(new MetadataContribution
+        {
+            MetadataContainerId = container3.Id,
+            ProviderType = "user",
+            Source = "user",
+            Ordinal = 0,
+            Title = "Charlie",
+            CreatedAt = DateTime.UtcNow
+        });
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
         var sort = new SortParameter { PropertyName = "name", Direction = SortDirection.Descending };
@@ -1658,9 +1858,6 @@ public sealed class SubjectRepositoryTests
     [Test]
     public async Task CreateAsync_PersistsSubjectAndContainer_WhenContributionCreationSucceeds()
     {
-        // Arrange
-        var subjectsBefore = await _context.Subjects.CountAsync().ConfigureAwait(false);
-
         // Act
         Subject created = null!;
         MetadataContribution contribution = null!;
@@ -1685,7 +1882,7 @@ public sealed class SubjectRepositoryTests
         // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(await _context.Subjects.CountAsync().ConfigureAwait(false), Is.EqualTo(subjectsBefore + 1));
+            Assert.That(await _context.Subjects.CountAsync().ConfigureAwait(false), Is.EqualTo(1));
             Assert.That(await _context.Subjects.AnyAsync(s => s.Id == created.Id).ConfigureAwait(false), Is.True);
             Assert.That(
                 await _context.MetadataContainers.AnyAsync(c => c.Id == created.MetadataContainerId)

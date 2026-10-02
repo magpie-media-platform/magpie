@@ -3,8 +3,8 @@ using System;
 namespace Magpie.Models.Security;
 
 /// <summary>
-/// A token value and expiration.
+/// A token and the time when it expires.
 /// </summary>
-/// <param name="Token">Token value</param>
-/// <param name="ExpiresAt">Expiration timestamp</param>
+/// <param name="Token">The token</param>
+/// <param name="ExpiresAt">The time when the token expires</param>
 public sealed record IssuedToken(string Token, DateTime ExpiresAt);

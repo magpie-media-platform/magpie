@@ -30,7 +30,7 @@ public interface ITransactionManager
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// If a transaction is open, runs an action after it commits, otherwise runs the action now.
+    /// Runs an action after the current transaction commits.
     /// </summary>
     /// <param name="action">The work to run after the commit</param>
     /// <param name="cancellationToken">The token that cancels the operation</param>

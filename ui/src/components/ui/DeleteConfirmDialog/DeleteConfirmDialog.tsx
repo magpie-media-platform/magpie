@@ -5,6 +5,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 import { Button, type ButtonVariant } from '../Button';
 import { Switch } from '../Switch';
 
+import { DisabledTooltip } from '@/auth';
 import { returnFocusOnClose } from '@/lib/returnFocus';
 
 import './DeleteConfirmDialog.css';
@@ -15,6 +16,8 @@ interface DeleteConfirmExtraToggle {
     checked: boolean;
 
     onChange: (checked: boolean) => void;
+
+    disabledReason?: string;
 }
 
 export interface DeleteConfirmDialogProps {
@@ -94,17 +97,22 @@ export function DeleteConfirmDialog({
                         <label className="delete-confirm-dialog__toggle-label" htmlFor={toggleId}>
                             {extraToggle.label}
                         </label>
-                        <Switch
-                            id={toggleId}
-                            checked={extraToggle.checked}
-                            onCheckedChange={(value) => extraToggle.onChange(value === true)}
-                            disabled={isDeleting}
-                            data-action="extra-toggle"
-                        />
+                        <DisabledTooltip
+                            disabled={extraToggle.disabledReason !== undefined}
+                            message={extraToggle.disabledReason ?? ''}
+                        >
+                            <Switch
+                                id={toggleId}
+                                checked={extraToggle.checked}
+                                onCheckedChange={(value) => extraToggle.onChange(value === true)}
+                                disabled={isDeleting || extraToggle.disabledReason !== undefined}
+                                data-action="extra-toggle"
+                            />
+                        </DisabledTooltip>
                     </div>
                 )}
                 <DialogFooter>
-                    <Button variant="ghost" onClick={onCancel} disabled={isDeleting} data-action="cancel">
+                    <Button variant="ghost" onClick={onCancel} disabled={isDeleting} data-action="cancel" autoFocus>
                         Cancel
                     </Button>
                     <Button

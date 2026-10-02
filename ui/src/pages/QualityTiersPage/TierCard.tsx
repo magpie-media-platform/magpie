@@ -19,6 +19,7 @@ interface TierCardProps {
     isDeleting: boolean;
     isCloning: boolean;
     canManage: boolean;
+    sharedWith?: readonly string[];
     isMoving: boolean;
     isReorderDisabled: boolean;
     isDragging: boolean;
@@ -49,6 +50,7 @@ export function TierCard({
     isDeleting,
     isCloning,
     canManage,
+    sharedWith,
     isMoving,
     isReorderDisabled,
     isDragging,
@@ -71,6 +73,7 @@ export function TierCard({
     onMove,
     onFocusRestored,
 }: TierCardProps) {
+    const isShared = !!sharedWith?.length;
     const tierClasses = [
         'tier-list-detail-page__tier',
         sortableListItemClassNames(isDragging, isDropTarget, dropPosition),
@@ -86,6 +89,7 @@ export function TierCard({
             data-tier-id={tier.id}
             data-sortable-list-item-id={tier.id}
             data-cutoff={tier.isCutoff || undefined}
+            data-shared={isShared || undefined}
             data-deleting={isDeleting || undefined}
             data-dragging={isDragging || undefined}
             onDragOver={(e) => onDragOver(tier.id, e)}
@@ -131,6 +135,11 @@ export function TierCard({
                                 Cutoff
                             </Badge>
                         )}
+                        {isShared && (
+                            <Badge variant="info" size="sm">
+                                Shared
+                            </Badge>
+                        )}
                     </div>
                     <div className="tier-list-detail-page__tier-meta">
                         <span className="tier-list-detail-page__criteria-count">
@@ -142,6 +151,11 @@ export function TierCard({
                             </span>
                         )}
                     </div>
+                    {isShared && (
+                        <div className="tier-list-detail-page__tier-meta" data-testid="tier-shared-lists">
+                            Also in {sharedWith?.map((name) => `"${name}"`).join(', ')}
+                        </div>
+                    )}
                 </div>
                 {canManage && (
                     <div className="tier-list-detail-page__tier-actions card-actions">

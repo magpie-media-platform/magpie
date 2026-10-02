@@ -3,7 +3,7 @@ import { Link, useSearchParams } from 'react-router-dom';
 import { LocalContentLink } from '@/components/content/LocalContentPreview';
 import { MagnifyingGlassIcon, TargetIcon, WarningCircleIcon } from '@phosphor-icons/react';
 import { useQuery } from '@tanstack/react-query';
-import { type ColumnDef, type RowSelectionState, type SortingState } from '@tanstack/react-table';
+import { type ColumnDef, type SortingState } from '@tanstack/react-table';
 
 import { ContentPoster } from '@/components/content/ContentCardPrimitives';
 import { ContentLineageTitle } from '@/components/content/ContentLineageTitle';
@@ -49,6 +49,7 @@ import { escapeQueryString } from '@/lib/simpleFilterQuery';
 import { formatPublishDate } from '@/lib/dateFormatting';
 import { formatRelativeTime } from '@/lib/formatTime';
 import { getFulfillmentBadge } from '@/types/content';
+import type { TemporalPrecision } from '@/types/contentMetadata';
 import type { ContentListItem, FulfillmentStatus } from '@/types';
 
 import { countMissingDescendants, resolveWantedSearchLeaves } from './wantedSearch';
@@ -142,8 +143,8 @@ function LastSearchedCell({ value }: { value?: string | null }) {
     return <span className="wanted-page__mobile-last-searched">{formatRelativeTime(value, 'Never')}</span>;
 }
 
-function PublishedCell({ value }: { value?: string }) {
-    return <span className="wanted-page__published">{formatPublishDate(value, '--')}</span>;
+function PublishedCell({ value, precision }: { value?: string; precision?: TemporalPrecision }) {
+    return <span className="wanted-page__published">{formatPublishDate(value, '--', precision)}</span>;
 }
 
 function isContainerItem(item: ContentListItem, contentTypes: LibraryTypeDefinition[]): boolean {
@@ -338,9 +339,7 @@ export function WantedPage() {
         return [...stagedItems, ...upgrades];
     }, [items, upgradeItems, isContainer]);
 
-    const filteredItems = wantedItems;
-
-    const sortedItems = useMemo(() => sortWantedItems(filteredItems, sorting), [filteredItems, sorting]);
+    const sortedItems = useMemo(() => sortWantedItems(wantedItems, sorting), [wantedItems, sorting]);
 
     const hasActiveFilters = filterQuery.trim().length > 0;
 
@@ -405,24 +404,6 @@ export function WantedPage() {
             ...ancestors.map((item) => ({ id: item.id, label: item.title, to: wantedUrl(item.id) })),
         ];
     }, [ancestors, parentId, wantedUrl]);
-
-    const handleRowSelectionChange = useCallback(
-        (updater: RowSelectionState | ((previous: RowSelectionState) => RowSelectionState)) => {
-            const current = selection.rowSelection;
-            const next = typeof updater === 'function' ? updater(current) : updater;
-            const changed = pageRowIds.filter((id) => selection.isRowChecked(id) !== Boolean(next[id]));
-            if (changed.length === 0) {
-                return;
-            }
-            if (changed.length > 1) {
-                selection.toggleHeader(Boolean(next[changed[0]]));
-                return;
-            }
-            const id = changed[0];
-            selection.toggleRow(id, Boolean(next[id]));
-        },
-        [pageRowIds, selection],
-    );
 
     const toggleMobileSelection = useCallback(
         (item: ContentListItem) => {
@@ -588,7 +569,9 @@ export function WantedPage() {
                 header: 'Published',
                 size: 130,
                 sortUndefined: 'last',
-                cell: ({ row }) => <PublishedCell value={row.original.publishDate} />,
+                cell: ({ row }) => (
+                    <PublishedCell value={row.original.publishDate} precision={row.original.publishDatePrecision} />
+                ),
             },
             {
                 id: 'lastSearched',
@@ -792,14 +775,13 @@ export function WantedPage() {
                                 data={sortedItems}
                                 enableRowSelection={canSearch}
                                 rowSelection={selection.rowSelection}
-                                onRowSelectionChange={handleRowSelectionChange}
                                 enableSorting={true}
                                 manualSorting
                                 sorting={sorting}
                                 onSortingChange={(updater) =>
                                     setSorting(typeof updater === 'function' ? updater(sorting) : updater)
                                 }
-                                enablePagination={filteredItems.length > PAGE_SIZE}
+                                enablePagination={wantedItems.length > PAGE_SIZE}
                                 hidePagination
                                 pageSize={PAGE_SIZE}
                                 pagination={pagination}
@@ -807,12 +789,12 @@ export function WantedPage() {
                                 emptyState={hasActiveFilters ? filteredEmptyState : emptyState}
                                 keepHeaderWhenEmpty={hasActiveFilters}
                             />
-                            {filteredItems.length > PAGE_SIZE && (
+                            {wantedItems.length > PAGE_SIZE && (
                                 <Pager
                                     className="wanted-page__pager"
                                     page={currentPage}
                                     pageCount={pageCount}
-                                    totalItems={filteredItems.length}
+                                    totalItems={wantedItems.length}
                                     onFirst={() => setPage(1)}
                                     onPrevious={() => setPage(currentPage - 1)}
                                     onNext={() => setPage(currentPage + 1)}
@@ -824,7 +806,7 @@ export function WantedPage() {
 
                     {usesCardLayout && (
                         <div className="wanted-page__mobile-list">
-                            {filteredItems.length === 0 ? (
+                            {wantedItems.length === 0 ? (
                                 hasActiveFilters ? (
                                     filteredEmptyState
                                 ) : (
@@ -935,7 +917,14 @@ export function WantedPage() {
                                                         <AcquisitionBadge status={item.acquisitionStatus} />
                                                     )}
                                                     <TypeCell item={item} contentTypes={contentTypes} />
-                                                    <span>Published: {formatPublishDate(item.publishDate, '--')}</span>
+                                                    <span>
+                                                        Published:{' '}
+                                                        {formatPublishDate(
+                                                            item.publishDate,
+                                                            '--',
+                                                            item.publishDatePrecision,
+                                                        )}
+                                                    </span>
                                                     <span className="wanted-page__mobile-last-searched">
                                                         Last searched: {formatRelativeTime(item.lastSearched, 'Never')}
                                                     </span>
@@ -945,12 +934,12 @@ export function WantedPage() {
                                     })}
                                 </>
                             )}
-                            {filteredItems.length > PAGE_SIZE && (
+                            {wantedItems.length > PAGE_SIZE && (
                                 <Pager
                                     className="wanted-page__pager"
                                     page={currentPage}
                                     pageCount={pageCount}
-                                    totalItems={filteredItems.length}
+                                    totalItems={wantedItems.length}
                                     onFirst={() => setPage(1)}
                                     onPrevious={() => setPage(currentPage - 1)}
                                     onNext={() => setPage(currentPage + 1)}

@@ -621,10 +621,10 @@ public class QueryPlannerTests
         }
     }
 
-    [TestCase("tv", "relationship[0] /person/{id}/tv_credits")]
-    [TestCase("movie", "relationship[0] with_people")]
+    [TestCase((int)ContentRoute.TvShow, "relationship[0] /person/{id}/tv_credits")]
+    [TestCase((int)ContentRoute.Movie, "relationship[0] with_people")]
     public void SerializePlan_RetainsDirectRelationshipResidual_WhenFallbackCanIgnoreSubjects(
-        string routeName,
+        int routeValue,
         string pushedDisposition)
     {
         // Arrange
@@ -677,7 +677,7 @@ public class QueryPlannerTests
         // Act
         var plan = _subject.Plan(new QueryRequest
         {
-            Route = routeName == "movie" ? ContentRoute.Movie : ContentRoute.TvShow,
+            Route = (ContentRoute)routeValue,
             Criteria = criteria,
             Page = 1,
             DefaultLanguagePreference = "en-US"

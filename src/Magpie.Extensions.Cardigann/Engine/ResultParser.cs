@@ -80,7 +80,7 @@ internal sealed class ResultParser(TimeProvider timeProvider, ILogger<ResultPars
         var magnet = "magnet:?xt=urn:btih:" + hash.Trim();
         if (!string.IsNullOrWhiteSpace(title))
         {
-            magnet += "&dn=" + Uri.EscapeDataString(title!);
+            magnet += "&dn=" + Uri.EscapeDataString(title);
         }
 
         foreach (var tracker in DefaultMagnetTrackers)
@@ -99,7 +99,7 @@ internal sealed class ResultParser(TimeProvider timeProvider, ILogger<ResultPars
             return null;
         }
 
-        return (magnet!.InfoHashes.V1 ?? magnet.InfoHashes.V2)?.ToHex().ToLowerInvariant();
+        return (magnet.InfoHashes.V1 ?? magnet.InfoHashes.V2)?.ToHex().ToLowerInvariant();
     }
 
     private static void CaptureIdentityKey(Release release, Uri infoUri, string? infoHash)
@@ -113,7 +113,7 @@ internal sealed class ResultParser(TimeProvider timeProvider, ILogger<ResultPars
         var magnetUri = string.IsNullOrWhiteSpace(explicitHash)
             ? infoUri.ToString()
             : "magnet:?xt=urn:btih:" + explicitHash;
-        if (!MagnetLink.TryParse(magnetUri, out var magnet) || magnet!.InfoHashes.V1 is not { } v1)
+        if (!MagnetLink.TryParse(magnetUri, out var magnet) || magnet.InfoHashes.V1 is not { } v1)
         {
             return;
         }
@@ -368,7 +368,7 @@ internal sealed class ResultParser(TimeProvider timeProvider, ILogger<ResultPars
                     : RenderSelector(download.InfoHash.Title, vars) is { } renderedTitle
                         ? ExtractField(document.DocumentElement, renderedTitle, "download.infohash.title")
                         : null;
-                return BuildMagnet(hash!, title);
+                return BuildMagnet(hash, title);
             }
         }
 
@@ -493,13 +493,13 @@ internal sealed class ResultParser(TimeProvider timeProvider, ILogger<ResultPars
             return null;
         }
 
-        var infoUri = ResolveLink(link!, baseUri, rowIndex);
+        var infoUri = ResolveLink(link, baseUri, rowIndex);
         if (infoUri is null)
         {
             return null;
         }
 
-        return BuildRelease(values, title!, infoUri, infoHash: null, baseUri, categoryMappings);
+        return BuildRelease(values, title, infoUri, infoHash: null, baseUri, categoryMappings);
     }
 
     private Release BuildRelease(
@@ -521,7 +521,7 @@ internal sealed class ResultParser(TimeProvider timeProvider, ILogger<ResultPars
         var rawCategory = Get(values, "category") ?? Get(values, "cat");
         if (!string.IsNullOrWhiteSpace(rawCategory))
         {
-            categories.Add(MapCategory(categoryMappings, rawCategory!));
+            categories.Add(MapCategory(categoryMappings, rawCategory));
         }
 
         var release = new Release
@@ -615,19 +615,11 @@ internal sealed class ResultParser(TimeProvider timeProvider, ILogger<ResultPars
             }
             catch (RegexMatchTimeoutException ex)
             {
-                logger.LogWarning(
-                    ex,
-                    "Cardigann filter {Filter} timed out at {Context} and skipped the field (possible ReDoS).",
-                    step.Name,
-                    context);
+                logger.LogWarning(ex, "Cardigann filter {Filter} timed out at {Context}", step.Name, context);
             }
             catch (Exception ex)
             {
-                logger.LogWarning(
-                    ex,
-                    "Cardigann filter {Filter} failed at {Context}; the value stayed unchanged.",
-                    step.Name,
-                    context);
+                logger.LogWarning(ex, "Cardigann filter {Filter} failed at {Context}", step.Name, context);
             }
         }
 
@@ -659,15 +651,15 @@ internal sealed class ResultParser(TimeProvider timeProvider, ILogger<ResultPars
         Uri? infoUri = null;
         if (!string.IsNullOrWhiteSpace(magnet))
         {
-            infoUri = ResolveLink(magnet!, baseUri, 0);
+            infoUri = ResolveLink(magnet, baseUri, 0);
         }
         else if (!string.IsNullOrWhiteSpace(download))
         {
-            infoUri = ResolveLink(download!, baseUri, 0);
+            infoUri = ResolveLink(download, baseUri, 0);
         }
-        else if (!string.IsNullOrWhiteSpace(infohash) && infohash!.Trim('0').Length > 0)
+        else if (!string.IsNullOrWhiteSpace(infohash) && infohash.Trim('0').Length > 0)
         {
-            Uri.TryCreate(BuildMagnet(infohash!, title), UriKind.Absolute, out infoUri);
+            Uri.TryCreate(BuildMagnet(infohash, title), UriKind.Absolute, out infoUri);
         }
 
         if (infoUri is null)
@@ -675,7 +667,7 @@ internal sealed class ResultParser(TimeProvider timeProvider, ILogger<ResultPars
             return null;
         }
 
-        return BuildRelease(values, title!, infoUri, infohash, baseUri, categoryMappings);
+        return BuildRelease(values, title, infoUri, infohash, baseUri, categoryMappings);
     }
 
     public void ApplyResolvedDownload(Release release, Uri resolved)
@@ -716,10 +708,10 @@ internal sealed class ResultParser(TimeProvider timeProvider, ILogger<ResultPars
             return null;
         }
 
-        var trimmed = value!.Trim();
+        var trimmed = value.Trim();
         if (!trimmed.StartsWith("//", StringComparison.Ordinal))
         {
-            if (Uri.TryCreate(trimmed, UriKind.Absolute, out _))
+            if (Uri.TryCreate(trimmed, UriKind.Absolute, out var absolute) && absolute.Scheme is "http" or "https")
             {
                 return null;
             }
@@ -730,7 +722,7 @@ internal sealed class ResultParser(TimeProvider timeProvider, ILogger<ResultPars
             }
         }
 
-        return Uri.TryCreate(baseUri, trimmed, out var resolved) ? resolved.ToString() : null;
+        return Uri.TryCreate(baseUri, trimmed, out var resolved) ? resolved.AbsoluteUri : null;
     }
 
     private string SerializeRetainedProperties(IReadOnlyDictionary<string, string?> values, Uri baseUri)

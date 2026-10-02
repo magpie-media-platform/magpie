@@ -13,6 +13,10 @@
         gap: var(--space-xs);
     }
 
+    .tier-form__notice-text {
+        margin: 0 0 var(--space-sm);
+    }
+
     .tier-form__error {
         font-size: var(--text-sm);
         color: var(--status-unhealthy);

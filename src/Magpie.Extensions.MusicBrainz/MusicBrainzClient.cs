@@ -215,6 +215,20 @@ internal sealed class MusicBrainzClient(
             cancellationToken);
     }
 
+    public Task<FetchResult<ReleaseSearchResponseDto>> BrowseTrackReleasesAsync(
+        string trackMbid,
+        Settings settings,
+        CancellationToken cancellationToken)
+    {
+        return SendJsonAsync<ReleaseSearchResponseDto>(
+            "release?fmt=json&track=" + Uri.EscapeDataString(trackMbid) + "&inc=recordings%2Bartist-credits%2Bisrcs",
+            "release-browse",
+            DiagnosticIdentity(trackMbid),
+            settings,
+            maximumBytes: null,
+            cancellationToken);
+    }
+
     public async Task<FetchResult<ArtistResolutionResponse>>
         ResolveArtistCompositionAsync(
             ArtistResolutionRequest request,
@@ -318,7 +332,7 @@ internal sealed class MusicBrainzClient(
                 .Where(value => Guid.TryParse(value.Mbid, out _) && !string.IsNullOrWhiteSpace(value.Name))
                 .Select(value => new ArtistResolutionCandidate
                 {
-                    Mbid = Guid.Parse(value.Mbid!).ToString("D", CultureInfo.InvariantCulture),
+                    Mbid = Guid.Parse(value.Mbid).ToString("D", CultureInfo.InvariantCulture),
                     Name = value.Name!,
                     Aliases = [.. (value.Aliases ?? [])
                         .Select(alias => alias.Name)
@@ -375,7 +389,7 @@ internal sealed class MusicBrainzClient(
 
     private static string BuildUserAgent(Settings settings)
     {
-        var contact = string.IsNullOrWhiteSpace(settings.Contact) ? DefaultContact : settings.Contact!.Trim();
+        var contact = string.IsNullOrWhiteSpace(settings.Contact) ? DefaultContact : settings.Contact.Trim();
         var version = typeof(MusicBrainzClient).Assembly.GetName().Version ?? new Version(1, 0, 0);
         return string.Format(
             CultureInfo.InvariantCulture,

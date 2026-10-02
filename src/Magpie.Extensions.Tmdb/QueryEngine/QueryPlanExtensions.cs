@@ -161,9 +161,7 @@ internal static class QueryPlanExtensions
         {
             QueryAnchorKind.Search => fetch.Route == ContentRoute.Movie ? "/search/movie" : "/search/tv",
             QueryAnchorKind.Discover => fetch.Route == ContentRoute.Movie ? "/discover/movie" : "/discover/tv",
-            QueryAnchorKind.PersonCredits => fetch.Route == ContentRoute.Movie
-                ? "/person/{id}/movie_credits"
-                : "/person/{id}/tv_credits",
+            QueryAnchorKind.PersonCredits => "/person/{id}/tv_credits",
             QueryAnchorKind.ContentIds => "/{route}/{id} or /find/{externalId}",
             _ => throw new ArgumentOutOfRangeException(nameof(fetch))
         };

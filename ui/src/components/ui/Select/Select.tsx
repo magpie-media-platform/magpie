@@ -1,5 +1,6 @@
-import { forwardRef, useRef, type ComponentPropsWithoutRef, type ReactNode } from 'react';
+import { forwardRef, useRef, type ComponentPropsWithoutRef } from 'react';
 import * as SelectPrimitive from '@radix-ui/react-select';
+import { CaretDownIcon, CheckIcon } from '@phosphor-icons/react';
 
 import './Select.css';
 
@@ -34,8 +35,6 @@ export type SelectItemProps = ComponentPropsWithoutRef<typeof SelectPrimitive.It
 export type SelectGroupProps = ComponentPropsWithoutRef<typeof SelectPrimitive.Group>;
 
 export type SelectLabelProps = ComponentPropsWithoutRef<typeof SelectPrimitive.Label>;
-
-export type SelectSeparatorProps = ComponentPropsWithoutRef<typeof SelectPrimitive.Separator>;
 
 function SelectRoot({ value, onValueChange, onOpenChange, onDismiss, ...props }: SelectProps) {
     const pickedRef = useRef(false);
@@ -89,7 +88,7 @@ const SelectTrigger = forwardRef<HTMLButtonElement, SelectTriggerProps>(
             >
                 {children ?? <SelectPrimitive.Value placeholder={placeholder} />}
                 <SelectPrimitive.Icon className="select-trigger__icon" aria-hidden="true">
-                    <ChevronDownIcon />
+                    <CaretDownIcon size={16} weight="bold" aria-hidden="true" />
                 </SelectPrimitive.Icon>
             </SelectPrimitive.Trigger>
         );
@@ -127,7 +126,7 @@ const SelectItem = forwardRef<HTMLDivElement, SelectItemProps>(({ className, chi
         <SelectPrimitive.Item ref={ref} className={classes} {...props}>
             <SelectPrimitive.ItemText>{children}</SelectPrimitive.ItemText>
             <SelectPrimitive.ItemIndicator className="select-item__indicator">
-                <CheckIcon />
+                <CheckIcon size={16} weight="bold" aria-hidden="true" />
             </SelectPrimitive.ItemIndicator>
         </SelectPrimitive.Item>
     );
@@ -144,52 +143,8 @@ const SelectLabel = forwardRef<HTMLDivElement, SelectLabelProps>(({ className, .
 
 SelectLabel.displayName = 'SelectLabel';
 
-const SelectSeparator = forwardRef<HTMLDivElement, SelectSeparatorProps>(({ className, ...props }, ref) => {
-    const classes = ['select-separator', className].filter(Boolean).join(' ');
-    return <SelectPrimitive.Separator ref={ref} className={classes} {...props} />;
-});
-
-SelectSeparator.displayName = 'SelectSeparator';
-
-function ChevronDownIcon(): ReactNode {
-    return (
-        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <path
-                d="M4 6L8 10L12 6"
-                stroke="currentColor"
-                strokeWidth="1.5"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-            />
-        </svg>
-    );
-}
-
-function CheckIcon(): ReactNode {
-    return (
-        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <path
-                d="M3 8L6.5 11.5L13 5"
-                stroke="currentColor"
-                strokeWidth="1.5"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-            />
-        </svg>
-    );
-}
-
 const SelectValue = SelectPrimitive.Value;
 
-export {
-    SelectRoot as Select,
-    SelectTrigger,
-    SelectContent,
-    SelectItem,
-    SelectGroup,
-    SelectLabel,
-    SelectSeparator,
-    SelectValue,
-};
+export { SelectRoot as Select, SelectTrigger, SelectContent, SelectItem, SelectGroup, SelectLabel, SelectValue };
 
 export default SelectRoot;

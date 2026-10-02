@@ -49,7 +49,8 @@ internal sealed class ExtensionActivationGenerationRepository(
                     var updated = await context.ExtensionActivationStates
                         .Where(s => s.Id == SingletonId)
                         .ExecuteUpdateAsync(
-                            s => s.SetProperty(e => e.Generation, e => e.Generation + 1), cancellationToken)
+                            s => s.SetProperty(e => e.Generation, e => e.Generation + 1),
+                            cancellationToken)
                         .ConfigureAwait(false);
                     if (updated == 0)
                     {

@@ -53,7 +53,7 @@ public class SearchPipelineTests
                 ProviderSettings.GroupName,
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync((SettingsGroupDetail?)null);
-        using var client = new TvmazeClient(
+        var client = new TvmazeClient(
             settingsService.Object,
             Mock.Of<IHttpClientFactory>(factory => factory.CreateClient(TvmazeClient.HttpClientName) == httpClient),
             NullLogger<TvmazeClient>.Instance);

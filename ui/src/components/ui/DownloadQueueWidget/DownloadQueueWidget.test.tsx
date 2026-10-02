@@ -269,44 +269,6 @@ describe('DownloadQueueWidget navigation', () => {
         expect(link).toHaveAttribute('href', '/downloads');
     });
 
-    it('renders download items as links when getDownloadUrl is provided', () => {
-        const getDownloadUrl = (download: ActiveDownloadItem) => `/downloads/${download.id}`;
-
-        renderWithRouter(
-            <DownloadQueueWidget
-                counts={defaultCounts}
-                activeDownloads={activeDownloads}
-                getDownloadUrl={getDownloadUrl}
-            />,
-        );
-
-        const item = screen.getByText('Breaking Bad S01E01').closest('.download-queue-widget__item');
-        expect(item?.tagName).toBe('A');
-        expect(item).toHaveAttribute('href', '/downloads/1');
-    });
-
-    it('renders download items as divs when getDownloadUrl is not provided', () => {
-        renderWithRouter(<DownloadQueueWidget counts={defaultCounts} activeDownloads={activeDownloads} />);
-
-        const item = screen.getByText('Breaking Bad S01E01').closest('.download-queue-widget__item');
-        expect(item?.tagName).toBe('DIV');
-    });
-
-    it('makes download item clickable when getDownloadUrl is provided', () => {
-        const getDownloadUrl = (download: ActiveDownloadItem) => `/downloads/${download.id}`;
-
-        renderWithRouter(
-            <DownloadQueueWidget
-                counts={defaultCounts}
-                activeDownloads={activeDownloads}
-                getDownloadUrl={getDownloadUrl}
-            />,
-        );
-
-        const item = screen.getByText('Breaking Bad S01E01').closest('.download-queue-widget__item');
-        expect(item).toHaveAttribute('data-clickable');
-    });
-
     it('links have correct URLs for each state', () => {
         const getStateUrl = (state: DownloadState) => `/downloads?state=${state}`;
 
@@ -365,32 +327,12 @@ describe('DownloadQueueWidget accessibility', () => {
         expect(screen.getByRole('heading', { level: 2, name: 'Downloads' })).toBeInTheDocument();
     });
 
-    it('supports custom heading level', () => {
-        renderWithRouter(<DownloadQueueWidget counts={defaultCounts} headingLevel={3} />);
-        expect(screen.getByRole('heading', { level: 3, name: 'Downloads' })).toBeInTheDocument();
-    });
-
     it('clickable rows have aria-label', () => {
         const getStateUrl = (state: DownloadState) => `/downloads?state=${state}`;
         renderWithRouter(<DownloadQueueWidget counts={defaultCounts} getStateUrl={getStateUrl} />);
 
         const downloadingRow = screen.getByText('Downloading').closest('.status-row');
         expect(downloadingRow).toHaveAttribute('aria-label', 'View 2 downloading items');
-    });
-
-    it('clickable download items keep their visible title in the accessible name', () => {
-        const getDownloadUrl = (download: ActiveDownloadItem) => `/downloads/${download.id}`;
-        renderWithRouter(
-            <DownloadQueueWidget
-                counts={defaultCounts}
-                activeDownloads={activeDownloads}
-                getDownloadUrl={getDownloadUrl}
-            />,
-        );
-
-        const item = screen.getByText('Breaking Bad S01E01').closest('.download-queue-widget__item');
-        expect(item).not.toHaveAttribute('aria-label');
-        expect(item).toHaveAccessibleName('Breaking Bad S01E01 5m 1.2 GB 45 45%');
     });
 
     it('icon is hidden from screen readers', () => {

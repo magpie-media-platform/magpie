@@ -17,8 +17,8 @@ internal sealed record QueryProgress
     internal QueryProgress Copy() => this with
     {
         Delivered = [.. Delivered],
-        BrowsePages = new Dictionary<int, int>(BrowsePages),
+        BrowsePages = new(BrowsePages),
         ExhaustedBrowse = [.. ExhaustedBrowse],
-        ResolvedSources = new Dictionary<int, string>(ResolvedSources)
+        ResolvedSources = new(ResolvedSources)
     };
 }

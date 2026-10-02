@@ -1,6 +1,5 @@
 @layer components {
-    .dropdown-menu-content,
-    .dropdown-menu-sub-content {
+    .dropdown-menu-content {
         z-index: var(--z-popover);
         min-width: 160px;
         background-color: var(--bg-secondary);
@@ -18,24 +17,6 @@
 
         &[data-state='closed'] {
             animation-name: dropdown-menu-content-hide;
-        }
-    }
-
-    .dropdown-menu-sub-content {
-        &[data-side='top'] {
-            animation-name: dropdown-menu-slide-down-fade;
-        }
-
-        &[data-side='bottom'] {
-            animation-name: dropdown-menu-slide-up-fade;
-        }
-
-        &[data-side='left'] {
-            animation-name: dropdown-menu-slide-right-fade;
-        }
-
-        &[data-side='right'] {
-            animation-name: dropdown-menu-slide-left-fade;
         }
     }
 
@@ -63,58 +44,8 @@
         }
     }
 
-    @keyframes dropdown-menu-slide-up-fade {
-        from {
-            opacity: 0;
-            transform: translateY(var(--space-xs));
-        }
-
-        to {
-            opacity: 1;
-            transform: translateY(0);
-        }
-    }
-
-    @keyframes dropdown-menu-slide-down-fade {
-        from {
-            opacity: 0;
-            transform: translateY(calc(-1 * var(--space-xs)));
-        }
-
-        to {
-            opacity: 1;
-            transform: translateY(0);
-        }
-    }
-
-    @keyframes dropdown-menu-slide-left-fade {
-        from {
-            opacity: 0;
-            transform: translateX(var(--space-xs));
-        }
-
-        to {
-            opacity: 1;
-            transform: translateX(0);
-        }
-    }
-
-    @keyframes dropdown-menu-slide-right-fade {
-        from {
-            opacity: 0;
-            transform: translateX(calc(-1 * var(--space-xs)));
-        }
-
-        to {
-            opacity: 1;
-            transform: translateX(0);
-        }
-    }
-
     .dropdown-menu-item,
-    .dropdown-menu-checkbox-item,
-    .dropdown-menu-radio-item,
-    .dropdown-menu-sub-trigger {
+    .dropdown-menu-radio-item {
         position: relative;
         display: flex;
         align-items: center;
@@ -140,11 +71,6 @@
         }
     }
 
-    .dropdown-menu-item--inset {
-        padding-left: calc(var(--space-md) + var(--icon-inline-sm));
-    }
-
-    .dropdown-menu-checkbox-item,
     .dropdown-menu-radio-item {
         padding-left: calc(var(--space-sm) + 16px + var(--space-sm));
     }
@@ -160,20 +86,6 @@
         color: var(--accent-primary);
     }
 
-    .dropdown-menu-sub-trigger__icon {
-        margin-left: auto;
-        color: var(--text-muted);
-        transition: transform var(--duration-fast) var(--easing-default);
-    }
-
-    .dropdown-menu-sub-trigger[data-state='open'] > .dropdown-menu-sub-trigger__icon {
-        transform: rotate(90deg);
-    }
-
-    .dropdown-menu-sub-trigger--inset {
-        padding-left: calc(var(--space-md) + var(--icon-inline-sm));
-    }
-
     .dropdown-menu-label {
         padding: var(--space-sm) var(--space-md);
         font-family: var(--font-sans);
@@ -184,29 +96,15 @@
         letter-spacing: var(--tracking-wide);
     }
 
-    .dropdown-menu-label--inset {
-        padding-left: calc(var(--space-md) + var(--icon-inline-sm));
-    }
-
     .dropdown-menu-separator {
         height: 1px;
         margin: var(--space-xs) calc(var(--space-xs) * -1);
         background-color: var(--border-default);
     }
 
-    .dropdown-menu-shortcut {
-        margin-left: auto;
-        font-family: var(--font-mono);
-        font-size: var(--text-xs);
-        color: var(--text-muted);
-        letter-spacing: var(--tracking-wide);
-    }
-
     @media (pointer: coarse) {
         .dropdown-menu-item,
-        .dropdown-menu-checkbox-item,
-        .dropdown-menu-radio-item,
-        .dropdown-menu-sub-trigger {
+        .dropdown-menu-radio-item {
             min-height: var(--touch-target-min);
         }
     }

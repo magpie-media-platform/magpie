@@ -14,10 +14,12 @@ using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
 using Magpie.Models.Patch;
+using Magpie.Sdk.Extensions;
 using Magpie.Sdk.Services;
 
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
@@ -102,7 +104,6 @@ public sealed class ExtensionRepositoryTests
     [TearDown]
     public void TearDown()
     {
-        _context.Database.CloseConnection();
         _context.Dispose();
     }
 
@@ -726,6 +727,186 @@ public sealed class ExtensionRepositoryTests
             Assert.That(audits.Count(a => a.EntityType == nameof(SettingsGroup) && a.Operation == "Delete"),
                 Is.EqualTo(1));
             Assert.That(audits.Select(a => a.Detail), Has.None.Contains("never-audit-this-value"));
+        }
+    }
+
+    [Test]
+    public async Task RegisterLoadedExtensionsAsync_RefreshesNameVersionAndTargetAbi_WhenTheRowIsRegistered()
+    {
+        // Arrange
+        _context.Extensions.AddRange(
+            new Extension
+            {
+                Id = Guid.NewGuid(),
+                PackageId = "Magpie.Test.Core",
+                Name = "Old name",
+                Version = "1.2.3",
+                TargetABI = null,
+                FilePath = "/app/data/extensions/loaded/Magpie.Test.Core.dll",
+                AssemblyName = "Magpie.Test.Core",
+                Installed = true,
+                Enabled = true,
+            },
+            new Extension
+            {
+                Id = Guid.NewGuid(),
+                PackageId = "Magpie.Extensions.NotLoaded",
+                Name = "Not loaded",
+                Version = "1.0.0",
+                FilePath = "/app/data/extensions/not-loaded/Magpie.Extensions.NotLoaded.dll",
+                AssemblyName = "Magpie.Extensions.NotLoaded",
+                Installed = true,
+                Enabled = true,
+            });
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        // Act
+        await _subject.RegisterLoadedExtensionsAsync([], [new LoadedExtension()]).ConfigureAwait(false);
+
+        // Assert
+        var refreshed = await _context.Extensions.AsNoTracking()
+            .SingleAsync(extension => extension.AssemblyName == "Magpie.Test.Core")
+            .ConfigureAwait(false);
+        var notLoaded = await _context.Extensions.AsNoTracking()
+            .SingleAsync(extension => extension.AssemblyName == "Magpie.Extensions.NotLoaded")
+            .ConfigureAwait(false);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(refreshed.Name, Is.EqualTo("Loaded name"));
+            Assert.That(refreshed.Version, Is.EqualTo("1.2.4"));
+            Assert.That(refreshed.TargetABI, Is.EqualTo("[1.4.0,1.6.0)"));
+            Assert.That(notLoaded.Name, Is.EqualTo("Not loaded"));
+            Assert.That(notLoaded.Version, Is.EqualTo("1.0.0"));
+            Assert.That(notLoaded.TargetABI, Is.Null);
+        }
+    }
+
+    [TestCase(true, true)]
+    [TestCase(true, false)]
+    [TestCase(false, true)]
+    [TestCase(false, false)]
+    public async Task RegisterLoadedExtensionsAsync_KeepsTheStateAndSettings_WhenTheRowIsRefreshed(
+        bool installed,
+        bool enabled)
+    {
+        // Arrange
+        var extensionId = Guid.NewGuid();
+        var group = new SettingsGroup { Name = "General", ExtensionId = extensionId };
+        group.Settings.Add(new() { Key = "Endpoint", Value = "https://example.test" });
+        _context.Extensions.Add(new Extension
+        {
+            Id = extensionId,
+            PackageId = "Magpie.Test.Core",
+            Name = "Old name",
+            Version = "1.2.3",
+            LifecycleVersion = "1.2.3",
+            FilePath = "/app/data/extensions/loaded/Magpie.Test.Core.dll",
+            AssemblyName = "Magpie.Test.Core",
+            Installed = installed,
+            Enabled = enabled,
+            DisabledReason = "Kept reason",
+            LoadOrder = 7,
+            Managed = true,
+            NuGetId = "Magpie.Test.Core",
+            PackageRepository = "https://packages.example.test",
+            AutoUpgrade = true,
+        });
+        _context.SettingsGroups.Add(group);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        // Act
+        await _subject.RegisterLoadedExtensionsAsync([], [new LoadedExtension()]).ConfigureAwait(false);
+
+        // Assert
+        var row = await _context.Extensions.AsNoTracking().SingleAsync().ConfigureAwait(false);
+        var setting = await _context.Settings.AsNoTracking().SingleAsync().ConfigureAwait(false);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(row.Enabled, Is.EqualTo(enabled));
+            Assert.That(row.Installed, Is.EqualTo(installed));
+            Assert.That(row.DisabledReason, Is.EqualTo("Kept reason"));
+            Assert.That(row.LoadOrder, Is.EqualTo(7));
+            Assert.That(row.Managed, Is.True);
+            Assert.That(row.NuGetId, Is.EqualTo("Magpie.Test.Core"));
+            Assert.That(row.PackageRepository, Is.EqualTo("https://packages.example.test"));
+            Assert.That(row.AutoUpgrade, Is.True);
+            Assert.That(row.LifecycleVersion, Is.EqualTo("1.2.3"));
+            Assert.That(row.FilePath, Is.EqualTo("/app/data/extensions/loaded/Magpie.Test.Core.dll"));
+            Assert.That(setting.Key, Is.EqualTo("Endpoint"));
+            Assert.That(setting.Value, Is.EqualTo("https://example.test"));
+        }
+    }
+
+    [Test]
+    public async Task RegisterLoadedExtensionsAsync_CreatesNoRow_WhenALoadedExtensionHasNoRow()
+    {
+        // Arrange
+        _context.Extensions.Add(new Extension
+        {
+            Id = Guid.NewGuid(),
+            PackageId = "Magpie.Extensions.NotLoaded",
+            Name = "Not loaded",
+            Version = "1.0.0",
+            FilePath = "/app/data/extensions/not-loaded/Magpie.Extensions.NotLoaded.dll",
+            AssemblyName = "Magpie.Extensions.NotLoaded",
+            Installed = true,
+            Enabled = true,
+        });
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        // Act
+        await _subject.RegisterLoadedExtensionsAsync([], [new LoadedExtension()]).ConfigureAwait(false);
+
+        // Assert
+        var assemblyNames = await _context.Extensions.AsNoTracking()
+            .Select(extension => extension.AssemblyName)
+            .ToListAsync()
+            .ConfigureAwait(false);
+        Assert.That(assemblyNames, Is.EqualTo(["Magpie.Extensions.NotLoaded"]));
+    }
+
+    [Test]
+    public async Task RegisterLoadedExtensionsAsync_AddsTheDiscoveredRowWithLoadedValues_WhenTheTableIsEmpty()
+    {
+        // Arrange
+        var discovered = new Extension
+        {
+            Id = Guid.NewGuid(),
+            PackageId = "Magpie.Test.Core",
+            Name = "Magpie.Test.Core",
+            Version = "0.0.0",
+            FilePath = "/app/data/extensions/loaded/Magpie.Test.Core.dll",
+            AssemblyName = "Magpie.Test.Core",
+            Installed = true,
+            Enabled = true,
+        };
+
+        // Act
+        await _subject.RegisterLoadedExtensionsAsync([discovered], [new LoadedExtension()]).ConfigureAwait(false);
+
+        // Assert
+        var row = await _context.Extensions.AsNoTracking().SingleAsync().ConfigureAwait(false);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(row.Name, Is.EqualTo("Loaded name"));
+            Assert.That(row.Version, Is.EqualTo("1.2.4"));
+            Assert.That(row.TargetABI, Is.EqualTo("[1.4.0,1.6.0)"));
+            Assert.That(row.Enabled, Is.True);
+        }
+    }
+
+    private sealed class LoadedExtension : IExtension
+    {
+        public Guid Id => Guid.Empty;
+
+        public Version Version => new(1, 2, 4);
+
+        public string Name => "Loaded name";
+
+        public string? TargetABI => "[1.4.0,1.6.0)";
+
+        public void RegisterServices(IServiceCollection services)
+        {
         }
     }
 }

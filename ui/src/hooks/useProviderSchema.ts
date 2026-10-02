@@ -119,12 +119,10 @@ export function useIndexerInstanceSchema(indexerId: string | null): UseQueryResu
     const queryKey = ['indexer-instance-schema', indexerId ?? ''] as const;
     useInvalidateQueriesOnEvents(indexerId ? EXTENSION_CATALOG_EVENTS : [], [queryKey], {
         exact: true,
-        owner: 'indexer-instance-schema',
     });
     useInvalidateQueriesOnEvents(indexerId ? ['indexer.updated'] : [], [queryKey], {
         entityIds: indexerId ? [indexerId] : [],
         exact: true,
-        owner: 'indexer-instance-schema',
     });
     return useQuery({
         queryKey,

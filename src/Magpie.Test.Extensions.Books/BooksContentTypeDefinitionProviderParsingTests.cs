@@ -96,7 +96,7 @@ public class BooksContentTypeDefinitionProviderParsingTests
     [TestCase("The Martian", "Andy Weir - Project Hail Mary (2011) [EPUB]", ReleaseMatchResult.NoMatch)]
     [TestCase(null, "Andy Weir - The Martian (2011) [EPUB]", ReleaseMatchResult.Indeterminate)]
     [TestCase("...", "Andy Weir - The Martian (2011) [EPUB]", ReleaseMatchResult.NoMatch)]
-    public void IsMatch_Result_WhenBookTitleIsBoundedWithinRelease(
+    public void IsMatch_ReturnsExpectedMatch_WhenBookTitleIsBoundedWithinRelease(
         string? title,
         string releaseTitle,
         ReleaseMatchResult expected)

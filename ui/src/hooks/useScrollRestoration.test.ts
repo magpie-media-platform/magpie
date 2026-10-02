@@ -54,7 +54,7 @@ describe('useScrollRestoration', () => {
         wrapper = createMockWrapper();
 
         vi.spyOn(document, 'querySelector').mockImplementation((selector: string) => {
-            if (selector === '[data-component="app-shell-main-wrapper"], [data-component="admin-shell-main-wrapper"]') {
+            if (selector === '[data-component="app-shell-main-wrapper"]') {
                 return wrapper as unknown as HTMLElement;
             }
             return null;
@@ -99,7 +99,7 @@ describe('useScrollRestoration', () => {
         vi.mocked(useMediaQuery).mockReturnValue(true);
         const main = createMockWrapper();
         vi.spyOn(document, 'querySelector').mockImplementation((selector: string) => {
-            if (selector === '[data-component="app-shell-main"], [data-component="admin-shell-main"]') {
+            if (selector === '[data-component="app-shell-main"]') {
                 return main as unknown as HTMLElement;
             }
             return null;
@@ -171,21 +171,5 @@ describe('useScrollRestoration', () => {
 
         const { unmount } = renderHook(() => useScrollRestoration());
         unmount();
-    });
-
-    it('evicts the oldest sessionStorage entry once the cap is exceeded', () => {
-        const totalVisits = 52;
-        for (let i = 0; i < totalVisits; i++) {
-            mockLocation.pathname = `/path-${i}`;
-            const { unmount } = renderHook(() => useScrollRestoration());
-            wrapper.scrollTop = i * 10;
-            wrapper.dispatchScroll();
-            flushRaf();
-            unmount();
-        }
-
-        expect(sessionStorage.getItem('magpie_scroll_/path-0')).toBeNull();
-        expect(sessionStorage.getItem('magpie_scroll_/path-1')).toBeNull();
-        expect(sessionStorage.getItem(`magpie_scroll_/path-${totalVisits - 1}`)).not.toBeNull();
     });
 });

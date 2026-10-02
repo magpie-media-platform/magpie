@@ -56,7 +56,6 @@ export function useExternalChangeConflict({
         {
             eventName: [...eventNames],
             enabled: enabled && !!entityId,
-            owner: 'external-change-conflict',
         },
     );
 

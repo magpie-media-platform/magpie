@@ -579,12 +579,12 @@ internal sealed class QueryExecutor(
             return filter.Operator == CriteriaValueOperator.IsNotNull ? present : !present;
         }
 
-        if (!present || filter.TemporalValues.Count == 0)
+        if (candidate is null || filter.TemporalValues.Count == 0)
         {
             return null;
         }
 
-        return candidate!.Compare(filter.Operator, filter.TemporalValues);
+        return candidate.Compare(filter.Operator, filter.TemporalValues);
     }
 
     private bool? CompareLanguage(
@@ -1069,8 +1069,7 @@ internal sealed class QueryExecutor(
             {
                 if (progress.Configuration is not null && progress.Configuration != context.UserAgent)
                 {
-                    throw new MetadataSearchContinuationException(
-                        "Open Library configuration changed. Start a new search.");
+                    throw new MetadataSearchContinuationException("Open Library configuration changed.");
                 }
 
                 progress.Configuration = context.UserAgent;

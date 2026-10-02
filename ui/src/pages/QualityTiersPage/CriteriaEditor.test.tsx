@@ -277,9 +277,7 @@ describe('CriteriaEditor', () => {
         expect(screen.getByLabelText(/criterion 1 operator/i)).toBeInTheDocument();
         expect(screen.getByLabelText(/criterion 1 value/i)).toBeInTheDocument();
 
-        for (const combobox of screen.getAllByRole('combobox')) {
-            expect(combobox).toHaveAccessibleName();
-        }
+        expect(screen.getByRole('combobox')).toHaveAccessibleName('Criterion 1 operator');
     });
 
     it('shows the selected operator label instead of the raw contains symbol', () => {

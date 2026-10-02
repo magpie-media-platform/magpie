@@ -33,7 +33,7 @@ public sealed class EmptyQualityProfileDiagnosticTests
         // Arrange
         var list = new QualityTierList
         {
-            Id = Guid.NewGuid(),
+            Id = new Guid("00000000-0000-0000-0000-0000000000a1"),
             Name = "Empty profile",
             CreatedAt = DateTime.UtcNow,
         };
@@ -50,7 +50,9 @@ public sealed class EmptyQualityProfileDiagnosticTests
             Assert.That(findings[0].Severity, Is.EqualTo(DiagnosticFindingSeverity.Warning));
             Assert.That(findings[0].DiagnosticCheckId, Is.EqualTo(EmptyQualityProfileDiagnostic.Id));
             Assert.That(findings[0].RepairId, Is.Null);
-            Assert.That(findings[0].AffectedEntity, Is.EqualTo($"QualityTierList:{list.Id}"));
+            Assert.That(
+                findings[0].AffectedEntity,
+                Is.EqualTo("QualityTierList:00000000-0000-0000-0000-0000000000a1"));
         }
     }
 
@@ -64,25 +66,36 @@ public sealed class EmptyQualityProfileDiagnosticTests
             Name = "Healthy profile",
             CreatedAt = DateTime.UtcNow,
         };
-        for (var ordinal = 0; ordinal < 7; ordinal++)
+        var firstTier = new QualityTier
         {
-            var tier = new QualityTier
-            {
-                Id = Guid.NewGuid(),
-                Name = $"Tier {ordinal}",
-                Criteria = new QualityTierCriteria(),
-                CreatedAt = DateTime.UtcNow,
-            };
-            list.QualityTierRanks.Add(new QualityTierListRank
-            {
-                QualityTierListId = list.Id,
-                QualityTierId = tier.Id,
-                Ordinal = ordinal,
-                CreatedAt = DateTime.UtcNow,
-                QualityTier = tier,
-            });
-        }
-
+            Id = Guid.NewGuid(),
+            Name = "Tier 0",
+            Criteria = new QualityTierCriteria(),
+            CreatedAt = DateTime.UtcNow,
+        };
+        var secondTier = new QualityTier
+        {
+            Id = Guid.NewGuid(),
+            Name = "Tier 1",
+            Criteria = new QualityTierCriteria(),
+            CreatedAt = DateTime.UtcNow,
+        };
+        list.QualityTierRanks.Add(new QualityTierListRank
+        {
+            QualityTierListId = list.Id,
+            QualityTierId = firstTier.Id,
+            Ordinal = 0,
+            CreatedAt = DateTime.UtcNow,
+            QualityTier = firstTier,
+        });
+        list.QualityTierRanks.Add(new QualityTierListRank
+        {
+            QualityTierListId = list.Id,
+            QualityTierId = secondTier.Id,
+            Ordinal = 1,
+            CreatedAt = DateTime.UtcNow,
+            QualityTier = secondTier,
+        });
         _tierLists.Setup(repository => repository.ListAllAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync([list]);
 
@@ -99,7 +112,7 @@ public sealed class EmptyQualityProfileDiagnosticTests
         // Arrange
         var list = new QualityTierList
         {
-            Id = Guid.NewGuid(),
+            Id = new Guid("00000000-0000-0000-0000-0000000000a2"),
             Name = "Rules-only profile",
             CreatedAt = DateTime.UtcNow,
         };
@@ -120,7 +133,9 @@ public sealed class EmptyQualityProfileDiagnosticTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(findings, Has.Count.EqualTo(1));
-            Assert.That(findings[0].AffectedEntity, Is.EqualTo($"QualityTierList:{list.Id}"));
+            Assert.That(
+                findings[0].AffectedEntity,
+                Is.EqualTo("QualityTierList:00000000-0000-0000-0000-0000000000a2"));
         }
     }
 }

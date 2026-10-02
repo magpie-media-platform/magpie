@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -8,6 +9,7 @@ using Magpie.Extensions.MusicBrainz.Mapping;
 using Magpie.Extensions.MusicBrainz.QueryEngine;
 using Magpie.Models;
 using Magpie.Models.Data;
+using Magpie.Models.Filtering;
 using Magpie.Sdk.Content;
 
 using Microsoft.Extensions.Logging.Abstractions;
@@ -25,6 +27,38 @@ public class MusicBrainzContentMetadataProviderTests
     private Mock<IMusicBrainzClient> _client = null!;
     private Mock<ICoverArtArchiveClient> _coverClient = null!;
     private IContentHierarchyMetadataProvider _subject = null!;
+
+    public static IEnumerable<TestCaseData> UnresolvedTrackAncestors()
+    {
+        yield return new TestCaseData(
+            new MetadataContribution[]
+            {
+                new()
+                {
+                    ProviderType = "musicbrainz",
+                    Source = "musicbrainz:release-group:b68c33f1-50da-4c27-92f4-c42cf5e66ece",
+                    ExternalIds =
+                    {
+                        new ExternalId { Source = "musicbrainz", Value = "b68c33f1-50da-4c27-92f4-c42cf5e66ece" }
+                    }
+                }
+            },
+            "MusicBrainz has no release with track 63a9abaa-7b6c-4290-83e7-828de5802e7e.");
+        yield return new TestCaseData(
+            new MetadataContribution[]
+            {
+                new()
+                {
+                    ProviderType = "musicbrainz",
+                    Source = "musicbrainz:artist:4cd13a09-ea6e-4eb5-9bc4-4b9141bdd3cd",
+                    ExternalIds =
+                    {
+                        new ExternalId { Source = "musicbrainz", Value = "4cd13a09-ea6e-4eb5-9bc4-4b9141bdd3cd" }
+                    }
+                }
+            },
+            "MusicBrainz track 63a9abaa-7b6c-4290-83e7-828de5802e7e has no release group.");
+    }
 
     [SetUp]
     public void SetUp()
@@ -50,6 +84,14 @@ public class MusicBrainzContentMetadataProviderTests
             .Returns((
                 BrowseCacheKey _,
                 Func<CancellationToken, Task<FetchResult<ReleaseGroupSearchResponseDto>>> loader,
+                CancellationToken token) => loader(token));
+        cache.Setup(value => value.GetTrackReleasesAsync(
+                It.IsAny<string>(),
+                It.IsAny<Func<CancellationToken, Task<FetchResult<ReleaseSearchResponseDto>>>>(),
+                It.IsAny<CancellationToken>()))
+            .Returns((
+                string _,
+                Func<CancellationToken, Task<FetchResult<ReleaseSearchResponseDto>>> loader,
                 CancellationToken token) => loader(token));
         cache.Setup(value => value.GetCoverAsync(
                 It.IsAny<CoverCacheKey>(),
@@ -295,6 +337,8 @@ public class MusicBrainzContentMetadataProviderTests
                     identifier.Source == Constants.ProviderType).Value,
                 Is.EqualTo(groupMbid));
             Assert.That(contribution.Images.Single().Url.AbsoluteUri, Is.EqualTo("https://archive.org/front.jpg"));
+            Assert.That(contribution.PublishDate, Is.EqualTo(new DateTime(1975, 11, 21, 0, 0, 0, DateTimeKind.Utc)));
+            Assert.That(contribution.PublishDatePrecision, Is.EqualTo(TemporalPrecision.Day));
             Assert.That(
                 metadata.Children.Select(child => child.Slug),
                 Is.EqualTo(
@@ -392,6 +436,10 @@ public class MusicBrainzContentMetadataProviderTests
             Assert.That(result, Is.Not.Null);
             Assert.That(result!.Contribution!.Title, Is.EqualTo("Fetched album"));
             Assert.That(
+                result.Contribution.PublishDate,
+                Is.EqualTo(new DateTime(2001, 1, 1, 0, 0, 0, DateTimeKind.Utc)));
+            Assert.That(result.Contribution.PublishDatePrecision, Is.EqualTo(TemporalPrecision.Year));
+            Assert.That(
                 result.Contribution.ExternalIds.Select(identifier => identifier.Source),
                 Is.EqualTo(["musicbrainz"]));
             Assert.That(result.Children, Is.Empty);
@@ -469,6 +517,798 @@ public class MusicBrainzContentMetadataProviderTests
     }
 
     [Test]
+    public async Task TryGetMetadataAsync_TrackAppearanceContribution_WhenTrackIsOnTheAlbumRelease()
+    {
+        // Arrange
+        _client.Setup(client => client.GetEntityAsync(
+                It.Is<EntityCacheKey>(key =>
+                    key.Kind == EntityKind.ReleaseGroup && key.Mbid == "b68c33f1-50da-4c27-92f4-c42cf5e66ece"),
+                It.IsAny<Settings>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new FetchResult<EntityResponseDto>
+            {
+                Outcome = FetchOutcome.Success,
+                Value = new EntityResponseDto
+                {
+                    ReleaseGroup = new ReleaseGroupDto
+                    {
+                        Id = "b68c33f1-50da-4c27-92f4-c42cf5e66ece",
+                        Title = "In Sight",
+                        Releases =
+                        [
+                            new ReleaseDto
+                            {
+                                Id = "75c2e824-78bb-42c2-a6ec-5648357efd27",
+                                Status = "Official",
+                                Date = "2019-05-03"
+                            },
+                            new ReleaseDto
+                            {
+                                Id = "853a7dd8-0c27-40db-903c-38f378f8e8d8",
+                                Status = "Official",
+                                Date = "2021-11-19"
+                            }
+                        ]
+                    }
+                }
+            });
+        _client.Setup(client => client.GetEntityAsync(
+                It.Is<EntityCacheKey>(key =>
+                    key.Kind == EntityKind.Release && key.Mbid == "75c2e824-78bb-42c2-a6ec-5648357efd27"),
+                It.IsAny<Settings>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new FetchResult<EntityResponseDto>
+            {
+                Outcome = FetchOutcome.Success,
+                Value = new EntityResponseDto
+                {
+                    Release = new ReleaseDto
+                    {
+                        Id = "75c2e824-78bb-42c2-a6ec-5648357efd27",
+                        Media =
+                        [
+                            new MediumDto
+                            {
+                                Position = 1,
+                                Tracks =
+                                [
+                                    new TrackDto
+                                    {
+                                        Id = "b8af3bd3-1816-4d34-883e-a1db7b62d675",
+                                        Position = 1,
+                                        Title = "Opening",
+                                        Recording = new RecordingDto
+                                        {
+                                            Id = "8f737f98-13e1-4154-95bd-cb478e4a2f4f",
+                                            Title = "Opening"
+                                        }
+                                    },
+                                    new TrackDto
+                                    {
+                                        Id = "63a9abaa-7b6c-4290-83e7-828de5802e7e",
+                                        Position = 2,
+                                        Title = "Bitter Blue",
+                                        Length = 201000,
+                                        Recording = new RecordingDto
+                                        {
+                                            Id = "e3063748-d1cb-450a-b35b-fa17446a9a6b",
+                                            Title = "Bitter Blue"
+                                        }
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                }
+            });
+        _client.Setup(client => client.GetEntityAsync(
+                It.Is<EntityCacheKey>(key =>
+                    key.Kind == EntityKind.Recording && key.Mbid == "63a9abaa-7b6c-4290-83e7-828de5802e7e"),
+                It.IsAny<Settings>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new FetchResult<EntityResponseDto> { Outcome = FetchOutcome.NotFound });
+        _client.Setup(client => client.GetEntityAsync(
+                It.Is<EntityCacheKey>(key =>
+                    key.Kind == EntityKind.Recording && key.Mbid == "e3063748-d1cb-450a-b35b-fa17446a9a6b"),
+                It.IsAny<Settings>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new FetchResult<EntityResponseDto>
+            {
+                Outcome = FetchOutcome.Success,
+                Value = new EntityResponseDto
+                {
+                    Recording = new RecordingDto
+                    {
+                        Id = "e3063748-d1cb-450a-b35b-fa17446a9a6b",
+                        Title = "Bitter Blue",
+                        Disambiguation = "album version",
+                        FirstReleaseDate = "2019-05-03",
+                        Aliases = [new AliasDto { Name = "Amargo Azul", Locale = "es" }]
+                    }
+                }
+            });
+        var existing = new MetadataContribution
+        {
+            ProviderType = Constants.ProviderType,
+            Source = "musicbrainz:track:63a9abaa-7b6c-4290-83e7-828de5802e7e"
+        };
+        existing.ExternalIds.Add(new ExternalId
+        {
+            Source = Constants.ProviderType,
+            Value = "63a9abaa-7b6c-4290-83e7-828de5802e7e",
+            Ordinal = 0
+        });
+        var album = new MetadataContribution
+        {
+            ProviderType = Constants.ProviderType,
+            Source = "musicbrainz:release-group:b68c33f1-50da-4c27-92f4-c42cf5e66ece"
+        };
+        album.ExternalIds.Add(new ExternalId
+        {
+            Source = Constants.ProviderType,
+            Value = "b68c33f1-50da-4c27-92f4-c42cf5e66ece",
+            Ordinal = 0
+        });
+        var request = new MetadataFetchRequest
+        {
+            Item = new ContentHierarchyItem
+            {
+                Id = Guid.NewGuid(),
+                ContentType = "music",
+                Level = "track",
+                Slug = "63a9abaa-7b6c-4290-83e7-828de5802e7e",
+                Name = "Bitter Blue"
+            },
+            ExistingMetadata = [existing],
+            AncestorMetadata = [album],
+            DefaultLanguagePreference = "en"
+        };
+
+        // Act
+        var result = await _subject.TryGetMetadataAsync(request, default).ConfigureAwait(false);
+
+        // Assert
+        var contribution = result!.Contribution!;
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(contribution.Source, Is.EqualTo("musicbrainz:track:63a9abaa-7b6c-4290-83e7-828de5802e7e"));
+            Assert.That(contribution.Title, Is.EqualTo("Bitter Blue"));
+            Assert.That(contribution.Overview, Is.EqualTo("album version"));
+            Assert.That(contribution.SequenceNumber, Is.EqualTo(2));
+            Assert.That(contribution.Duration, Is.EqualTo(TimeSpan.FromSeconds(201)));
+            Assert.That(
+                contribution.ExternalIds.Select(identifier => identifier.Value),
+                Is.EqualTo(["63a9abaa-7b6c-4290-83e7-828de5802e7e"]));
+            Assert.That(contribution.PublishDate, Is.EqualTo(new DateTime(2019, 5, 3)));
+            Assert.That(contribution.AlternateTexts.Select(text => text.Text), Is.EqualTo(["Amargo Azul"]));
+            Assert.That(contribution.DateLastRefreshed, Is.EqualTo(new DateTime(2026, 7, 13)));
+        }
+
+        _client.Verify(
+            client => client.GetEntityAsync(
+                It.Is<EntityCacheKey>(key =>
+                    key.Kind == EntityKind.Recording && key.Mbid == "63a9abaa-7b6c-4290-83e7-828de5802e7e"),
+                It.IsAny<Settings>(),
+                It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Test]
+    public async Task TryGetMetadataAsync_TrackAppearanceContribution_WhenAnotherReleaseHoldsTheTrack()
+    {
+        // Arrange
+        _client.Setup(client => client.GetEntityAsync(
+                It.Is<EntityCacheKey>(key =>
+                    key.Kind == EntityKind.ReleaseGroup && key.Mbid == "b68c33f1-50da-4c27-92f4-c42cf5e66ece"),
+                It.IsAny<Settings>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new FetchResult<EntityResponseDto>
+            {
+                Outcome = FetchOutcome.Success,
+                Value = new EntityResponseDto
+                {
+                    ReleaseGroup = new ReleaseGroupDto
+                    {
+                        Id = "b68c33f1-50da-4c27-92f4-c42cf5e66ece",
+                        Title = "In Sight",
+                        Releases =
+                        [
+                            new ReleaseDto
+                            {
+                                Id = "75c2e824-78bb-42c2-a6ec-5648357efd27",
+                                Status = "Official",
+                                Date = "2019-05-03"
+                            },
+                            new ReleaseDto
+                            {
+                                Id = "853a7dd8-0c27-40db-903c-38f378f8e8d8",
+                                Status = "Official",
+                                Date = "2021-11-19"
+                            }
+                        ]
+                    }
+                }
+            });
+        _client.Setup(client => client.GetEntityAsync(
+                It.Is<EntityCacheKey>(key =>
+                    key.Kind == EntityKind.Release && key.Mbid == "75c2e824-78bb-42c2-a6ec-5648357efd27"),
+                It.IsAny<Settings>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new FetchResult<EntityResponseDto>
+            {
+                Outcome = FetchOutcome.Success,
+                Value = new EntityResponseDto
+                {
+                    Release = new ReleaseDto
+                    {
+                        Id = "75c2e824-78bb-42c2-a6ec-5648357efd27",
+                        Media =
+                        [
+                            new MediumDto
+                            {
+                                Position = 1,
+                                Tracks =
+                                [
+                                    new TrackDto
+                                    {
+                                        Id = "b8af3bd3-1816-4d34-883e-a1db7b62d675",
+                                        Position = 1,
+                                        Title = "Opening",
+                                        Recording = new RecordingDto
+                                        {
+                                            Id = "8f737f98-13e1-4154-95bd-cb478e4a2f4f",
+                                            Title = "Opening"
+                                        }
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                }
+            });
+        _client.Setup(client => client.BrowseTrackReleasesAsync(
+                "63a9abaa-7b6c-4290-83e7-828de5802e7e",
+                It.IsAny<Settings>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new FetchResult<ReleaseSearchResponseDto>
+            {
+                Outcome = FetchOutcome.Success,
+                Value = new ReleaseSearchResponseDto
+                {
+                    Releases =
+                    [
+                        new ReleaseDto
+                        {
+                            Id = "86ecd18e-f1fb-4ac7-b77a-5d0fd4bd830e",
+                            Media =
+                            [
+                                new MediumDto
+                                {
+                                    Position = 1,
+                                    Tracks =
+                                    [
+                                        new TrackDto
+                                        {
+                                            Id = "06ec70bd-4477-4a56-a623-5c9139de3444",
+                                            Position = 1,
+                                            Title = "Opening",
+                                            Recording = new RecordingDto
+                                            {
+                                                Id = "8f737f98-13e1-4154-95bd-cb478e4a2f4f",
+                                                Title = "Opening"
+                                            }
+                                        }
+                                    ]
+                                },
+                                new MediumDto
+                                {
+                                    Position = 2,
+                                    Tracks =
+                                    [
+                                        new TrackDto
+                                        {
+                                            Id = "63a9abaa-7b6c-4290-83e7-828de5802e7e",
+                                            Position = 1,
+                                            Title = "Bitter Blue",
+                                            Recording = new RecordingDto
+                                            {
+                                                Id = "e3063748-d1cb-450a-b35b-fa17446a9a6b",
+                                                Title = "Bitter Blue"
+                                            }
+                                        }
+                                    ]
+                                }
+                            ]
+                        }
+                    ]
+                }
+            });
+        _client.Setup(client => client.GetEntityAsync(
+                It.Is<EntityCacheKey>(key =>
+                    key.Kind == EntityKind.Recording && key.Mbid == "e3063748-d1cb-450a-b35b-fa17446a9a6b"),
+                It.IsAny<Settings>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new FetchResult<EntityResponseDto>
+            {
+                Outcome = FetchOutcome.Success,
+                Value = new EntityResponseDto
+                {
+                    Recording = new RecordingDto
+                    {
+                        Id = "e3063748-d1cb-450a-b35b-fa17446a9a6b",
+                        Title = "Bitter Blue"
+                    }
+                }
+            });
+        var existing = new MetadataContribution
+        {
+            ProviderType = Constants.ProviderType,
+            Source = "musicbrainz:track:63a9abaa-7b6c-4290-83e7-828de5802e7e"
+        };
+        existing.ExternalIds.Add(new ExternalId
+        {
+            Source = Constants.ProviderType,
+            Value = "63a9abaa-7b6c-4290-83e7-828de5802e7e",
+            Ordinal = 0
+        });
+        var album = new MetadataContribution
+        {
+            ProviderType = Constants.ProviderType,
+            Source = "musicbrainz:release-group:b68c33f1-50da-4c27-92f4-c42cf5e66ece"
+        };
+        album.ExternalIds.Add(new ExternalId
+        {
+            Source = Constants.ProviderType,
+            Value = "b68c33f1-50da-4c27-92f4-c42cf5e66ece",
+            Ordinal = 0
+        });
+        var request = new MetadataFetchRequest
+        {
+            Item = new ContentHierarchyItem
+            {
+                Id = Guid.NewGuid(),
+                ContentType = "music",
+                Level = "track",
+                Slug = "63a9abaa-7b6c-4290-83e7-828de5802e7e",
+                Name = "Bitter Blue"
+            },
+            ExistingMetadata = [existing],
+            AncestorMetadata = [album],
+            DefaultLanguagePreference = "en"
+        };
+
+        // Act
+        var result = await _subject.TryGetMetadataAsync(request, default).ConfigureAwait(false);
+
+        // Assert
+        var contribution = result!.Contribution!;
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(contribution.Source, Is.EqualTo("musicbrainz:track:63a9abaa-7b6c-4290-83e7-828de5802e7e"));
+            Assert.That(contribution.Title, Is.EqualTo("Bitter Blue"));
+            Assert.That(contribution.SequenceNumber, Is.EqualTo(2));
+        }
+
+        _client.Verify(
+            client => client.BrowseTrackReleasesAsync(
+                "63a9abaa-7b6c-4290-83e7-828de5802e7e",
+                It.IsAny<Settings>(),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [TestCaseSource(nameof(UnresolvedTrackAncestors))]
+    public void TryGetMetadataAsync_Throws_WhenNoReleaseHoldsTheTrack(
+        MetadataContribution[] ancestorMetadata,
+        string message)
+    {
+        // Arrange
+        _client.Setup(client => client.GetEntityAsync(
+                It.Is<EntityCacheKey>(key =>
+                    key.Kind == EntityKind.ReleaseGroup && key.Mbid == "b68c33f1-50da-4c27-92f4-c42cf5e66ece"),
+                It.IsAny<Settings>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new FetchResult<EntityResponseDto>
+            {
+                Outcome = FetchOutcome.Success,
+                Value = new EntityResponseDto
+                {
+                    ReleaseGroup = new ReleaseGroupDto
+                    {
+                        Id = "b68c33f1-50da-4c27-92f4-c42cf5e66ece",
+                        Title = "In Sight",
+                        Releases =
+                        [
+                            new ReleaseDto
+                            {
+                                Id = "75c2e824-78bb-42c2-a6ec-5648357efd27",
+                                Status = "Official",
+                                Date = "2019-05-03"
+                            },
+                            new ReleaseDto
+                            {
+                                Id = "853a7dd8-0c27-40db-903c-38f378f8e8d8",
+                                Status = "Official",
+                                Date = "2021-11-19"
+                            }
+                        ]
+                    }
+                }
+            });
+        _client.Setup(client => client.GetEntityAsync(
+                It.Is<EntityCacheKey>(key =>
+                    key.Kind == EntityKind.Release && key.Mbid == "75c2e824-78bb-42c2-a6ec-5648357efd27"),
+                It.IsAny<Settings>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new FetchResult<EntityResponseDto>
+            {
+                Outcome = FetchOutcome.Success,
+                Value = new EntityResponseDto
+                {
+                    Release = new ReleaseDto
+                    {
+                        Id = "75c2e824-78bb-42c2-a6ec-5648357efd27",
+                        Media =
+                        [
+                            new MediumDto
+                            {
+                                Position = 1,
+                                Tracks =
+                                [
+                                    new TrackDto
+                                    {
+                                        Id = "b8af3bd3-1816-4d34-883e-a1db7b62d675",
+                                        Position = 1,
+                                        Title = "Opening",
+                                        Recording = new RecordingDto
+                                        {
+                                            Id = "8f737f98-13e1-4154-95bd-cb478e4a2f4f",
+                                            Title = "Opening"
+                                        }
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                }
+            });
+        _client.Setup(client => client.BrowseTrackReleasesAsync(
+                "63a9abaa-7b6c-4290-83e7-828de5802e7e",
+                It.IsAny<Settings>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new FetchResult<ReleaseSearchResponseDto>
+            {
+                Outcome = FetchOutcome.Success,
+                Value = new ReleaseSearchResponseDto { Releases = [] }
+            });
+        var existing = new MetadataContribution
+        {
+            ProviderType = Constants.ProviderType,
+            Source = "musicbrainz:track:63a9abaa-7b6c-4290-83e7-828de5802e7e"
+        };
+        existing.ExternalIds.Add(new ExternalId
+        {
+            Source = Constants.ProviderType,
+            Value = "63a9abaa-7b6c-4290-83e7-828de5802e7e",
+            Ordinal = 0
+        });
+        var request = new MetadataFetchRequest
+        {
+            Item = new ContentHierarchyItem
+            {
+                Id = Guid.NewGuid(),
+                ContentType = "music",
+                Level = "track",
+                Slug = "63a9abaa-7b6c-4290-83e7-828de5802e7e",
+                Name = "Bitter Blue"
+            },
+            ExistingMetadata = [existing],
+            AncestorMetadata = ancestorMetadata,
+            DefaultLanguagePreference = "en"
+        };
+
+        // Act
+        var exception = Assert.ThrowsAsync<InvalidOperationException>(
+            async () => await _subject.TryGetMetadataAsync(request, default).ConfigureAwait(false));
+
+        // Assert
+        Assert.That(exception!.Message, Is.EqualTo(message));
+    }
+
+    [Test]
+    public void TryGetMetadataAsync_Throws_WhenTheReleaseLookupReturnsNoRelease()
+    {
+        // Arrange
+        _client.Setup(client => client.GetEntityAsync(
+                It.Is<EntityCacheKey>(key =>
+                    key.Kind == EntityKind.ReleaseGroup && key.Mbid == "b68c33f1-50da-4c27-92f4-c42cf5e66ece"),
+                It.IsAny<Settings>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new FetchResult<EntityResponseDto>
+            {
+                Outcome = FetchOutcome.Success,
+                Value = new EntityResponseDto
+                {
+                    ReleaseGroup = new ReleaseGroupDto
+                    {
+                        Id = "b68c33f1-50da-4c27-92f4-c42cf5e66ece",
+                        Title = "In Sight",
+                        Releases =
+                        [
+                            new ReleaseDto
+                            {
+                                Id = "75c2e824-78bb-42c2-a6ec-5648357efd27",
+                                Status = "Official",
+                                Date = "2019-05-03"
+                            },
+                            new ReleaseDto
+                            {
+                                Id = "853a7dd8-0c27-40db-903c-38f378f8e8d8",
+                                Status = "Official",
+                                Date = "2021-11-19"
+                            }
+                        ]
+                    }
+                }
+            });
+        _client.Setup(client => client.GetEntityAsync(
+                It.Is<EntityCacheKey>(key =>
+                    key.Kind == EntityKind.Release && key.Mbid == "75c2e824-78bb-42c2-a6ec-5648357efd27"),
+                It.IsAny<Settings>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new FetchResult<EntityResponseDto>
+            {
+                Outcome = FetchOutcome.Success,
+                Value = new EntityResponseDto()
+            });
+        var existing = new MetadataContribution
+        {
+            ProviderType = Constants.ProviderType,
+            Source = "musicbrainz:track:63a9abaa-7b6c-4290-83e7-828de5802e7e"
+        };
+        existing.ExternalIds.Add(new ExternalId
+        {
+            Source = Constants.ProviderType,
+            Value = "63a9abaa-7b6c-4290-83e7-828de5802e7e",
+            Ordinal = 0
+        });
+        var album = new MetadataContribution
+        {
+            ProviderType = Constants.ProviderType,
+            Source = "musicbrainz:release-group:b68c33f1-50da-4c27-92f4-c42cf5e66ece"
+        };
+        album.ExternalIds.Add(new ExternalId
+        {
+            Source = Constants.ProviderType,
+            Value = "b68c33f1-50da-4c27-92f4-c42cf5e66ece",
+            Ordinal = 0
+        });
+        var request = new MetadataFetchRequest
+        {
+            Item = new ContentHierarchyItem
+            {
+                Id = Guid.NewGuid(),
+                ContentType = "music",
+                Level = "track",
+                Slug = "63a9abaa-7b6c-4290-83e7-828de5802e7e",
+                Name = "Bitter Blue"
+            },
+            ExistingMetadata = [existing],
+            AncestorMetadata = [album],
+            DefaultLanguagePreference = "en"
+        };
+
+        // Act
+        var exception = Assert.ThrowsAsync<InvalidOperationException>(
+            async () => await _subject.TryGetMetadataAsync(request, default).ConfigureAwait(false));
+
+        // Assert
+        Assert.That(
+            exception!.Message,
+            Is.EqualTo(
+                "MusicBrainz returned no Release 75c2e824-78bb-42c2-a6ec-5648357efd27."));
+    }
+
+    [Test]
+    public void TryGetMetadataAsync_Throws_WhenTheReleaseListsTheTrackWithoutATitle()
+    {
+        // Arrange
+        _client.Setup(client => client.GetEntityAsync(
+                It.Is<EntityCacheKey>(key =>
+                    key.Kind == EntityKind.ReleaseGroup && key.Mbid == "b68c33f1-50da-4c27-92f4-c42cf5e66ece"),
+                It.IsAny<Settings>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new FetchResult<EntityResponseDto>
+            {
+                Outcome = FetchOutcome.Success,
+                Value = new EntityResponseDto
+                {
+                    ReleaseGroup = new ReleaseGroupDto
+                    {
+                        Id = "b68c33f1-50da-4c27-92f4-c42cf5e66ece",
+                        Title = "In Sight",
+                        Releases =
+                        [
+                            new ReleaseDto
+                            {
+                                Id = "75c2e824-78bb-42c2-a6ec-5648357efd27",
+                                Status = "Official",
+                                Date = "2019-05-03"
+                            },
+                            new ReleaseDto
+                            {
+                                Id = "853a7dd8-0c27-40db-903c-38f378f8e8d8",
+                                Status = "Official",
+                                Date = "2021-11-19"
+                            }
+                        ]
+                    }
+                }
+            });
+        _client.Setup(client => client.GetEntityAsync(
+                It.Is<EntityCacheKey>(key =>
+                    key.Kind == EntityKind.Release && key.Mbid == "75c2e824-78bb-42c2-a6ec-5648357efd27"),
+                It.IsAny<Settings>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new FetchResult<EntityResponseDto>
+            {
+                Outcome = FetchOutcome.Success,
+                Value = new EntityResponseDto
+                {
+                    Release = new ReleaseDto
+                    {
+                        Id = "75c2e824-78bb-42c2-a6ec-5648357efd27",
+                        Media =
+                        [
+                            new MediumDto
+                            {
+                                Position = 1,
+                                Tracks =
+                                [
+                                    new TrackDto
+                                    {
+                                        Id = "b8af3bd3-1816-4d34-883e-a1db7b62d675",
+                                        Position = 1,
+                                        Title = "Opening",
+                                        Recording = new RecordingDto
+                                        {
+                                            Id = "8f737f98-13e1-4154-95bd-cb478e4a2f4f",
+                                            Title = "Opening"
+                                        }
+                                    },
+                                    new TrackDto
+                                    {
+                                        Id = "63a9abaa-7b6c-4290-83e7-828de5802e7e",
+                                        Position = 2,
+                                        Recording = new RecordingDto { Id = "e3063748-d1cb-450a-b35b-fa17446a9a6b" }
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                }
+            });
+        _client.Setup(client => client.GetEntityAsync(
+                It.Is<EntityCacheKey>(key =>
+                    key.Kind == EntityKind.Recording && key.Mbid == "e3063748-d1cb-450a-b35b-fa17446a9a6b"),
+                It.IsAny<Settings>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new FetchResult<EntityResponseDto>
+            {
+                Outcome = FetchOutcome.Success,
+                Value = new EntityResponseDto
+                {
+                    Recording = new RecordingDto
+                    {
+                        Id = "e3063748-d1cb-450a-b35b-fa17446a9a6b",
+                        Title = "Bitter Blue"
+                    }
+                }
+            });
+        var existing = new MetadataContribution
+        {
+            ProviderType = Constants.ProviderType,
+            Source = "musicbrainz:track:63a9abaa-7b6c-4290-83e7-828de5802e7e"
+        };
+        existing.ExternalIds.Add(new ExternalId
+        {
+            Source = Constants.ProviderType,
+            Value = "63a9abaa-7b6c-4290-83e7-828de5802e7e",
+            Ordinal = 0
+        });
+        var album = new MetadataContribution
+        {
+            ProviderType = Constants.ProviderType,
+            Source = "musicbrainz:release-group:b68c33f1-50da-4c27-92f4-c42cf5e66ece"
+        };
+        album.ExternalIds.Add(new ExternalId
+        {
+            Source = Constants.ProviderType,
+            Value = "b68c33f1-50da-4c27-92f4-c42cf5e66ece",
+            Ordinal = 0
+        });
+        var request = new MetadataFetchRequest
+        {
+            Item = new ContentHierarchyItem
+            {
+                Id = Guid.NewGuid(),
+                ContentType = "music",
+                Level = "track",
+                Slug = "63a9abaa-7b6c-4290-83e7-828de5802e7e",
+                Name = "Bitter Blue"
+            },
+            ExistingMetadata = [existing],
+            AncestorMetadata = [album],
+            DefaultLanguagePreference = "en"
+        };
+
+        // Act
+        var exception = Assert.ThrowsAsync<InvalidOperationException>(
+            async () => await _subject.TryGetMetadataAsync(request, default).ConfigureAwait(false));
+
+        // Assert
+        Assert.That(
+            exception!.Message,
+            Is.EqualTo(
+                "MusicBrainz release 75c2e824-78bb-42c2-a6ec-5648357efd27 lists track " +
+                "63a9abaa-7b6c-4290-83e7-828de5802e7e without a title."));
+    }
+
+    [Test]
+    public void TryGetMetadataAsync_Throws_WhenTheReleaseGroupBrowseIsNotFound()
+    {
+        // Arrange
+        _client.Setup(client => client.GetEntityAsync(
+                It.Is<EntityCacheKey>(key => key.Kind == EntityKind.Artist),
+                It.IsAny<Settings>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new FetchResult<EntityResponseDto>
+            {
+                Outcome = FetchOutcome.Success,
+                Value = new EntityResponseDto
+                {
+                    Artist = new ArtistDto { Id = "0383dadf-2a4e-4d10-a46a-e9e041da8eb3", Name = "Queen" }
+                }
+            });
+        _client.Setup(client => client.BrowseReleaseGroupsAsync(
+                It.IsAny<BrowseCacheKey>(),
+                It.IsAny<Settings>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new FetchResult<ReleaseGroupSearchResponseDto> { Outcome = FetchOutcome.NotFound });
+        var existing = new MetadataContribution { ProviderType = Constants.ProviderType };
+        existing.ExternalIds.Add(new ExternalId
+        {
+            Source = Constants.ProviderType,
+            Value = "0383dadf-2a4e-4d10-a46a-e9e041da8eb3",
+            Ordinal = 0
+        });
+        var request = new MetadataFetchRequest
+        {
+            Item = new ContentHierarchyItem
+            {
+                Id = Guid.NewGuid(),
+                ContentType = "music",
+                Level = "artist",
+                Slug = "0383dadf-2a4e-4d10-a46a-e9e041da8eb3",
+                Name = "Queen"
+            },
+            ExistingMetadata = [existing],
+            DefaultLanguagePreference = "en"
+        };
+
+        // Act
+        var exception = Assert.ThrowsAsync<InvalidOperationException>(
+            async () => await _subject.TryGetMetadataAsync(request, default).ConfigureAwait(false));
+
+        // Assert
+        Assert.That(
+            exception!.Message,
+            Is.EqualTo(
+                "MusicBrainz could not browse the release groups of " +
+                "0383dadf-2a4e-4d10-a46a-e9e041da8eb3: NotFound."));
+    }
+
+    [Test]
     public void TryGetMetadataAsync_Throws_WhenTheRecordingLookupCouldNotAnswer()
     {
         // Arrange
@@ -506,7 +1346,7 @@ public class MusicBrainzContentMetadataProviderTests
     }
 
     [Test]
-    public async Task TryGetMetadataAsync_ReturnsNull_WhenTheRecordingIsNotFound()
+    public void TryGetMetadataAsync_Throws_WhenTheRecordingIsNotFound()
     {
         // Arrange
         const string recordingMbid = "550e8400-e29b-41d4-a716-446655440000";
@@ -522,25 +1362,27 @@ public class MusicBrainzContentMetadataProviderTests
             Value = recordingMbid,
             Ordinal = 0
         });
+        var request = new MetadataFetchRequest
+        {
+            Item = new ContentHierarchyItem
+            {
+                Id = Guid.NewGuid(),
+                ContentType = "music",
+                Level = "track",
+                Slug = recordingMbid,
+                Name = "Bohemian Rhapsody"
+            },
+            ExistingMetadata = [existing],
+            DefaultLanguagePreference = "en"
+        };
 
         // Act
-        var result = await _subject.TryGetMetadataAsync(
-            new MetadataFetchRequest
-            {
-                Item = new ContentHierarchyItem
-                {
-                    Id = Guid.NewGuid(),
-                    ContentType = "music",
-                    Level = "track",
-                    Slug = recordingMbid,
-                    Name = "Bohemian Rhapsody"
-                },
-                ExistingMetadata = [existing],
-                DefaultLanguagePreference = "en"
-            },
-            default).ConfigureAwait(false);
+        var exception = Assert.ThrowsAsync<InvalidOperationException>(
+            async () => await _subject.TryGetMetadataAsync(request, default).ConfigureAwait(false));
 
         // Assert
-        Assert.That(result, Is.Null);
+        Assert.That(
+            exception!.Message,
+            Is.EqualTo("MusicBrainz could not read Recording 550e8400-e29b-41d4-a716-446655440000: NotFound."));
     }
 }

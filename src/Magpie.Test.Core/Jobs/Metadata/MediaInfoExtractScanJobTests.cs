@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 
 using Magpie.Abstractions;
 using Magpie.Abstractions.Repositories;
+using Magpie.Core.Jobs;
 using Magpie.Core.Jobs.Metadata;
 using Magpie.Models;
 using Magpie.Models.Arguments;
@@ -113,13 +114,33 @@ public sealed class MediaInfoExtractScanJobTests
             Assert.That(
                 spec.SupportedTriggerModes,
                 Is.EquivalentTo([JobTriggerMode.Manual, JobTriggerMode.Schedule, JobTriggerMode.Event]));
-            Assert.That(spec.Parameters, Has.Count.EqualTo(2));
+            Assert.That(spec.Parameters, Has.Count.EqualTo(3));
             Assert.That(spec.Parameters[0].Name, Is.EqualTo("contentHierarchyItemId"));
             Assert.That(spec.Parameters[0].Required, Is.False);
-            Assert.That(spec.Parameters[1].Name, Is.EqualTo("maxAgeHours"));
-            Assert.That(spec.Parameters[1].DefaultValue, Is.EqualTo("24"));
+            Assert.That(spec.Parameters[1].Name, Is.EqualTo("mediaInfoPolicy"));
+            Assert.That(spec.Parameters[1].Required, Is.False);
+            Assert.That(spec.Parameters[1].DefaultValue, Is.EqualTo("MissingOrStale"));
+            Assert.That(spec.Parameters[2].Name, Is.EqualTo("maxAgeHours"));
+            Assert.That(spec.Parameters[2].DefaultValue, Is.EqualTo("24"));
             Assert.That(spec.FailurePolicy, Is.EqualTo(JobFailurePolicy.Requeue));
         }
+    }
+
+    [Test]
+    public void EventTriggers_BindTheImportedItemAndTheMissingPolicy_WhenCatalogInspected()
+    {
+        // Act
+        var trigger = DefaultJobTriggerCatalog.EventTriggers
+            .Single(candidate => candidate.JobType == "MediaInfoExtractScan");
+
+        // Assert
+        Assert.That(
+            trigger.Parameters,
+            Is.EquivalentTo(new Dictionary<string, string>
+            {
+                ["contentHierarchyItemId"] = "${event.content.hierarchyItemId}",
+                ["mediaInfoPolicy"] = "Missing"
+            }));
     }
 
     [Test]
@@ -248,6 +269,54 @@ public sealed class MediaInfoExtractScanJobTests
         }
     }
 
+    [TestCase(true, "Missing", 501)]
+    [TestCase(true, "MissingOrStale", 501)]
+    [TestCase(true, "All", 501)]
+    [TestCase(false, "Missing", 500)]
+    [TestCase(false, "MissingOrStale", 500)]
+    [TestCase(false, "All", 501)]
+    public async Task ExecuteAsync_QueuesFilesFromEveryPage_WhenTheScanIsTargetedOrSelectsAll(
+        bool targeted,
+        string policy,
+        int expectedQueued)
+    {
+        // Arrange
+        var firstPage = Enumerable.Range(0, 500)
+            .Select(i => new MediaFile { Id = Guid.NewGuid(), FilePath = $"/media/file-{i}.mkv", FileKind = "video" })
+            .ToList();
+        _mediaFileRepository
+            .Setup(r => r.QueryAsync(
+                It.IsAny<MediaFileQuery>(),
+                It.Is<PagingParameter>(paging => paging.PageNumber == 1 && paging.PageSize == 500),
+                null,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<MediaFile> { Items = firstPage, TotalItems = 501 });
+        _mediaFileRepository
+            .Setup(r => r.QueryAsync(
+                It.IsAny<MediaFileQuery>(),
+                It.Is<PagingParameter>(paging => paging.PageNumber == 2 && paging.PageSize == 500),
+                null,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<MediaFile>
+            {
+                Items = [new MediaFile { Id = Guid.NewGuid(), FilePath = "/media/file-500.mkv", FileKind = "video" }],
+                TotalItems = 501
+            });
+        var parameters = new Dictionary<string, string> { ["mediaInfoPolicy"] = policy };
+        if (targeted)
+        {
+            parameters["contentHierarchyItemId"] = _targetHierarchyItemId.ToString("D");
+        }
+
+        var jobContext = _manualContext with { Parameters = parameters };
+
+        // Act
+        await _job.ExecuteAsync(jobContext, default).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(_queuedJobs, Has.Count.EqualTo(expectedQueued));
+    }
+
     [Test]
     public async Task ExecuteAsync_ReportsNoCandidates_WhenNoFilesNeedExtract()
     {
@@ -352,80 +421,50 @@ public sealed class MediaInfoExtractScanJobTests
     }
 
     [Test]
-    public void ExecuteAsync_ThrowsAndDoesNotQueue_WhenManualTriggerWithoutTarget()
+    public async Task ExecuteAsync_RunsLibraryScan_WhenManualTriggerWithoutTarget()
     {
         // Arrange
         var jobContext = _manualContext;
 
         // Act
-        var ex = Assert.Throws<MagpieException>(() => _job.ExecuteAsync(jobContext).GetAwaiter().GetResult());
-
-        // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(ex, Has.Property(nameof(ex.Message)).Contain("scheduled or system trigger"));
-            Assert.That(_queuedJobs, Is.Empty);
-            _mediaFileRepository.Verify(
-                r => r.QueryAsync(
-                    It.IsAny<MediaFileQuery>(),
-                    It.IsAny<PagingParameter>(),
-                    It.IsAny<SortParameter?>(),
-                    It.IsAny<CancellationToken>()),
-                Times.Never);
-        }
-    }
-
-    [Test]
-    public async Task ExecuteAsync_QueuesExtractPerFile_WhenTheEventSuppliesATarget()
-    {
-        // Arrange
-        var targetFileId = Guid.NewGuid();
-        _mediaFileRepository
-            .Setup(r => r.QueryAsync(
-                It.Is<MediaFileQuery>(query => query.ContentHierarchyItemId == _targetHierarchyItemId),
-                It.IsAny<PagingParameter>(),
-                null,
-                It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new PagedList<MediaFile>
-            {
-                Items = [new MediaFile { Id = targetFileId, FileKind = "video", FilePath = "/media/event-target.mkv" }]
-            });
-        var jobContext = _eventContext;
-
-        // Act
         await _job.ExecuteAsync(jobContext, default).ConfigureAwait(false);
 
         // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(_queuedJobs, Has.Count.EqualTo(1));
-            Assert.That(_queuedJobs[0].JobType, Is.EqualTo("MediaInfoExtractItem"));
-            Assert.That(_queuedJobs[0].Parameters!["mediaFileId"], Is.EqualTo(targetFileId.ToString("D")));
-            Assert.That(_queuedJobs[0].Parameters!["requireMissingMediaInfo"], Is.EqualTo("False"));
-            _mediaFileRepository.Verify(
-                r => r.QueryAsync(
-                    It.Is<MediaFileQuery>(query => query.ContentHierarchyItemId == _targetHierarchyItemId),
-                    It.IsAny<PagingParameter>(),
-                    null,
-                    It.IsAny<CancellationToken>()),
-                Times.Once);
-        }
+        _mediaFileRepository.Verify(
+            r => r.QueryAsync(
+                It.Is<MediaFileQuery>(query =>
+                    query.ContentHierarchyItemId == null && query.MediaInfoStaleBefore != null),
+                It.Is<PagingParameter>(paging => paging.PageSize == 500),
+                null,
+                It.IsAny<CancellationToken>()),
+            Times.Once);
     }
 
-    [TestCase("content.imported", "True")]
-    [TestCase("download.imported", "False")]
-    [TestCase("content.updated", "False")]
-    public async Task ExecuteAsync_KeepsStoredMediaInfoOnlyForImports_WhenAnEventSuppliesATarget(
-        string eventName,
+    [TestCase(false, "Missing", "0001-01-01T00:00:00", "True")]
+    [TestCase(false, "MissingOrStale", "2026-05-19T12:00:00", "False")]
+    [TestCase(false, "All", null, "False")]
+    [TestCase(true, "Missing", "0001-01-01T00:00:00", "True")]
+    [TestCase(true, "MissingOrStale", "2026-05-19T12:00:00", "False")]
+    [TestCase(true, "All", null, "False")]
+    [TestCase(false, "missing", "0001-01-01T00:00:00", "True")]
+    [TestCase(true, "MISSINGORSTALE", "2026-05-19T12:00:00", "False")]
+    [TestCase(false, " all ", null, "False")]
+    public async Task ExecuteAsync_SelectsFilesByPolicy_WhenTheScanIsOrIsNotTargeted(
+        bool targeted,
+        string policy,
+        DateTime? expectedStaleBefore,
         string expectedRequireMissing)
     {
         // Arrange
+        MediaFileQuery? capturedQuery = null;
         _mediaFileRepository
             .Setup(r => r.QueryAsync(
-                It.Is<MediaFileQuery>(query => query.ContentHierarchyItemId == _targetHierarchyItemId),
+                It.IsAny<MediaFileQuery>(),
                 It.IsAny<PagingParameter>(),
                 null,
                 It.IsAny<CancellationToken>()))
+            .Callback<MediaFileQuery, PagingParameter, SortParameter?, CancellationToken>(
+                (query, _, _, _) => capturedQuery = query)
             .ReturnsAsync(new PagedList<MediaFile>
             {
                 Items =
@@ -434,10 +473,81 @@ public sealed class MediaInfoExtractScanJobTests
                     {
                         Id = Guid.NewGuid(),
                         FileKind = "video",
-                        FilePath = "/media/event-target.mkv",
+                        FilePath = "/media/extracted.mkv",
                         MediaInfo = new() { Container = "matroska" }
                     }
-                ]
+                ],
+                TotalItems = 1
+            });
+        var parameters = new Dictionary<string, string> { ["mediaInfoPolicy"] = policy };
+        if (targeted)
+        {
+            parameters["contentHierarchyItemId"] = _targetHierarchyItemId.ToString("D");
+        }
+
+        var jobContext = _manualContext with { Parameters = parameters };
+
+        // Act
+        await _job.ExecuteAsync(jobContext, default).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(capturedQuery!.ContentHierarchyItemId, Is.EqualTo(targeted ? _targetHierarchyItemId : null));
+            Assert.That(capturedQuery.MediaInfoStaleBefore, Is.EqualTo(expectedStaleBefore));
+            Assert.That(
+                _queuedJobs.Single().Parameters!["requireMissingMediaInfo"],
+                Is.EqualTo(expectedRequireMissing));
+        }
+    }
+
+    [Test]
+    public void ExecuteAsync_Throws_WhenTheMediaInfoPolicyIsUnknown()
+    {
+        // Arrange
+        var jobContext = _manualContext with
+        {
+            Parameters = new Dictionary<string, string> { ["mediaInfoPolicy"] = "Stale" }
+        };
+
+        // Act
+        var ex = Assert.Throws<ArgumentException>(() => _job.ExecuteAsync(jobContext).GetAwaiter().GetResult());
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(ex!.Message, Is.EqualTo("The media info policy Stale is not Missing, MissingOrStale or All."));
+            Assert.That(_queuedJobs, Is.Empty);
+        }
+    }
+
+    [TestCase("content.imported")]
+    [TestCase("download.imported")]
+    public async Task ExecuteAsync_IgnoresTheEventPayload_WhenTheTriggerBindsNoParameters(string eventName)
+    {
+        // Arrange
+        MediaFileQuery? capturedQuery = null;
+        _mediaFileRepository
+            .Setup(r => r.QueryAsync(
+                It.IsAny<MediaFileQuery>(),
+                It.IsAny<PagingParameter>(),
+                null,
+                It.IsAny<CancellationToken>()))
+            .Callback<MediaFileQuery, PagingParameter, SortParameter?, CancellationToken>(
+                (query, _, _, _) => capturedQuery = query)
+            .ReturnsAsync(new PagedList<MediaFile>
+            {
+                Items =
+                [
+                    new MediaFile
+                    {
+                        Id = Guid.NewGuid(),
+                        FileKind = "video",
+                        FilePath = "/media/stale.mkv",
+                        MediaInfo = new() { Container = "matroska" }
+                    }
+                ],
+                TotalItems = 1
             });
         var jobContext = _eventContext with { Event = _downloadImportedEvent with { Name = eventName } };
 
@@ -445,7 +555,12 @@ public sealed class MediaInfoExtractScanJobTests
         await _job.ExecuteAsync(jobContext, default).ConfigureAwait(false);
 
         // Assert
-        Assert.That(_queuedJobs.Single().Parameters!["requireMissingMediaInfo"], Is.EqualTo(expectedRequireMissing));
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(capturedQuery!.ContentHierarchyItemId, Is.Null);
+            Assert.That(capturedQuery.MediaInfoStaleBefore, Is.EqualTo(new DateTime(2026, 5, 19, 12, 0, 0)));
+            Assert.That(_queuedJobs.Single().Parameters!["requireMissingMediaInfo"], Is.EqualTo("False"));
+        }
     }
 
     [Test]
@@ -512,7 +627,10 @@ public sealed class MediaInfoExtractScanJobTests
         var jobContext = _manualContext with
         {
             Parameters = new Dictionary<string, string>
-            { ["contentHierarchyItemId"] = _targetHierarchyItemId.ToString() },
+            {
+                ["contentHierarchyItemId"] = _targetHierarchyItemId.ToString(),
+                ["mediaInfoPolicy"] = "All"
+            },
             ManualTriggerUserId = userId,
             CorrelationId = correlationId
         };
@@ -578,31 +696,6 @@ public sealed class MediaInfoExtractScanJobTests
             Assert.That(
                 ex,
                 Has.Property(nameof(ex.Message)).Contain("The content hierarchy item ID has an invalid format."));
-            Assert.That(_queuedJobs, Is.Empty);
-        }
-    }
-
-    [Test]
-    public void ExecuteAsync_Throws_WhenEventContentHierarchyItemIdNotGuid()
-    {
-        // Arrange
-        var jobContext = _eventContext with
-        {
-            Event = _downloadImportedEvent with
-            {
-                Context = new Dictionary<string, string> { ["content.hierarchyItemId"] = "not-a-guid" }
-            }
-        };
-
-        // Act
-        var ex = Assert.Throws<ArgumentException>(() => _job.ExecuteAsync(jobContext).GetAwaiter().GetResult());
-
-        // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(
-                ex,
-                Has.Property(nameof(ex.Message)).Contain("The job received an invalid content hierarchy item ID."));
             Assert.That(_queuedJobs, Is.Empty);
         }
     }

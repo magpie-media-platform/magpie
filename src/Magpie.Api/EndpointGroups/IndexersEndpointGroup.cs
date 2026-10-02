@@ -279,10 +279,7 @@ internal sealed class IndexersEndpointGroup : IApiEndpointGroup
         Guid connectionId,
         CancellationToken cancellationToken)
     {
-        var result = await indexerService.TestConnectionAsync(
-            id,
-            connectionId,
-            cancellationToken: cancellationToken)
+        var result = await indexerService.TestConnectionAsync(id, connectionId, cancellationToken: cancellationToken)
             .ConfigureAwait(false);
 
         return Results.Ok(result);
@@ -320,9 +317,6 @@ internal sealed class IndexersEndpointGroup : IApiEndpointGroup
         IndexerConnection connection,
         IReadOnlyList<SettingSchemaDefinition> schema)
     {
-        return connection with
-        {
-            Settings = connection.Settings.RedactSecrets(schema),
-        };
+        return connection with { Settings = connection.Settings.RedactSecrets(schema) };
     }
 }

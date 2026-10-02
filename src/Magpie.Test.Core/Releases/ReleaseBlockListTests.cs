@@ -25,6 +25,14 @@ public sealed class ReleaseBlockListTests
 
     private static readonly Guid SecondReleaseId = Guid.Parse("42c7da8f-1696-41fe-adcd-513dd69b76e0");
 
+    private static readonly Guid ThirdReleaseId = Guid.Parse("2570a39c-923a-43f4-872d-fdf1eb7c97f0");
+
+    private static readonly Guid FourthReleaseId = Guid.Parse("66e5e7f6-ad42-4984-929f-e6f2f3a24050");
+
+    private static readonly Guid StoredReleaseId = Guid.Parse("e90b25c6-3a4a-4b25-a707-0470eba5cd5f");
+
+    private static readonly Guid IndexerId = Guid.Parse("029b9454-ce64-4243-8cdd-ed2688c2551e");
+
     private static readonly Guid DownloadId = Guid.Parse("50c7278e-3b43-4ee8-a370-ddf06e680d5c");
 
     private static readonly Guid ImportedDownloadId = Guid.Parse("7d0b1f7e-54c4-4b43-9d8f-0e6a3c2b91a4");
@@ -41,10 +49,185 @@ public sealed class ReleaseBlockListTests
         _downloads = new Mock<IDownloadRepository>();
         _downloads
             .Setup(repository => repository.ListByReleaseAsync(
-                It.IsAny<IReadOnlyCollection<ReleaseIdentityKey>>(),
+                It.IsAny<IReadOnlyCollection<Release>>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync([]);
         _subject = new ReleaseBlockList(_downloads.Object);
+    }
+
+    [TestCase(DownloadStatus.Failed, true)]
+    [TestCase(DownloadStatus.Faulted, false)]
+    public async Task ResolveStatusesAsync_ReportsTheFailure_WhenAFailureStoppedADownloadOfTheKeylessRelease(
+        DownloadStatus status,
+        bool expectedBlocked)
+    {
+        // Arrange
+        var rejected = new Release
+        {
+            Id = FirstReleaseId,
+            Protocol = "torrent",
+            Title = "Pilot.1080p-GRP",
+            ExternalId = "first"
+        };
+        var unrelated = new Release
+        {
+            Id = SecondReleaseId,
+            Protocol = "torrent",
+            Title = "Pilot.720p-GRP",
+            ExternalId = "second"
+        };
+        _downloads
+            .Setup(repository => repository.ListByReleaseAsync(
+                It.IsAny<IReadOnlyCollection<Release>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(
+            [
+                new Download
+                {
+                    Id = DownloadId,
+                    ReleaseId = FirstReleaseId,
+                    DownloadClientId = DownloadClientId,
+                    ExternalId = "rejected",
+                    Title = "rejected grab",
+                    Status = status,
+                    FailureReason = DownloadFailureReason.ClientRejected
+                }
+            ]);
+
+        // Act
+        var statuses = await _subject
+            .ResolveStatusesAsync([rejected, unrelated], LeafContentHierarchyItemId, CancellationToken.None)
+            .ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(statuses.Keys, Is.EquivalentTo([FirstReleaseId]));
+            Assert.That(
+                statuses[FirstReleaseId],
+                Is.EqualTo((status, (DownloadFailureReason?)DownloadFailureReason.ClientRejected)));
+            Assert.That(ReleaseBlockList.Blocked(statuses).Contains(FirstReleaseId), Is.EqualTo(expectedBlocked));
+        }
+    }
+
+    [Test]
+    public async Task Blocked_BlocksOnlyTheReleaseWithTheSameIndexerAndExternalId_WhenAnotherRowOfItFailed()
+    {
+        // Arrange
+        var sameSource = new Release
+        {
+            Id = FirstReleaseId,
+            IndexerId = IndexerId,
+            Protocol = "torrent",
+            Title = "Pilot.1080p-GRP",
+            ExternalId = "shared"
+        };
+        var noIndexer = new Release
+        {
+            Id = SecondReleaseId,
+            Protocol = "torrent",
+            Title = "Pilot.1080p-GRP",
+            ExternalId = "shared"
+        };
+        var noExternalId = new Release
+        {
+            Id = ThirdReleaseId,
+            IndexerId = IndexerId,
+            Protocol = "torrent",
+            Title = "Pilot.1080p-GRP"
+        };
+        var otherExternalId = new Release
+        {
+            Id = FourthReleaseId,
+            IndexerId = IndexerId,
+            Protocol = "torrent",
+            Title = "Pilot.720p-GRP",
+            ExternalId = "other"
+        };
+        _downloads
+            .Setup(repository => repository.ListByReleaseAsync(
+                It.IsAny<IReadOnlyCollection<Release>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(
+            [
+                new Download
+                {
+                    Id = DownloadId,
+                    ReleaseId = StoredReleaseId,
+                    Release = new Release
+                    {
+                        Id = StoredReleaseId,
+                        IndexerId = IndexerId,
+                        Protocol = "torrent",
+                        Title = "Pilot.1080p-GRP",
+                        ExternalId = "shared"
+                    },
+                    DownloadClientId = DownloadClientId,
+                    ExternalId = "rejected",
+                    Title = "rejected grab",
+                    Status = DownloadStatus.Failed,
+                    FailureReason = DownloadFailureReason.ClientRejected
+                }
+            ]);
+
+        // Act
+        var result = ReleaseBlockList.Blocked(
+            await _subject
+                .ResolveStatusesAsync(
+                    [sameSource, noIndexer, noExternalId, otherExternalId],
+                    LeafContentHierarchyItemId,
+                    CancellationToken.None)
+                .ConfigureAwait(false));
+
+        // Assert
+        Assert.That(result, Is.EquivalentTo([FirstReleaseId]));
+    }
+
+    [TestCase("53cf05a8-b01e-4cc9-b9b1-c364d3b86187", true)]
+    [TestCase("0f3e2d1c-5b4a-4c9d-8e7f-6a5b4c3d2e1f", false)]
+    public async Task Blocked_ReportsTheBlock_WhenTheKeylessReleaseWasImportedAndTheScopeVaries(
+        string scopeItemId,
+        bool expectedBlocked)
+    {
+        // Arrange
+        var release = new Release
+        {
+            Id = FirstReleaseId,
+            Protocol = "torrent",
+            Title = "Pilot.1080p-GRP",
+            ExternalId = "first"
+        };
+        var download = new Download
+        {
+            Id = ImportedDownloadId,
+            ReleaseId = FirstReleaseId,
+            DownloadClientId = DownloadClientId,
+            ExternalId = "imported",
+            Title = "earlier import",
+            Status = DownloadStatus.Imported,
+            Scope =
+            {
+                new DownloadScope
+                {
+                    DownloadId = ImportedDownloadId,
+                    ContentHierarchyItemId = Guid.Parse(scopeItemId)
+                }
+            }
+        };
+        _downloads
+            .Setup(repository => repository.ListByReleaseAsync(
+                It.IsAny<IReadOnlyCollection<Release>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync([download]);
+
+        // Act
+        var result = ReleaseBlockList.Blocked(
+            await _subject
+                .ResolveStatusesAsync([release], LeafContentHierarchyItemId, CancellationToken.None)
+                .ConfigureAwait(false));
+
+        // Assert
+        Assert.That(result.Contains(FirstReleaseId), Is.EqualTo(expectedBlocked));
     }
 
     [Test]
@@ -69,7 +252,7 @@ public sealed class ReleaseBlockListTests
         };
         _downloads
             .Setup(repository => repository.ListByReleaseAsync(
-                It.IsAny<IReadOnlyCollection<ReleaseIdentityKey>>(),
+                It.IsAny<IReadOnlyCollection<Release>>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(
             [
@@ -111,7 +294,7 @@ public sealed class ReleaseBlockListTests
         };
         _downloads
             .Setup(repository => repository.ListByReleaseAsync(
-                It.IsAny<IReadOnlyCollection<ReleaseIdentityKey>>(),
+                It.IsAny<IReadOnlyCollection<Release>>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(
             [
@@ -171,7 +354,7 @@ public sealed class ReleaseBlockListTests
         };
         _downloads
             .Setup(repository => repository.ListByReleaseAsync(
-                It.IsAny<IReadOnlyCollection<ReleaseIdentityKey>>(),
+                It.IsAny<IReadOnlyCollection<Release>>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(
             [
@@ -222,7 +405,7 @@ public sealed class ReleaseBlockListTests
         };
         _downloads
             .Setup(repository => repository.ListByReleaseAsync(
-                It.IsAny<IReadOnlyCollection<ReleaseIdentityKey>>(),
+                It.IsAny<IReadOnlyCollection<Release>>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(
             [
@@ -286,7 +469,7 @@ public sealed class ReleaseBlockListTests
     }
 
     [Test]
-    public async Task ResolveStatusesAsync_ReadsTheDownloadsOnceWithEveryKey_WhenSeveralReleasesAreGiven()
+    public async Task ResolveStatusesAsync_ReadsTheDownloadsOnce_WhenSeveralReleasesAreGiven()
     {
         // Arrange
         var first = new Release
@@ -314,9 +497,7 @@ public sealed class ReleaseBlockListTests
         // Assert
         _downloads.Verify(
             repository => repository.ListByReleaseAsync(
-                It.Is<IReadOnlyCollection<ReleaseIdentityKey>>(keys =>
-                    keys.Any(key => key.Value == "first-key") &&
-                    keys.Any(key => key.Value == "second-key")),
+                It.Is<IReadOnlyCollection<Release>>(releases => releases.SequenceEqual(new[] { first, second })),
                 It.IsAny<CancellationToken>()),
             Times.Once);
         _downloads.VerifyNoOtherCalls();
@@ -372,7 +553,7 @@ public sealed class ReleaseBlockListTests
 
         _downloads
             .Setup(repository => repository.ListByReleaseAsync(
-                It.IsAny<IReadOnlyCollection<ReleaseIdentityKey>>(),
+                It.IsAny<IReadOnlyCollection<Release>>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync([download]);
 

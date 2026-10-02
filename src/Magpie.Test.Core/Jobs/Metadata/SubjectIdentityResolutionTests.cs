@@ -44,6 +44,7 @@ public sealed class SubjectIdentityResolutionTests
     private Subject _first = null!;
     private Subject _second = null!;
     private Guid _itemId;
+    private JobContext _jobContext = null!;
     private Mock<ILogger<ContentMetadataRefreshItemJob>> _logger = null!;
     private List<string> _queries = null!;
     private ISubjectRepository _subjectRepository = null!;
@@ -96,6 +97,14 @@ public sealed class SubjectIdentityResolutionTests
         _context.ContentHierarchyItems.Add(item);
         _context.SaveChanges();
         _itemId = item.Id;
+        _jobContext = new JobContext(
+            ExecutionId: Guid.NewGuid(),
+            ScheduleTriggerId: null,
+            EventTriggerId: null,
+            ManualTriggerUserId: null,
+            ExecutionMode: JobExecutionMode.Queue,
+            Parameters: new Dictionary<string, string> { ["contentHierarchyItemId"] = _itemId.ToString("D") },
+            Event: null);
         var content = new Mock<IContentHierarchyItemRepository> { CallBase = true };
         content.Setup(repository => repository.GetLineageAsync(
                 It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
@@ -146,8 +155,9 @@ public sealed class SubjectIdentityResolutionTests
             .ReturnsAsync(_definitions);
         _logger = new Mock<ILogger<ContentMetadataRefreshItemJob>>();
         _subject = new ContentMetadataRefreshItemJob([provider.Object], content.Object, containers, subjects,
-            Mock.Of<IEventBus>(), contentTypes.Object, transactions, Mock.Of<IJobManager>(), kinds.Object,
-            TimeProvider.System, _logger.Object, Mock.Of<IProgressReporter>());
+            Mock.Of<IEventBus>(), contentTypes.Object, transactions, Mock.Of<IJobManager>(),
+            Mock.Of<ILibraryImportCandidateRepository>(), kinds.Object, TimeProvider.System, _logger.Object,
+            Mock.Of<IProgressReporter>());
         _first = new Subject
         {
             Kind = "person",
@@ -194,7 +204,7 @@ public sealed class SubjectIdentityResolutionTests
     [TestCase("x-id", "001", "x", "1")]
     [TestCase("x", "{00112233-4455-6677-8899-aabbccddeeff}", "X ID", "00112233445566778899AABBCCDDEEFF")]
     [TestCase("x", " Text ", "X", "text")]
-    public async Task RefreshAsync_ReportsAmbiguity_WhenStoredIdentifierFormattingIsEquivalent(
+    public async Task ExecuteAsync_ReportsAmbiguity_WhenStoredIdentifierFormattingIsEquivalent(
         string storedSource, string storedValue, string incomingSource, string incomingValue)
     {
         // Arrange
@@ -209,7 +219,7 @@ public sealed class SubjectIdentityResolutionTests
         await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
-        await _subject.RefreshAsync(_itemId, null, null, Mock.Of<IProgressReporter>()).ConfigureAwait(false);
+        await _subject.ExecuteAsync(_jobContext).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -223,7 +233,7 @@ public sealed class SubjectIdentityResolutionTests
     }
 
     [Test]
-    public async Task RefreshAsync_UsesOneIdentityProjection_WhenSeveralCreditsHaveTheSameKind()
+    public async Task ExecuteAsync_UsesOneIdentityProjection_WhenSeveralCreditsHaveTheSameKind()
     {
         // Arrange
         _context.Subjects.AddRange(_first, _second);
@@ -232,7 +242,7 @@ public sealed class SubjectIdentityResolutionTests
         _queries.Clear();
 
         // Act
-        await _subject.RefreshAsync(_itemId, null, null, Mock.Of<IProgressReporter>()).ConfigureAwait(false);
+        await _subject.ExecuteAsync(_jobContext).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -245,7 +255,7 @@ public sealed class SubjectIdentityResolutionTests
     }
 
     [Test]
-    public async Task RefreshAsync_PreservesVerifiedIdentifierText_WhenUniqueNormalizedCandidateMatches()
+    public async Task ExecuteAsync_PreservesVerifiedIdentifierText_WhenUniqueNormalizedCandidateMatches()
     {
         // Arrange
         _first.MetadataContainer!.Contributions.Single().ExternalIds.Single().Source = "X-ID";
@@ -254,7 +264,7 @@ public sealed class SubjectIdentityResolutionTests
         await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
-        await _subject.RefreshAsync(_itemId, null, null, Mock.Of<IProgressReporter>()).ConfigureAwait(false);
+        await _subject.ExecuteAsync(_jobContext).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -269,7 +279,7 @@ public sealed class SubjectIdentityResolutionTests
     }
 
     [Test]
-    public async Task RefreshAsync_DoesNotExpandStoredFallbackDiscovery_WhenAnotherCreditLoadsTheCandidate()
+    public async Task ExecuteAsync_DoesNotExpandStoredFallbackDiscovery_WhenAnotherCreditLoadsTheCandidate()
     {
         // Arrange
         _definitions.Insert(0, _incoming with
@@ -282,7 +292,7 @@ public sealed class SubjectIdentityResolutionTests
         await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
-        await _subject.RefreshAsync(_itemId, null, null, Mock.Of<IProgressReporter>()).ConfigureAwait(false);
+        await _subject.ExecuteAsync(_jobContext).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -296,7 +306,7 @@ public sealed class SubjectIdentityResolutionTests
 
     [TestCase("wrong", new[] { "22222222-2222-2222-2222-222222222222" })]
     [TestCase("2", new string[0])]
-    public async Task RefreshAsync_ExaminesAllStoredCandidates_WhenIdentityEvidenceCrossesAPageBoundary(
+    public async Task ExecuteAsync_ExaminesAllStoredCandidates_WhenIdentityEvidenceCrossesAPageBoundary(
         string firstValue, string[] expectedContainers)
     {
         // Arrange
@@ -339,7 +349,7 @@ public sealed class SubjectIdentityResolutionTests
         _queries.Clear();
 
         // Act
-        await _subject.RefreshAsync(_itemId, null, null, Mock.Of<IProgressReporter>()).ConfigureAwait(false);
+        await _subject.ExecuteAsync(_jobContext).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -357,7 +367,7 @@ public sealed class SubjectIdentityResolutionTests
 
     [TestCase("A", "Z")]
     [TestCase("Z", "A")]
-    public async Task RefreshAsync_SelectsUniqueCompatibleSubject_WhenAnotherCandidateConflicts(
+    public async Task ExecuteAsync_SelectsUniqueCompatibleSubject_WhenAnotherCandidateConflicts(
         string firstTitle,
         string secondTitle)
     {
@@ -374,7 +384,7 @@ public sealed class SubjectIdentityResolutionTests
         await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
-        await _subject.RefreshAsync(_itemId, null, null, Mock.Of<IProgressReporter>()).ConfigureAwait(false);
+        await _subject.ExecuteAsync(_jobContext).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -389,7 +399,7 @@ public sealed class SubjectIdentityResolutionTests
 
     [TestCase("x", "1", "y", "2", "A", "Z")]
     [TestCase("y", "2", "x", "1", "Z", "A")]
-    public async Task RefreshAsync_ReportsAmbiguityWithoutAssociation_WhenStoredMatchesHaveDisjointIds(
+    public async Task ExecuteAsync_ReportsAmbiguityWithoutAssociation_WhenStoredMatchesHaveDisjointIds(
         string firstSource,
         string firstValue,
         string secondSource,
@@ -409,7 +419,7 @@ public sealed class SubjectIdentityResolutionTests
         await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
-        await _subject.RefreshAsync(_itemId, null, null, Mock.Of<IProgressReporter>()).ConfigureAwait(false);
+        await _subject.ExecuteAsync(_jobContext).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -423,7 +433,7 @@ public sealed class SubjectIdentityResolutionTests
     }
 
     [Test]
-    public async Task RefreshAsync_LeavesAssociationUnresolved_WhenEveryExternalCandidateConflicts()
+    public async Task ExecuteAsync_LeavesAssociationUnresolved_WhenEveryExternalCandidateConflicts()
     {
         // Arrange
         _first.MetadataContainer!.Contributions.Single().ExternalIds.Add(
@@ -432,7 +442,7 @@ public sealed class SubjectIdentityResolutionTests
         await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
-        await _subject.RefreshAsync(_itemId, null, null, Mock.Of<IProgressReporter>()).ConfigureAwait(false);
+        await _subject.ExecuteAsync(_jobContext).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -443,7 +453,7 @@ public sealed class SubjectIdentityResolutionTests
     }
 
     [Test]
-    public async Task RefreshAsync_ReusesStoredSubject_WhenIdentifierFormattingMustRemainIntactForLookup()
+    public async Task ExecuteAsync_ReusesStoredSubject_WhenIdentifierFormattingMustRemainIntactForLookup()
     {
         // Arrange
         _first.MetadataContainer!.Contributions.Single().ExternalIds.Single().Source = "provider-x";
@@ -453,7 +463,7 @@ public sealed class SubjectIdentityResolutionTests
         await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
-        await _subject.RefreshAsync(_itemId, null, null, Mock.Of<IProgressReporter>()).ConfigureAwait(false);
+        await _subject.ExecuteAsync(_jobContext).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -465,7 +475,7 @@ public sealed class SubjectIdentityResolutionTests
     }
 
     [Test]
-    public async Task RefreshAsync_LeavesAssociationUnresolved_WhenOneIdentifierMatchesTwoStoredSubjects()
+    public async Task ExecuteAsync_LeavesAssociationUnresolved_WhenOneIdentifierMatchesTwoStoredSubjects()
     {
         // Arrange
         _second.MetadataContainer!.Contributions.Single().ExternalIds.Clear();
@@ -474,7 +484,7 @@ public sealed class SubjectIdentityResolutionTests
         await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
-        await _subject.RefreshAsync(_itemId, null, null, Mock.Of<IProgressReporter>()).ConfigureAwait(false);
+        await _subject.ExecuteAsync(_jobContext).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -486,7 +496,7 @@ public sealed class SubjectIdentityResolutionTests
 
     [TestCase(false)]
     [TestCase(true)]
-    public async Task RefreshAsync_LeavesAssociationUnresolved_WhenInRunCandidatesHaveDisjointIds(bool reverse)
+    public async Task ExecuteAsync_LeavesAssociationUnresolved_WhenInRunCandidatesHaveDisjointIds(bool reverse)
     {
         // Arrange
         var first = _incoming with
@@ -504,7 +514,7 @@ public sealed class SubjectIdentityResolutionTests
         _definitions.InsertRange(0, reverse ? [second, first] : [first, second]);
 
         // Act
-        await _subject.RefreshAsync(_itemId, null, null, Mock.Of<IProgressReporter>()).ConfigureAwait(false);
+        await _subject.ExecuteAsync(_jobContext).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -517,7 +527,7 @@ public sealed class SubjectIdentityResolutionTests
     }
 
     [Test]
-    public async Task RefreshAsync_RejectsPartialMatch_WhenInRunSubjectHasAConflictingSharedIdentifier()
+    public async Task ExecuteAsync_RejectsPartialMatch_WhenInRunSubjectHasAConflictingSharedIdentifier()
     {
         // Arrange
         _definitions.Insert(0, _incoming with
@@ -528,7 +538,7 @@ public sealed class SubjectIdentityResolutionTests
         });
 
         // Act
-        await _subject.RefreshAsync(_itemId, null, null, Mock.Of<IProgressReporter>()).ConfigureAwait(false);
+        await _subject.ExecuteAsync(_jobContext).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -541,7 +551,7 @@ public sealed class SubjectIdentityResolutionTests
     }
 
     [Test]
-    public async Task RefreshAsync_LeavesAssociationUnresolved_WhenInRunMatchCompetesWithStoredMatch()
+    public async Task ExecuteAsync_LeavesAssociationUnresolved_WhenInRunMatchCompetesWithStoredMatch()
     {
         // Arrange
         _context.Subjects.Add(_first);
@@ -554,7 +564,7 @@ public sealed class SubjectIdentityResolutionTests
         });
 
         // Act
-        await _subject.RefreshAsync(_itemId, null, null, Mock.Of<IProgressReporter>()).ConfigureAwait(false);
+        await _subject.ExecuteAsync(_jobContext).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -567,7 +577,7 @@ public sealed class SubjectIdentityResolutionTests
     }
 
     [Test]
-    public async Task RefreshAsync_RejectsFallbackCandidate_WhenEarlierLookupDidNotUseItsConflictingStoredId()
+    public async Task ExecuteAsync_RejectsFallbackCandidate_WhenEarlierLookupDidNotUseItsConflictingStoredId()
     {
         // Arrange
         _first.MetadataContainer!.Contributions.Single().ExternalIds.Add(
@@ -583,7 +593,7 @@ public sealed class SubjectIdentityResolutionTests
         _incoming.SubjectExternalIds = new Dictionary<string, string> { ["y"] = "2" };
 
         // Act
-        await _subject.RefreshAsync(_itemId, null, null, Mock.Of<IProgressReporter>()).ConfigureAwait(false);
+        await _subject.ExecuteAsync(_jobContext).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -598,13 +608,13 @@ public sealed class SubjectIdentityResolutionTests
     }
 
     [Test]
-    public async Task RefreshAsync_LeavesAssociationUnresolved_WhenSeedAndIncomingIdsConflictAfterNormalization()
+    public async Task ExecuteAsync_LeavesAssociationUnresolved_WhenSeedAndIncomingIdsConflictAfterNormalization()
     {
         // Arrange
         _incoming.InitialSubjectContribution!.ExternalIds.Add(new ExternalId { Source = " X ", Value = "wrong" });
 
         // Act
-        await _subject.RefreshAsync(_itemId, null, null, Mock.Of<IProgressReporter>()).ConfigureAwait(false);
+        await _subject.ExecuteAsync(_jobContext).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())

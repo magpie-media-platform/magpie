@@ -79,7 +79,7 @@ internal sealed class ContentMetadataSearcher(
 
         if (levelDefinition.Slug != ShowLevelSlug)
         {
-            logger.LogDebug("The TVmaze searcher does not support level slug {Slug}.", levelDefinition.Slug);
+            logger.LogDebug("TVmaze does not support level slug {Slug}", levelDefinition.Slug);
             return [];
         }
 
@@ -108,7 +108,7 @@ internal sealed class ContentMetadataSearcher(
         if (contentType != TvContentType)
         {
             logger.LogDebug(
-                "The TVmaze searcher does not support advanced search for content type {ContentType}.",
+                "TVmaze does not support advanced search for content type {ContentType}",
                 contentType);
             return MetadataSearchPage.NotSupported;
         }

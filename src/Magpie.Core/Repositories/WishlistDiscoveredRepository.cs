@@ -107,7 +107,7 @@ internal sealed class WishlistDiscoveredRepository(
         EnrichedProjection p,
         IReadOnlyDictionary<Guid, string> postersByContainer)
     {
-        return new WishlistDiscoveredEnrichedRow
+        return new()
         {
             DiscoveredId = p.DiscoveredId,
             Source = p.Source,
@@ -144,8 +144,10 @@ internal sealed class WishlistDiscoveredRepository(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "The wishlist discovery repository failed to list discovered keys for wishlist " +
-                "{WishlistId}.", wishlistId);
+            logger.LogError(
+                ex,
+                "The wishlist discovery repository failed to list discovered keys for wishlist {WishlistId}.",
+                wishlistId);
             throw;
         }
     }
@@ -197,8 +199,10 @@ internal sealed class WishlistDiscoveredRepository(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "The wishlist discovery repository failed to record discovered candidates for " +
-                "wishlist {WishlistId}.", wishlistId);
+            logger.LogError(
+                ex,
+                "The wishlist discovery repository failed to record discovered candidates for wishlist {WishlistId}.",
+                wishlistId);
             throw;
         }
     }
@@ -227,7 +231,7 @@ internal sealed class WishlistDiscoveredRepository(
 
             var posters = await ResolvePostersAsync(items, cancellationToken).ConfigureAwait(false);
 
-            return new PagedList<WishlistDiscoveredEnrichedRow>
+            return new()
             {
                 Items = [.. items.Select(p => ToEnrichedRow(p, posters))],
                 PageNumber = query.Paging.PageNumber,
@@ -237,8 +241,10 @@ internal sealed class WishlistDiscoveredRepository(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "The wishlist discovery repository failed to list enriched discovered rows for " +
-                "wishlist {WishlistId}.", wishlistId);
+            logger.LogError(
+                ex,
+                "The wishlist discovery repository failed to list enriched discovered rows for wishlist {WishlistId}.",
+                wishlistId);
             throw;
         }
     }
@@ -260,7 +266,7 @@ internal sealed class WishlistDiscoveredRepository(
                 .CountAsync(r => r.LinkId != null && r.FulfilledContainerId == null, cancellationToken)
                 .ConfigureAwait(false);
 
-            return new WishlistDiscoveredCounts
+            return new()
             {
                 TotalDiscovered = total,
                 InLibrary = inLibrary,
@@ -270,8 +276,10 @@ internal sealed class WishlistDiscoveredRepository(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "The wishlist discovery repository failed to count discovered rows for wishlist " +
-                "{WishlistId}.", wishlistId);
+            logger.LogError(
+                ex,
+                "The wishlist discovery repository failed to count discovered rows for wishlist {WishlistId}.",
+                wishlistId);
             throw;
         }
     }

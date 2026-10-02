@@ -20,7 +20,7 @@ public sealed record SettingsGroupDetail
     public IReadOnlyList<SettingSchemaDefinition> Schema { get; init; } = [];
 
     /// <summary>
-    /// Whether the schema resolved. When false, a consumer cannot identify the secret keys and must withhold every value.
+    /// Whether the schema resolved.
     /// </summary>
     public bool SchemaResolved { get; init; } = true;
 

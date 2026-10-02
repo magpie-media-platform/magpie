@@ -9,6 +9,7 @@ import { RenameTokenReference } from '@/components/content/RenameTokenReference'
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Label } from '@/components/ui/Label';
+import { MonitoringToggle } from '@/components/ui/MonitoringToggle';
 import { PathInput } from '@/components/ui/PathInput';
 import { Select, SelectTrigger, SelectContent, SelectItem, SelectGroup, SelectLabel } from '@/components/ui/Select';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription, SheetFooter } from '@/components/ui/Sheet';
@@ -18,7 +19,9 @@ import { ExternalChangeConflictWarning, StaleSaveConfirmationDialog } from '@/co
 import type { LibraryLevelDefinition, LibraryTypeDefinition } from '@/hooks/useLibraryTypes';
 import { useQualityTierLists } from '@/hooks/useQualityTierLists';
 import type { RootFolderDefault, UpgradeFileHandling } from '@/hooks/useRootFolders';
+import { useSystemSettingsGroup } from '@/hooks/useSettings';
 import { focusFirstInvalidField } from '@/lib/focusFirstInvalidField';
+import type { MonitoringMode } from '@/types';
 
 import './RootFolderForm.css';
 
@@ -28,7 +31,7 @@ export interface RootFolderFormValues {
     path: string;
     contentType: string;
     isDefault: boolean;
-    defaultMonitoring: boolean | null;
+    defaultMonitoring: MonitoringMode | null;
     renameTemplate: string;
     upgradeFileHandling: UpgradeFileHandling;
     autoImport: boolean;
@@ -87,13 +90,38 @@ const emptyValues: RootFolderFormValues = {
 
 const DEFAULT_RENAME_TEMPLATE_SUGGESTION = '{Title} ({Year})/{Title} ({Year}).{Ext}';
 
+function parseSystemDefaultMonitoring(raw: string | undefined): MonitoringMode {
+    return raw === 'false' || raw === '0' ? 'Unmonitored' : 'Monitored';
+}
+
 function describeMimePatterns(patterns: string[] | undefined): string {
     return patterns?.length ? patterns.join(', ') : 'Any MIME type';
+}
+
+function describeAcceptedFileTypes(level: LibraryLevelDefinition, levels: LibraryLevelDefinition[]): string {
+    const branch = new Set([level.slug]);
+    let grew = true;
+    while (grew) {
+        grew = false;
+        for (const candidate of levels) {
+            if (candidate.parentSlug && branch.has(candidate.parentSlug) && !branch.has(candidate.slug)) {
+                branch.add(candidate.slug);
+                grew = true;
+            }
+        }
+    }
+    const accepted = new Set(
+        levels
+            .filter((candidate) => branch.has(candidate.slug))
+            .flatMap((candidate) => candidate.acceptedFileTypes ?? []),
+    );
+    return accepted.size > 0 ? [...accepted].join(', ') : 'No file types declared';
 }
 
 interface LevelDefaultPickerProps {
     contentType: string;
     level: LibraryLevelDefinition;
+    levels: LibraryLevelDefinition[];
     value: string;
     required: boolean;
     simple: boolean;
@@ -106,6 +134,7 @@ interface LevelDefaultPickerProps {
 function LevelDefaultPicker({
     contentType,
     level,
+    levels,
     value,
     required,
     simple,
@@ -114,26 +143,19 @@ function LevelDefaultPicker({
     error,
     onChange,
 }: LevelDefaultPickerProps) {
-    const { tierLists: applicableTierLists, isLoading } = useQualityTierLists({
-        contentType,
-        level: level.slug,
+    const { tierLists: loadedTierLists, isLoading } = useQualityTierLists({
         enabled: qualityTierLists === undefined && !!contentType,
     });
-    const availableTierLists = qualityTierLists ?? applicableTierLists;
-    const applicableSelection = availableTierLists.find((tierList) => tierList.id === value);
-    const { tierLists: allTierLists, isLoading: allTierListsLoading } = useQualityTierLists({
-        enabled: qualityTierLists === undefined && !!value && !applicableSelection,
-    });
-    const selectedTierList = applicableSelection ?? allTierLists.find((tierList) => tierList.id === value);
+    const availableTierLists = qualityTierLists ?? loadedTierLists;
+    const selectedTierList = availableTierLists.find((tierList) => tierList.id === value);
     const fieldId = `folder-default-quality-${level.slug}`;
-    const acceptedMimeTypes = level.effectiveAcceptedMimeTypes ?? [];
 
     return (
         <div className="root-folder-form__level-default" data-level={level.slug}>
             <Label htmlFor={fieldId} error={!!error} required={required}>
                 {simple ? 'Default Quality Tiers' : `${level.displayName} (${level.slug})`}
             </Label>
-            <p className="root-folder-form__help">Accepts: {describeMimePatterns(acceptedMimeTypes)}</p>
+            <p className="root-folder-form__help">Accepts: {describeAcceptedFileTypes(level, levels)}</p>
             <Select
                 value={value || NO_QUALITY_PROFILE_VALUE}
                 onValueChange={(next) => onChange(level.slug, next === NO_QUALITY_PROFILE_VALUE ? '' : next)}
@@ -150,7 +172,7 @@ function LevelDefaultPicker({
                     {selectedTierList
                         ? `${selectedTierList.name} - ${describeMimePatterns(selectedTierList.mimeTypes)}`
                         : value
-                          ? allTierListsLoading
+                          ? isLoading
                               ? 'Loading...'
                               : 'Unknown tier list'
                           : required
@@ -163,7 +185,7 @@ function LevelDefaultPicker({
                     {!required && <SelectItem value={NO_QUALITY_PROFILE_VALUE}>Inherit parent level</SelectItem>}
                     {availableTierLists.length > 0 && (
                         <SelectGroup>
-                            <SelectLabel>Compatible tier lists</SelectLabel>
+                            <SelectLabel>Tier lists</SelectLabel>
                             {availableTierLists.map((tierList) => (
                                 <SelectItem key={tierList.id} value={tierList.id}>
                                     {tierList.name} - {describeMimePatterns(tierList.mimeTypes)}
@@ -198,6 +220,13 @@ export function RootFolderForm({
     isSubmitting = false,
 }: RootFolderFormProps): ReactNode {
     const isEditing = !!initialValues?.id;
+    const monitoringSettings = useSystemSettingsGroup('monitoring');
+    const systemDefaultMonitoring =
+        monitoringSettings.isLoading || monitoringSettings.error
+            ? undefined
+            : parseSystemDefaultMonitoring(
+                  monitoringSettings.group?.settings.find((setting) => setting.key === 'system-default')?.value,
+              );
     const startingValues = initialValues ? { ...initialValues, defaults: initialValues.defaults ?? {} } : emptyValues;
 
     const [values, setValues] = useState<RootFolderFormValues>(startingValues);
@@ -308,12 +337,18 @@ export function RootFolderForm({
         setErrors((prev) => ({ ...prev, contentType: '' }));
     }, []);
 
-    const handleDefaultMonitoringChange = useCallback((value: boolean) => {
-        setValues((prev) => ({ ...prev, defaultMonitoring: value }));
-    }, []);
+    const handleUseSystemDefaultMonitoringChange = useCallback(
+        (useSystemDefault: boolean) => {
+            setValues((prev) => ({
+                ...prev,
+                defaultMonitoring: useSystemDefault ? null : (systemDefaultMonitoring ?? 'Monitored'),
+            }));
+        },
+        [systemDefaultMonitoring],
+    );
 
-    const handleInheritMonitoring = useCallback(() => {
-        setValues((prev) => ({ ...prev, defaultMonitoring: null }));
+    const handleDefaultMonitoringChange = useCallback((defaultMonitoring: MonitoringMode) => {
+        setValues((prev) => ({ ...prev, defaultMonitoring }));
     }, []);
 
     const handleIsDefaultChange = useCallback((isDefault: boolean) => {
@@ -522,42 +557,41 @@ export function RootFolderForm({
                         </div>
 
                         <div className="root-folder-form__field">
+                            <span id="folder-default-monitoring-heading" className="label">
+                                Default monitoring
+                            </span>
                             <div className="root-folder-form__toggle-row">
                                 <Switch
-                                    id="folder-default-monitoring"
-                                    checked={values.defaultMonitoring === true}
-                                    onCheckedChange={handleDefaultMonitoringChange}
+                                    id="folder-monitoring-system-default"
+                                    checked={values.defaultMonitoring === null}
+                                    onCheckedChange={handleUseSystemDefaultMonitoringChange}
                                     disabled={isSubmitting}
-                                    aria-label="Default monitoring"
-                                    data-field="default-monitoring"
+                                    aria-describedby={
+                                        monitoringSettings.error ? 'folder-monitoring-system-default-error' : undefined
+                                    }
+                                    data-field="monitoring-system-default"
                                 />
-                                <Label htmlFor="folder-default-monitoring">
-                                    {values.defaultMonitoring === null
-                                        ? 'Use system default monitoring'
-                                        : values.defaultMonitoring
-                                          ? 'Monitor new content'
-                                          : 'Exclude new content'}
-                                </Label>
+                                <Label htmlFor="folder-monitoring-system-default">Use system default</Label>
                             </div>
+                            {monitoringSettings.error && (
+                                <p id="folder-monitoring-system-default-error" className="form-error" role="alert">
+                                    The system default could not be loaded.
+                                </p>
+                            )}
+                            <MonitoringToggle<MonitoringMode>
+                                value={values.defaultMonitoring ?? systemDefaultMonitoring}
+                                onChange={handleDefaultMonitoringChange}
+                                disabled={isSubmitting || values.defaultMonitoring === null}
+                                aria-labelledby="folder-default-monitoring-heading"
+                                data-field="default-monitoring"
+                                shotgun
+                                inherit={false}
+                            />
                             <p className="root-folder-form__help">
                                 {values.defaultMonitoring === null
                                     ? 'New top-level content uses the system default monitoring setting.'
-                                    : values.defaultMonitoring
-                                      ? 'New top-level content under this folder is actively monitored.'
-                                      : 'New top-level content under this folder is excluded from monitoring.'}
+                                    : 'New top-level content under this folder uses the selected monitoring mode.'}
                             </p>
-                            {values.defaultMonitoring !== null && (
-                                <Button
-                                    type="button"
-                                    variant="ghost"
-                                    size="sm"
-                                    onClick={handleInheritMonitoring}
-                                    disabled={isSubmitting}
-                                    data-action="inherit-monitoring"
-                                >
-                                    Use system default
-                                </Button>
-                            )}
                         </div>
 
                         <fieldset className="root-folder-form__field root-folder-form__radio-field">
@@ -630,6 +664,7 @@ export function RootFolderForm({
                             <LevelDefaultPicker
                                 contentType={values.contentType}
                                 level={rootLevels[0]}
+                                levels={selectedContentType?.levels ?? []}
                                 value={values.defaults[rootLevels[0].slug]?.qualityTierListId ?? ''}
                                 required
                                 simple
@@ -651,6 +686,7 @@ export function RootFolderForm({
                                         key={level.slug}
                                         contentType={values.contentType}
                                         level={level}
+                                        levels={selectedContentType?.levels ?? []}
                                         value={values.defaults[level.slug]?.qualityTierListId ?? ''}
                                         required
                                         simple={false}
@@ -675,6 +711,7 @@ export function RootFolderForm({
                                             key={level.slug}
                                             contentType={values.contentType}
                                             level={level}
+                                            levels={selectedContentType?.levels ?? []}
                                             value={values.defaults[level.slug]?.qualityTierListId ?? ''}
                                             required={false}
                                             simple={false}

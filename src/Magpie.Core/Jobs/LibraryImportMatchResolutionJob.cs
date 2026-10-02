@@ -80,8 +80,7 @@ internal sealed class LibraryImportMatchResolutionJob(
 
     private static readonly TimeSpan ProviderRetryDelay = TimeSpan.FromMinutes(1);
 
-    private static IReadOnlyList<string> GetSearchQueries(
-        IReadOnlyDictionary<string, IReadOnlyList<string>> signals)
+    private static IReadOnlyList<string> GetSearchQueries(IReadOnlyDictionary<string, IReadOnlyList<string>> signals)
     {
         var candidates = signals.GetValues(ParsedFileSignalKeys.RootTitle);
         if (candidates.Count == 0)
@@ -149,8 +148,7 @@ internal sealed class LibraryImportMatchResolutionJob(
         };
     }
 
-    private static IReadOnlyList<string> GetTitleCandidates(
-        IReadOnlyDictionary<string, IReadOnlyList<string>> signals)
+    private static IReadOnlyList<string> GetTitleCandidates(IReadOnlyDictionary<string, IReadOnlyList<string>> signals)
     {
         var rootTitles = signals.GetValues(ParsedFileSignalKeys.RootTitle)
             .Where(value => !string.IsNullOrWhiteSpace(value))
@@ -286,14 +284,6 @@ internal sealed class LibraryImportMatchResolutionJob(
     private static IReadOnlyList<string> ContentTokens(IEnumerable<string> tokens)
     {
         var words = tokens.Where(token => !IsYear(token)).ToList();
-        var significant = words.Where(word => !StopWords.Contains(word)).ToList();
-
-        return significant.Count > 0 ? significant : words;
-    }
-
-    private static IReadOnlyList<string> SignificantTitleWords(string? title)
-    {
-        var words = MatchWords(title).Where(word => !IsYear(word)).ToList();
         var significant = words.Where(word => !StopWords.Contains(word)).ToList();
 
         return significant.Count > 0 ? significant : words;
@@ -436,7 +426,9 @@ internal sealed class LibraryImportMatchResolutionJob(
 
             var members = group.ToList();
             progressReporter.ReportFraction(
-                processed, total, $"The match resolution will resolve {Path.GetFileName(group.Key)}.");
+                processed,
+                total,
+                $"The match resolution will resolve {Path.GetFileName(group.Key)}.");
 
             try
             {
@@ -591,7 +583,7 @@ internal sealed class LibraryImportMatchResolutionJob(
         }
         catch (Exception ex)
         {
-            logger.LogWarning(ex, "The match resolution failed to queue automatic associations.");
+            logger.LogWarning(ex, "The match resolution failed to queue automatic associations");
         }
     }
 
@@ -636,7 +628,7 @@ internal sealed class LibraryImportMatchResolutionJob(
                         : null,
                 },
                 cancellationToken).ConfigureAwait(false);
-            logger.LogInformation("The match resolution requeued itself because unresolved candidates remain.");
+            logger.LogInformation("The match resolution requeued itself because unresolved candidates remain");
         }
         catch (OperationCanceledException)
         {
@@ -644,7 +636,7 @@ internal sealed class LibraryImportMatchResolutionJob(
         }
         catch (Exception ex)
         {
-            logger.LogWarning(ex, "The match resolution failed to requeue itself for the remaining candidates.");
+            logger.LogWarning(ex, "The match resolution failed to requeue itself for the remaining candidates");
         }
     }
 
@@ -671,7 +663,11 @@ internal sealed class LibraryImportMatchResolutionJob(
         if (parsed is { } query)
         {
             (matches, notes) = await ResolveConfidentMatchAsync(
-                query, levelSlug, candidate.ContentType, searchCache, cancellationToken).ConfigureAwait(false);
+                query,
+                levelSlug,
+                candidate.ContentType,
+                searchCache,
+                cancellationToken).ConfigureAwait(false);
         }
         else
         {
@@ -751,7 +747,11 @@ internal sealed class LibraryImportMatchResolutionJob(
             }
 
             (matches, notes) = await ResolveConfidentMatchAsync(
-                signals, rootLevelSlug, contentType, searchCache, cancellationToken).ConfigureAwait(false);
+                signals,
+                rootLevelSlug,
+                contentType,
+                searchCache,
+                cancellationToken).ConfigureAwait(false);
         }
 
         if (matches is null)

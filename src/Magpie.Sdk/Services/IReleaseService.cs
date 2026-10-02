@@ -48,7 +48,8 @@ public interface IReleaseService
     /// <param name="correlationId">The id that groups related calls, or <see langword="null"/> when standalone</param>
     /// <param name="progress">The reporter for progress updates, or <see langword="null"/> when there is none</param>
     /// <param name="interactive">
-    /// Whether the grab is interactive, which prior Failed or Imported downloads do not suppress
+    /// Whether the grab is interactive, which prior Failed or Imported downloads do not suppress; the backoff after a
+    /// Failed or Faulted attempt applies to it too
     /// </param>
     /// <param name="grabTargetContentHierarchyItemId">The hierarchy node that the grab targets</param>
     /// <param name="cancellationToken">The token that cancels the operation</param>

@@ -424,10 +424,14 @@ describe('ExtensionsPage', () => {
             const items = screen.getAllByRole('listitem');
             expect(items.length).toBe(listedExtensions.length);
         });
+    });
 
-        for (const ext of listedExtensions) {
+    it.each(listedExtensions)('renders a card for the extension $id', async (ext) => {
+        render(<ExtensionsPage />, { wrapper: createWrapper() });
+
+        await waitFor(() => {
             expect(document.querySelector(`[data-magpie-extension-id="${ext.id}"]`)).toBeInTheDocument();
-        }
+        });
     });
 
     it('renders duplicate extension names as separate rows', async () => {
@@ -440,23 +444,20 @@ describe('ExtensionsPage', () => {
 
         const duplicateNamedExtensions = listedExtensions.filter((e) => e.name === 'DownloadClient A');
         expect(screen.getAllByText('DownloadClient A')).toHaveLength(duplicateNamedExtensions.length);
-        for (const ext of duplicateNamedExtensions) {
-            expect(document.querySelector(`[data-magpie-extension-id="${ext.id}"]`)).toBeInTheDocument();
-        }
+        expect(
+            duplicateNamedExtensions.map((ext) => document.querySelector(`[data-magpie-extension-id="${ext.id}"]`)),
+        ).not.toContain(null);
     });
 
-    it('each card links to the extension detail page', async () => {
+    it.each(listedExtensions)('the card for the extension $id links to the extension detail page', async (ext) => {
         render(<ExtensionsPage />, { wrapper: createWrapper() });
 
         await waitFor(() => {
             expect(screen.getAllByRole('listitem').length).toBe(listedExtensions.length);
         });
 
-        for (const ext of listedExtensions) {
-            const card = document.querySelector(`[data-magpie-extension-id="${ext.id}"]`);
-            const link = card?.querySelector('a');
-            expect(link).toHaveAttribute('href', `/admin/extensions/${ext.id}`);
-        }
+        const card = document.querySelector(`[data-magpie-extension-id="${ext.id}"]`);
+        expect(card?.querySelector('a')).toHaveAttribute('href', `/admin/extensions/${ext.id}`);
     });
 
     it('shows failed activation status and reason from API data', async () => {
@@ -743,12 +744,10 @@ describe('ExtensionsPage load-order reordering', () => {
 
         const handles = screen.getAllByTestId('extensions-page__drag-handle');
         expect(handles.length).toBe(listedExtensions.length);
-        for (const handle of handles) {
-            expect(handle).toHaveAttribute('draggable', 'true');
-        }
-        for (const card of screen.getAllByRole('listitem')) {
-            expect(card).not.toHaveAttribute('draggable');
-        }
+        expect(handles.map((handle) => handle.getAttribute('draggable'))).toEqual(Array(10).fill('true'));
+        expect(screen.getAllByRole('listitem').map((card) => card.getAttribute('draggable'))).toEqual(
+            Array(10).fill(null),
+        );
     });
 
     it('moves a card up with the keyboard, announces its new position, and retains focus', async () => {

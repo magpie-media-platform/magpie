@@ -107,7 +107,7 @@ internal sealed class SettingsService(
             }
         }
 
-        return new IntegrationSettingsValidationResult
+        return new()
         {
             IsValid = issues.Count == 0,
             Issues = issues
@@ -115,10 +115,10 @@ internal sealed class SettingsService(
     }
 
     private static string Label(SettingSchemaDefinition definition)
-        => string.IsNullOrWhiteSpace(definition.DisplayName) ? definition.Key : definition.DisplayName!;
+        => string.IsNullOrWhiteSpace(definition.DisplayName) ? definition.Key : definition.DisplayName;
 
     private static string Label(SettingSchemaField field)
-        => string.IsNullOrWhiteSpace(field.DisplayName) ? field.Key : field.DisplayName!;
+        => string.IsNullOrWhiteSpace(field.DisplayName) ? field.Key : field.DisplayName;
 
     private static string TypeMismatchMessage(SettingSchemaDefinition definition)
     {
@@ -217,7 +217,7 @@ internal sealed class SettingsService(
             entity.Settings.Add(new Setting { Key = entry.Key, Value = entry.Value });
         }
 
-        return new SettingsGroupDetail
+        return new()
         {
             Group = entity,
             Schema = schema ?? [],
@@ -441,7 +441,7 @@ internal sealed class SettingsService(
             .ValidateSettingsAsync(settings, cancellationToken)
             .ConfigureAwait(false);
 
-        return new IntegrationSettingsValidationResult
+        return new()
         {
             IsValid = baseline.IsValid && extensionResult.IsValid,
             Issues = [.. baseline.Issues, .. extensionResult.Issues]
@@ -484,7 +484,7 @@ internal sealed class SettingsService(
                     {
                         ExtensionId = extensionId,
                         Name = name,
-                        Settings = new DictionaryPatch<string, string, string>
+                        Settings = new()
                         {
                             Add = add.Count > 0 ? add : null,
                             Remove = remove.Length > 0 ? remove : null,

@@ -50,7 +50,7 @@ import { useDownloadClients } from '@/hooks/useDownloadClients';
 import { useCardLayout } from '@/hooks/ui/useCardLayout';
 import { formatDateTime } from '@/lib/dateFormatting';
 import { displayLineageLeafTitle } from '@/lib/downloadTitle';
-import { type DownloadClientOption, type StateFilterOption, type DownloadFilterState } from '@/types';
+import { type DownloadClientOption, type DownloadFilterState } from '@/types';
 import { ACTIVE_DOWNLOAD_STATUSES } from '@/types/downloads';
 import type { SortDirectionName } from '@/types/paging';
 
@@ -80,8 +80,7 @@ import './DownloadsPage.css';
 
 const DOWNLOADS_PAGE_SIZE = 25;
 
-const queueStateOptions: StateFilterOption[] = [
-    { value: 'all', label: 'All States' },
+const QUEUE_STATE_FACETS: FacetOption[] = [
     { value: 'Downloading', label: 'Downloading' },
     { value: 'Queued', label: 'Queued' },
     { value: 'Grabbed', label: 'Grabbed' },
@@ -89,8 +88,7 @@ const queueStateOptions: StateFilterOption[] = [
     { value: 'Stalled', label: 'Stalled' },
 ];
 
-const historyStateOptions: StateFilterOption[] = [
-    { value: 'all', label: 'All States' },
+const HISTORY_STATE_FACETS: FacetOption[] = [
     { value: 'Downloaded', label: 'Downloaded' },
     { value: 'Importing', label: 'Importing' },
     { value: 'Imported', label: 'Imported' },
@@ -426,117 +424,109 @@ export function DownloadsPage() {
         [toast],
     );
 
-    const handleConfirmForget = useCallback(async () => {
-        if (!forgetTarget || forgetTarget.count === 0) {
+    const confirmTargetAction = async ({
+        target,
+        bulk,
+        perId,
+        setBusy,
+        setTarget,
+        texts,
+    }: {
+        target: ConfirmTarget | null;
+        bulk: typeof bulkForgetDownloads;
+        perId: (id: string) => Promise<unknown>;
+        setBusy: (busy: boolean) => void;
+        setTarget: (target: ConfirmTarget | null) => void;
+        texts: {
+            action: string;
+            noneTitle: string;
+            successTitle: (count: number) => string;
+            successDescription: (count: number) => string;
+            failureDescription: string;
+        };
+    }) => {
+        if (!target || target.count === 0) {
             return;
         }
-        setIsForgetting(true);
+        setBusy(true);
         try {
-            let count = forgetTarget.count;
-            if (forgetTarget.allPages) {
-                const result = await bulkForgetDownloads({
-                    filter: forgetTarget.filter,
-                    excludeIds: forgetTarget.excludeIds,
+            let count = target.count;
+            if (target.allPages) {
+                const result = await bulk({
+                    filter: target.filter,
+                    excludeIds: target.excludeIds,
                 });
                 if (showBulkResultError(result.error)) {
                     return;
                 }
                 if (result.count === 0) {
                     toast({
-                        title: 'No downloads forgotten',
+                        title: texts.noneTitle,
                         description: 'The selected downloads no longer exist.',
                         variant: 'warning',
                     });
-                    forgetTarget.selection?.clear();
+                    target.selection?.clear();
                     return;
                 }
                 count = result.count;
             } else {
-                const { succeededIds, failedCount } = await runPerDownloadActions(forgetTarget.ids, removeDownload);
+                const { succeededIds, failedCount } = await runPerDownloadActions(target.ids, perId);
                 if (failedCount > 0) {
-                    succeededIds.forEach((id) => forgetTarget.selection?.toggleRow(id, false));
-                    if (forgetTarget.selection) {
-                        showPerDownloadFailures(succeededIds.length, failedCount, 'forget');
+                    succeededIds.forEach((id) => target.selection?.toggleRow(id, false));
+                    if (target.selection) {
+                        showPerDownloadFailures(succeededIds.length, failedCount, texts.action);
                     } else {
-                        toast({ title: 'Error', description: 'Failed to forget download', variant: 'error' });
+                        toast({ title: 'Error', description: texts.failureDescription, variant: 'error' });
                     }
                     return;
                 }
             }
             toast({
-                title: count === 1 ? 'Download forgotten' : `${count} downloads forgotten`,
-                description: `Magpie stopped tracking ${count === 1 ? 'it' : 'them'}. ${count === 1 ? 'The transfer is' : 'The transfers are'} left in the download client.`,
+                title: texts.successTitle(count),
+                description: texts.successDescription(count),
                 variant: 'success',
             });
-            forgetTarget.selection?.clear();
+            target.selection?.clear();
         } catch {
-            toast({ title: 'Error', description: 'Failed to forget download', variant: 'error' });
+            toast({ title: 'Error', description: texts.failureDescription, variant: 'error' });
         } finally {
-            setIsForgetting(false);
-            setForgetTarget(null);
+            setBusy(false);
+            setTarget(null);
         }
-    }, [forgetTarget, bulkForgetDownloads, removeDownload, showBulkResultError, showPerDownloadFailures, toast]);
+    };
 
-    const handleConfirmRemove = useCallback(async () => {
-        if (!removeTarget || removeTarget.count === 0) {
-            return;
-        }
-        setIsRemoving(true);
-        try {
-            let count = removeTarget.count;
-            if (removeTarget.allPages) {
-                const result = await bulkRemoveDownloads({
-                    filter: removeTarget.filter,
-                    excludeIds: removeTarget.excludeIds,
-                });
-                if (showBulkResultError(result.error)) {
-                    return;
-                }
-                if (result.count === 0) {
-                    toast({
-                        title: 'No downloads removed',
-                        description: 'The selected downloads no longer exist.',
-                        variant: 'warning',
-                    });
-                    removeTarget.selection?.clear();
-                    return;
-                }
-                count = result.count;
-            } else {
-                const { succeededIds, failedCount } = await runPerDownloadActions(
-                    removeTarget.ids,
-                    deleteDownloadWithFiles,
-                );
-                if (failedCount > 0) {
-                    succeededIds.forEach((id) => removeTarget.selection?.toggleRow(id, false));
-                    if (removeTarget.selection) {
-                        showPerDownloadFailures(succeededIds.length, failedCount, 'remove');
-                    } else {
-                        toast({ title: 'Error', description: 'Failed to remove download and files', variant: 'error' });
-                    }
-                    return;
-                }
-            }
-            toast({
-                title: count === 1 ? 'Download removed' : `${count} downloads removed`,
-                description: 'Removed the download and its files from the download client.',
-                variant: 'success',
-            });
-            removeTarget.selection?.clear();
-        } catch {
-            toast({ title: 'Error', description: 'Failed to remove download and files', variant: 'error' });
-        } finally {
-            setIsRemoving(false);
-            setRemoveTarget(null);
-        }
-    }, [
-        removeTarget,
-        bulkRemoveDownloads,
-        deleteDownloadWithFiles,
-        showBulkResultError,
-        showPerDownloadFailures,
-        toast,
-    ]);
+    const handleConfirmForget = () =>
+        confirmTargetAction({
+            target: forgetTarget,
+            bulk: bulkForgetDownloads,
+            perId: removeDownload,
+            setBusy: setIsForgetting,
+            setTarget: setForgetTarget,
+            texts: {
+                action: 'forget',
+                noneTitle: 'No downloads forgotten',
+                successTitle: (count) => (count === 1 ? 'Download forgotten' : `${count} downloads forgotten`),
+                successDescription: (count) =>
+                    `Magpie stopped tracking ${count === 1 ? 'it' : 'them'}. ${count === 1 ? 'The transfer is' : 'The transfers are'} left in the download client.`,
+                failureDescription: 'Failed to forget download',
+            },
+        });
+
+    const handleConfirmRemove = () =>
+        confirmTargetAction({
+            target: removeTarget,
+            bulk: bulkRemoveDownloads,
+            perId: deleteDownloadWithFiles,
+            setBusy: setIsRemoving,
+            setTarget: setRemoveTarget,
+            texts: {
+                action: 'remove',
+                noneTitle: 'No downloads removed',
+                successTitle: (count) => (count === 1 ? 'Download removed' : `${count} downloads removed`),
+                successDescription: () => 'Removed the download and its files from the download client.',
+                failureDescription: 'Failed to remove download and files',
+            },
+        });
 
     const handleStop = useCallback(
         async (id: string) => {
@@ -716,12 +706,6 @@ export function DownloadsPage() {
         [clients],
     );
 
-    const toFacetOptions = (options: StateFilterOption[]): FacetOption[] =>
-        options.filter((o) => o.value !== 'all').map((o) => ({ value: String(o.value), label: o.label }));
-
-    const queueStateFacets = useMemo(() => toFacetOptions(queueStateOptions), []);
-    const historyStateFacets = useMemo(() => toFacetOptions(historyStateOptions), []);
-
     const queueColumns = useMemo(
         () =>
             buildDownloadColumns({
@@ -729,7 +713,7 @@ export function DownloadsPage() {
                 filters: queueFilters,
                 onChange: setQueueFilters,
                 clientOptions: clientFacetOptions,
-                stateOptions: queueStateFacets,
+                stateOptions: QUEUE_STATE_FACETS,
                 selection: queueSelection,
                 canControlDownloads,
                 canManageDownloads,
@@ -740,7 +724,6 @@ export function DownloadsPage() {
             queueFilters,
             setQueueFilters,
             clientFacetOptions,
-            queueStateFacets,
             queueSelection,
             canControlDownloads,
             canManageDownloads,
@@ -755,7 +738,7 @@ export function DownloadsPage() {
                 filters: historyFilters,
                 onChange: setHistoryFilters,
                 clientOptions: clientFacetOptions,
-                stateOptions: historyStateFacets,
+                stateOptions: HISTORY_STATE_FACETS,
                 selection: historySelection,
                 canControlDownloads,
                 canManageDownloads,
@@ -766,7 +749,6 @@ export function DownloadsPage() {
             historyFilters,
             setHistoryFilters,
             clientFacetOptions,
-            historyStateFacets,
             historySelection,
             canControlDownloads,
             canManageDownloads,
@@ -781,11 +763,11 @@ export function DownloadsPage() {
     const hasActiveHistoryFilters = historyFilters.client !== '' || historyFilters.state !== '';
     const queueFilterFields: ListFilterField[] = [
         { id: 'client', label: 'Client', kind: 'facet', value: queueFilters.client, options: clientFacetOptions },
-        { id: 'state', label: 'Status', kind: 'facet', value: queueFilters.state, options: queueStateFacets },
+        { id: 'state', label: 'Status', kind: 'facet', value: queueFilters.state, options: QUEUE_STATE_FACETS },
     ];
     const historyFilterFields: ListFilterField[] = [
         { id: 'client', label: 'Client', kind: 'facet', value: historyFilters.client, options: clientFacetOptions },
-        { id: 'state', label: 'Status', kind: 'facet', value: historyFilters.state, options: historyStateFacets },
+        { id: 'state', label: 'Status', kind: 'facet', value: historyFilters.state, options: HISTORY_STATE_FACETS },
     ];
 
     const knownDownloads = useRef<Record<string, ApiDownload>>({});

@@ -12,8 +12,6 @@ internal sealed class MediaFileConfiguration : IEntityTypeConfiguration<MediaFil
     public void Configure(EntityTypeBuilder<MediaFile> builder)
     {
         builder.ToTable("content_mediaFile");
-        builder.HasKey(e => e.Id);
-        builder.Property(e => e.Id).ValueGeneratedOnAdd();
         builder.Property(e => e.MediaInfo).HasConversion(
             v => JsonSerializer.Serialize(v, JsonSerializerOptions.Default),
             v => JsonSerializer.Deserialize<MediaInfo>(v, JsonSerializerOptions.Default) ?? new())
@@ -27,8 +25,6 @@ internal sealed class MediaFileConfiguration : IEntityTypeConfiguration<MediaFil
             .WithMany()
             .HasForeignKey(e => e.DownloadId)
             .OnDelete(DeleteBehavior.SetNull);
-        builder.HasIndex(e => e.ContentItemId);
-        builder.HasIndex(e => e.DownloadId);
         builder.HasIndex(e => e.FilePath).IsUnique();
         builder.HasIndex(e => e.PathKey).IsUnique();
     }

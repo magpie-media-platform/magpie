@@ -39,8 +39,7 @@ internal sealed class SettingsResolver(
             {
                 _missingContactWarned = true;
                 logger.LogWarning(
-                    "Wikidata requests use a generic User-Agent because settings group {GroupName} has no " +
-                    "{ContactKey} and environment variable {EnvVar} is not set.",
+                    "Wikidata uses a generic User-Agent: {GroupName} has no {ContactKey} and {EnvVar} is not set",
                     Settings.GroupName,
                     Settings.ContactKey,
                     EnvContactVariable);
@@ -56,7 +55,7 @@ internal sealed class SettingsResolver(
             var version = typeof(SettingsResolver).Assembly.GetName().Version ?? new Version(1, 0, 0);
             var contact = string.IsNullOrWhiteSpace(_snapshot.Contact)
                 ? Settings.DefaultContact
-                : _snapshot.Contact!;
+                : _snapshot.Contact;
             return new RequestContext
             {
                 Language = language,
@@ -92,12 +91,12 @@ internal sealed class SettingsResolver(
     {
         if (!string.IsNullOrWhiteSpace(configured))
         {
-            return configured!.ToPrimaryLanguage() ?? Settings.FallbackLanguage;
+            return configured.ToPrimaryLanguage() ?? Settings.FallbackLanguage;
         }
 
         return string.IsNullOrWhiteSpace(fallback)
             ? Settings.FallbackLanguage
-            : (fallback!.ToPrimaryLanguage() ?? Settings.FallbackLanguage);
+            : (fallback.ToPrimaryLanguage() ?? Settings.FallbackLanguage);
     }
 
     private async Task<Settings> ReadSnapshotAsync(CancellationToken cancellationToken)
@@ -106,13 +105,13 @@ internal sealed class SettingsResolver(
         var envContact = Environment.GetEnvironmentVariable(EnvContactVariable);
         if (!string.IsNullOrWhiteSpace(envContact))
         {
-            resolved[Settings.ContactKey] = envContact!;
+            resolved[Settings.ContactKey] = envContact;
         }
 
         var envLanguage = Environment.GetEnvironmentVariable(EnvLanguageVariable);
         if (!string.IsNullOrWhiteSpace(envLanguage))
         {
-            resolved[Settings.LanguageKey] = envLanguage!;
+            resolved[Settings.LanguageKey] = envLanguage;
         }
 
         var detail = await settingsService

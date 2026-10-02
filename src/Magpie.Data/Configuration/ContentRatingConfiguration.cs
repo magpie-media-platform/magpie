@@ -10,13 +10,10 @@ internal sealed class ContentRatingConfiguration : IEntityTypeConfiguration<Cont
     public void Configure(EntityTypeBuilder<ContentRating> builder)
     {
         builder.ToTable("metadata_contentRating");
-        builder.HasKey(e => e.Id);
-        builder.Property(e => e.Id).ValueGeneratedOnAdd();
         builder.HasOne<MetadataContribution>()
             .WithMany(e => e.ContentRatings)
             .HasForeignKey(e => e.MetadataContributionId)
             .IsRequired()
             .OnDelete(DeleteBehavior.Restrict);
-        builder.HasIndex(e => e.MetadataContributionId);
     }
 }

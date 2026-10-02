@@ -86,20 +86,55 @@ function save() {
 
 describe('PackageSourceForm validation', () => {
     it.each([
-        ['invalid URL scheme', 'ftp://feed.example/v3/index.json', 'sourceUrl must be an absolute HTTP or HTTPS URL.'],
-        ['relative URL', '/v3/index.json', 'sourceUrl must be an absolute HTTP or HTTPS URL.'],
+        ['an HTTP URL', 'http://127.0.0.1:17126/qa-disabled-index.json', 'Source URL must be an absolute HTTPS URL.'],
+        ['a malformed URL', 'bad-url', 'Source URL must be an absolute HTTPS URL.'],
+        ['an invalid URL scheme', 'ftp://feed.example/v3/index.json', 'Source URL must be an absolute HTTPS URL.'],
+        ['a relative URL', '/v3/index.json', 'Source URL must be an absolute HTTPS URL.'],
         [
             'embedded credentials',
             'https://user:pass@feed.example/v3/index.json',
-            'sourceUrl must not include credentials.',
+            'Source URL must not include credentials.',
         ],
-    ])('rejects %s', async (_name, sourceUrl, message) => {
+    ])('rejects %s on the Source URL field and keeps the draft', async (_name, sourceUrl, message) => {
         const { onSubmit } = renderForm(validCreateSource({ sourceUrl }));
 
         save();
 
         expect(await screen.findByText(message)).toBeInTheDocument();
+        expect(screen.getByLabelText(/^Source URL/)).toHaveAccessibleDescription(message);
+        expect(screen.getByLabelText(/^Source URL/)).toHaveValue(sourceUrl);
         expect(onSubmit).not.toHaveBeenCalled();
+    });
+
+    it.each([
+        ['creating an enabled feed', validCreateSource({ sourceUrl: 'http://feed.example/v3/index.json' })],
+        [
+            'creating a disabled feed',
+            validCreateSource({ sourceUrl: 'http://feed.example/v3/index.json', enabled: false }),
+        ],
+        [
+            'editing a disabled feed',
+            existingBasicSource({ sourceUrl: 'http://feed.example/v3/index.json', enabled: false }),
+        ],
+    ])('requires an HTTPS Source URL when %s', async (_name, initialValues) => {
+        const { onSubmit } = renderForm(initialValues);
+
+        save();
+
+        expect(await screen.findByText('Source URL must be an absolute HTTPS URL.')).toBeInTheDocument();
+        expect(onSubmit).not.toHaveBeenCalled();
+    });
+
+    it('accepts an HTTPS Source URL for a disabled feed', async () => {
+        const initialValues = validCreateSource({ enabled: false });
+        const { onSubmit } = renderForm(initialValues);
+
+        await act(async () => {
+            save();
+        });
+
+        expect(screen.queryByText('Source URL must be an absolute HTTPS URL.')).not.toBeInTheDocument();
+        expect(onSubmit).toHaveBeenCalledWith(initialValues);
     });
 
     it('requires a Basic secret when creating a feed', async () => {

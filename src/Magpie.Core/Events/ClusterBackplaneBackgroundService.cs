@@ -53,9 +53,7 @@ internal sealed class ClusterBackplaneBackgroundService(
     {
         try
         {
-            using var listener = eventBus is EventBus bus
-                ? bus.CreateListener(eventName: null, localOnly: false, callSite: "backplane")
-                : eventBus.CreateListener();
+            using var listener = eventBus.CreateListener(eventName: null, localOnly: false, callSite: "backplane");
             _listenerReady.TrySetResult();
             await databaseMigration.Completion.WaitAsync(cancellationToken)
                 .ConfigureAwait(false);
@@ -111,7 +109,7 @@ internal sealed class ClusterBackplaneBackgroundService(
         }
     }
 
-    internal Task RelayOutboundAsync(MagpieEvent magpieEvent, CancellationToken cancellationToken)
+    private Task RelayOutboundAsync(MagpieEvent magpieEvent, CancellationToken cancellationToken)
     {
         if (backplane is null || !string.Equals(magpieEvent.NodeId, hostEnvironment.NodeId, StringComparison.Ordinal))
         {
@@ -121,7 +119,7 @@ internal sealed class ClusterBackplaneBackgroundService(
         return backplane.BroadcastEventAsync(magpieEvent, cancellationToken);
     }
 
-    internal Task RelayInboundAsync(MagpieEvent magpieEvent, CancellationToken cancellationToken)
+    private Task RelayInboundAsync(MagpieEvent magpieEvent, CancellationToken cancellationToken)
     {
         if (string.Equals(magpieEvent.NodeId, hostEnvironment.NodeId, StringComparison.Ordinal))
         {

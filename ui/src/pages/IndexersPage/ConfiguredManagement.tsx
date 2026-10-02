@@ -1,5 +1,5 @@
 import { useState, useMemo, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { DatabaseIcon, FlaskIcon, MagnifyingGlassIcon, PlusIcon, TrashIcon } from '@phosphor-icons/react';
 import { type ColumnDef, type SortingState } from '@tanstack/react-table';
 
@@ -23,8 +23,6 @@ import {
     useIndexers,
     useAllIndexerConnections,
     useIndexerConnectionMutations,
-    indexerStatusLabels,
-    indexerStatusVariants,
     type ConfiguredConnectionRow,
 } from '@/hooks/useIndexers';
 import { useBulkRun } from '@/hooks/useBulkRun';
@@ -99,7 +97,7 @@ export function ConfiguredManagement({ onGoToCatalog }: ConfiguredManagementProp
     const providerOptions = useMemo(() => [...new Set(rows.map((r) => r.indexer.providerType))].sort(), [rows]);
     const statusOptions = useMemo<FacetOption[]>(() => {
         const present = [...new Set(rows.map((r) => r.connection.status))];
-        return present.map((s) => ({ value: s, label: indexerStatusLabels[s] }));
+        return present.map((s) => ({ value: s, label: s }));
     }, [rows]);
 
     const filteredRows = useMemo(() => {
@@ -312,12 +310,8 @@ export function ConfiguredManagement({ onGoToCatalog }: ConfiguredManagementProp
                 cell: ({ row }) => {
                     const s = row.original.connection.status;
                     return (
-                        <Badge
-                            variant={indexerStatusVariants[s] as Parameters<typeof Badge>[0]['variant']}
-                            size="sm"
-                            dot
-                        >
-                            {indexerStatusLabels[s]}
+                        <Badge variant={s.toLowerCase() as Parameters<typeof Badge>[0]['variant']} size="sm" dot>
+                            {s}
                         </Badge>
                     );
                 },
@@ -456,15 +450,15 @@ export function ConfiguredManagement({ onGoToCatalog }: ConfiguredManagementProp
                 label="Indexer instance selection actions"
                 itemNounPlural="indexer instances"
             >
-                <Button
-                    variant="primary"
-                    size="sm"
-                    onClick={() => handleSearchSelected(selectedConnections.map((connection) => connection.id))}
-                    aria-label="Search selected indexers"
-                    data-action="bulk-search"
-                >
-                    <MagnifyingGlassIcon weight="bold" aria-hidden="true" />
-                    <span className="bulk-actions-toolbar__btn-label">Search</span>
+                <Button asChild variant="primary" size="sm">
+                    <Link
+                        to={`/admin/indexers/search?connections=${selectedConnections.map((connection) => connection.id).join(',')}`}
+                        aria-label="Search selected indexers"
+                        data-action="bulk-search"
+                    >
+                        <MagnifyingGlassIcon weight="bold" aria-hidden="true" />
+                        <span className="bulk-actions-toolbar__btn-label">Search</span>
+                    </Link>
                 </Button>
                 <Button
                     variant="secondary"

@@ -101,7 +101,6 @@ public sealed class ContentHierarchyItemRepositoryDeleteTests
     [TearDown]
     public void TearDown()
     {
-        _context.Database.CloseConnection();
         _context.Dispose();
     }
 
@@ -767,6 +766,105 @@ public sealed class ContentHierarchyItemRepositoryDeleteTests
                 await _context.DownloadScopes.AnyAsync(c => c.ContentHierarchyItemId == episode.Id)
                     .ConfigureAwait(false),
                 Is.False);
+        }
+    }
+
+    [TestCase("episode-1", "episode-2", new[] { "episode-3" })]
+    [TestCase("episode-2", "episode-1", new[] { "episode-3" })]
+    [TestCase("episode-3", "episode-1", new[] { "episode-2" })]
+    public async Task DeleteAsync_KeepsTheFileForTheOtherEpisodes_WhenAnEpisodeThatTheFileCoversIsDeleted(
+        string deletedSlug,
+        string ownerSlug,
+        string[] coveredSlugs)
+    {
+        // Arrange
+        var season = new ContentHierarchyItem
+        {
+            Id = Guid.NewGuid(),
+            MetadataContainerId = _metadataContainerId,
+            ContentType = "tv",
+            Level = "season",
+            Slug = "season-1",
+            Name = "Season 1",
+            CreatedAt = DateTime.UtcNow
+        };
+        var firstEpisode = new ContentHierarchyItem
+        {
+            MetadataContainer = new() { CreatedAt = DateTime.UtcNow },
+            ParentId = season.Id,
+            ContentType = "tv",
+            Level = "episode",
+            Slug = "episode-1",
+            Name = "Episode 1",
+            Ordinal = 1,
+            CreatedAt = DateTime.UtcNow,
+            ContentItem = new() { CreatedAt = DateTime.UtcNow }
+        };
+        var secondEpisode = new ContentHierarchyItem
+        {
+            MetadataContainer = new() { CreatedAt = DateTime.UtcNow },
+            ParentId = season.Id,
+            ContentType = "tv",
+            Level = "episode",
+            Slug = "episode-2",
+            Name = "Episode 2",
+            Ordinal = 2,
+            CreatedAt = DateTime.UtcNow,
+            ContentItem = new() { CreatedAt = DateTime.UtcNow }
+        };
+        var thirdEpisode = new ContentHierarchyItem
+        {
+            MetadataContainer = new() { CreatedAt = DateTime.UtcNow },
+            ParentId = season.Id,
+            ContentType = "tv",
+            Level = "episode",
+            Slug = "episode-3",
+            Name = "Episode 3",
+            Ordinal = 3,
+            CreatedAt = DateTime.UtcNow,
+            ContentItem = new() { CreatedAt = DateTime.UtcNow }
+        };
+        _context.ContentHierarchyItems.AddRange(season, firstEpisode, secondEpisode, thirdEpisode);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        var mediaFile = new MediaFile
+        {
+            ContentItemId = firstEpisode.ContentItem.Id,
+            FileKind = "Video",
+            FilePath = "/tv/S01E01-E03.mkv",
+            PathKey = "/tv/S01E01-E03.mkv",
+            CreatedAt = DateTime.UtcNow
+        };
+        mediaFile.Coverage.Add(new() { ContentItemId = secondEpisode.ContentItem.Id });
+        mediaFile.Coverage.Add(new() { ContentItemId = thirdEpisode.ContentItem.Id });
+        _context.MediaFiles.Add(mediaFile);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.ChangeTracker.Clear();
+        var deletedId = await _context.ContentHierarchyItems
+            .Where(item => item.Slug == deletedSlug)
+            .Select(item => item.Id)
+            .SingleAsync()
+            .ConfigureAwait(false);
+
+        // Act
+        await _subject.DeleteAsync(deletedId, _userId).ConfigureAwait(false);
+
+        // Assert
+        var slugs = await _context.ContentItems.AsNoTracking()
+            .Join(
+                _context.ContentHierarchyItems,
+                item => item.ContentHierarchyItemId,
+                node => node.Id,
+                (item, node) => new { item.Id, node.Slug })
+            .ToDictionaryAsync(item => item.Id, item => item.Slug)
+            .ConfigureAwait(false);
+        var stored = await _context.MediaFiles.AsNoTracking()
+            .Include(file => file.Coverage)
+            .SingleAsync()
+            .ConfigureAwait(false);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(slugs[stored.ContentItemId], Is.EqualTo(ownerSlug));
+            Assert.That(stored.Coverage.Select(coverage => slugs[coverage.ContentItemId]), Is.EqualTo(coveredSlugs));
         }
     }
 }

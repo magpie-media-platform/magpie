@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { CheckIcon, FolderSimplePlusIcon, WarningCircleIcon } from '@phosphor-icons/react';
 import { type ColumnDef } from '@tanstack/react-table';
 
@@ -147,7 +147,6 @@ interface LibraryImportGroupPageProps {
 
 export function LibraryImportGroupPage({ monitoringMode, onMonitoringModeChange }: LibraryImportGroupPageProps) {
     const { toast } = useToast();
-    const navigate = useNavigate();
     const [searchParams] = useSearchParams();
 
     const groupKey = searchParams.get('key') ?? '';
@@ -366,20 +365,17 @@ export function LibraryImportGroupPage({ monitoringMode, onMonitoringModeChange 
                                     Accept
                                 </Button>
                             )}
-                            <Button
-                                variant="secondary"
-                                size="sm"
-                                onClick={() => void navigate(buildUrl([...path, bucket.key]))}
-                                data-action="dig-in"
-                            >
-                                {digInLabel}
+                            <Button asChild variant="secondary" size="sm">
+                                <Link to={buildUrl([...path, bucket.key])} data-action="dig-in">
+                                    {digInLabel}
+                                </Link>
                             </Button>
                         </div>
                     );
                 },
             },
         ],
-        [acceptingKeys, buildUrl, digInLabel, globalLeafLevel, handleAccept, navigate, path, selection],
+        [acceptingKeys, buildUrl, digInLabel, globalLeafLevel, handleAccept, path, selection],
     );
 
     const title = queryTitle || fallbackTitle(candidates);

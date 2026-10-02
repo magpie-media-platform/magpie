@@ -1,8 +1,1 @@
-export {
-    BottomNav,
-    BottomNavItem,
-    BottomNavButton,
-    type BottomNavProps,
-    type BottomNavItemProps,
-    type BottomNavButtonProps,
-} from './BottomNav';
+export { BottomNav, BottomNavItem, type BottomNavProps, type BottomNavItemProps } from './BottomNav';

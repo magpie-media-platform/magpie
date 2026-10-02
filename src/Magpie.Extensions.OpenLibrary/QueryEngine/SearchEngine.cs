@@ -4,7 +4,6 @@ using System.Threading;
 using System.Threading.Tasks;
 
 using Magpie.Extensions.OpenLibrary.Mapping;
-using Magpie.Models.MetadataSearch;
 
 using Microsoft.Extensions.Logging;
 
@@ -33,7 +32,7 @@ internal sealed class SearchEngine(
             return new QueryResult
             {
                 Hits = [],
-                PageInfo = new ProviderSearchPageInfo
+                PageInfo = new()
                 {
                     RequestedPage = Math.Max(1, plan.Page),
                     HasMore = true

@@ -134,8 +134,24 @@ describe('JobRetryPolicyPanel', () => {
         });
     });
 
+    it('rejects an empty base delay before saving', async () => {
+        const user = userEvent.setup();
+        render(<JobRetryPolicyPanel />, { wrapper: createWrapper() });
+
+        const input = await screen.findByLabelText(/base delay/i);
+        await user.clear(input);
+
+        await user.click(screen.getByRole('button', { name: /save settings/i }));
+
+        const error = screen.getByText('Base delay is required.');
+        expect(error).toHaveAttribute('role', 'alert');
+        expect(input).toHaveAttribute('aria-invalid', 'true');
+        expect(input).toHaveAccessibleDescription('Base delay is required.');
+        expect(mockApiPatch).not.toHaveBeenCalled();
+        expect(screen.queryByText('Job retry settings updated.')).not.toBeInTheDocument();
+    });
+
     it.each([
-        [/base delay/i, '', 'Base delay is required.'],
         [/base delay/i, '0', 'Base delay must be at least 1.'],
         [/backoff factor/i, '0.5', 'Backoff factor must be at least 1.'],
         [/maximum delay/i, '0', 'Maximum delay must be at least 1.'],
@@ -146,9 +162,7 @@ describe('JobRetryPolicyPanel', () => {
 
         const input = await screen.findByLabelText(label);
         await user.clear(input);
-        if (value) {
-            await user.type(input, value);
-        }
+        await user.type(input, value);
 
         await user.click(screen.getByRole('button', { name: /save settings/i }));
 

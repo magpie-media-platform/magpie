@@ -34,6 +34,7 @@ internal sealed class ContentMetadataRefreshItemJob(
     IContentTypeRegistry contentTypeRegistry,
     ITransactionManager transactionManager,
     IJobManager jobManager,
+    ILibraryImportCandidateRepository libraryImportCandidateRepository,
     ISubjectKindRegistry subjectKindRegistry,
     TimeProvider timeProvider,
     ILogger<ContentMetadataRefreshItemJob> logger,
@@ -99,8 +100,7 @@ internal sealed class ContentMetadataRefreshItemJob(
     private const string NoProviderMatchedStatus =
         "No metadata provider handles this content type, so the refresh made no changes.";
 
-    private const string ProviderFailedStatus =
-        "A metadata provider failed, so the refresh will try again.";
+    private const string ProviderFailedStatus = "A metadata provider failed.";
 
     private const MetadataField NameLikeFallbackIdentityFields =
         MetadataField.Title | MetadataField.OriginalTitle | MetadataField.SortTitle;
@@ -372,16 +372,61 @@ internal sealed class ContentMetadataRefreshItemJob(
     {
         var itemId = ResolveContentHierarchyItemId(context);
 
-        await RefreshAsync(
-            itemId,
-            context.ManualTriggerUserId,
-            context.CorrelationId,
-            progressReporter,
-            context.ExecutionMode == JobExecutionMode.Immediate,
-            cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await RefreshAsync(
+                itemId,
+                context.ManualTriggerUserId,
+                context.CorrelationId,
+                progressReporter,
+                context.ExecutionMode == JobExecutionMode.Immediate,
+                cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            await HandOverWaitingImportsAsync(itemId).ConfigureAwait(false);
+        }
     }
 
-    internal async Task RefreshAsync(
+    private async Task HandOverWaitingImportsAsync(Guid itemId)
+    {
+        try
+        {
+            var waiting = await libraryImportCandidateRepository.QueryAsync(
+                new LibraryImportCandidateQuery
+                {
+                    Status = LibraryImportCandidateStatus.Importing,
+                    ContentHierarchyItemIds = [itemId]
+                },
+                new() { PageNumber = 1, PageSize = 1 },
+                null,
+                CancellationToken.None).ConfigureAwait(false);
+            if (!waiting.Items.Any())
+            {
+                return;
+            }
+
+            await jobManager.ExecuteAsync(
+                new JobEnqueueRequest
+                {
+                    JobType = MagpieJobs.Types.RootFolderContentImportResume,
+                    Parameters = new Dictionary<string, string>
+                    {
+                        [MagpieJobs.Parameters.ContentHierarchyItemId] = itemId.ToString("D")
+                    }
+                },
+                CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(
+                ex,
+                "The metadata refresh of item {ContentHierarchyItemId} failed to hand over its waiting imports",
+                itemId);
+        }
+    }
+
+    private async Task RefreshAsync(
         Guid contentHierarchyItemId,
         Guid? userId,
         Guid? correlationId,
@@ -622,12 +667,13 @@ internal sealed class ContentMetadataRefreshItemJob(
             .Select(c => c.PublishDate?.Year)
             .FirstOrDefault(year => year is not null);
 
-        var childDefinitionsAreComplete = childDefinitions.Count > 0 &&
-            !fetchResults.Any(result => result.Exception is not null);
+        var anyProviderFailed = fetchResults.Any(result => result.Exception is not null);
+        var childDefinitionsAreComplete = childDefinitions.Count > 0 && !anyProviderFailed;
         var stillPlaceholder = string.IsNullOrWhiteSpace(resolvedTitle) &&
             item.PendingMetadataRefresh &&
             !childDefinitionsAreComplete;
-        if (stillPlaceholder)
+        var onlyFailuresReturned = anyProviderFailed && replacements.Count == 0 && childDefinitions.Count == 0;
+        if (stillPlaceholder || onlyFailuresReturned)
         {
             if (throttles.Count > 0)
             {
@@ -643,7 +689,7 @@ internal sealed class ContentMetadataRefreshItemJob(
                 return item.ContentType;
             }
 
-            if (!operatorRequested)
+            if (!operatorRequested && item.PendingMetadataRefresh)
             {
                 await contentHierarchyItemRepository
                     .PatchAsync(
@@ -657,8 +703,7 @@ internal sealed class ContentMetadataRefreshItemJob(
                     .ConfigureAwait(false);
             }
 
-            var anyProviderFailedTransiently = fetchResults.Any(r => r.Exception is not null);
-            if (anyProviderFailedTransiently)
+            if (anyProviderFailed)
             {
                 logger.LogWarning(
                     "A metadata provider failed for item {ContentHierarchyItemId} and the refresh will retry",
@@ -667,9 +712,7 @@ internal sealed class ContentMetadataRefreshItemJob(
                 throw new MetadataNotReturnedException(ProviderFailedStatus);
             }
 
-            logger.LogInformation(
-                "No provider returned metadata for item {ContentHierarchyItemId}",
-                item.Id);
+            logger.LogInformation("No provider returned metadata for item {ContentHierarchyItemId}", item.Id);
             progress.Report(1, NoMetadataReturnedStatus);
             return item.ContentType;
         }
@@ -718,7 +761,7 @@ internal sealed class ContentMetadataRefreshItemJob(
         {
             logger.LogWarning(
                 ex,
-                "The refresh finished but failed to publish metadata.refreshed for item " + "{ContentHierarchyItemId}",
+                "The refresh finished but failed to publish metadata.refreshed for item {ContentHierarchyItemId}",
                 item.Id);
         }
 
@@ -784,7 +827,8 @@ internal sealed class ContentMetadataRefreshItemJob(
                                 var primaryImage = (
                                     from i in replacement.Contribution.Images
                                     where primaryImageUrls.Contains(i.Url)
-                                    orderby i.Ordinal, i.Url.AbsoluteUri
+                                    orderby i.Ordinal,
+                                    i.Url.AbsoluteUri
                                     select i).FirstOrDefault();
 
                                 foreach (var image in replacement.Contribution.Images)
@@ -842,11 +886,7 @@ internal sealed class ContentMetadataRefreshItemJob(
 
                     using var cascadeActivity = ContentTelemetry.Source.StartActivity("magpie.metadata.cascade");
                     cascadeActivity?.SetTag("magpie.cascade.child_count", childIds.Count);
-                    await EnqueueChildRefreshesAsync(
-                        childIds,
-                        userId,
-                        correlationId,
-                        ct).ConfigureAwait(false);
+                    await EnqueueChildRefreshesAsync(childIds, userId, correlationId, ct).ConfigureAwait(false);
                     cascadedChildCount = childIds.Count;
                 },
                 cancellationToken).ConfigureAwait(false);
@@ -1118,7 +1158,9 @@ internal sealed class ContentMetadataRefreshItemJob(
                 externalIds.Any(subject.ExternalIds.Contains)).ToArray();
             var candidates = resolvedSubjects.Concat(storedCandidates)
                 .Where(subject => string.Equals(
-                    subject.Definition.SubjectKind, definition.SubjectKind, StringComparison.Ordinal))
+                    subject.Definition.SubjectKind,
+                    definition.SubjectKind,
+                    StringComparison.Ordinal))
                 .GroupBy(subject => subject.MetadataContainerId)
                 .Select(group => new
                 {
@@ -1260,7 +1302,9 @@ internal sealed class ContentMetadataRefreshItemJob(
             }
 
             var subjectIds = await subjectRepository.ListIdsByExternalIdentityAsync(
-                group.Key, externalIds, cancellationToken).ConfigureAwait(false);
+                group.Key,
+                externalIds,
+                cancellationToken).ConfigureAwait(false);
             var subjects = await subjectRepository.ListIdentityDetailsAsync(subjectIds, cancellationToken)
                 .ConfigureAwait(false);
             foreach (var subject in subjects)
@@ -1335,10 +1379,7 @@ internal sealed class ContentMetadataRefreshItemJob(
         var shouldReplacePlaceholderPath = shouldWriteName &&
             current.PendingMetadataRefresh &&
             string.Equals(origin, GeneratedPathOrigin, StringComparison.OrdinalIgnoreCase) &&
-            string.Equals(
-                current.Path,
-                current.Slug.NormalizeContentPathSegment(),
-                StringComparison.Ordinal) &&
+            string.Equals(current.Path, current.Slug.NormalizeContentPathSegment(), StringComparison.Ordinal) &&
             !isAbsolute &&
             current.ContentItem is not { MediaFiles.Count: > 0 };
         var name = shouldWriteName ? resolvedTitle! : null;

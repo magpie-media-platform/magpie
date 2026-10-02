@@ -54,15 +54,9 @@ internal sealed class QueryCoordinator : IQueryCoordinator, IDisposable
     private readonly ICache _credits;
 
     private readonly ICache _scans;
-    private readonly Dictionary<string, Task<string>> _configurationInflight = [];
-    private readonly Dictionary<string, Task<IReadOnlyDictionary<string, int>>> _genreInflight = [];
     private readonly Dictionary<string, Task<SubjectResolution>> _subjectInflight = [];
     private readonly Dictionary<string, SharedSubjectSetLoad> _subjectSetInflight = [];
-    private readonly Dictionary<string, Task<CreditResponse>> _creditsInflight = [];
-    private readonly object _configurationGate = new();
-    private readonly object _genreGate = new();
     private readonly object _subjectGate = new();
-    private readonly object _creditsGate = new();
     private readonly object _scanGate = new();
 
     private readonly IHostApplicationLifetime _lifetime;
@@ -100,8 +94,6 @@ internal sealed class QueryCoordinator : IQueryCoordinator, IDisposable
         {
             return await GetOrCreateAsync(
                 _configuration,
-                _configurationInflight,
-                _configurationGate,
                 "configuration",
                 QueryCoordinatorRegion.Configuration,
                 RequestRole.Configuration,
@@ -115,7 +107,7 @@ internal sealed class QueryCoordinator : IQueryCoordinator, IDisposable
                         throw new InvalidOperationException("TMDb configuration omitted its secure image base URL.");
                     }
 
-                    return value!;
+                    return value;
                 },
                 cancellationToken).ConfigureAwait(false);
         }
@@ -125,7 +117,7 @@ internal sealed class QueryCoordinator : IQueryCoordinator, IDisposable
         }
         catch (Exception ex)
         {
-            logger.LogWarning(ex, "TMDb configuration request failed; the cache uses the default image base URL.");
+            logger.LogWarning(ex, "TMDb configuration request failed, using default image base URL");
             return Constants.DefaultImageBaseUrl;
         }
     }
@@ -138,8 +130,6 @@ internal sealed class QueryCoordinator : IQueryCoordinator, IDisposable
     {
         return GetOrCreateAsync<IReadOnlyDictionary<string, int>>(
             _genres,
-            _genreInflight,
-            _genreGate,
             request.CacheKey,
             QueryCoordinatorRegion.Genres,
             request.Endpoint,
@@ -181,10 +171,10 @@ internal sealed class QueryCoordinator : IQueryCoordinator, IDisposable
         }
 
         RecordCacheOutcome(QueryCoordinatorRegion.Subjects, hit: false);
-        var task = default(Task<SubjectResolution>)!;
+        var task = default(Task<SubjectResolution>);
         lock (_subjectGate)
         {
-            if (!_subjectInflight.TryGetValue(key, out task!))
+            if (!_subjectInflight.TryGetValue(key, out task))
             {
                 task = LoadSubjectAsync(key, state, loader);
                 _subjectInflight[key] = task;
@@ -213,10 +203,10 @@ internal sealed class QueryCoordinator : IQueryCoordinator, IDisposable
         }
 
         RecordCacheOutcome(QueryCoordinatorRegion.SubjectSets, hit: false);
-        var shared = default(SharedSubjectSetLoad)!;
+        var shared = default(SharedSubjectSetLoad);
         lock (_subjectGate)
         {
-            if (!_subjectSetInflight.TryGetValue(key, out shared!) || shared.Cancellation.IsCancellationRequested)
+            if (!_subjectSetInflight.TryGetValue(key, out shared) || shared.Cancellation.IsCancellationRequested)
             {
                 shared = new SharedSubjectSetLoad(
                     CancellationTokenSource.CreateLinkedTokenSource(_lifetime.ApplicationStopping));
@@ -253,8 +243,6 @@ internal sealed class QueryCoordinator : IQueryCoordinator, IDisposable
     {
         return GetOrCreateAsync(
             _credits,
-            _creditsInflight,
-            _creditsGate,
             key,
             QueryCoordinatorRegion.Credits,
             role,
@@ -393,8 +381,6 @@ internal sealed class QueryCoordinator : IQueryCoordinator, IDisposable
 
     private async Task<TValue> GetOrCreateAsync<TValue>(
         ICache cache,
-        Dictionary<string, Task<TValue>> inflight,
-        object gate,
         string key,
         string region,
         string role,
@@ -413,40 +399,10 @@ internal sealed class QueryCoordinator : IQueryCoordinator, IDisposable
         }
 
         RecordCacheOutcome(region, hit: false);
-        var task = default(Task<TValue>)!;
-        lock (gate)
-        {
-            if (!inflight.TryGetValue(key, out task!))
-            {
-                task = LoadAsync(cache, inflight, gate, key, loader);
-                inflight[key] = task;
-            }
-        }
-
-        return await WaitAsync(task, cancellationToken).ConfigureAwait(false);
-    }
-
-    private async Task<TValue> LoadAsync<TValue>(
-        ICache cache,
-        Dictionary<string, Task<TValue>> inflight,
-        object gate,
-        string key,
-        Func<CancellationToken, Task<TValue>> loader)
-    {
-        await Task.Yield();
-        try
-        {
-            var value = await loader(_lifetime.ApplicationStopping).ConfigureAwait(false);
-            cache.Set(key, value);
-            return value;
-        }
-        finally
-        {
-            lock (gate)
-            {
-                inflight.Remove(key);
-            }
-        }
+        return await cache.GetOrAddAsync(
+            key,
+            async token => await loader(token).ConfigureAwait(false),
+            cancellationToken).ConfigureAwait(false);
     }
 
     private sealed class SharedSubjectSetLoad(CancellationTokenSource cancellation)

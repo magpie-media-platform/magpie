@@ -18,8 +18,6 @@ public sealed class MagpieDbContextFactory : IDesignTimeDbContextFactory<MagpieD
 {
     private const int CommandTimeoutSeconds = 30;
 
-    private static readonly TimeSpan BusyTimeout = TimeSpan.FromSeconds(10);
-
     /// <summary>
     /// Creates a context for the given connection string.
     /// </summary>
@@ -53,7 +51,7 @@ public sealed class MagpieDbContextFactory : IDesignTimeDbContextFactory<MagpieD
                     .MigrationsAssembly(typeof(MagpieDbContextFactory).Assembly.GetName().Name)
                     .UseQuerySplittingBehavior(QuerySplittingBehavior.SplitQuery))
             .ReplaceService<IModelCustomizer, SqliteModelCustomizer>()
-            .AddInterceptors(new SqlitePragmaConnectionInterceptor(BusyTimeout))
+            .AddInterceptors(new SqlitePragmaConnectionInterceptor())
             .UseMagpieSeeding(defaultScheduleTriggers, defaultEventTriggers);
     }
 

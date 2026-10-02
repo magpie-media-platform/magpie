@@ -14,7 +14,7 @@ namespace Magpie.Extensions.Cardigann.Git;
 
 internal sealed class GitCoreDefinitionSource(
     IHttpClientFactory httpClientFactory,
-    ILogger<GitCoreDefinitionSource> logger) : IGitDefinitionSource
+    ILogger<GitCoreDefinitionSource> logger)
 {
     public const string HttpClientName = "cardigann-gitcore";
 

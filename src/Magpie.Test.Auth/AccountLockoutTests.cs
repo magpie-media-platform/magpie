@@ -116,12 +116,8 @@ public class AccountLockoutTests
             Assert.That(user.LockedUntil, Is.Null);
         }
 
-        _userRepository.Verify(
-            r => r.ResetLockoutAsync(user.Id, null, It.IsAny<CancellationToken>()),
-            Times.Once);
-        _userRepository.Verify(
-            r => r.ClearFailedLoginsAsync(user.Id, It.IsAny<CancellationToken>()),
-            Times.Once);
+        _userRepository.Verify(r => r.ResetLockoutAsync(user.Id, null, It.IsAny<CancellationToken>()), Times.Once);
+        _userRepository.Verify(r => r.ClearFailedLoginsAsync(user.Id, It.IsAny<CancellationToken>()), Times.Once);
         _eventBus.Verify(
             b => b.PublishAsync(
                 It.Is<MagpieEvent>(e =>
@@ -168,12 +164,8 @@ public class AccountLockoutTests
             Assert.That(user.LockedUntil, Is.Null);
         }
 
-        _userRepository.Verify(
-            r => r.ResetLockoutAsync(user.Id, null, It.IsAny<CancellationToken>()),
-            Times.Once);
-        _userRepository.Verify(
-            r => r.RecordFailedLoginAsync(user.Id, null, It.IsAny<CancellationToken>()),
-            Times.Once);
+        _userRepository.Verify(r => r.ResetLockoutAsync(user.Id, null, It.IsAny<CancellationToken>()), Times.Once);
+        _userRepository.Verify(r => r.RecordFailedLoginAsync(user.Id, null, It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Test]
@@ -206,9 +198,7 @@ public class AccountLockoutTests
 
         // Assert
         Assert.That(result, Is.Null);
-        _userRepository.Verify(
-            r => r.RecordFailedLoginAsync(user.Id, null, It.IsAny<CancellationToken>()),
-            Times.Once);
+        _userRepository.Verify(r => r.RecordFailedLoginAsync(user.Id, null, It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Test]
@@ -243,9 +233,7 @@ public class AccountLockoutTests
         await _subject.VerifyCredentialsAsync("alice", "bad-password").ConfigureAwait(false);
 
         // Assert
-        Assert.That(
-            capturedLockUntil,
-            Is.EqualTo(new DateTime(2026, 9, 9, 12, 5, 0, DateTimeKind.Utc)));
+        Assert.That(capturedLockUntil, Is.EqualTo(new DateTime(2026, 9, 9, 12, 5, 0, DateTimeKind.Utc)));
     }
 
     [Test]
@@ -275,9 +263,7 @@ public class AccountLockoutTests
 
         // Assert
         Assert.That(result, Is.Not.Null);
-        _userRepository.Verify(
-            r => r.ClearFailedLoginsAsync(user.Id, It.IsAny<CancellationToken>()),
-            Times.Once);
+        _userRepository.Verify(r => r.ClearFailedLoginsAsync(user.Id, It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Test]

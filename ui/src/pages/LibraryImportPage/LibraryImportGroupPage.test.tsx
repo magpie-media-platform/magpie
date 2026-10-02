@@ -297,22 +297,23 @@ describe('LibraryImportGroupPage', () => {
         });
 
         const firstRow = bucketRows()[0];
-        expect(within(firstRow).getByRole('button', { name: /^Series$/ })).toBeInTheDocument();
-        expect(within(firstRow).queryByRole('button', { name: /^Seriess$/ })).toBeNull();
+        expect(within(firstRow).getByRole('link', { name: /^Series$/ })).toBeInTheDocument();
+        expect(within(firstRow).queryByRole('link', { name: /^Seriess$/ })).toBeNull();
     });
 
     it('digs into a bucket by extending the path search param one level deeper', async () => {
-        const user = userEvent.setup();
         setCandidates([episode('e1', '1'), episode('e2', '2')]);
         render(<LibraryImportGroupPage monitoringMode="" onMonitoringModeChange={() => {}} />, {
             wrapper: createTestWrapper('/library/import?key=%2Fmedia%2Ftv%2FBluey&title=Bluey'),
         });
 
         const firstRow = bucketRows()[0];
-        await user.click(within(firstRow).getByRole('button', { name: /^Episode$/ }));
+        const href = within(firstRow)
+            .getByRole('link', { name: /^Episode$/ })
+            .getAttribute('href');
 
-        expect(mockNavigate).toHaveBeenCalledWith(expect.stringContaining('path=1'));
-        expect(mockNavigate).toHaveBeenCalledWith(expect.stringContaining('key=%2Fmedia%2Ftv%2FBluey'));
+        expect(href).toContain('path=1');
+        expect(href).toContain('key=%2Fmedia%2Ftv%2FBluey');
     });
 
     it('labels the dig-in button with the immediate child level of the bucket being dug into, pluralized', () => {
@@ -322,10 +323,11 @@ describe('LibraryImportGroupPage', () => {
         });
 
         const rows = bucketRows();
-        for (const row of rows) {
-            expect(within(row).getByRole('button', { name: /^Episode$/ })).toBeInTheDocument();
-            expect(within(row).queryByRole('button', { name: /^Dig in$/ })).toBeNull();
-        }
+        expect(rows).toHaveLength(2);
+        expect(within(rows[0]).getByRole('link', { name: /^Episode$/ })).toBeInTheDocument();
+        expect(within(rows[0]).queryByRole('link', { name: /^Dig in$/ })).toBeNull();
+        expect(within(rows[1]).getByRole('link', { name: /^Episode$/ })).toBeInTheDocument();
+        expect(within(rows[1]).queryByRole('link', { name: /^Dig in$/ })).toBeNull();
     });
 
     it('accepting a bucket bulk-accepts exactly that subset of candidate ids', async () => {

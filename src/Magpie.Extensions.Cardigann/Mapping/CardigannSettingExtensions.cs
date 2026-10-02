@@ -49,7 +49,7 @@ internal static class CardigannSettingExtensions
     {
         var (dataType, secret) = MapType(entry.Type);
         var options = string.Equals(entry.Type, "select", StringComparison.Ordinal)
-            ? CollectOptions(entry.Options)
+            ? entry.Options?.Keys.ToList() ?? []
             : null;
 
         return new SettingSchemaDefinition
@@ -77,22 +77,6 @@ internal static class CardigannSettingExtensions
             "number" => (DataType.Number, false),
             _ => (DataType.String, false)
         };
-    }
-
-    private static IReadOnlyList<string> CollectOptions(IReadOnlyDictionary<string, string>? options)
-    {
-        if (options is null || options.Count == 0)
-        {
-            return [];
-        }
-
-        var list = new List<string>(options.Count);
-        foreach (var kvp in options)
-        {
-            list.Add(kvp.Key);
-        }
-
-        return list;
     }
 
     private static string? StringifyDefault(object? raw)

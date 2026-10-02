@@ -26,26 +26,8 @@ internal static class PropertyBuilderExtensions
                     0,
                     (hash, pair) => hash ^ HashCode.Combine(pair.Key, pair.Value)),
             dictionary => dictionary == null
-                ? new Dictionary<string, string>()
-                : new Dictionary<string, string>(dictionary));
-
-    private static readonly ValueConverter<Dictionary<string, string>?, string> NullableStringDictionaryConverter =
-        new(
-            dictionary => JsonSerializer.Serialize(dictionary, JsonSerializerOptions.Default),
-            json => JsonSerializer.Deserialize<Dictionary<string, string>>(json, JsonSerializerOptions.Default)
-                ?? new());
-
-    private static readonly ValueComparer<Dictionary<string, string>?> NullableStringDictionaryComparer =
-        new(
-            (left, right) => DictionariesEqual(left, right),
-            dictionary => dictionary == null
-                ? 0
-                : dictionary.Aggregate(
-                    0,
-                    (hash, pair) => hash ^ HashCode.Combine(pair.Key, pair.Value)),
-            dictionary => dictionary == null
-                ? new Dictionary<string, string>()
-                : new Dictionary<string, string>(dictionary));
+                ? new()
+                : new(dictionary));
 
     internal static PropertyBuilder<Dictionary<string, string>> UseStringDictionaryConversion(
         this PropertyBuilder<Dictionary<string, string>> builder)
@@ -58,8 +40,8 @@ internal static class PropertyBuilderExtensions
     internal static PropertyBuilder<Dictionary<string, string>?> UseNullableStringDictionaryConversion(
         this PropertyBuilder<Dictionary<string, string>?> builder)
     {
-        builder.HasConversion(NullableStringDictionaryConverter);
-        builder.Metadata.SetValueComparer(NullableStringDictionaryComparer);
+        builder.HasConversion(StringDictionaryConverter);
+        builder.Metadata.SetValueComparer(StringDictionaryComparer);
         return builder;
     }
 
@@ -74,7 +56,7 @@ internal static class PropertyBuilderExtensions
                     : list.Aggregate(
                         0,
                         (hash, item) => HashCode.Combine(hash, item == null ? 0 : item.GetHashCode())),
-                list => list == null ? new List<T>() : new List<T>(list)));
+                list => list == null ? new() : new(list)));
         return builder;
     }
 

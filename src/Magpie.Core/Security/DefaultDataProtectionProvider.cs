@@ -127,7 +127,7 @@ internal sealed class DefaultDataProtectionProvider : IDataProtectionProvider
     {
         var hash = SHA256.HashData(material);
         var keyId = Convert.ToHexString(hash, 0, 8).ToLowerInvariant();
-        return new ProtectionKey(keyId, material);
+        return new(keyId, material);
     }
 
     private static bool TryReadEnvelope(string protectedValue, out string keyId, out byte[] payload)

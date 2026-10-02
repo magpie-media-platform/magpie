@@ -29,6 +29,11 @@ internal interface IQueryCoordinator
         Func<CancellationToken, Task<FetchResult<ReleaseGroupSearchResponseDto>>> loader,
         CancellationToken cancellationToken);
 
+    Task<FetchResult<ReleaseSearchResponseDto>> GetTrackReleasesAsync(
+        string trackMbid,
+        Func<CancellationToken, Task<FetchResult<ReleaseSearchResponseDto>>> loader,
+        CancellationToken cancellationToken);
+
     Task<FetchResult<ArtistBrowseResponseDto>> GetArtistBrowsePageAsync(
         ArtistBrowseCacheKey key,
         Func<CancellationToken, Task<FetchResult<ArtistBrowseResponseDto>>> loader,

@@ -302,6 +302,17 @@ public sealed class QueryPlannerTests
                         {
                             And = [new PropertyCriterion<string> { Value = "Dune" }]
                         },
+                        AfterId = Guid.Parse("66666666-6666-6666-6666-666666666666")
+                    },
+                    "Empty",
+                    "afterId:constant-absent").SetName("local id cursor contradicts"),
+                new TestCaseData(
+                    new ContentHierarchyItemCriteria
+                    {
+                        Name = new CriteriaSet<PropertyCriterion<string>>
+                        {
+                            And = [new PropertyCriterion<string> { Value = "Dune" }]
+                        },
                         AncestorId = Guid.Parse("55555555-5555-5555-5555-555555555555")
                     },
                     "Empty",

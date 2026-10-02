@@ -136,16 +136,14 @@ internal sealed class ContentTypeRegistry : IContentTypeRegistry
             }
 
             throw new ArgumentException(
-                $"Level {levelSlug} is not a root level of content type {contentType}; " +
-                $"valid root levels are: {string.Join(", ", rootLevels.Select(level => level.Slug))}.",
+                $"Level {levelSlug} is not a root level of content type {contentType}.",
                 nameof(levelSlug));
         }
 
         return rootLevels.Count > 1
             ? throw new ArgumentException(
                 $"Content type {contentType} defines multiple root levels " +
-                $"({string.Join(", ", rootLevels.Select(level => level.Slug))}); " +
-                "a target levelSlug must be supplied.",
+                $"({string.Join(", ", rootLevels.Select(level => level.Slug))}) and no levelSlug was supplied.",
                 nameof(levelSlug))
             : rootLevels[0].Slug;
     }

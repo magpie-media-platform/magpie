@@ -17,13 +17,6 @@ export const RoleName: Record<Role, string> = {
     [Role.Admin]: 'Admin',
 };
 
-const ROLE_NAME_TO_VALUE: Record<string, Role> = {
-    Viewer: Role.Viewer,
-    Requester: Role.Requester,
-    Manager: Role.Manager,
-    Admin: Role.Admin,
-};
-
 const ROLE_VALUES = new Set<number>(Object.values(Role));
 
 export function isRole(value: unknown): value is Role {
@@ -35,8 +28,8 @@ export function roleFromApi(value: Role | string | number | null | undefined): R
         return value;
     }
     if (typeof value === 'string') {
-        if (value in ROLE_NAME_TO_VALUE) {
-            return ROLE_NAME_TO_VALUE[value];
+        if (Object.prototype.hasOwnProperty.call(Role, value)) {
+            return Role[value as keyof typeof Role];
         }
         const numeric = Number(value);
         if (isRole(numeric)) {

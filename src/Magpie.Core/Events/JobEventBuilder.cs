@@ -20,50 +20,6 @@ internal static class JobEventBuilder
         return new(Guid.Empty, "job.cancellation.requested", context, default, default, null);
     }
 
-    public static MagpieEvent BuildJobExecutionCancellationRequestedEvent(
-        Guid executionId,
-        ContentEventImpact? impact = null,
-        string? jobType = null)
-    {
-        return BuildJobExecutionStateChangedEvent(
-            MagpieEvents.Names.JobExecutionCancellationRequested,
-            executionId,
-            impact,
-            jobType);
-    }
-
-    public static MagpieEvent BuildJobExecutionCancelledEvent(
-        Guid executionId,
-        ContentEventImpact? impact = null,
-        string? jobType = null)
-    {
-        return BuildJobExecutionStateChangedEvent(
-            MagpieEvents.Names.JobExecutionCancelled,
-            executionId,
-            impact,
-            jobType);
-    }
-
-    public static MagpieEvent BuildJobExecutionCompletedEvent(
-        Guid executionId,
-        ContentEventImpact? impact = null,
-        string? jobType = null)
-    {
-        return BuildJobExecutionStateChangedEvent(
-            MagpieEvents.Names.JobExecutionCompleted,
-            executionId,
-            impact,
-            jobType);
-    }
-
-    public static MagpieEvent BuildJobExecutionCreatedEvent(
-        Guid executionId,
-        ContentEventImpact? impact = null,
-        string? jobType = null)
-    {
-        return BuildJobExecutionStateChangedEvent(MagpieEvents.Names.JobExecutionCreated, executionId, impact, jobType);
-    }
-
     public static MagpieEvent BuildJobExecutionFailedEvent(Guid executionId, string jobType, string failureReason)
     {
         var context = new Dictionary<string, string>
@@ -74,34 +30,6 @@ internal static class JobEventBuilder
         };
 
         return new(Guid.Empty, MagpieEvents.Names.JobExecutionFailed, context, default, default, null);
-    }
-
-    public static MagpieEvent BuildJobExecutionProgressChangedEvent(
-        Guid executionId,
-        ContentEventImpact? impact = null,
-        string? jobType = null)
-    {
-        return BuildJobExecutionStateChangedEvent(
-            MagpieEvents.Names.JobExecutionProgressChanged,
-            executionId,
-            impact,
-            jobType);
-    }
-
-    public static MagpieEvent BuildJobExecutionQueuedEvent(
-        Guid executionId,
-        ContentEventImpact? impact = null,
-        string? jobType = null)
-    {
-        return BuildJobExecutionStateChangedEvent(MagpieEvents.Names.JobExecutionQueued, executionId, impact, jobType);
-    }
-
-    public static MagpieEvent BuildJobExecutionStartedEvent(
-        Guid executionId,
-        ContentEventImpact? impact = null,
-        string? jobType = null)
-    {
-        return BuildJobExecutionStateChangedEvent(MagpieEvents.Names.JobExecutionStarted, executionId, impact, jobType);
     }
 
     public static MagpieEvent BuildJobExecutionStateChangedEvent(
@@ -115,7 +43,7 @@ internal static class JobEventBuilder
 
         if (!string.IsNullOrWhiteSpace(jobType))
         {
-            context[MagpieEvents.Keys.ExecutionJobType] = jobType!;
+            context[MagpieEvents.Keys.ExecutionJobType] = jobType;
         }
 
         return new(Guid.Empty, name, context, default, default, null);

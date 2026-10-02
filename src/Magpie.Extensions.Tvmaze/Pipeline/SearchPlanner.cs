@@ -109,7 +109,7 @@ internal sealed class SearchPlanner(ILogger<SearchPlanner> logger) : ISearchPlan
         }
     }
 
-    internal SearchPlanNode Compile(MetadataCriteria criteria)
+    private SearchPlanNode Compile(MetadataCriteria criteria)
     {
         var residualDispositions = new List<CriterionDisposition>();
         var filters = new List<LocalFilter>();
@@ -159,7 +159,11 @@ internal sealed class SearchPlanner(ILogger<SearchPlanner> logger) : ISearchPlan
         foreach (var criterion in criteria.Title.And)
         {
             var compiledTerm = CompileText(
-                LocalFilterKind.Title, MetadataField.Title, criterion, filters, residualDispositions);
+                LocalFilterKind.Title,
+                MetadataField.Title,
+                criterion,
+                filters,
+                residualDispositions);
             if (compiledTerm.Count > 0)
             {
                 titleTermCandidates.Add(compiledTerm);
@@ -193,26 +197,41 @@ internal sealed class SearchPlanner(ILogger<SearchPlanner> logger) : ISearchPlan
         foreach (var criterion in criteria.ProductionStatus.And)
         {
             CompileText(
-                LocalFilterKind.ProductionStatus, MetadataField.ProductionStatus, criterion, filters,
+                LocalFilterKind.ProductionStatus,
+                MetadataField.ProductionStatus,
+                criterion,
+                filters,
                 residualDispositions);
         }
 
         foreach (var criterion in criteria.PublishDate.And)
         {
             CompileTemporal(
-                LocalFilterKind.PublishDate, MetadataField.PublishDate, criterion, filters, residualDispositions);
+                LocalFilterKind.PublishDate,
+                MetadataField.PublishDate,
+                criterion,
+                filters,
+                residualDispositions);
         }
 
         foreach (var criterion in criteria.Established.And)
         {
             CompileTemporal(
-                LocalFilterKind.Established, MetadataField.Established, criterion, filters, residualDispositions);
+                LocalFilterKind.Established,
+                MetadataField.Established,
+                criterion,
+                filters,
+                residualDispositions);
         }
 
         foreach (var criterion in criteria.Dissolved.And)
         {
             CompileTemporal(
-                LocalFilterKind.Dissolved, MetadataField.Dissolved, criterion, filters, residualDispositions);
+                LocalFilterKind.Dissolved,
+                MetadataField.Dissolved,
+                criterion,
+                filters,
+                residualDispositions);
         }
 
         foreach (var criterion in criteria.Duration.And)
@@ -995,7 +1014,9 @@ internal sealed class SearchPlanner(ILogger<SearchPlanner> logger) : ISearchPlan
         if (!CriterionGrammar.IsOrderedOperator(op))
         {
             residualDispositions.Add(new CriterionDisposition(
-                MetadataField.Duration.ToString(), criterion, "pass-through-residual"));
+                MetadataField.Duration.ToString(),
+                criterion,
+                "pass-through-residual"));
             return;
         }
 
@@ -1003,7 +1024,9 @@ internal sealed class SearchPlanner(ILogger<SearchPlanner> logger) : ISearchPlan
         if (values.Count == 0)
         {
             residualDispositions.Add(new CriterionDisposition(
-                MetadataField.Duration.ToString(), criterion, "pass-through-residual"));
+                MetadataField.Duration.ToString(),
+                criterion,
+                "pass-through-residual"));
             return;
         }
 
@@ -1477,7 +1500,9 @@ internal sealed class SearchPlanner(ILogger<SearchPlanner> logger) : ISearchPlan
                 if (!CriterionGrammar.IsTextOperator(op))
                 {
                     residualDispositions.Add(new CriterionDisposition(
-                        MetadataField.References.ToString(), criterion, "pass-through-residual"));
+                        MetadataField.References.ToString(),
+                        criterion,
+                        "pass-through-residual"));
                     return;
                 }
             }
@@ -1488,7 +1513,9 @@ internal sealed class SearchPlanner(ILogger<SearchPlanner> logger) : ISearchPlan
                 if (!CriterionGrammar.IsOrderedOperator(op))
                 {
                     residualDispositions.Add(new CriterionDisposition(
-                        MetadataField.References.ToString(), criterion, "pass-through-residual"));
+                        MetadataField.References.ToString(),
+                        criterion,
+                        "pass-through-residual"));
                     return;
                 }
             }
@@ -1565,7 +1592,8 @@ internal sealed class SearchPlanner(ILogger<SearchPlanner> logger) : ISearchPlan
             {
                 residualDispositions.Add(new CriterionDisposition(
                     string.Concat("Images.None[", (exclusionIndex + 1).ToString(CultureInfo.InvariantCulture), "]"),
-                    image, "pass-through-residual"));
+                    image,
+                    "pass-through-residual"));
                 continue;
             }
 
@@ -1982,10 +2010,10 @@ internal sealed class SearchPlanner(ILogger<SearchPlanner> logger) : ISearchPlan
 
     private bool TryCompilePersonAlternative(
         RelationshipCriteria relationship,
-        out SearchSeed.PersonAlternative alternative,
+        [NotNullWhen(true)] out SearchSeed.PersonAlternative? alternative,
         out bool isSettled)
     {
-        alternative = null!;
+        alternative = null;
         var hasNames = TryCompilePersonNameTerms(relationship.Subject.And, out var names);
         var hasExactPersonIds = TryCompilePersonIds(relationship.ExternalIds, out var personIds);
         if (!hasNames && personIds.Count == 0)
@@ -2180,7 +2208,9 @@ internal sealed class SearchPlanner(ILogger<SearchPlanner> logger) : ISearchPlan
             if (!CriterionGrammar.IsTextOperator(op))
             {
                 residualDispositions.Add(new CriterionDisposition(
-                    field.ToString(), criterion, "pass-through-residual"));
+                    field.ToString(),
+                    criterion,
+                    "pass-through-residual"));
                 return false;
             }
         }

@@ -96,7 +96,10 @@ describe('useLibraryFilters', () => {
         expect(router.state.location.search).toBe('?savedFilter=created-2');
     });
 
-    it.each(['Update', 'Create'])('save_PreservesLatestSavedDraft_WhenEarlier%sCompletesLast', async (operation) => {
+    it.each([
+        ['Update', '?filter=title+contains+%22ABC%22'],
+        ['Create', '?savedFilter=created-2'],
+    ])('save_PreservesLatestSavedDraft_WhenEarlier%sCompletesLast', async (operation, search) => {
         // Arrange
         let finishEarlier!: (value: { id: string }) => void;
         mocks.update
@@ -140,9 +143,7 @@ describe('useLibraryFilters', () => {
         // Assert
         expect(input).toHaveValue('title contains "ABC"');
         expect(screen.getByTestId('request')).toHaveTextContent('title contains "ABC"');
-        expect(router.state.location.search).toBe(
-            operation === 'Update' ? '?filter=title+contains+%22ABC%22' : '?savedFilter=created-2',
-        );
+        expect(router.state.location.search).toBe(search);
     });
 
     it.each([0, 350])('save_PreservesReturnToOriginalQuery_WhenUpdateCompletesAfter%dMs', async (delay) => {
@@ -184,60 +185,13 @@ describe('useLibraryFilters', () => {
     });
 
     it.each([
-        { operation: 'Update', delay: 0 },
-        { operation: 'Update', delay: 350 },
-        { operation: 'Create', delay: 0 },
-        { operation: 'Create', delay: 350 },
-    ])('save_PreservesLaterEntry_When$operation completes after $delay ms', async ({ operation, delay }) => {
-        // Arrange
-        let finish!: (value: { id: string }) => void;
-        mocks.update.mockImplementation(
-            () =>
-                new Promise((resolve) => {
-                    finish = resolve;
-                }),
-        );
-        mocks.create.mockImplementation(
-            () =>
-                new Promise((resolve) => {
-                    finish = resolve;
-                }),
-        );
-        const router = createMemoryRouter([{ path: '/library/:kind', element: <LibraryFilterPage /> }], {
-            initialEntries: ['/library/movie?savedFilter=saved-1'],
-        });
-        render(<RouterProvider router={router} />);
-        const input = screen.getByRole('textbox', { name: 'Filter' });
-
-        // Act
-        fireEvent.change(input, { target: { value: 'title contains "AB"' } });
-        await act(async () => {
-            fireEvent.click(screen.getByRole('button', { name: operation }));
-        });
-        fireEvent.change(input, { target: { value: 'title contains "ABC"' } });
-        await act(async () => {
-            vi.advanceTimersByTime(delay);
-        });
-        await act(async () => {
-            finish({ id: 'created-1' });
-        });
-
-        // Assert
-        expect(input).toHaveValue('title contains "ABC"');
-        if (operation === 'Update') {
-            expect(screen.getByTestId('saved-query')).toHaveTextContent('title contains "AB"');
-        }
-        expect(mocks.toast).toHaveBeenCalledWith(expect.objectContaining({ variant: 'success' }));
-        await act(async () => {
-            vi.advanceTimersByTime(350);
-        });
-        expect(router.state.location.search).toBe('?filter=title+contains+%22ABC%22');
-        expect(screen.getByTestId('request')).toHaveTextContent('title contains "ABC"');
-    });
-
-    it.each(['Update', 'Create'])(
-        'save_AppliesSuccessfulFilter_When%sCompletesWithoutLaterEntry',
-        async (operation) => {
+        { operation: 'Update', delay: 0, savedQuery: 'title contains "AB"' },
+        { operation: 'Update', delay: 350, savedQuery: 'title contains "AB"' },
+        { operation: 'Create', delay: 0, savedQuery: 'title contains "A"' },
+        { operation: 'Create', delay: 350, savedQuery: 'title contains "A"' },
+    ])(
+        'save_PreservesLaterEntry_When$operation completes after $delay ms',
+        async ({ operation, delay, savedQuery }) => {
             // Arrange
             let finish!: (value: { id: string }) => void;
             mocks.update.mockImplementation(
@@ -256,30 +210,76 @@ describe('useLibraryFilters', () => {
                 initialEntries: ['/library/movie?savedFilter=saved-1'],
             });
             render(<RouterProvider router={router} />);
+            const input = screen.getByRole('textbox', { name: 'Filter' });
 
             // Act
-            fireEvent.change(screen.getByRole('textbox'), { target: { value: 'title contains "AB"' } });
+            fireEvent.change(input, { target: { value: 'title contains "AB"' } });
             await act(async () => {
                 fireEvent.click(screen.getByRole('button', { name: operation }));
             });
+            fireEvent.change(input, { target: { value: 'title contains "ABC"' } });
             await act(async () => {
-                vi.advanceTimersByTime(350);
+                vi.advanceTimersByTime(delay);
             });
             await act(async () => {
                 finish({ id: 'created-1' });
             });
+
+            // Assert
+            expect(input).toHaveValue('title contains "ABC"');
+            expect(screen.getByTestId('saved-query')).toHaveTextContent(savedQuery);
+            expect(mocks.toast).toHaveBeenCalledWith(expect.objectContaining({ variant: 'success' }));
             await act(async () => {
                 vi.advanceTimersByTime(350);
             });
-
-            // Assert
-            expect(screen.getByRole('textbox')).toHaveValue('title contains "AB"');
-            expect(screen.getByTestId('saved-query')).toHaveTextContent('title contains "AB"');
-            expect(router.state.location.search).toBe(
-                operation === 'Update' ? '?savedFilter=saved-1' : '?savedFilter=created-1',
-            );
+            expect(router.state.location.search).toBe('?filter=title+contains+%22ABC%22');
+            expect(screen.getByTestId('request')).toHaveTextContent('title contains "ABC"');
         },
     );
+
+    it.each([
+        ['Update', '?savedFilter=saved-1'],
+        ['Create', '?savedFilter=created-1'],
+    ])('save_AppliesSuccessfulFilter_When%sCompletesWithoutLaterEntry', async (operation, search) => {
+        // Arrange
+        let finish!: (value: { id: string }) => void;
+        mocks.update.mockImplementation(
+            () =>
+                new Promise((resolve) => {
+                    finish = resolve;
+                }),
+        );
+        mocks.create.mockImplementation(
+            () =>
+                new Promise((resolve) => {
+                    finish = resolve;
+                }),
+        );
+        const router = createMemoryRouter([{ path: '/library/:kind', element: <LibraryFilterPage /> }], {
+            initialEntries: ['/library/movie?savedFilter=saved-1'],
+        });
+        render(<RouterProvider router={router} />);
+
+        // Act
+        fireEvent.change(screen.getByRole('textbox'), { target: { value: 'title contains "AB"' } });
+        await act(async () => {
+            fireEvent.click(screen.getByRole('button', { name: operation }));
+        });
+        await act(async () => {
+            vi.advanceTimersByTime(350);
+        });
+        await act(async () => {
+            finish({ id: 'created-1' });
+        });
+        await act(async () => {
+            vi.advanceTimersByTime(350);
+        });
+
+        // Assert
+        expect(screen.getByRole('textbox')).toHaveValue('title contains "AB"');
+        expect(screen.getByTestId('saved-query')).toHaveTextContent('title contains "AB"');
+        expect(router.state.location.search).toBe(search);
+    });
 
     it.each([
         { operation: 'Update', path: '/library/series?filter=title+contains+%22AB%22' },

@@ -7,10 +7,8 @@ import {
     isValidationError,
     getErrorMessage,
     candidateSearchErrorMessage,
-    createApiError,
     getValidationErrors,
     getFieldError,
-    HTTP_STATUS,
 } from './errors';
 
 describe('Error type checks', () => {
@@ -233,23 +231,13 @@ describe('getFieldError', () => {
     });
 });
 
-describe('Constants', () => {
-    it('HTTP_STATUS.NOT_FOUND triggers isNotFoundError', () => {
-        expect(isNotFoundError(new ApiError(HTTP_STATUS.NOT_FOUND, 'Not found'))).toBe(true);
-    });
-
-    it('HTTP_STATUS.BAD_REQUEST triggers isValidationError', () => {
-        expect(isValidationError(new ApiError(HTTP_STATUS.BAD_REQUEST, 'Bad request'))).toBe(true);
-    });
-});
-
 describe('candidateSearchErrorMessage', () => {
     it.each([
-        [createApiError(400, 'Bad query', { message: 'Expected a value.', position: 3 }), 'Expected a value.'],
-        [createApiError(400, 'Unknown search field.'), 'Unknown search field.'],
-        [createApiError(500, 'Internal details'), 'Search failed. Please try again.'],
+        [new ApiError(400, 'Bad query', { message: 'Expected a value.', position: 3 }), 'Expected a value.'],
+        [new ApiError(400, 'Unknown search field.'), 'Unknown search field.'],
+        [new ApiError(500, 'Internal details'), 'Search failed. Please try again.'],
         [
-            createApiError(503, 'The provider is busy. Try again later.', {
+            new ApiError(503, 'The provider is busy. Try again later.', {
                 status: 503,
                 detail: 'The provider is busy. Try again later.',
             }),

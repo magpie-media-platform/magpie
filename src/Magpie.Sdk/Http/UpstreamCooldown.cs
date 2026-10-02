@@ -26,15 +26,17 @@ internal sealed class UpstreamCooldown(TimeProvider timeProvider) : IUpstreamCoo
             var now = timeProvider.GetUtcNow();
             if (_cooldowns.TryGetValue(key, out var cooldown) && (cooldown.RetryAt > now || cooldown.Recovering))
             {
-                throw new UpstreamThrottledException(cooldown.RetryAt > now
-                    ? cooldown.RetryAt : now.AddSeconds(1));
+                throw new UpstreamThrottledException(cooldown.RetryAt > now ? cooldown.RetryAt : now.AddSeconds(1));
             }
         }
     }
 
     /// <inheritdoc />
-    public async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, string? authenticationScope,
-        Func<CancellationToken, Task<HttpResponseMessage>> send, CancellationToken cancellationToken)
+    public async Task<HttpResponseMessage> SendAsync(
+        HttpRequestMessage request,
+        string? authenticationScope,
+        Func<CancellationToken, Task<HttpResponseMessage>> send,
+        CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var key = Key(request, authenticationScope);
@@ -46,8 +48,7 @@ internal sealed class UpstreamCooldown(TimeProvider timeProvider) : IUpstreamCoo
             {
                 if (cooldown.RetryAt > now || cooldown.Recovering)
                 {
-                    throw new UpstreamThrottledException(cooldown.RetryAt > now
-                        ? cooldown.RetryAt : now.AddSeconds(1));
+                    throw new UpstreamThrottledException(cooldown.RetryAt > now ? cooldown.RetryAt : now.AddSeconds(1));
                 }
 
                 if (cooldown.RecoveryUntil != default && cooldown.RecoveryUntil <= now)
@@ -98,7 +99,9 @@ internal sealed class UpstreamCooldown(TimeProvider timeProvider) : IUpstreamCoo
     }
 
     /// <inheritdoc />
-    public UpstreamThrottledException RecordThrottle(HttpRequestMessage request, string? authenticationScope,
+    public UpstreamThrottledException RecordThrottle(
+        HttpRequestMessage request,
+        string? authenticationScope,
         HttpResponseMessage response)
     {
         var key = Key(request, authenticationScope);

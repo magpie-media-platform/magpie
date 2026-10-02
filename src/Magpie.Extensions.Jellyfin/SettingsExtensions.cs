@@ -69,9 +69,7 @@ internal static class SettingsExtensions
         if (!settings.TryGetValueIgnoringCase(JellyfinSettings.HostKey, out var rawHost) ||
             string.IsNullOrWhiteSpace(rawHost))
         {
-            throw new ArgumentException(
-                $"Jellyfin setting {JellyfinSettings.HostKey} is required.",
-                nameof(settings));
+            throw new ArgumentException($"Jellyfin setting {JellyfinSettings.HostKey} is required.", nameof(settings));
         }
 
         if (!Uri.TryCreate(rawHost, UriKind.Absolute, out var hostUri) ||

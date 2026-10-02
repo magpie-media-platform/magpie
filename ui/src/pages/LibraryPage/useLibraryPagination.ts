@@ -27,7 +27,6 @@ export function useLibraryPagination({ params, updateParams }: UseLibraryPaginat
         [pagination, updateParams],
     );
 
-    const currentPage = pagination.pageIndex + 1;
     const goToPage = useCallback(
         (page: number) => handlePaginationChange({ pageIndex: page - 1, pageSize: PAGE_SIZE }),
         [handlePaginationChange],
@@ -37,7 +36,6 @@ export function useLibraryPagination({ params, updateParams }: UseLibraryPaginat
         pageNumber,
         pagination,
         handlePaginationChange,
-        currentPage,
         goToPage,
     };
 }

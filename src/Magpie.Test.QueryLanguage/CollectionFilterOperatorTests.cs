@@ -27,8 +27,11 @@ public sealed class CollectionFilterOperatorTests
         {
             Assert.That(parsed.IsSuccess, Is.True);
             Assert.That(reparsed.IsSuccess, Is.True);
-            Assert.That(JsonNode.DeepEquals(JsonSerializer.SerializeToNode(parsed.Value),
-                JsonSerializer.SerializeToNode(reparsed.Value)), Is.True);
+            Assert.That(
+                JsonNode.DeepEquals(
+                    JsonSerializer.SerializeToNode(parsed.Value),
+                    JsonSerializer.SerializeToNode(reparsed.Value)),
+                Is.True);
         }
     }
 
@@ -107,10 +110,6 @@ public sealed class CollectionFilterOperatorTests
         "Url")]
     [TestCase("Relationships has (Kind > \"x\")", "GreaterThan", "Kind")]
     [TestCase("Relationships has (Subject !startswith \"x\")", "NotStartsWith", "Subject")]
-    [TestCase(
-        "Relationships has (RelatedMetadataContainerId contains \"3f2a1c4e-5b6d-47a8-9c10-2d3e4f5a6b7c\")",
-        "Contains",
-        "RelatedMetadataContainerId")]
     [TestCase("Relationships has (ExternalId > \"x\")", "GreaterThan", "ExternalId")]
     public void ParseContentFilter_ReturnsFieldAndOperator_WhenCollectionOperatorIsUnsupported(
         string query,

@@ -19,38 +19,17 @@ internal sealed class TransactionManager(
 {
     private readonly List<Func<CancellationToken, Task>> _postCommitActions = [];
 
-    public async Task ExecuteWithTransactionAsync(
+    public Task ExecuteWithTransactionAsync(
         Func<CancellationToken, Task> operation,
         CancellationToken cancellationToken)
     {
-        if (context.Database.CurrentTransaction is not null)
-        {
-            await operation(cancellationToken).ConfigureAwait(false);
-            return;
-        }
-
-        var started = Stopwatch.GetTimestamp();
-        var transaction = await context.Database
-            .BeginTransactionAsync(cancellationToken)
-            .ConfigureAwait(false);
-        await using var transactionHandle = transaction.ConfigureAwait(false);
-
-        try
-        {
-            await operation(cancellationToken).ConfigureAwait(false);
-            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
-        }
-        catch
-        {
-            _postCommitActions.Clear();
-            await RollbackAsync(transaction, cancellationToken).ConfigureAwait(false);
-            context.ChangeTracker.Clear();
-            RecordOutcome(started, committed: false);
-            throw;
-        }
-
-        RecordOutcome(started, committed: true);
-        await DrainPostCommitActionsAsync().ConfigureAwait(false);
+        return ExecuteWithTransactionAsync(
+            async token =>
+            {
+                await operation(token).ConfigureAwait(false);
+                return true;
+            },
+            cancellationToken);
     }
 
     public async Task<TResult> ExecuteWithTransactionAsync<TResult>(

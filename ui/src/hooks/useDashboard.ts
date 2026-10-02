@@ -104,14 +104,13 @@ export function useDownloadClientHealth() {
     useInvalidateQueriesOnEvents(
         ['downloadClient.created', 'downloadClient.deleted', 'downloadClient.updated'],
         [dashboardQueryKeys.downloadClients],
-        { exact: true, owner: 'dashboard:download-clients' },
+        { exact: true },
     );
     useInvalidateQueriesOnEvents(['integration.health.changed'], [dashboardQueryKeys.downloadClients], {
         context: { 'integration.type': 'downloadClient' },
         debounceMs: 200,
         exact: true,
         maxWaitMs: 800,
-        owner: 'dashboard:download-clients',
     });
     return useQuery({
         queryKey: dashboardQueryKeys.downloadClients,
@@ -125,14 +124,13 @@ export function useMediaServerHealth() {
     useInvalidateQueriesOnEvents(
         ['mediaServer.created', 'mediaServer.deleted', 'mediaServer.updated'],
         [dashboardQueryKeys.mediaServers],
-        { exact: true, owner: 'dashboard:media-servers' },
+        { exact: true },
     );
     useInvalidateQueriesOnEvents(['integration.health.changed'], [dashboardQueryKeys.mediaServers], {
         context: { 'integration.type': 'mediaServer' },
         debounceMs: 200,
         exact: true,
         maxWaitMs: 800,
-        owner: 'dashboard:media-servers',
     });
     return useQuery({
         queryKey: dashboardQueryKeys.mediaServers,
@@ -149,7 +147,6 @@ export function useActiveDownloads(limit = 5) {
         debounceMs: 200,
         exact: true,
         maxWaitMs: 800,
-        owner: 'dashboard:downloads',
         predicate: (event) => {
             if (event.name !== 'download.updated') {
                 return true;
@@ -172,7 +169,6 @@ export function useActiveDownloads(limit = 5) {
             debounceMs: 200,
             exact: true,
             maxWaitMs: 800,
-            owner: 'dashboard:downloads-content-lineage',
             predicate: (event) => {
                 const current = queryClient.getQueryData<PagedList<ApiDownload>>(dashboardQueryKeys.downloads);
                 return !!current?.items.some(
@@ -209,7 +205,6 @@ export function useRecentJobs(limit = 5) {
         debounceMs: 150,
         exact: true,
         maxWaitMs: 600,
-        owner: 'dashboard:jobs',
         predicate: (event) => {
             const executionId = event.context['execution.id'];
             const current = queryClient.getQueryData<PagedList<ApiJobExecution>>(dashboardQueryKeys.jobs);
@@ -232,7 +227,7 @@ export function useContentCounts() {
             'content.fulfillment.changed',
         ],
         [dashboardQueryKeys.contentStats],
-        { debounceMs: 300, exact: true, maxWaitMs: 1200, owner: 'dashboard:content-counts' },
+        { debounceMs: 300, exact: true, maxWaitMs: 1200 },
     );
     return useQuery({
         queryKey: dashboardQueryKeys.contentStats,
@@ -252,7 +247,7 @@ export function useRecentContent(limit = 3) {
             'metadata.refreshed',
         ],
         [dashboardQueryKeys.recentContent],
-        { debounceMs: 300, exact: true, maxWaitMs: 1200, owner: 'dashboard:recent-content' },
+        { debounceMs: 300, exact: true, maxWaitMs: 1200 },
     );
     return useQuery({
         queryKey: dashboardQueryKeys.recentContent,
@@ -273,7 +268,7 @@ export function useUpcomingContent() {
             'metadata.refreshed',
         ],
         [dashboardQueryKeys.upcomingContent(today)],
-        { debounceMs: 300, exact: true, maxWaitMs: 1200, owner: 'dashboard:upcoming-content' },
+        { debounceMs: 300, exact: true, maxWaitMs: 1200 },
     );
     return useQuery({
         queryKey: dashboardQueryKeys.upcomingContent(today),

@@ -15,7 +15,7 @@ internal sealed record ProviderSettings
 
     public string BuildUserAgent(Version version)
     {
-        var contact = string.IsNullOrWhiteSpace(Contact) ? DefaultContact : Contact!.Trim();
+        var contact = string.IsNullOrWhiteSpace(Contact) ? DefaultContact : Contact.Trim();
         return string.Format(
             CultureInfo.InvariantCulture,
             "Magpie/{0} (TVmaze metadata provider; {1})",

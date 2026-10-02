@@ -6,11 +6,13 @@ using System.Threading.Tasks;
 using Magpie.Abstractions;
 using Magpie.Abstractions.Jobs;
 using Magpie.Abstractions.Repositories;
+using Magpie.Core.Jobs.Metadata;
 using Magpie.Core.Jobs.Runtime;
 using Magpie.Models;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
+using Magpie.Models.Jobs;
 using Magpie.Models.Patch;
 using Magpie.Sdk.Jobs;
 using Magpie.Sdk.Services;
@@ -38,6 +40,7 @@ public sealed class JobManagerTriggerAuthorizationTests
 
     private Mock<IScheduleTriggerRepository> _scheduleTriggers = null!;
     private Mock<IEventTriggerRepository> _eventTriggers = null!;
+    private Mock<IJobExecutionRepository> _executions = null!;
     private IJobManager _subject = null!;
 
     public static IEnumerable<TestCaseData> ScheduleCreateAllowedCases
@@ -81,6 +84,12 @@ public sealed class JobManagerTriggerAuthorizationTests
                 new Dictionary<string, string> { [Target] = "00000000-0000-0000-0000-000000000001" });
             yield return new TestCaseData("FlaggedEventOnly", Role.Requester,
                 new Dictionary<string, string> { [Target] = "00000000-0000-0000-0000-000000000001" });
+            yield return new TestCaseData("Flagged", Role.Requester,
+                new Dictionary<string, string>
+                {
+                    [Target] = "00000000-0000-0000-0000-000000000001",
+                    ["note"] = "$${event.name}"
+                });
             yield return new TestCaseData("Flagged", Role.Manager,
                 new Dictionary<string, string> { [Target] = "${event.contentHierarchyItemId}" });
             yield return new TestCaseData("Flagged", Role.Manager, new Dictionary<string, string>());
@@ -212,7 +221,8 @@ public sealed class JobManagerTriggerAuthorizationTests
             {
                 JobType = "Builtin", DisplayName = "Builtin", Category = "Test", Scope = JobScope.System,
                 SupportedTriggerModes = [JobTriggerMode.Schedule, JobTriggerMode.Event], Parameters = parameters
-            }
+            },
+            MediaInfoExtractScanJob.Spec
         ];
 
         _scheduleTriggers = new Mock<IScheduleTriggerRepository>();
@@ -235,6 +245,16 @@ public sealed class JobManagerTriggerAuthorizationTests
                 It.IsAny<EventTriggerPatch>(), It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(true);
 
+        _executions = new Mock<IJobExecutionRepository>();
+        _executions
+            .Setup(repository => repository.CreateAsync(
+                It.IsAny<JobExecution>(), It.IsAny<Guid?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((JobExecution execution, Guid? _, CancellationToken _) =>
+                execution with { Status = JobExecutionStatus.Completed });
+        _executions
+            .Setup(repository => repository.GetByIdAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new JobExecution { JobType = "MediaInfoExtractScan", Status = JobExecutionStatus.Completed });
+
         var transactions = new Mock<ITransactionManager>();
         transactions.Setup(manager => manager.ExecuteWithTransactionAsync(
                 It.IsAny<Func<CancellationToken, Task<bool>>>(), It.IsAny<CancellationToken>()))
@@ -243,7 +263,7 @@ public sealed class JobManagerTriggerAuthorizationTests
         _subject = new JobManager(
             Mock.Of<IJobRuntime>(),
             Mock.Of<IJobRegistry>(registry => registry.ListJobSpecs() == specs),
-            Mock.Of<IJobExecutionRepository>(),
+            _executions.Object,
             _scheduleTriggers.Object,
             _eventTriggers.Object,
             Mock.Of<IJobConcurrencyScheduler>(),
@@ -251,6 +271,105 @@ public sealed class JobManagerTriggerAuthorizationTests
             TimeProvider.System,
             NullLogger<JobManager>.Instance,
             transactions.Object);
+    }
+
+    [TestCase(Role.Viewer)]
+    [TestCase(Role.Requester)]
+    public void ExecuteImmediateAsync_Throws_WhenABelowManagerCallerRunsAnUntargetedMediaInfoScan(Role role)
+    {
+        // Act
+        var exception = Assert.ThrowsAsync<MagpieException>(async () =>
+            await _subject.ExecuteImmediateAsync(
+                new JobEnqueueRequest { JobType = "MediaInfoExtractScan" },
+                CallerId,
+                role,
+                default).ConfigureAwait(false));
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(exception!.Message, Is.EqualTo("The caller role cannot run this job type."));
+            _executions.Verify(
+                repository => repository.CreateAsync(
+                    It.IsAny<JobExecution>(), It.IsAny<Guid?>(), It.IsAny<CancellationToken>()),
+                Times.Never);
+        }
+    }
+
+    [TestCase(Role.Manager)]
+    [TestCase(Role.Admin)]
+    public async Task ExecuteImmediateAsync_RunsAnUntargetedMediaInfoScan_WhenTheCallerIsAManagerOrAbove(Role role)
+    {
+        // Act
+        await _subject.ExecuteImmediateAsync(
+            new JobEnqueueRequest { JobType = "MediaInfoExtractScan" },
+            CallerId,
+            role,
+            default).ConfigureAwait(false);
+
+        // Assert
+        _executions.Verify(
+            repository => repository.CreateAsync(
+                It.Is<JobExecution>(execution => execution.JobType == "MediaInfoExtractScan"),
+                CallerId,
+                It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Test]
+    public void EnqueueAsync_Throws_WhenTheMediaInfoPolicyIsUnknown()
+    {
+        // Act
+        var exception = Assert.ThrowsAsync<MagpieException>(async () =>
+            await _subject.EnqueueAsync(
+                new JobEnqueueRequest
+                {
+                    JobType = "MediaInfoExtractScan",
+                    Parameters = new Dictionary<string, string> { ["mediaInfoPolicy"] = "Stale" }
+                },
+                CallerId,
+                Role.Admin,
+                default).ConfigureAwait(false));
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(
+                exception!.Message,
+                Is.EqualTo("Parameter mediaInfoPolicy must be Missing, MissingOrStale or All."));
+            _executions.Verify(
+                repository => repository.CreateAsync(
+                    It.IsAny<JobExecution>(), It.IsAny<Guid?>(), It.IsAny<CancellationToken>()),
+                Times.Never);
+        }
+    }
+
+    [Test]
+    public void ExecuteImmediateAsync_Throws_WhenTheMediaInfoPolicyIsUnknown()
+    {
+        // Act
+        var exception = Assert.ThrowsAsync<MagpieException>(async () =>
+            await _subject.ExecuteImmediateAsync(
+                new JobEnqueueRequest
+                {
+                    JobType = "MediaInfoExtractScan",
+                    Parameters = new Dictionary<string, string> { ["mediaInfoPolicy"] = "Stale" }
+                },
+                CallerId,
+                Role.Admin,
+                default).ConfigureAwait(false));
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(
+                exception!.Message,
+                Is.EqualTo("Parameter mediaInfoPolicy must be Missing, MissingOrStale or All."));
+            _executions.Verify(
+                repository => repository.CreateAsync(
+                    It.IsAny<JobExecution>(), It.IsAny<Guid?>(), It.IsAny<CancellationToken>()),
+                Times.Never);
+        }
     }
 
     [TestCaseSource(nameof(ScheduleCreateAllowedCases))]

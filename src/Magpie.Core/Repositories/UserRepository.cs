@@ -247,7 +247,8 @@ internal sealed class UserRepository(
                     {
                         await transactionManager.OnCommittedAsync(
                             token => eventBus.PublishAsync(
-                                SecurityEventBuilder.BuildUserUpdatedEvent(model.Id, changedFields), token),
+                                SecurityEventBuilder.BuildUserUpdatedEvent(model.Id, changedFields),
+                                token),
                             cancellationToken).ConfigureAwait(false);
                     }
 
@@ -354,7 +355,8 @@ internal sealed class UserRepository(
                                 ? user.Enabled : patch.Enabled.Value)
                             .SetProperty(user => user.Role, user => patch.Role == null ? user.Role : patch.Role.Value)
                             .SetProperty(user => user.ModifiedAt, now)
-                            .SetProperty(user => user.ModifiedByUserId, modifiedByUserId), cancellationToken)
+                            .SetProperty(user => user.ModifiedByUserId, modifiedByUserId),
+                            cancellationToken)
                         .ConfigureAwait(false);
                     if (updated > 0)
                     {
@@ -477,10 +479,10 @@ internal sealed class UserRepository(
 
             if (snapshot is null)
             {
-                return new FailedLoginResult(0, null);
+                return new(0, null);
             }
 
-            return new FailedLoginResult(snapshot.FailedLoginAttempts, snapshot.LockedUntil);
+            return new(snapshot.FailedLoginAttempts, snapshot.LockedUntil);
         }
         catch (Exception ex)
         {

@@ -159,9 +159,7 @@ internal sealed class LibraryImportEndpointGroup : IApiEndpointGroup
     {
         if (action.Filter is not null)
         {
-            return Results.Problem(
-                "Select the files to associate by id.",
-                statusCode: StatusCodes.Status400BadRequest);
+            return Results.Problem("Select the files to associate by id.", statusCode: StatusCodes.Status400BadRequest);
         }
 
         var candidates = await libraryImportService
@@ -200,11 +198,7 @@ internal sealed class LibraryImportEndpointGroup : IApiEndpointGroup
 
         var query = CreateCandidateQuery(rootFolderId, scanRunId, statuses, hasMatches, groupKey);
 
-        var paging = new PagingParameter
-        {
-            PageNumber = pageNumber ?? 1,
-            PageSize = pageSize ?? 25,
-        };
+        var paging = new PagingParameter { PageNumber = pageNumber ?? 1, PageSize = pageSize ?? 25 };
 
         var sort = !string.IsNullOrEmpty(sortBy)
             ? new SortParameter { PropertyName = sortBy, Direction = sortDirection ?? SortDirection.Ascending }
@@ -240,11 +234,7 @@ internal sealed class LibraryImportEndpointGroup : IApiEndpointGroup
 
         var query = CreateCandidateQuery(rootFolderId, scanRunId, statuses, hasMatches, groupKey: null);
 
-        var paging = new PagingParameter
-        {
-            PageNumber = pageNumber ?? 1,
-            PageSize = pageSize ?? 25,
-        };
+        var paging = new PagingParameter { PageNumber = pageNumber ?? 1, PageSize = pageSize ?? 25 };
 
         var result = await libraryImportService.QueryCandidateGroupsAsync(query, paging, cancellationToken)
             .ConfigureAwait(false);

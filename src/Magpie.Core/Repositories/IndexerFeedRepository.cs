@@ -31,9 +31,7 @@ internal sealed class IndexerFeedRepository(
 {
     private readonly TimeProvider _time = timeProvider;
 
-    private static void ApplyPatch(
-        IDictionary<string, string> values,
-        DictionaryPatch<string, string, string> patch)
+    private static void ApplyPatch(IDictionary<string, string> values, DictionaryPatch<string, string, string> patch)
     {
         if (patch.Add is not null)
         {
@@ -238,8 +236,10 @@ internal sealed class IndexerFeedRepository(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "The indexer feed repository failed to create indexer feed " +
-                "{IndexerFeedName}.", model.Name);
+            logger.LogError(
+                ex,
+                "The indexer feed repository failed to create indexer feed {IndexerFeedName}.",
+                model.Name);
             throw;
         }
     }
@@ -306,7 +306,8 @@ internal sealed class IndexerFeedRepository(
             {
                 await transactionManager.OnCommittedAsync(
                     token => eventBus.PublishAsync(
-                        IndexerEventBuilder.BuildIndexerFeedUpdatedEvent(model.Id, changedFields), token),
+                        IndexerEventBuilder.BuildIndexerFeedUpdatedEvent(model.Id, changedFields),
+                        token),
                     cancellationToken).ConfigureAwait(false);
             }
 
@@ -314,8 +315,7 @@ internal sealed class IndexerFeedRepository(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "The indexer feed repository failed to update indexer feed " +
-                "{IndexerFeedId}.", model.Id);
+            logger.LogError(ex, "The indexer feed repository failed to update indexer feed {IndexerFeedId}.", model.Id);
             throw;
         }
     }
@@ -405,8 +405,7 @@ internal sealed class IndexerFeedRepository(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "The indexer feed repository failed to patch indexer feed " +
-                "{IndexerFeedId}.", patch.Id);
+            logger.LogError(ex, "The indexer feed repository failed to patch indexer feed {IndexerFeedId}.", patch.Id);
             throw;
         }
     }

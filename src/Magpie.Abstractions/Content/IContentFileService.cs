@@ -52,11 +52,13 @@ public interface IContentFileService
     /// Previews an unassociated file against a read-only import lineage.
     /// </summary>
     /// <param name="lineage">The proposed content lineage from leaf to root</param>
+    /// <param name="covered">The proposed items, other than the leaf, that the file also covers</param>
     /// <param name="filePath">The existing file to associate</param>
     /// <param name="cancellationToken">The token that cancels the operation</param>
     /// <param name="otherPlannedFiles">The other selected primary files for this content owner</param>
     Task<FileRenamePreview> PreviewImportRenameMaskAsync(
         IReadOnlyList<ContentHierarchyItem> lineage,
+        IReadOnlyList<ContentHierarchyItem> covered,
         string filePath,
         CancellationToken cancellationToken = default,
         IReadOnlyList<FileRenameEntry>? otherPlannedFiles = null);
@@ -128,7 +130,7 @@ public interface IContentFileService
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Attaches a discovered library file, including a valid container fallback or an existing retry.
+    /// Attaches a discovered library file to a content hierarchy item.
     /// </summary>
     /// <param name="contentHierarchyItemId">The id of the content hierarchy item</param>
     /// <param name="filePath">The full path of the host file</param>
@@ -191,6 +193,12 @@ public interface IContentFileService
         Guid contentHierarchyItemId,
         Guid? actingUserId,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Normalizes the path key of every media file.
+    /// </summary>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
+    Task NormalizeMediaFilePathKeysAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Plans a rename for a file, without a change on disk.

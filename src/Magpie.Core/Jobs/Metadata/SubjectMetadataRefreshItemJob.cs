@@ -202,7 +202,7 @@ internal sealed class SubjectMetadataRefreshItemJob(
             cancellationToken).ConfigureAwait(false);
     }
 
-    internal async Task RefreshAsync(
+    private async Task RefreshAsync(
         Guid subjectId,
         Guid? userId,
         Guid? correlationId,

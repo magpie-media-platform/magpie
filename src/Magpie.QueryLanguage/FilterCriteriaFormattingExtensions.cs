@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
-using System.Text;
 
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
@@ -122,13 +121,13 @@ internal static class FilterCriteriaFormattingExtensions
         parts.AddRange(FormatPropertyCriteria(nameof(meta.OriginalTitle), meta.OriginalTitle));
         parts.AddRange(FormatPropertyCriteria(nameof(meta.Overview), meta.Overview));
         parts.AddRange(FormatPropertyCriteria(nameof(meta.Language), meta.Language));
-        parts.AddRange(FormatTemporalCriteria(nameof(meta.PublishDate), meta.PublishDate));
+        parts.AddRange(FormatPropertyCriteria(nameof(meta.PublishDate), meta.PublishDate));
         parts.AddRange(FormatPropertyCriteria(nameof(meta.Duration), meta.Duration));
         parts.AddRange(FormatPropertyCriteria(nameof(meta.ProductionStatus), meta.ProductionStatus));
-        parts.AddRange(FormatTemporalCriteria(nameof(meta.BirthDate), meta.BirthDate));
-        parts.AddRange(FormatTemporalCriteria(nameof(meta.DeathDate), meta.DeathDate));
-        parts.AddRange(FormatTemporalCriteria(nameof(meta.Established), meta.Established));
-        parts.AddRange(FormatTemporalCriteria(nameof(meta.Dissolved), meta.Dissolved));
+        parts.AddRange(FormatPropertyCriteria(nameof(meta.BirthDate), meta.BirthDate));
+        parts.AddRange(FormatPropertyCriteria(nameof(meta.DeathDate), meta.DeathDate));
+        parts.AddRange(FormatPropertyCriteria(nameof(meta.Established), meta.Established));
+        parts.AddRange(FormatPropertyCriteria(nameof(meta.Dissolved), meta.Dissolved));
 
         parts.AddRange(FormatCollectionCriteria(
             nameof(Genre),
@@ -186,40 +185,6 @@ internal static class FilterCriteriaFormattingExtensions
         }
     }
 
-    private static IEnumerable<QueryPart> FormatTemporalCriteria(
-        string fieldName,
-        CriteriaSet<PropertyCriterion<TemporalValue>> criteriaSet)
-    {
-        foreach (var criterion in criteriaSet.And)
-        {
-            yield return new QueryPart(FormatTemporalCriterion(fieldName, criterion), false);
-        }
-    }
-
-    private static string FormatTemporalCriterion(string fieldName, PropertyCriterion<TemporalValue> criterion)
-    {
-        var op = FormatOperator(criterion.Operator);
-
-        if (criterion.Operator is CriteriaValueOperator.IsNull or CriteriaValueOperator.IsNotNull)
-        {
-            return $"{fieldName} {op}";
-        }
-
-        if (criterion.Operator is CriteriaValueOperator.In or CriteriaValueOperator.NotIn)
-        {
-            var values = criterion.Values ?? [];
-            var formattedValues = string.Join(", ", values.Select(FormatTemporalValue));
-            return $"{fieldName} {op} ({formattedValues})";
-        }
-
-        return $"{fieldName} {op} {FormatTemporalValue(criterion.Value)}";
-    }
-
-    private static string FormatTemporalValue(TemporalValue? value)
-    {
-        return value is null ? "null" : $"\"{FormatTemporalText(value)}\"";
-    }
-
     private static string FormatTemporalText(TemporalValue value)
     {
         return value.Precision switch
@@ -269,6 +234,7 @@ internal static class FilterCriteriaFormattingExtensions
             string s => $"\"{EscapeString(s)}\"",
             DateTime dt => $"\"{FormatDateTime(dt)}\"",
             TimeSpan ts => $"\"{FormatTimeSpan(ts)}\"",
+            TemporalValue t => $"\"{FormatTemporalText(t)}\"",
             Guid g => $"\"{g}\"",
             Enum e => e.ToString(),
             bool b => b ? "true" : "false",
@@ -492,36 +458,9 @@ internal static class FilterCriteriaFormattingExtensions
 
     private static string JoinWithAnd(List<QueryPart> parts)
     {
-        if (parts.Count == 0)
-        {
-            return string.Empty;
-        }
-
-        if (parts.Count == 1)
-        {
-            return parts[0].Text;
-        }
-
-        var sb = new StringBuilder();
-        for (var i = 0; i < parts.Count; i++)
-        {
-            if (i > 0)
-            {
-                sb.Append(" and ");
-            }
-
-            var part = parts[i];
-            if (part.IsOrGroup)
-            {
-                sb.Append($"({part.Text})");
-            }
-            else
-            {
-                sb.Append(part.Text);
-            }
-        }
-
-        return sb.ToString();
+        return parts.Count == 1
+            ? parts[0].Text
+            : string.Join(" and ", parts.Select(p => p.IsOrGroup ? $"({p.Text})" : p.Text));
     }
 
     private readonly record struct QueryPart(string Text, bool IsOrGroup);

@@ -19,6 +19,7 @@ import {
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Input } from '@/components/ui/Input';
 import { Label } from '@/components/ui/Label';
+import { MobileListToolbar, type MobileListSortOption } from '@/components/ui/MobileListToolbar';
 import { MobileSelectionBar } from '@/components/ui/MobileSelectionBar';
 import { Pager } from '@/components/ui/Pager';
 import { PageHeader } from '@/components/ui/PageHeader';
@@ -28,6 +29,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/Tabs';
 import { useToast } from '@/components/ui/Toast';
 import { Tooltip } from '@/components/ui/Tooltip';
 
+import { useCardLayout } from '@/hooks/ui/useCardLayout';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { useToggle } from '@/hooks/useToggle';
 import { useUrlTableState } from '@/hooks/useUrlTableState';
@@ -411,6 +413,10 @@ interface MimeRegistrySectionProps extends AddDialogState {
 const MIME_PAGE_SIZE = 50;
 
 const MIME_SORT_KEYS = ['extension', 'mimeType'] as const;
+const MIME_SORT_OPTIONS: MobileListSortOption[] = [
+    { id: 'extension', label: 'Extension' },
+    { id: 'mimeType', label: 'MIME type' },
+];
 const MIME_DEFAULT_SORTING: SortingState = [{ id: 'extension', desc: false }];
 
 function MimeRegistrySection({ registry, addOpen, openAdd, closeAdd }: MimeRegistrySectionProps) {
@@ -421,6 +427,7 @@ function MimeRegistrySection({ registry, addOpen, openAdd, closeAdd }: MimeRegis
     const [isBulkDeleteOpen, setIsBulkDeleteOpen] = useState(false);
     const [isBulkDeleting, setIsBulkDeleting] = useState(false);
     const runBulk = useBulkRun();
+    const usesCardLayout = useCardLayout();
 
     const { sorting, page, setSorting, setPage } = useUrlTableState({
         defaultSort: MIME_DEFAULT_SORTING,
@@ -618,7 +625,15 @@ function MimeRegistrySection({ registry, addOpen, openAdd, closeAdd }: MimeRegis
                         </Button>
                     </BulkActionsToolbar>
 
-                    <SelectModeToggle active={selection.selectionMode} onToggle={selection.toggleSelectionMode} />
+                    {usesCardLayout && (
+                        <MobileListToolbar
+                            className="file-types-page__mobile-toolbar"
+                            sorting={sorting}
+                            sortOptions={MIME_SORT_OPTIONS}
+                            onSortingChange={setSorting}
+                            selection={{ active: selection.selectionMode, onToggle: selection.toggleSelectionMode }}
+                        />
+                    )}
 
                     <div data-table="mime-registry">
                         <DataTable<MimeMapping>

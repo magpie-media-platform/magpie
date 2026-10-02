@@ -29,7 +29,7 @@ public sealed record ProviderMetadataCandidateSearchResult
     };
 
     /// <summary>
-    /// Warnings for failed or incomplete searches, not valid empty results.
+    /// The warnings for failed or incomplete searches.
     /// </summary>
     public IReadOnlyList<string> Warnings { get; init; } = [];
 

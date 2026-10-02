@@ -5,6 +5,7 @@ using System.Net.Http;
 using Magpie.Extensions.OpenLibrary.QueryEngine;
 using Magpie.Sdk.Configuration;
 using Magpie.Sdk.Content;
+using Magpie.Sdk.Diagnostics;
 using Magpie.Sdk.Extensions;
 using Magpie.Sdk.UI;
 
@@ -21,13 +22,7 @@ public sealed class OpenLibraryExtension : IExtension
     public Guid Id => Constants.ExtensionId;
 
     /// <inheritdoc />
-    public Version Version => new(1, 0, 0);
-
-    /// <inheritdoc />
     public string Name => "Open Library";
-
-    /// <inheritdoc />
-    public string? TargetABI => "[1.0.0,)";
 
     /// <inheritdoc />
     public void RegisterServices(IServiceCollection services)
@@ -58,5 +53,7 @@ public sealed class OpenLibraryExtension : IExtension
         services.AddSingleton<IExtensionSettingsSchemaProvider>(
             provider => provider.GetRequiredService<AdminUiProvider>());
         services.AddScoped<IExtensionConfigurationTester, ConfigurationTester>();
+        services.AddScoped<IDiagnosticCheck, OpenLibraryMisPairedSubjectDiagnostic>();
+        services.AddScoped<IDiagnosticRepair, OpenLibraryMisPairedSubjectRepair>();
     }
 }

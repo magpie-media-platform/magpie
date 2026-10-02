@@ -16,8 +16,8 @@
         gap: var(--space-xs);
     }
 
-    .run-job-dialog__field--toggle {
-        flex-direction: row;
+    .run-job-dialog__toggle-wrapper {
+        display: flex;
         align-items: center;
         gap: var(--space-sm);
     }

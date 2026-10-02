@@ -57,7 +57,6 @@ export function useCrudResource<TItem, TCreate, TPatch extends EnabledPatch>(
     const queryClient = useQueryClient();
     useInvalidateQueriesOnEvents(config.eventNames ?? [], [[...queryKeys.list(), basePath]], {
         exact: true,
-        owner: `crud:${basePath}`,
     });
 
     const listQuery = useQuery({

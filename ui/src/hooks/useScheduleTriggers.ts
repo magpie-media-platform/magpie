@@ -106,7 +106,7 @@ export function useScheduleTriggers(params?: ScheduleTriggerQueryParams) {
     useInvalidateQueriesOnEvents(
         ['scheduleTrigger.created', 'scheduleTrigger.updated', 'scheduleTrigger.deleted'],
         [scheduleTriggerQueryKeys.list(params)],
-        { exact: true, owner: 'schedule-triggers:list' },
+        { exact: true },
     );
     const queryClient = useQueryClient();
 
@@ -161,7 +161,7 @@ export function useScheduleTrigger(id: string, enabled = true) {
     useInvalidateQueriesOnEvents(
         ['scheduleTrigger.created', 'scheduleTrigger.updated', 'scheduleTrigger.deleted'],
         [scheduleTriggerQueryKeys.detail(id)],
-        { entityIds: id ? [id] : [], exact: true, owner: 'schedule-triggers:detail' },
+        { entityIds: id ? [id] : [], exact: true },
     );
     const triggerQuery = useQuery({
         queryKey: scheduleTriggerQueryKeys.detail(id),

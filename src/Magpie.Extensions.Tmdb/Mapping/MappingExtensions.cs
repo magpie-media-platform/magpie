@@ -45,8 +45,6 @@ internal static class MappingExtensions
 
     private const string SocialReferenceKind = "social";
 
-    private static readonly IReadOnlyDictionary<string, string> EmptyStrings = new Dictionary<string, string>();
-
     private const int CastCap = 30;
 
     private const int CrewCap = 30;
@@ -98,7 +96,7 @@ internal static class MappingExtensions
             {
                 Kind = entry.Type.NullIfBlank()?.Trim() ?? AlternateTitleKind,
                 Language = null,
-                Text = entry.Title!.Trim(),
+                Text = entry.Title.Trim(),
                 Ordinal = ordinal++
             });
         }
@@ -141,30 +139,6 @@ internal static class MappingExtensions
             BackdropPath = hit.BackdropPath.NullIfBlank(),
             SourceOrder = sourceOrder,
             ExternalIds = ContentExternalIds(hit.Id, externalIds: null)
-        };
-    }
-
-    internal static SearchHit FromMovieCredit(
-        this MovieCreditDto hit,
-        ResolvedSubject subject,
-        bool cast,
-        int sourceOrder)
-    {
-        return new()
-        {
-            Route = ContentRoute.Movie,
-            Id = hit.Id,
-            Title = hit.Title.NullIfBlank(),
-            OriginalTitle = hit.OriginalTitle.NullIfBlank(),
-            Overview = hit.Overview.NullIfBlank(),
-            OriginalLanguage = hit.OriginalLanguage.NullIfBlank(),
-            ReleaseDate = hit.ReleaseDate.ParseDateOnly(),
-            GenreIds = hit.GenreIds ?? [],
-            PosterPath = hit.PosterPath.NullIfBlank(),
-            BackdropPath = hit.BackdropPath.NullIfBlank(),
-            SourceOrder = sourceOrder,
-            ExternalIds = ContentExternalIds(hit.Id, externalIds: null),
-            SubjectReferences = [SubjectReference(subject, cast, cast ? hit.Character : hit.Job)]
         };
     }
 
@@ -317,21 +291,6 @@ internal static class MappingExtensions
         return values;
     }
 
-    private static IReadOnlyDictionary<string, string> ContentRatingsByBody(SearchHit hit)
-    {
-        if (hit.ContentRatings.Count == 0)
-        {
-            return EmptyStrings;
-        }
-
-        return hit.ContentRatings
-            .GroupBy(rating => rating.Body, StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(
-                group => group.Key,
-                group => group.OrderBy(rating => rating.Ordinal).First().Rating,
-                StringComparer.OrdinalIgnoreCase);
-    }
-
     private static IReadOnlyDictionary<string, string> ContentExternalIds(int id, ExternalIdsDto? externalIds)
     {
         var values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
@@ -340,12 +299,12 @@ internal static class MappingExtensions
         };
         if (!string.IsNullOrWhiteSpace(externalIds?.ImdbId))
         {
-            values["imdb"] = externalIds.ImdbId!;
+            values["imdb"] = externalIds.ImdbId;
         }
 
         if (!string.IsNullOrWhiteSpace(externalIds?.WikidataId))
         {
-            values["wikidata"] = externalIds.WikidataId!;
+            values["wikidata"] = externalIds.WikidataId;
         }
 
         if (externalIds?.TvdbId is > 0 and var tvdbId)
@@ -493,7 +452,7 @@ internal static class MappingExtensions
             contribution.CustomMetadata.Add(new CustomMetadataValue
             {
                 Key = "parentCompany",
-                Value = parent.Name!.Trim()
+                Value = parent.Name.Trim()
             });
             contribution.CustomMetadata.Add(new CustomMetadataValue
             {
@@ -527,7 +486,7 @@ internal static class MappingExtensions
 
             result.Add(new ContentRating
             {
-                Body = country.CountryCode!.Trim().ToUpperInvariant(),
+                Body = country.CountryCode.Trim().ToUpperInvariant(),
                 Rating = certification,
                 Ordinal = ordinal++
             });
@@ -556,8 +515,8 @@ internal static class MappingExtensions
 
             result.Add(new ContentRating
             {
-                Body = entry.CountryCode!.Trim().ToUpperInvariant(),
-                Rating = entry.Rating!.Trim(),
+                Body = entry.CountryCode.Trim().ToUpperInvariant(),
+                Rating = entry.Rating.Trim(),
                 Ordinal = ordinal++
             });
         }
@@ -588,7 +547,7 @@ internal static class MappingExtensions
 
             if (!string.IsNullOrWhiteSpace(release.Certification))
             {
-                return release.Certification!.Trim();
+                return release.Certification.Trim();
             }
         }
 
@@ -653,7 +612,7 @@ internal static class MappingExtensions
                 SubjectExternalIds = BuildExternalIds(entry.Id),
                 InitialSubjectContribution = BuildPersonContribution(
                     entry.Id,
-                    entry.Name!,
+                    entry.Name,
                     entry.ProfilePath,
                     imageBaseUrl,
                     utcNow)
@@ -694,11 +653,11 @@ internal static class MappingExtensions
                 RelationshipQualifier = entry.Job.NullIfBlank(),
                 RelationshipOrdinal = ordinalBase + emitted,
                 SubjectKind = Constants.Person,
-                SubjectName = entry.Name!.Trim(),
+                SubjectName = entry.Name.Trim(),
                 SubjectExternalIds = BuildExternalIds(entry.Id),
                 InitialSubjectContribution = BuildPersonContribution(
                     entry.Id,
-                    entry.Name!,
+                    entry.Name,
                     entry.ProfilePath,
                     imageBaseUrl,
                     utcNow)
@@ -714,7 +673,7 @@ internal static class MappingExtensions
             return Constants.Crew;
         }
 
-        var trimmed = job!.Trim();
+        var trimmed = job.Trim();
         if (string.Equals(trimmed, "Director", StringComparison.OrdinalIgnoreCase))
         {
             return Constants.Director;
@@ -943,13 +902,13 @@ internal static class MappingExtensions
             return null;
         }
 
-        var basePart = string.IsNullOrEmpty(imageBase) ? Constants.DefaultImageBaseUrl : imageBase!;
+        var basePart = string.IsNullOrEmpty(imageBase) ? Constants.DefaultImageBaseUrl : imageBase;
         if (!basePart.EndsWith("/", StringComparison.Ordinal))
         {
             basePart += "/";
         }
 
-        var trimmed = path!.StartsWith("/", StringComparison.Ordinal) ? path.Substring(1) : path;
+        var trimmed = path.StartsWith("/", StringComparison.Ordinal) ? path.Substring(1) : path;
         var composed = string.Format(
             CultureInfo.InvariantCulture,
             "{0}{1}/{2}",
@@ -1002,38 +961,8 @@ internal static class MappingExtensions
             Value = idString,
             Ordinal = 0
         });
+        AddPayloadExternalIds(contribution, externalIds);
         var imdbId = externalIds?.ImdbId.NullIfBlank();
-        if (imdbId is not null)
-        {
-            contribution.ExternalIds.Add(new ExternalId
-            {
-                Source = "imdb",
-                Value = imdbId,
-                Ordinal = contribution.ExternalIds.Count
-            });
-        }
-
-        var wikidataId = externalIds?.WikidataId.NullIfBlank();
-        if (wikidataId is not null)
-        {
-            contribution.ExternalIds.Add(new ExternalId
-            {
-                Source = "wikidata",
-                Value = wikidataId,
-                Ordinal = contribution.ExternalIds.Count
-            });
-        }
-
-        if (externalIds?.TvdbId is > 0 and var tvdbId)
-        {
-            contribution.ExternalIds.Add(new ExternalId
-            {
-                Source = "tvdb",
-                Value = tvdbId.ToString(CultureInfo.InvariantCulture),
-                Ordinal = contribution.ExternalIds.Count
-            });
-        }
-
         contribution.AddSelfReferences(kind, idString, imdbId, "title", homepage);
         contribution.AddSocialReferences(externalIds);
 
@@ -1049,7 +978,7 @@ internal static class MappingExtensions
 
                 contribution.Genres.Add(new Genre
                 {
-                    Name = genre.Name!,
+                    Name = genre.Name,
                     Ordinal = ordinal++
                 });
             }
@@ -1122,26 +1051,7 @@ internal static class MappingExtensions
             Value = idString,
             Ordinal = 0
         });
-        if (dto.ExternalIds is { ImdbId: { Length: > 0 } imdbId })
-        {
-            contribution.ExternalIds.Add(new ExternalId
-            {
-                Source = "imdb",
-                Value = imdbId,
-                Ordinal = contribution.ExternalIds.Count
-            });
-        }
-
-        if (dto.ExternalIds?.WikidataId.NullIfBlank() is { } wikidataId)
-        {
-            contribution.ExternalIds.Add(new ExternalId
-            {
-                Source = "wikidata",
-                Value = wikidataId,
-                Ordinal = contribution.ExternalIds.Count
-            });
-        }
-
+        AddPayloadExternalIds(contribution, dto.ExternalIds);
         contribution.AddSelfReferences("person", idString, dto.ExternalIds?.ImdbId, "name");
         contribution.AddSocialReferences(dto.ExternalIds);
 
@@ -1312,7 +1222,7 @@ internal static class MappingExtensions
         string? id)
     {
         if (string.IsNullOrWhiteSpace(id) ||
-            !Uri.TryCreate(urlPrefix + Uri.EscapeDataString(id!.Trim()), UriKind.Absolute, out var url))
+            !Uri.TryCreate(urlPrefix + Uri.EscapeDataString(id.Trim()), UriKind.Absolute, out var url))
         {
             return;
         }
@@ -1404,7 +1314,7 @@ internal static class MappingExtensions
             var idString = company.Id.ToString(CultureInfo.InvariantCulture);
             var contribution = BuildContribution(
                 idString,
-                company.Name!,
+                company.Name,
                 company.LogoPath,
                 imageBaseUrl,
                 utcNow,
@@ -1414,7 +1324,7 @@ internal static class MappingExtensions
                 contribution.CustomMetadata.Add(new CustomMetadataValue
                 {
                     Key = "originCountry",
-                    Value = company.OriginCountry!.Trim()
+                    Value = company.OriginCountry.Trim()
                 });
             }
 
@@ -1423,7 +1333,7 @@ internal static class MappingExtensions
                 RelationshipKind = relationshipKind,
                 RelationshipOrdinal = startOrdinal + emitted,
                 SubjectKind = subjectKind,
-                SubjectName = company.Name!.Trim(),
+                SubjectName = company.Name.Trim(),
                 SubjectExternalIds = new Dictionary<string, string> { [Constants.ProviderType] = idString },
                 InitialSubjectContribution = contribution
             });
@@ -1488,7 +1398,7 @@ internal static class MappingExtensions
             ? (season.SeasonNumber == 0
                 ? "Specials"
                 : string.Format(CultureInfo.InvariantCulture, "Season {0}", season.SeasonNumber))
-            : season.Name!;
+            : season.Name;
 
         return new ChildHierarchyDefinition
         {
@@ -1614,7 +1524,7 @@ internal static class MappingExtensions
             episode.EpisodeNumber);
         var name = string.IsNullOrWhiteSpace(episode.Name)
             ? string.Format(CultureInfo.InvariantCulture, "Episode {0}", episode.EpisodeNumber)
-            : episode.Name!;
+            : episode.Name;
 
         return new ChildHierarchyDefinition
         {

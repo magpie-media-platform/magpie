@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 
+using Magpie.Models.Filtering;
+
 namespace Magpie.Models.Data;
 
 /// <summary>
@@ -52,6 +54,11 @@ public sealed record MaterializedMetadata
     /// The date of first publication.
     /// </summary>
     public DateTime? PublishDate { get; init; }
+
+    /// <summary>
+    /// The calendar precision of <see cref="PublishDate"/>, or null when the provider gives no precision.
+    /// </summary>
+    public TemporalPrecision? PublishDatePrecision { get; init; }
 
     /// <summary>
     /// The run time.

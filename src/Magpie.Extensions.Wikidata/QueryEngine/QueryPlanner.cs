@@ -51,7 +51,7 @@ internal sealed class QueryPlanner : IQueryPlanner
     {
         var normalizedOrdinaryTerm = string.IsNullOrWhiteSpace(ordinaryTerm?.Replace("\"", string.Empty))
             ? null
-            : ordinaryTerm!.Trim();
+            : ordinaryTerm.Trim();
         if (entityKind is not (EntityKind.Movie or EntityKind.Show))
         {
             var unsupported = new QueryPlan
@@ -204,7 +204,7 @@ internal sealed class QueryPlanner : IQueryPlanner
                 filter.Alternatives.Any(alternative => alternative.Names.Count > 0) &&
                 filter.CriterionSource is not null &&
                 residualSources.Contains(filter.CriterionSource))
-            .Select(filter => filter.CriterionSource!)
+            .Select(filter => filter.CriterionSource)
             .ToHashSet(StringComparer.Ordinal);
         if (removedSources.Count == 0)
         {
@@ -246,126 +246,104 @@ internal sealed class QueryPlanner : IQueryPlanner
             matchesNothing |= mapped.MatchesNothing;
         }
 
-        var titleIndex = 0;
-        foreach (var criterion in criteria.Title.And)
+        foreach (var (criterion, index) in criteria.Title.And.Select((value, index) => (value, index)))
         {
             Add(
-                CriterionSource(nameof(MetadataCriteria.Title), "And", titleIndex),
+                CriterionSource(nameof(MetadataCriteria.Title), "And", index),
                 MapText(MetadataField.Title, nameof(MetadataCriteria.Title), criterion));
-            titleIndex++;
         }
 
-        var languageIndex = 0;
-        foreach (var criterion in criteria.Language.And)
+        foreach (var (criterion, index) in criteria.Language.And.Select((value, index) => (value, index)))
         {
             Add(
-                CriterionSource(nameof(MetadataCriteria.Language), "And", languageIndex),
+                CriterionSource(nameof(MetadataCriteria.Language), "And", index),
                 MapText(MetadataField.Language, nameof(MetadataCriteria.Language), criterion));
-            languageIndex++;
         }
 
-        var publishDateIndex = 0;
-        foreach (var criterion in criteria.PublishDate.And)
+        foreach (var (criterion, index) in criteria.PublishDate.And.Select((value, index) => (value, index)))
         {
             Add(
-                CriterionSource(nameof(MetadataCriteria.PublishDate), "And", publishDateIndex),
+                CriterionSource(nameof(MetadataCriteria.PublishDate), "And", index),
                 MapDate(
                     entityKind,
                     criterion,
                     QueryFilterKind.PublishDate,
                     nameof(MetadataCriteria.PublishDate)));
-            publishDateIndex++;
         }
 
-        var originalTitleIndex = 0;
-        foreach (var criterion in criteria.OriginalTitle.And)
+        foreach (var (criterion, index) in criteria.OriginalTitle.And.Select((value, index) => (value, index)))
         {
             Add(
-                CriterionSource(nameof(MetadataCriteria.OriginalTitle), "And", originalTitleIndex),
+                CriterionSource(nameof(MetadataCriteria.OriginalTitle), "And", index),
                 MapText(
                     MetadataField.OriginalTitle,
                     nameof(MetadataCriteria.OriginalTitle),
                     criterion));
-            originalTitleIndex++;
         }
 
-        var overviewIndex = 0;
-        foreach (var criterion in criteria.Overview.And)
+        foreach (var (criterion, index) in criteria.Overview.And.Select((value, index) => (value, index)))
         {
             Add(
-                CriterionSource(nameof(MetadataCriteria.Overview), "And", overviewIndex),
+                CriterionSource(nameof(MetadataCriteria.Overview), "And", index),
                 MapText(MetadataField.Overview, nameof(MetadataCriteria.Overview), criterion));
-            overviewIndex++;
         }
 
-        var durationIndex = 0;
-        foreach (var criterion in criteria.Duration.And)
+        foreach (var (criterion, index) in criteria.Duration.And.Select((value, index) => (value, index)))
         {
             Add(
-                CriterionSource(nameof(MetadataCriteria.Duration), "And", durationIndex),
+                CriterionSource(nameof(MetadataCriteria.Duration), "And", index),
                 MapDuration(criterion));
-            durationIndex++;
         }
 
-        var productionStatusIndex = 0;
-        foreach (var criterion in criteria.ProductionStatus.And)
+        foreach (var (criterion, index) in criteria.ProductionStatus.And.Select((value, index) => (value, index)))
         {
             Add(
-                CriterionSource(nameof(MetadataCriteria.ProductionStatus), "And", productionStatusIndex),
+                CriterionSource(nameof(MetadataCriteria.ProductionStatus), "And", index),
                 MapProductionStatus(entityKind, criterion));
-            productionStatusIndex++;
         }
 
-        var establishedIndex = 0;
-        foreach (var criterion in criteria.Established.And)
+        foreach (var (criterion, index) in criteria.Established.And.Select((value, index) => (value, index)))
         {
             Add(
-                CriterionSource(nameof(MetadataCriteria.Established), "And", establishedIndex),
+                CriterionSource(nameof(MetadataCriteria.Established), "And", index),
                 MapDate(
                     entityKind,
                     criterion,
                     QueryFilterKind.Established,
                     nameof(MetadataCriteria.Established)));
-            establishedIndex++;
         }
 
-        var dissolvedIndex = 0;
-        foreach (var criterion in criteria.Dissolved.And)
+        foreach (var (criterion, index) in criteria.Dissolved.And.Select((value, index) => (value, index)))
         {
             Add(
-                CriterionSource(nameof(MetadataCriteria.Dissolved), "And", dissolvedIndex),
+                CriterionSource(nameof(MetadataCriteria.Dissolved), "And", index),
                 MapDate(
                     entityKind,
                     criterion,
                     QueryFilterKind.Dissolved,
                     nameof(MetadataCriteria.Dissolved)));
-            dissolvedIndex++;
         }
 
-        var birthDateIndex = 0;
-        foreach (var criterion in criteria.BirthDate.And)
+        foreach (var (criterion, index) in criteria.BirthDate.And.Select((value, index) => (value, index)))
         {
             Add(
-                CriterionSource(nameof(MetadataCriteria.BirthDate), "And", birthDateIndex),
+                CriterionSource(nameof(MetadataCriteria.BirthDate), "And", index),
                 MapDate(
                     entityKind,
                     criterion,
                     QueryFilterKind.BirthDate,
                     nameof(MetadataCriteria.BirthDate)));
-            birthDateIndex++;
         }
 
-        var deathDateIndex = 0;
-        foreach (var criterion in criteria.DeathDate.And)
+        foreach (var (criterion, index) in criteria.DeathDate.And.Select((value, index) => (value, index)))
         {
             Add(
-                CriterionSource(nameof(MetadataCriteria.DeathDate), "And", deathDateIndex),
+                CriterionSource(nameof(MetadataCriteria.DeathDate), "And", index),
                 MapDate(
                     entityKind,
                     criterion,
                     QueryFilterKind.DeathDate,
                     nameof(MetadataCriteria.DeathDate)));
-            deathDateIndex++;
         }
 
         var customMetadataIndex = 0;
@@ -643,11 +621,11 @@ internal sealed class QueryPlanner : IQueryPlanner
             {
                 if (value.TryNormalizeQid(out var qid))
                 {
-                    qids.Add(qid!);
+                    qids.Add(qid);
                 }
                 else if (TryNormalizeLanguageCode(value, out var code))
                 {
-                    codes.Add(code!);
+                    codes.Add(code);
                 }
                 else
                 {
@@ -1022,8 +1000,8 @@ internal sealed class QueryPlanner : IQueryPlanner
                     : Unsupported(nameof(MetadataCriteria.Relationships), negate);
             }
 
-            if (RequiresRelationshipResidual(residualAlternative!, negate) &&
-                !TryCompileResidualRelationshipAlternative(residualAlternative!, out _))
+            if (RequiresRelationshipResidual(residualAlternative, negate) &&
+                !TryCompileResidualRelationshipAlternative(residualAlternative, out _))
             {
                 if (!negate && applicable.Count > 1)
                 {
@@ -1033,8 +1011,8 @@ internal sealed class QueryPlanner : IQueryPlanner
                 return Unsupported(nameof(MetadataCriteria.Relationships), negate);
             }
 
-            mapped.Add(mappedAlternative!);
-            mappedCriteria.Add(residualAlternative!);
+            mapped.Add(mappedAlternative);
+            mappedCriteria.Add(residualAlternative);
         }
 
         if (mapped.Count == 0)
@@ -1064,8 +1042,8 @@ internal sealed class QueryPlanner : IQueryPlanner
     private bool TryMapRelationshipAlternative(
         RelationshipCriteria alternative,
         bool allowFuzzySubjectNames,
-        out SubjectFilter? mapped,
-        out RelationshipCriteria? residualAlternative)
+        [NotNullWhen(true)] out SubjectFilter? mapped,
+        [NotNullWhen(true)] out RelationshipCriteria? residualAlternative)
     {
         mapped = null;
         residualAlternative = null;
@@ -1092,7 +1070,7 @@ internal sealed class QueryPlanner : IQueryPlanner
         {
             if (exactSubjectOperator && value.TryNormalizeQid(out var qid))
             {
-                qids.Add(qid!);
+                qids.Add(qid);
             }
             else
             {
@@ -1110,7 +1088,7 @@ internal sealed class QueryPlanner : IQueryPlanner
             names.Clear();
             alternative = alternative with
             {
-                Subject = new CriteriaSet<PropertyCriterion<string>>
+                Subject = new()
                 {
                     And = [alternative.Subject.And.Single() with { Value = null, Values = qids }]
                 }
@@ -1176,7 +1154,7 @@ internal sealed class QueryPlanner : IQueryPlanner
                                     Values = supportedSources
                                 }]
                             },
-                        Value = new CriteriaSet<PropertyCriterion<string>>
+                        Value = new()
                         {
                             And = [external.Value.And.Single() with
                             {
@@ -1236,7 +1214,7 @@ internal sealed class QueryPlanner : IQueryPlanner
                 return false;
             }
 
-            compiled.Add(compiledAlternative!);
+            compiled.Add(compiledAlternative);
         }
 
         residual = new ResidualFilter
@@ -1244,7 +1222,7 @@ internal sealed class QueryPlanner : IQueryPlanner
             Kind = ResidualFilterKind.Relationship,
             Source = nameof(MetadataCriteria.Relationships),
             Hydration = ResidualHydration.Entity | ResidualHydration.Support,
-            RelationshipGroup = new ResidualRelationshipGroup
+            RelationshipGroup = new()
             {
                 OuterNegate = outerNegate,
                 Alternatives = compiled
@@ -1323,7 +1301,7 @@ internal sealed class QueryPlanner : IQueryPlanner
 
     private bool TryCompileResidualRelationshipAlternative(
         RelationshipCriteria alternative,
-        out ResidualRelationshipAlternative? compiled)
+        [NotNullWhen(true)] out ResidualRelationshipAlternative? compiled)
     {
         compiled = null;
         if (!TryRelationshipProperties(alternative, out var propertyIds, out _) ||
@@ -1357,7 +1335,7 @@ internal sealed class QueryPlanner : IQueryPlanner
                 if (op is CriteriaValueOperator.Equals or CriteriaValueOperator.In &&
                     value.TryNormalizeQid(out var qid))
                 {
-                    qids.Add(qid!);
+                    qids.Add(qid);
                 }
                 else
                 {
@@ -1450,7 +1428,7 @@ internal sealed class QueryPlanner : IQueryPlanner
 
     private bool TryCompileResidualStringCriterion(
         PropertyCriterion<string> criterion,
-        out ResidualStringCriterion? compiled)
+        [NotNullWhen(true)] out ResidualStringCriterion? compiled)
     {
         compiled = null;
         var (op, negate) = InterpretOperator(criterion.Operator, criterion.Negate);
@@ -1510,20 +1488,20 @@ internal sealed class QueryPlanner : IQueryPlanner
                 continue;
             }
 
-            compilation.Predicates.Add(predicate!);
+            compilation.Predicates.Add(predicate);
             var unverifiable = false;
             systems = [.. systems.Where(system =>
             {
                 var match = CriteriaMatcher.Match(
                     system.Body,
-                    predicate!.Operator,
+                    predicate.Operator,
                     predicate.StringValues,
                     predicate.Negate);
                 unverifiable |= match == CriteriaMatchResult.Unverifiable;
                 return match != CriteriaMatchResult.Rejected;
             })];
             compilation.RequiresResidual |= unverifiable;
-            compilation.ValueBearing |= IsValueBearing(predicate!);
+            compilation.ValueBearing |= IsValueBearing(predicate);
         }
 
         if (systems.Count == 0)
@@ -1667,13 +1645,13 @@ internal sealed class QueryPlanner : IQueryPlanner
                 continue;
             }
 
-            compilation.Predicates.Add(predicate!);
+            compilation.Predicates.Add(predicate);
             var filtered = new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal);
             foreach (var (propertyId, possibleTypes) in properties)
             {
                 var results = possibleTypes.Select(type => CriteriaMatcher.Match(
                     type,
-                    predicate!.Operator,
+                    predicate.Operator,
                     predicate.StringValues,
                     predicate.Negate)).ToArray();
                 if (results.Any(result => result != CriteriaMatchResult.Rejected))
@@ -1685,7 +1663,7 @@ internal sealed class QueryPlanner : IQueryPlanner
             }
 
             properties = filtered;
-            compilation.ValueBearing |= IsValueBearing(predicate!);
+            compilation.ValueBearing |= IsValueBearing(predicate);
         }
 
         if (properties.Count == 0)
@@ -1912,7 +1890,7 @@ internal sealed class QueryPlanner : IQueryPlanner
             Kind = ResidualFilterKind.Collection,
             Source = source,
             Hydration = hydration,
-            CollectionGroup = new ResidualCollectionGroup
+            CollectionGroup = new()
             {
                 Kind = collectionKind,
                 OuterNegate = outerNegate,
@@ -1962,19 +1940,13 @@ internal sealed class QueryPlanner : IQueryPlanner
                 continue;
             }
 
-            if (alwaysNonNull && predicate!.Operator is CriteriaValueOperator.IsNull or CriteriaValueOperator.IsNotNull)
+            if (alwaysNonNull && predicate.Operator is CriteriaValueOperator.IsNull or CriteriaValueOperator.IsNotNull)
             {
-                var matched = predicate.Operator == CriteriaValueOperator.IsNotNull;
-                if (predicate.Negate)
-                {
-                    matched = !matched;
-                }
-
-                compilation.MatchesNothing |= !matched;
+                compilation.MatchesNothing |= predicate.Operator == CriteriaValueOperator.IsNull;
                 continue;
             }
 
-            var compiledPredicate = predicate!;
+            var compiledPredicate = predicate;
             compilation.Predicates.Add(compiledPredicate);
             var remoteExact = allowRemoteExact &&
                 !compiledPredicate.Negate &&
@@ -2007,19 +1979,13 @@ internal sealed class QueryPlanner : IQueryPlanner
                 continue;
             }
 
-            if (alwaysNonNull && predicate!.Operator is CriteriaValueOperator.IsNull or CriteriaValueOperator.IsNotNull)
+            if (alwaysNonNull && predicate.Operator is CriteriaValueOperator.IsNull or CriteriaValueOperator.IsNotNull)
             {
-                var matched = predicate.Operator == CriteriaValueOperator.IsNotNull;
-                if (predicate.Negate)
-                {
-                    matched = !matched;
-                }
-
-                compilation.MatchesNothing |= !matched;
+                compilation.MatchesNothing |= predicate.Operator == CriteriaValueOperator.IsNull;
                 continue;
             }
 
-            compilation.Predicates.Add(predicate!);
+            compilation.Predicates.Add(predicate);
             compilation.RequiresResidual = true;
         }
     }
@@ -2038,15 +2004,9 @@ internal sealed class QueryPlanner : IQueryPlanner
                 continue;
             }
 
-            if (predicate!.Operator is CriteriaValueOperator.IsNull or CriteriaValueOperator.IsNotNull)
+            if (predicate.Operator is CriteriaValueOperator.IsNull or CriteriaValueOperator.IsNotNull)
             {
-                var matched = predicate.Operator == CriteriaValueOperator.IsNotNull;
-                if (predicate.Negate)
-                {
-                    matched = !matched;
-                }
-
-                compilation.MatchesNothing |= !matched;
+                compilation.MatchesNothing |= predicate.Operator == CriteriaValueOperator.IsNull;
                 continue;
             }
 
@@ -2091,7 +2051,7 @@ internal sealed class QueryPlanner : IQueryPlanner
 
             var match = CriteriaMatcher.Match(
                 actual,
-                predicate!.Operator,
+                predicate.Operator,
                 predicate.StringValues,
                 predicate.Negate);
             if (match == CriteriaMatchResult.Rejected)
@@ -2124,7 +2084,7 @@ internal sealed class QueryPlanner : IQueryPlanner
                 continue;
             }
 
-            var matched = predicate!.Operator == CriteriaValueOperator.IsNull;
+            var matched = predicate.Operator == CriteriaValueOperator.IsNull;
             if (predicate.Negate)
             {
                 matched = !matched;
@@ -2152,7 +2112,7 @@ internal sealed class QueryPlanner : IQueryPlanner
                 continue;
             }
 
-            var matched = predicate!.Operator == CriteriaValueOperator.IsNull;
+            var matched = predicate.Operator == CriteriaValueOperator.IsNull;
             if (predicate.Negate)
             {
                 matched = !matched;
@@ -2192,7 +2152,7 @@ internal sealed class QueryPlanner : IQueryPlanner
         PropertyCriterion<string> criterion,
         ResidualCollectionField field,
         string fieldName,
-        out ResidualCollectionPredicate? predicate,
+        [NotNullWhen(true)] out ResidualCollectionPredicate? predicate,
         out string? unsupportedField)
     {
         predicate = null;
@@ -2229,7 +2189,7 @@ internal sealed class QueryPlanner : IQueryPlanner
         PropertyCriterion<int> criterion,
         ResidualCollectionField field,
         string fieldName,
-        out ResidualCollectionPredicate? predicate,
+        [NotNullWhen(true)] out ResidualCollectionPredicate? predicate,
         out string? unsupportedField)
     {
         predicate = null;
@@ -2264,7 +2224,7 @@ internal sealed class QueryPlanner : IQueryPlanner
     private bool TryCollectionUriPredicate(
         PropertyCriterion<Uri> criterion,
         string fieldName,
-        out ResidualCollectionPredicate? predicate,
+        [NotNullWhen(true)] out ResidualCollectionPredicate? predicate,
         out string? unsupportedField)
     {
         predicate = null;
@@ -2395,7 +2355,7 @@ internal sealed class QueryPlanner : IQueryPlanner
         {
             if (value.TryNormalizeQid(out var qid))
             {
-                mappedQids.Add(qid!);
+                mappedQids.Add(qid);
             }
             else
             {
@@ -2461,7 +2421,7 @@ internal sealed class QueryPlanner : IQueryPlanner
 
             return normalizedKey == "relationship.externalid" &&
                 !CustomRelationshipSubjectAbsorbsExternalPair(customGroup)
-                ? Supported(pairedFilter!)
+                ? Supported(pairedFilter)
                 : Ignored("The criterion was absorbed by another criterion in the custom relationship group.");
         }
 
@@ -2502,7 +2462,7 @@ internal sealed class QueryPlanner : IQueryPlanner
             QueryFilter? pairedExternalFilter = null;
             if (hasExternalPair &&
                 (!TryBuildCustomRelationshipExternalFilter(customGroup, out pairedExternalFilter) ||
-                    pairedExternalFilter!.Negate))
+                    pairedExternalFilter.Negate))
             {
                 return Unsupported(key, criterion.Negate);
             }
@@ -2514,7 +2474,7 @@ internal sealed class QueryPlanner : IQueryPlanner
             {
                 if (exactOperator && value.TryNormalizeQid(out var qid))
                 {
-                    qids.Add(qid!);
+                    qids.Add(qid);
                 }
                 else
                 {
@@ -2539,7 +2499,7 @@ internal sealed class QueryPlanner : IQueryPlanner
                     Kind = ResidualFilterKind.Relationship,
                     Source = key,
                     Hydration = ResidualHydration.Entity | ResidualHydration.Support,
-                    RelationshipGroup = new ResidualRelationshipGroup
+                    RelationshipGroup = new()
                     {
                         OuterNegate = true,
                         Alternatives =
@@ -2901,7 +2861,7 @@ internal sealed class QueryPlanner : IQueryPlanner
     private bool TryGetCustomCriterion(
         IReadOnlyDictionary<string, PropertyCriterion<string>> group,
         string key,
-        out PropertyCriterion<string>? criterion)
+        [NotNullWhen(true)] out PropertyCriterion<string>? criterion)
     {
         var matches = group
             .Where(entry => string.Equals(entry.Key, key, StringComparison.OrdinalIgnoreCase))
@@ -2913,13 +2873,13 @@ internal sealed class QueryPlanner : IQueryPlanner
 
     private bool TryBuildCustomRelationshipExternalFilter(
         IReadOnlyDictionary<string, PropertyCriterion<string>> group,
-        out QueryFilter? filter)
+        [NotNullWhen(true)] out QueryFilter? filter)
     {
         filter = null;
         if (!TryGetCustomCriterion(group, RelationshipFieldKeys.ExternalId, out var externalIdCriterion) ||
             !TryGetCustomCriterion(group, RelationshipFieldKeys.ExternalIdSource, out var sourceCriterion) ||
-            externalIdCriterion!.Operator is not (CriteriaValueOperator.Equals or CriteriaValueOperator.In) ||
-            sourceCriterion!.Operator is not (CriteriaValueOperator.Equals or CriteriaValueOperator.In) ||
+            externalIdCriterion.Operator is not (CriteriaValueOperator.Equals or CriteriaValueOperator.In) ||
+            sourceCriterion.Operator is not (CriteriaValueOperator.Equals or CriteriaValueOperator.In) ||
             sourceCriterion.Negate ||
             !TryCustomRelationshipProperties(group, out var properties))
         {
@@ -3353,7 +3313,7 @@ internal sealed class QueryPlanner : IQueryPlanner
         }
     }
 
-    private bool TryNormalizeLanguageCode(string value, out string? language)
+    private bool TryNormalizeLanguageCode(string value, [NotNullWhen(true)] out string? language)
     {
         language = null;
         var trimmed = value.Trim();

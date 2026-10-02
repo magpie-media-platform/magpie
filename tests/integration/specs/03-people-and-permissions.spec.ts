@@ -422,12 +422,13 @@ test.describe.serial("Journey 3: staff the household and prove everyone's reach"
         });
 
         await test.step('the viewer is refused the add and import pages by direct URL', async () => {
-            for (const path of ['/library/add', '/library/import']) {
+            for (const [path, refusal] of [
+                ['/library/add', 'This page requires Requester role or higher.'],
+                ['/library/import', 'This page requires Manager role or higher.'],
+            ] as const) {
                 await viewerPage.goto(path);
                 await expect(viewerPage).toHaveURL(`${integrationEnvironment.baseUrl}/forbidden`);
-                await expect(viewerPage.locator('[data-page="forbidden"]')).toContainText(
-                    'This page requires Manager role or higher.',
-                );
+                await expect(viewerPage.locator('[data-page="forbidden"]')).toContainText(refusal);
             }
         });
 

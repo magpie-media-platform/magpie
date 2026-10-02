@@ -1,12 +1,6 @@
-import type { FulfillmentStatus } from '@/types/content';
-
 export { formatCalendarDate as formatDate } from '@/lib/dateFormatting';
 export { formatTimeOfDay as formatTime } from '@/lib/formatTime';
 export { parseCalendarDate, parseCalendarDateParts } from '@/lib/dateParsing';
-
-export function getFulfillmentClass(status: FulfillmentStatus): string {
-    return `calendar-page__event--${status}`;
-}
 
 export function getDayOfMonth(date: Date): string {
     return date.getDate().toString();
@@ -25,10 +19,10 @@ export function getFirstDayOfWeek(locale?: string): number {
         if (!tag) {
             return 0;
         }
-        const info = new Intl.Locale(tag) as unknown as {
+        const info: Intl.Locale & {
             weekInfo?: { firstDay?: number };
             getWeekInfo?: () => { firstDay: number };
-        };
+        } = new Intl.Locale(tag);
         const firstDay = info.getWeekInfo?.().firstDay ?? info.weekInfo?.firstDay;
         if (typeof firstDay === 'number') {
             return firstDay === 7 ? 0 : firstDay;

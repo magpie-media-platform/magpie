@@ -10,8 +10,7 @@ internal static class EventsTelemetry
 
     internal static readonly Meter Meter = new(Name, TelemetryVersion.Value);
 
-    internal static readonly Counter<long> PublishedTotal = Meter.CreateCounter<long>(
-        "magpie.events.published_total");
+    internal static readonly Counter<long> PublishedTotal = Meter.CreateCounter<long>("magpie.events.published_total");
 
     internal static readonly Histogram<double> DispatchLatency = Meter.CreateHistogram<double>(
         "magpie.events.dispatch_latency",

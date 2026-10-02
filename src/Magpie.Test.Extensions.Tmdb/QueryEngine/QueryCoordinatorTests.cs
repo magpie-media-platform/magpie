@@ -52,6 +52,57 @@ public class QueryCoordinatorTests
                         return found;
                     }));
                 cache.Setup(value => value.Remove(It.IsAny<string>())).Returns<string>(values.Remove);
+                cache.Setup(value => value.GetOrAddAsync(
+                        It.IsAny<string>(),
+                        It.IsAny<Func<CancellationToken, ValueTask<string>>>(),
+                        It.IsAny<CancellationToken>()))
+                    .Returns<string, Func<CancellationToken, ValueTask<string>>, CancellationToken>(
+                        async (key, valueFactory, token) =>
+                        {
+                            if (values.TryGetValue(key, out var cached))
+                            {
+                                return (string)cached!;
+                            }
+
+                            var created = await valueFactory(token).AsTask().WaitAsync(token).ConfigureAwait(false);
+                            values[key] = created;
+                            return created;
+                        });
+                cache.Setup(value => value.GetOrAddAsync(
+                        It.IsAny<string>(),
+                        It.IsAny<Func<CancellationToken, ValueTask<IReadOnlyDictionary<string, int>>>>(),
+                        It.IsAny<CancellationToken>()))
+                    .Returns<
+                        string,
+                        Func<CancellationToken, ValueTask<IReadOnlyDictionary<string, int>>>,
+                        CancellationToken>(
+                        async (key, valueFactory, token) =>
+                        {
+                            if (values.TryGetValue(key, out var cached))
+                            {
+                                return (IReadOnlyDictionary<string, int>)cached!;
+                            }
+
+                            var created = await valueFactory(token).AsTask().WaitAsync(token).ConfigureAwait(false);
+                            values[key] = created;
+                            return created;
+                        });
+                cache.Setup(value => value.GetOrAddAsync(
+                        It.IsAny<string>(),
+                        It.IsAny<Func<CancellationToken, ValueTask<CreditResponse>>>(),
+                        It.IsAny<CancellationToken>()))
+                    .Returns<string, Func<CancellationToken, ValueTask<CreditResponse>>, CancellationToken>(
+                        async (key, valueFactory, token) =>
+                        {
+                            if (values.TryGetValue(key, out var cached))
+                            {
+                                return (CreditResponse)cached!;
+                            }
+
+                            var created = await valueFactory(token).AsTask().WaitAsync(token).ConfigureAwait(false);
+                            values[key] = created;
+                            return created;
+                        });
                 return caches[name] = cache.Object;
             });
         _cacheFactory = cacheFactory.Object;
@@ -178,7 +229,7 @@ public class QueryCoordinatorTests
         await cancellation.CancelAsync().ConfigureAwait(false);
 
         // Assert
-        Assert.ThrowsAsync<OperationCanceledException>(async () => await loading.ConfigureAwait(false));
+        Assert.CatchAsync<OperationCanceledException>(async () => await loading.ConfigureAwait(false));
         release.SetResult(new ConfigurationEnvelopeDto
         {
             Images = new ConfigurationImagesDto { SecureBaseUrl = "https://images.example/" }
@@ -268,14 +319,14 @@ public class QueryCoordinatorTests
         // Arrange
         var cache = new QueryCoordinator(_scopeFactory, Mock.Of<IHostApplicationLifetime>());
         var calls = 0;
-        var movie = new CreditResponse { Movie = new PersonMovieCreditsDto { Cast = [] } };
-        var tv = new CreditResponse { Tv = new PersonTvCreditsDto { Cast = [] } };
+        var tvFirst = new CreditResponse { Tv = new PersonTvCreditsDto { Cast = [] } };
+        var tvSecond = new CreditResponse { Tv = new PersonTvCreditsDto { Crew = [] } };
 
         // Act
         var first = await cache.GetCreditsAsync(
-            "3/person/7/movie_credits?language=en-US",
-            RequestRole.MovieCredits,
-            movie,
+            "3/person/7/tv_credits?language=en-US",
+            RequestRole.TvCredits,
+            tvFirst,
             (state, _) =>
             {
                 calls++;
@@ -283,9 +334,9 @@ public class QueryCoordinatorTests
             },
             default).ConfigureAwait(false);
         var second = await cache.GetCreditsAsync(
-            "3/person/7/movie_credits?language=en-US",
-            RequestRole.MovieCredits,
-            tv,
+            "3/person/7/tv_credits?language=en-US",
+            RequestRole.TvCredits,
+            tvSecond,
             (state, _) =>
             {
                 calls++;
@@ -297,9 +348,9 @@ public class QueryCoordinatorTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(calls, Is.EqualTo(1));
-            Assert.That(first, Is.SameAs(movie));
-            Assert.That(second, Is.SameAs(movie));
-            Assert.That(second.Tv, Is.Null);
+            Assert.That(first, Is.SameAs(tvFirst));
+            Assert.That(second, Is.SameAs(tvFirst));
+            Assert.That(second.Tv!.Crew, Is.Null);
         }
     }
 

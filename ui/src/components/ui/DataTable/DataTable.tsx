@@ -13,10 +13,8 @@ import {
     getCoreRowModel,
     getSortedRowModel,
     getPaginationRowModel,
-    getExpandedRowModel,
     useReactTable,
     type ColumnDef,
-    type ExpandedState,
     type Header,
     type SortingState,
     type PaginationState,
@@ -42,7 +40,7 @@ declare module '@tanstack/react-table' {
     }
 }
 
-export type DataTableSize = 'sm' | 'md' | 'lg';
+export type DataTableSize = 'sm' | 'md';
 
 /** Selection wiring for the mobile card collapse's overlay circle. */
 export interface DataTableMobileSelectionOverlay<TData> {
@@ -83,8 +81,6 @@ export interface DataTableProps<TData> extends Omit<ComponentPropsWithoutRef<'di
 
     enableRowSelection?: boolean | ((row: Row<TData>) => boolean);
 
-    enableMultiRowSelection?: boolean;
-
     rowSelection?: RowSelectionState;
 
     onRowSelectionChange?: OnChangeFn<RowSelectionState>;
@@ -119,12 +115,6 @@ export interface DataTableProps<TData> extends Omit<ComponentPropsWithoutRef<'di
 
     manualSorting?: boolean;
 
-    enableExpanding?: boolean;
-
-    getSubRows?: (row: TData, index: number) => TData[] | undefined;
-
-    defaultAllExpanded?: boolean;
-
     onRowClick?: (row: TData) => void;
 
     emptyState?: ReactNode;
@@ -136,12 +126,6 @@ export interface DataTableProps<TData> extends Omit<ComponentPropsWithoutRef<'di
     loading?: boolean;
 
     getRowId?: (row: TData, index: number) => string;
-
-    stickyHeader?: boolean;
-
-    bordered?: boolean;
-
-    striped?: boolean;
 
     /** On the mobile card collapse, whether a selection-mode toggle on the page is currently active. */
     mobileSelectionActive?: boolean;
@@ -156,7 +140,6 @@ function DataTableInner<TData>(
         data,
         size = 'md',
         enableRowSelection = false,
-        enableMultiRowSelection = true,
         rowSelection: controlledRowSelection,
         onRowSelectionChange,
         enableSorting = true,
@@ -172,18 +155,12 @@ function DataTableInner<TData>(
         rowCount,
         manualPagination = false,
         manualSorting = false,
-        enableExpanding = false,
-        getSubRows,
-        defaultAllExpanded = true,
         onRowClick,
         emptyState,
         filterActions,
         keepHeaderWhenEmpty = false,
         loading = false,
         getRowId,
-        stickyHeader = false,
-        bordered = false,
-        striped = false,
         mobileSelectionActive,
         mobileSelectionOverlay,
         className,
@@ -197,7 +174,6 @@ function DataTableInner<TData>(
         pageIndex: 0,
         pageSize,
     });
-    const [expanded, setExpanded] = useState<ExpandedState>(enableExpanding && defaultAllExpanded ? true : {});
 
     const shouldPaginate = enablePagination || (!manualPagination && data.length > AUTO_PAGINATE_THRESHOLD);
 
@@ -246,19 +222,13 @@ function DataTableInner<TData>(
             rowSelection: rowSelectionState,
             pagination,
             ...(columnVisibility ? { columnVisibility } : {}),
-            ...(enableExpanding ? { expanded } : {}),
         },
         enableRowSelection,
-        enableMultiRowSelection,
-        enableExpanding,
         onSortingChange: handleSortingChange,
         onRowSelectionChange: handleRowSelectionChange,
         onPaginationChange: handlePaginationChange,
-        onExpandedChange: enableExpanding ? setExpanded : undefined,
-        getSubRows: enableExpanding ? getSubRows : undefined,
         getCoreRowModel: getCoreRowModel(),
         getSortedRowModel: manualSorting ? undefined : getSortedRowModel(),
-        getExpandedRowModel: enableExpanding ? getExpandedRowModel() : undefined,
         getPaginationRowModel: shouldPaginate && !manualPagination ? getPaginationRowModel() : undefined,
         manualPagination,
         manualSorting,
@@ -286,25 +256,13 @@ function DataTableInner<TData>(
             [
                 'data-table',
                 `data-table--${size}`,
-                stickyHeader && 'data-table--sticky-header',
-                bordered && 'data-table--bordered',
-                striped && 'data-table--striped',
                 loading && 'data-table--loading',
                 filterActions && 'data-table--with-filter-bar',
                 className,
             ]
                 .filter(Boolean)
                 .join(' '),
-        [size, stickyHeader, bordered, striped, loading, filterActions, className],
-    );
-
-    const handleRowClickInternal = useCallback(
-        (row: TData) => {
-            if (onRowClick) {
-                onRowClick(row);
-            }
-        },
-        [onRowClick],
+        [size, loading, filterActions, className],
     );
 
     return (
@@ -313,9 +271,6 @@ function DataTableInner<TData>(
             className={classes}
             data-component="data-table"
             data-size={size}
-            data-sticky-header={stickyHeader || undefined}
-            data-bordered={bordered || undefined}
-            data-striped={striped || undefined}
             data-loading={loading || undefined}
             data-mobile-selection-active={
                 mobileSelectionActive === undefined ? undefined : String(mobileSelectionActive)
@@ -429,23 +384,19 @@ function DataTableInner<TData>(
                                     ]
                                         .filter(Boolean)
                                         .join(' ')}
-                                    onClick={onRowClick ? () => handleRowClickInternal(row.original) : undefined}
+                                    onClick={onRowClick ? () => onRowClick(row.original) : undefined}
                                     onKeyDown={
                                         onRowClick
                                             ? (e) => {
                                                   if (e.key === 'Enter' || e.key === ' ') {
                                                       e.preventDefault();
-                                                      handleRowClickInternal(row.original);
+                                                      onRowClick(row.original);
                                                   }
                                               }
                                             : undefined
                                     }
                                     tabIndex={onRowClick ? 0 : undefined}
                                     data-row-id={row.id}
-                                    data-depth={enableExpanding ? row.depth : undefined}
-                                    data-expanded={
-                                        enableExpanding && row.getCanExpand() ? row.getIsExpanded() : undefined
-                                    }
                                     data-state={row.getIsSelected() ? 'selected' : undefined}
                                     data-clickable={onRowClick ? true : undefined}
                                     aria-selected={row.getIsSelected() ? true : undefined}

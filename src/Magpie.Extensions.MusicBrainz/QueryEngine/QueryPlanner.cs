@@ -37,8 +37,8 @@ internal sealed class QueryPlanner : IQueryPlanner
             Filter: { RemoteApplied: true, ReleaseIndexApplied: false }
         });
         var distinctCompositions = compilations
-            .Where(compilation => compilation.ArtistComposition is not null)
-            .Select(compilation => compilation.ArtistComposition!)
+            .Select(compilation => compilation.ArtistComposition)
+            .OfType<ArtistComposition>()
             .Distinct()
             .ToArray();
         var hasIndependentSeed = compilations.Any(compilation =>
@@ -1286,8 +1286,7 @@ internal sealed class QueryPlanner : IQueryPlanner
         var exactOperator = op is CriteriaValueOperator.Equals or CriteriaValueOperator.In;
         var values = suppliedValues.Select(value => value.NormalizeThreeLetterLanguageCode()
             ?? (exactOperator ? null : value.Trim().ToLowerInvariant()))
-            .Where(value => value is not null)
-            .Select(value => value!)
+            .OfType<string>()
             .Distinct(StringComparer.Ordinal)
             .ToArray();
         if (exactOperator && values.Length == 0)
@@ -2860,7 +2859,7 @@ internal sealed class QueryPlanner : IQueryPlanner
             MetadataField.Title => QueryFilterKind.Title,
             MetadataField.SortTitle => QueryFilterKind.SortTitle,
             MetadataField.Overview => QueryFilterKind.Overview,
-            _ => throw new InvalidOperationException("field")
+            _ => throw new InvalidOperationException($"Unsupported MusicBrainz text field {field}.")
         };
     }
 
@@ -2873,7 +2872,7 @@ internal sealed class QueryPlanner : IQueryPlanner
             MetadataField.BirthDate => QueryFilterKind.BirthDate,
             MetadataField.DeathDate => QueryFilterKind.DeathDate,
             MetadataField.PublishDate => QueryFilterKind.PublishDate,
-            _ => throw new InvalidOperationException("field")
+            _ => throw new InvalidOperationException($"Unsupported MusicBrainz temporal field {field}.")
         };
     }
 

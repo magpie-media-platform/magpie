@@ -67,7 +67,6 @@ async function deleteMimeMapping(extension: string): Promise<void> {
 export function useDenyList() {
     useInvalidateQueriesOnEvents(BLOCKED_FILE_TYPE_EVENTS, [fileTypesQueryKeys.denyList()], {
         exact: true,
-        owner: 'file-types:deny-list',
     });
     const queryClient = useQueryClient();
 
@@ -108,7 +107,6 @@ export function useDenyList() {
 export function useMimeMappings() {
     useInvalidateQueriesOnEvents(MIME_MAPPING_EVENTS, [fileTypesQueryKeys.mimeMappings()], {
         exact: true,
-        owner: 'file-types:mime-mappings',
     });
     const queryClient = useQueryClient();
 

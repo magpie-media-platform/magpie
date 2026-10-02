@@ -46,7 +46,7 @@ public interface IReleaseEvaluationService
         ReleaseEvaluationContext context);
 
     /// <summary>
-    /// Gives the quality rank that ranking uses, which holds the releases at or above a cutoff as equal.
+    /// Gets the quality rank that ranking uses.
     /// </summary>
     /// <param name="assessment">The assessment that holds the matched rank</param>
     /// <param name="context">The context that holds the quality tier list and the rank of the current file</param>
@@ -66,7 +66,19 @@ public interface IReleaseEvaluationService
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Scores current file for its content item.
+    /// Scores a download for a content hierarchy item.
+    /// </summary>
+    /// <param name="download">The download to score</param>
+    /// <param name="contentHierarchyItemId">The id of the content hierarchy item that owns the tier list</param>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
+    /// <returns>The assessment, or <see langword="null"/> when no quality tier matches</returns>
+    Task<ReleaseAssessment?> ScoreDownloadForContentAsync(
+        Download download,
+        Guid contentHierarchyItemId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Scores the current file for its content item.
     /// </summary>
     /// <param name="mediaFile">The current media file and its extracted information</param>
     /// <param name="contentHierarchyItemId">The hierarchy item that owns the quality tier list</param>

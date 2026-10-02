@@ -76,26 +76,20 @@ public sealed class MaterializedMetadataRepositoryTests
     public void SetUp()
     {
         var dbLoggerCategories = new List<string>();
-        var loggerFactory = NullLoggerFactory.Instance;
-
         var connection = new SqliteConnection("Data Source=:memory:");
         connection.Open();
         _template.BackupDatabase(connection);
         _context = new MagpieDbContext(new DbContextOptionsBuilder<MagpieDbContext>()
             .UseSqlite(connection, contextOwnsConnection: true)
             .EnableSensitiveDataLogging()
-            .UseLoggerFactory(loggerFactory)
             .Options);
 
-        _subject = new MaterializedMetadataRepository(
-            _context,
-            loggerFactory.CreateLogger<MaterializedMetadataRepository>());
+        _subject = new MaterializedMetadataRepository(_context, NullLogger<MaterializedMetadataRepository>.Instance);
     }
 
     [TearDown]
     public void TearDown()
     {
-        _context.Database.CloseConnection();
         _context.Dispose();
     }
 
@@ -254,6 +248,7 @@ public sealed class MaterializedMetadataRepositoryTests
             Language = "en",
             Overview = "A complete overview",
             PublishDate = new(2020, 6, 15),
+            PublishDatePrecision = TemporalPrecision.Day,
             Duration = TimeSpan.FromMinutes(120),
             SequenceNumber = 3,
             ProductionStatus = "Released",
@@ -278,6 +273,7 @@ public sealed class MaterializedMetadataRepositoryTests
             Assert.That(result, Has.Property(nameof(result.Language)).EqualTo("en"));
             Assert.That(result, Has.Property(nameof(result.Overview)).EqualTo("A complete overview"));
             Assert.That(result, Has.Property(nameof(result.PublishDate)).EqualTo(new DateTime(2020, 6, 15)));
+            Assert.That(result, Has.Property(nameof(result.PublishDatePrecision)).EqualTo(TemporalPrecision.Day));
             Assert.That(result, Has.Property(nameof(result.Duration)).EqualTo(TimeSpan.FromMinutes(120)));
             Assert.That(result, Has.Property(nameof(result.SequenceNumber)).EqualTo(3));
             Assert.That(result, Has.Property(nameof(result.ProductionStatus)).EqualTo("Released"));
@@ -285,6 +281,90 @@ public sealed class MaterializedMetadataRepositoryTests
             Assert.That(result, Has.Property(nameof(result.Dissolved)).EqualTo(new DateTime(2010, 12, 31)));
             Assert.That(result, Has.Property(nameof(result.BirthDate)).EqualTo(new DateTime(1970, 5, 20)));
             Assert.That(result, Has.Property(nameof(result.DeathDate)).EqualTo(new DateTime(2050, 1, 1)));
+        }
+    }
+
+    [TestCase(TemporalPrecision.Year)]
+    [TestCase(null)]
+    public async Task ListAllAsync_TakesThePublishDatePrecisionFromTheDateContribution_WhenContributionsDiffer(
+        TemporalPrecision? precision)
+    {
+        // Arrange
+        var container = new MetadataContainer { CreatedAt = DateTime.UtcNow };
+        container.Contributions.Add(new()
+        {
+            ProviderType = "undated",
+            Ordinal = 0,
+            Title = "Undated",
+            CreatedAt = DateTime.UtcNow
+        });
+        container.Contributions.Add(new()
+        {
+            ProviderType = "year",
+            Ordinal = 1,
+            PublishDate = new(1975, 1, 1),
+            PublishDatePrecision = precision,
+            CreatedAt = DateTime.UtcNow
+        });
+        container.Contributions.Add(new()
+        {
+            ProviderType = "day",
+            Ordinal = 2,
+            PublishDate = new(1980, 5, 5),
+            PublishDatePrecision = TemporalPrecision.Day,
+            CreatedAt = DateTime.UtcNow
+        });
+        _context.MetadataContainers.Add(container);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        // Act
+        var result = (await _subject.ListAllAsync().ConfigureAwait(false)).First();
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result, Has.Property(nameof(result.PublishDate)).EqualTo(new DateTime(1975, 1, 1)));
+            Assert.That(result, Has.Property(nameof(result.PublishDatePrecision)).EqualTo(precision));
+        }
+    }
+
+    [Test]
+    public async Task ListAllAsync_TakesThePublishDateAndPrecisionFromOneContribution_WhenOrdinalsTie()
+    {
+        // Arrange
+        var container = new MetadataContainer { CreatedAt = DateTime.UtcNow };
+        _context.MetadataContainers.Add(container);
+        _context.MetadataContributions.Add(new()
+        {
+            Id = new Guid("00000000-0000-0000-0000-000000000002"),
+            MetadataContainerId = container.Id,
+            ProviderType = "day",
+            Ordinal = 0,
+            PublishDate = new(1980, 5, 5),
+            PublishDatePrecision = TemporalPrecision.Day,
+            CreatedAt = DateTime.UtcNow
+        });
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.MetadataContributions.Add(new()
+        {
+            Id = new Guid("00000000-0000-0000-0000-000000000001"),
+            MetadataContainerId = container.Id,
+            ProviderType = "year",
+            Ordinal = 0,
+            PublishDate = new(1975, 1, 1),
+            PublishDatePrecision = TemporalPrecision.Year,
+            CreatedAt = DateTime.UtcNow
+        });
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        // Act
+        var result = (await _subject.ListAllAsync().ConfigureAwait(false)).First();
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result, Has.Property(nameof(result.PublishDate)).EqualTo(new DateTime(1975, 1, 1)));
+            Assert.That(result, Has.Property(nameof(result.PublishDatePrecision)).EqualTo(TemporalPrecision.Year));
         }
     }
 
@@ -462,11 +542,16 @@ public sealed class MaterializedMetadataRepositoryTests
 
         // Act
         var runs = new List<(string? Title, string? Overview, string? Language)>();
-        for (var i = 0; i < 5; i++)
-        {
-            var snapshot = (await _subject.ListAllAsync().ConfigureAwait(false)).First();
-            runs.Add((snapshot.Title, snapshot.Overview, snapshot.Language));
-        }
+        var snapshot1 = (await _subject.ListAllAsync().ConfigureAwait(false)).First();
+        runs.Add((snapshot1.Title, snapshot1.Overview, snapshot1.Language));
+        var snapshot2 = (await _subject.ListAllAsync().ConfigureAwait(false)).First();
+        runs.Add((snapshot2.Title, snapshot2.Overview, snapshot2.Language));
+        var snapshot3 = (await _subject.ListAllAsync().ConfigureAwait(false)).First();
+        runs.Add((snapshot3.Title, snapshot3.Overview, snapshot3.Language));
+        var snapshot4 = (await _subject.ListAllAsync().ConfigureAwait(false)).First();
+        runs.Add((snapshot4.Title, snapshot4.Overview, snapshot4.Language));
+        var snapshot5 = (await _subject.ListAllAsync().ConfigureAwait(false)).First();
+        runs.Add((snapshot5.Title, snapshot5.Overview, snapshot5.Language));
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -974,8 +1059,13 @@ public sealed class MaterializedMetadataRepositoryTests
         }
     }
 
-    [Test]
-    public async Task ListAllAsync_MaterializesAlternateTexts_WhenMultipleContributionsExist()
+    [TestCase("tagline", "es", "En el espacio nadie puede oirte gritar", 2)]
+    [TestCase("TAGLINE", "EN", "IN SPACE NO ONE CAN HEAR YOU SCREAM", 1)]
+    public async Task ListAllAsync_MaterializesAlternateTexts_WhenMultipleContributionsExist(
+        string kind,
+        string language,
+        string text,
+        int expected)
     {
         // Arrange
         var container = new MetadataContainer { CreatedAt = DateTime.UtcNow };
@@ -1002,9 +1092,9 @@ public sealed class MaterializedMetadataRepositoryTests
         contribution2.AlternateTexts.Add(new()
         {
             Ordinal = 0,
-            Kind = "tagline",
-            Language = "es",
-            Text = "En el espacio nadie puede oirte gritar"
+            Kind = kind,
+            Language = language,
+            Text = text
         });
 
         container.Contributions.Add(contribution1);
@@ -1016,52 +1106,7 @@ public sealed class MaterializedMetadataRepositoryTests
         var result = (await _subject.ListAllAsync().ConfigureAwait(false)).First();
 
         // Assert
-        Assert.That(result, Has.Property(nameof(result.AlternateTexts)).With.Exactly(2).Items);
-    }
-
-    [Test]
-    public async Task ListAllAsync_DeduplicatesAlternateTexts_WhenKindLanguageTextMatches()
-    {
-        // Arrange
-        var container = new MetadataContainer { CreatedAt = DateTime.UtcNow };
-        var contribution1 = new MetadataContribution
-        {
-            ProviderType = "primary",
-            Ordinal = 0,
-            CreatedAt = DateTime.UtcNow
-        };
-        contribution1.AlternateTexts.Add(new()
-        {
-            Ordinal = 0,
-            Kind = "tagline",
-            Language = "en",
-            Text = "In space no one can hear you scream"
-        });
-
-        var contribution2 = new MetadataContribution
-        {
-            ProviderType = "secondary",
-            Ordinal = 1,
-            CreatedAt = DateTime.UtcNow
-        };
-        contribution2.AlternateTexts.Add(new()
-        {
-            Ordinal = 0,
-            Kind = "TAGLINE",
-            Language = "EN",
-            Text = "IN SPACE NO ONE CAN HEAR YOU SCREAM"
-        });
-
-        container.Contributions.Add(contribution1);
-        container.Contributions.Add(contribution2);
-        _context.MetadataContainers.Add(container);
-        await _context.SaveChangesAsync().ConfigureAwait(false);
-
-        // Act
-        var result = (await _subject.ListAllAsync().ConfigureAwait(false)).First();
-
-        // Assert
-        Assert.That(result, Has.Property(nameof(result.AlternateTexts)).With.Exactly(1).Items);
+        Assert.That(result, Has.Property(nameof(result.AlternateTexts)).With.Exactly(expected).Items);
     }
 
     [Test]

@@ -5,9 +5,6 @@ namespace Magpie.Models;
 /// <summary>
 /// An upstream cooldown that prevents completion of the current work.
 /// </summary>
-/// <remarks>
-/// Creates an upstream cooldown result.
-/// </remarks>
 /// <param name="retryAt">The earliest time to resume the work</param>
 /// <param name="requestSent">True when the upstream received the request</param>
 public sealed class UpstreamThrottledException(

@@ -197,10 +197,10 @@ export function RunJobDialog({ open, onOpenChange, runnableJobs, runJob, onRan }
                             fieldset: 'run-job-dialog__parameters',
                             legend: 'run-job-dialog__legend',
                             field: 'run-job-dialog__field',
-                            toggleField: 'run-job-dialog__field run-job-dialog__field--toggle',
+                            toggleField: 'run-job-dialog__field',
+                            toggleWrapper: 'run-job-dialog__toggle-wrapper',
                             help: 'run-job-dialog__help',
                         }}
-                        showBooleanDescription={false}
                         onChange={handleParameterChange}
                     />
 

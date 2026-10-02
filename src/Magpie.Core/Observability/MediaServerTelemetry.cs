@@ -11,8 +11,7 @@ internal static class MediaServerTelemetry
 
     internal static readonly Meter Meter = new(Name, TelemetryVersion.Value);
 
-    internal static readonly Counter<long> Refreshes = Meter.CreateCounter<long>(
-        "magpie.media_servers.refreshes");
+    internal static readonly Counter<long> Refreshes = Meter.CreateCounter<long>("magpie.media_servers.refreshes");
 
     internal static readonly Histogram<double> RefreshDuration = Meter.CreateHistogram<double>(
         "magpie.media_servers.refresh.duration",

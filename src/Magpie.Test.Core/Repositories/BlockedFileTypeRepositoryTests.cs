@@ -102,7 +102,6 @@ public sealed class BlockedFileTypeRepositoryTests
     [TearDown]
     public void TearDown()
     {
-        _context.Database.CloseConnection();
         _context.Dispose();
     }
 

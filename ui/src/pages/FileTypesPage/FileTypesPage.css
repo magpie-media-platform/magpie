@@ -64,6 +64,10 @@
         gap: var(--space-2xs);
     }
 
+    .file-types-page__mobile-toolbar {
+        margin-bottom: var(--space-sm);
+    }
+
     .file-types-page__code {
         font-family: var(--font-mono);
         font-size: var(--text-sm);
@@ -116,10 +120,6 @@
     .file-types-page__action-btn--danger:hover:not(:disabled) {
         color: var(--status-unhealthy);
         border-color: var(--status-unhealthy);
-    }
-
-    .file-types-page__action-wrap {
-        display: inline-flex;
     }
 
     @media (min-width: 1100px) {

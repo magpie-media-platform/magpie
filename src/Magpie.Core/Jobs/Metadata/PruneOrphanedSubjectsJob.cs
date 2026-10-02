@@ -112,9 +112,7 @@ internal sealed class PruneOrphanedSubjectsJob(
         };
     }
 
-    private async Task<IReadOnlyList<Guid>> QueryIdsAsync(
-        SubjectQuery query,
-        CancellationToken cancellationToken)
+    private async Task<IReadOnlyList<Guid>> QueryIdsAsync(SubjectQuery query, CancellationToken cancellationToken)
     {
         var ids = new List<Guid>();
         var pageNumber = 1;

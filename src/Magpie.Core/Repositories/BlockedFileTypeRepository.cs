@@ -54,8 +54,10 @@ internal sealed class BlockedFileTypeRepository(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "The blocked file type repository failed to read blocked file type " +
-                "{BlockedFileTypeId}.", id);
+            logger.LogError(
+                ex,
+                "The blocked file type repository failed to read blocked file type {BlockedFileTypeId}.",
+                id);
             throw;
         }
     }
@@ -104,8 +106,10 @@ internal sealed class BlockedFileTypeRepository(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "The blocked file type repository failed to create blocked file type " +
-                "{Pattern}.", model.Pattern);
+            logger.LogError(
+                ex,
+                "The blocked file type repository failed to create blocked file type {Pattern}.",
+                model.Pattern);
             throw;
         }
     }
@@ -153,8 +157,10 @@ internal sealed class BlockedFileTypeRepository(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "The blocked file type repository failed to update blocked file type " +
-                "{BlockedFileTypeId}.", model.Id);
+            logger.LogError(
+                ex,
+                "The blocked file type repository failed to update blocked file type {BlockedFileTypeId}.",
+                model.Id);
             throw;
         }
     }
@@ -217,8 +223,10 @@ internal sealed class BlockedFileTypeRepository(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "The blocked file type repository failed to delete blocked file type " +
-                "{BlockedFileTypeId}.", id);
+            logger.LogError(
+                ex,
+                "The blocked file type repository failed to delete blocked file type {BlockedFileTypeId}.",
+                id);
             throw;
         }
     }

@@ -80,7 +80,10 @@ internal sealed class QualityTierListsEndpointGroup : IApiEndpointGroup
             });
         }
 
-        return Results.Created($"/api/{Name}/{result.TierList!.Id}", result.TierList);
+        var tierList = result.TierList
+            ?? throw new InvalidOperationException("The created quality tier list is missing.");
+
+        return Results.Created($"/api/{Name}/{tierList.Id}", tierList);
     }
 
     [MagpieCommand("get", "GET", "{id:guid}", "Show a quality tier list")]

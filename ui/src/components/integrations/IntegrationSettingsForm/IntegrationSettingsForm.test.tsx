@@ -1,12 +1,11 @@
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { useState, type ReactNode } from 'react';
+import { useState } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { ExtensionContext, type ExtensionContextValue } from '@/extensions/ExtensionProvider';
+import { ExtensionContext } from '@/extensions/ExtensionProvider';
 import { SchemaDataType, type IntegrationSettingDefinition } from '@/hooks/useProviderSchema';
-import type { IntegrationSettingsValidationIssue } from '@/hooks/useValidateSettings';
 
 import { IntegrationSettingsForm } from './IntegrationSettingsForm';
 import { parseMappingRows } from './parseMappingRows';
@@ -21,70 +20,16 @@ vi.mock('@/lib/api', async (importOriginal) => {
 
 import { apiGet } from '@/lib/api';
 
-function withQueryClient(
-    children: ReactNode,
-    client = createQueryClient(),
-    extensionState: ExtensionContextValue['state'] = {
-        state: 'ready',
-        error: null,
-        manifest: { assets: [], extensions: [] },
-    },
-): ReactNode {
-    const extensionContext: ExtensionContextValue = {
-        state: extensionState,
-        retriesExhausted: false,
-        context: {
-            apiBaseUrl: '/api',
-            userId: 'user-1',
-            username: 'admin',
-            role: 'Admin',
-        },
-        getExtensionsForSlot: () => [],
-        retry: () => Promise.resolve(),
-    };
-    return (
-        <ExtensionContext.Provider value={extensionContext}>
-            <QueryClientProvider client={client}>{children}</QueryClientProvider>
-        </ExtensionContext.Provider>
-    );
-}
-
-function createQueryClient(): QueryClient {
-    return new QueryClient({
-        defaultOptions: {
-            queries: { retry: false, gcTime: 0, staleTime: 0 },
-        },
-    });
-}
-
-function renderForm(
-    schema: IntegrationSettingDefinition[],
-    overrides: {
-        values?: Record<string, string>;
-        onChange?: (key: string, value: string) => void;
-        secretsConfigured?: Record<string, boolean>;
-        issues?: IntegrationSettingsValidationIssue[];
-        disabled?: boolean;
-    } = {},
-) {
-    const onChange = overrides.onChange ?? vi.fn();
-    render(
-        <IntegrationSettingsForm
-            schema={schema}
-            values={overrides.values ?? {}}
-            onChange={onChange}
-            secretsConfigured={overrides.secretsConfigured}
-            issues={overrides.issues}
-            disabled={overrides.disabled}
-        />,
-    );
-    return { onChange };
-}
-
 describe('IntegrationSettingsForm', () => {
     describe('input type rendering', () => {
         it('renders a text input for String type without options', () => {
-            renderForm([{ key: 'host', type: SchemaDataType.String, displayName: 'Host' }]);
+            render(
+                <IntegrationSettingsForm
+                    schema={[{ key: 'host', type: SchemaDataType.String, displayName: 'Host' }]}
+                    values={{}}
+                    onChange={vi.fn()}
+                />,
+            );
 
             const input = screen.getByLabelText('Host') as HTMLInputElement;
             expect(input).toBeInTheDocument();
@@ -92,42 +37,72 @@ describe('IntegrationSettingsForm', () => {
         });
 
         it('renders a password input when Secret is true', () => {
-            renderForm([{ key: 'apiKey', type: SchemaDataType.String, displayName: 'API Key', secret: true }]);
+            render(
+                <IntegrationSettingsForm
+                    schema={[{ key: 'apiKey', type: SchemaDataType.String, displayName: 'API Key', secret: true }]}
+                    values={{}}
+                    onChange={vi.fn()}
+                />,
+            );
 
             const input = screen.getByLabelText('API Key') as HTMLInputElement;
             expect(input.type).toBe('password');
         });
 
         it('renders a number input for Number type', () => {
-            renderForm([{ key: 'port', type: SchemaDataType.Number, displayName: 'Port' }]);
+            render(
+                <IntegrationSettingsForm
+                    schema={[{ key: 'port', type: SchemaDataType.Number, displayName: 'Port' }]}
+                    values={{}}
+                    onChange={vi.fn()}
+                />,
+            );
 
             const input = screen.getByLabelText('Port') as HTMLInputElement;
             expect(input.type).toBe('number');
         });
 
         it('renders a date input for Date type', () => {
-            renderForm([{ key: 'effectiveOn', type: SchemaDataType.Date, displayName: 'Effective Date' }]);
+            render(
+                <IntegrationSettingsForm
+                    schema={[{ key: 'effectiveOn', type: SchemaDataType.Date, displayName: 'Effective Date' }]}
+                    values={{}}
+                    onChange={vi.fn()}
+                />,
+            );
 
             const input = screen.getByLabelText('Effective Date') as HTMLInputElement;
             expect(input.type).toBe('date');
         });
 
         it('renders a switch for Boolean type', () => {
-            renderForm([{ key: 'useSsl', type: SchemaDataType.Boolean, displayName: 'Use SSL' }]);
+            render(
+                <IntegrationSettingsForm
+                    schema={[{ key: 'useSsl', type: SchemaDataType.Boolean, displayName: 'Use SSL' }]}
+                    values={{}}
+                    onChange={vi.fn()}
+                />,
+            );
 
             const toggle = screen.getByRole('switch', { name: 'Use SSL' });
             expect(toggle).toBeInTheDocument();
         });
 
         it('renders a select dropdown when Options is set on a String entry', () => {
-            renderForm([
-                {
-                    key: 'protocol',
-                    type: SchemaDataType.String,
-                    displayName: 'Protocol',
-                    options: ['http', 'https'],
-                },
-            ]);
+            render(
+                <IntegrationSettingsForm
+                    schema={[
+                        {
+                            key: 'protocol',
+                            type: SchemaDataType.String,
+                            displayName: 'Protocol',
+                            options: ['http', 'https'],
+                        },
+                    ]}
+                    values={{}}
+                    onChange={vi.fn()}
+                />,
+            );
 
             const trigger = document.querySelector('[data-field="protocol"]');
             expect(trigger).toBeInTheDocument();
@@ -137,47 +112,71 @@ describe('IntegrationSettingsForm', () => {
 
     describe('labels and help text', () => {
         it('uses key as fallback label when displayName is missing', () => {
-            renderForm([{ key: 'host', type: SchemaDataType.String }]);
+            render(
+                <IntegrationSettingsForm
+                    schema={[{ key: 'host', type: SchemaDataType.String }]}
+                    values={{}}
+                    onChange={vi.fn()}
+                />,
+            );
 
             expect(screen.getByLabelText('host')).toBeInTheDocument();
         });
 
         it('renders the description as help text below the input', () => {
-            renderForm([
-                {
-                    key: 'host',
-                    type: SchemaDataType.String,
-                    displayName: 'Host',
-                    description: 'Hostname of the server',
-                },
-            ]);
+            render(
+                <IntegrationSettingsForm
+                    schema={[
+                        {
+                            key: 'host',
+                            type: SchemaDataType.String,
+                            displayName: 'Host',
+                            description: 'Hostname of the server',
+                        },
+                    ]}
+                    values={{}}
+                    onChange={vi.fn()}
+                />,
+            );
 
             expect(screen.getByText('Hostname of the server')).toBeInTheDocument();
         });
 
         it('marks required fields with the label primitive', () => {
-            renderForm([
-                {
-                    key: 'host',
-                    type: SchemaDataType.String,
-                    displayName: 'Host',
-                    required: true,
-                },
-            ]);
+            render(
+                <IntegrationSettingsForm
+                    schema={[
+                        {
+                            key: 'host',
+                            type: SchemaDataType.String,
+                            displayName: 'Host',
+                            required: true,
+                        },
+                    ]}
+                    values={{}}
+                    onChange={vi.fn()}
+                />,
+            );
 
             const required = document.querySelector('[data-setting-key="host"] .label__required');
             expect(required).toBeInTheDocument();
         });
 
         it('uses the placeholder on string inputs', () => {
-            renderForm([
-                {
-                    key: 'host',
-                    type: SchemaDataType.String,
-                    displayName: 'Host',
-                    placeholder: 'localhost',
-                },
-            ]);
+            render(
+                <IntegrationSettingsForm
+                    schema={[
+                        {
+                            key: 'host',
+                            type: SchemaDataType.String,
+                            displayName: 'Host',
+                            placeholder: 'localhost',
+                        },
+                    ]}
+                    values={{}}
+                    onChange={vi.fn()}
+                />,
+            );
 
             expect(screen.getByPlaceholderText('localhost')).toBeInTheDocument();
         });
@@ -185,33 +184,51 @@ describe('IntegrationSettingsForm', () => {
 
     describe('value display', () => {
         it('shows the current value in a text input', () => {
-            renderForm([{ key: 'host', type: SchemaDataType.String, displayName: 'Host' }], {
-                values: { host: 'example.com' },
-            });
+            render(
+                <IntegrationSettingsForm
+                    schema={[{ key: 'host', type: SchemaDataType.String, displayName: 'Host' }]}
+                    values={{ host: 'example.com' }}
+                    onChange={vi.fn()}
+                />,
+            );
 
             expect(screen.getByDisplayValue('example.com')).toBeInTheDocument();
         });
 
         it('checks the switch when value is "true"', () => {
-            renderForm([{ key: 'useSsl', type: SchemaDataType.Boolean, displayName: 'Use SSL' }], {
-                values: { useSsl: 'true' },
-            });
+            render(
+                <IntegrationSettingsForm
+                    schema={[{ key: 'useSsl', type: SchemaDataType.Boolean, displayName: 'Use SSL' }]}
+                    values={{ useSsl: 'true' }}
+                    onChange={vi.fn()}
+                />,
+            );
 
             const toggle = screen.getByRole('switch', { name: 'Use SSL' });
             expect(toggle).toHaveAttribute('data-state', 'checked');
         });
 
         it('does not check the switch when value is "false"', () => {
-            renderForm([{ key: 'useSsl', type: SchemaDataType.Boolean, displayName: 'Use SSL' }], {
-                values: { useSsl: 'false' },
-            });
+            render(
+                <IntegrationSettingsForm
+                    schema={[{ key: 'useSsl', type: SchemaDataType.Boolean, displayName: 'Use SSL' }]}
+                    values={{ useSsl: 'false' }}
+                    onChange={vi.fn()}
+                />,
+            );
 
             const toggle = screen.getByRole('switch', { name: 'Use SSL' });
             expect(toggle).toHaveAttribute('data-state', 'unchecked');
         });
 
         it('renders an unconfigured secret as an ordinary editable password with no unlock button', () => {
-            renderForm([{ key: 'apiKey', type: SchemaDataType.String, displayName: 'API Key', secret: true }]);
+            render(
+                <IntegrationSettingsForm
+                    schema={[{ key: 'apiKey', type: SchemaDataType.String, displayName: 'API Key', secret: true }]}
+                    values={{}}
+                    onChange={vi.fn()}
+                />,
+            );
 
             const input = screen.getByLabelText('API Key') as HTMLInputElement;
             expect(input).toHaveAttribute('type', 'password');
@@ -221,9 +238,14 @@ describe('IntegrationSettingsForm', () => {
         });
 
         it('masks and locks a configured secret behind a clear button', () => {
-            renderForm([{ key: 'apiKey', type: SchemaDataType.String, displayName: 'API Key', secret: true }], {
-                secretsConfigured: { apiKey: true },
-            });
+            render(
+                <IntegrationSettingsForm
+                    schema={[{ key: 'apiKey', type: SchemaDataType.String, displayName: 'API Key', secret: true }]}
+                    values={{}}
+                    onChange={vi.fn()}
+                    secretsConfigured={{ apiKey: true }}
+                />,
+            );
 
             const input = screen.getByLabelText('API Key') as HTMLInputElement;
             expect(input.value).toBe('');
@@ -235,10 +257,14 @@ describe('IntegrationSettingsForm', () => {
         it('unlocks a configured secret for editing when the clear button is clicked', async () => {
             const user = userEvent.setup();
             const onChange = vi.fn();
-            renderForm([{ key: 'apiKey', type: SchemaDataType.String, displayName: 'API Key', secret: true }], {
-                onChange,
-                secretsConfigured: { apiKey: true },
-            });
+            render(
+                <IntegrationSettingsForm
+                    schema={[{ key: 'apiKey', type: SchemaDataType.String, displayName: 'API Key', secret: true }]}
+                    values={{}}
+                    onChange={onChange}
+                    secretsConfigured={{ apiKey: true }}
+                />,
+            );
 
             await user.click(screen.getByRole('button', { name: 'Replace API Key' }));
 
@@ -255,7 +281,14 @@ describe('IntegrationSettingsForm', () => {
     describe('change events', () => {
         it('calls onChange with new string value as user types', async () => {
             const user = userEvent.setup();
-            const { onChange } = renderForm([{ key: 'host', type: SchemaDataType.String, displayName: 'Host' }]);
+            const onChange = vi.fn();
+            render(
+                <IntegrationSettingsForm
+                    schema={[{ key: 'host', type: SchemaDataType.String, displayName: 'Host' }]}
+                    values={{}}
+                    onChange={onChange}
+                />,
+            );
 
             const input = screen.getByLabelText('Host');
             await user.type(input, 'a');
@@ -265,7 +298,14 @@ describe('IntegrationSettingsForm', () => {
 
         it('emits "true" / "false" strings for Boolean toggles', async () => {
             const user = userEvent.setup();
-            const { onChange } = renderForm([{ key: 'useSsl', type: SchemaDataType.Boolean, displayName: 'Use SSL' }]);
+            const onChange = vi.fn();
+            render(
+                <IntegrationSettingsForm
+                    schema={[{ key: 'useSsl', type: SchemaDataType.Boolean, displayName: 'Use SSL' }]}
+                    values={{}}
+                    onChange={onChange}
+                />,
+            );
 
             const toggle = screen.getByRole('switch', { name: 'Use SSL' });
             await user.click(toggle);
@@ -276,17 +316,27 @@ describe('IntegrationSettingsForm', () => {
 
     describe('issues', () => {
         it('renders a per-field issue beneath the input', () => {
-            renderForm([{ key: 'host', type: SchemaDataType.String, displayName: 'Host' }], {
-                issues: [{ key: 'host', message: 'Host is required' }],
-            });
+            render(
+                <IntegrationSettingsForm
+                    schema={[{ key: 'host', type: SchemaDataType.String, displayName: 'Host' }]}
+                    values={{}}
+                    onChange={vi.fn()}
+                    issues={[{ key: 'host', message: 'Host is required' }]}
+                />,
+            );
 
             expect(screen.getByText('Host is required')).toBeInTheDocument();
         });
 
         it('renders a form-level issue (key=null) at the bottom', () => {
-            renderForm([{ key: 'host', type: SchemaDataType.String, displayName: 'Host' }], {
-                issues: [{ key: null, message: 'Connection failed' }],
-            });
+            render(
+                <IntegrationSettingsForm
+                    schema={[{ key: 'host', type: SchemaDataType.String, displayName: 'Host' }]}
+                    values={{}}
+                    onChange={vi.fn()}
+                    issues={[{ key: null, message: 'Connection failed' }]}
+                />,
+            );
 
             const formIssues = document.querySelector('[data-field="integration-settings-form-issues"]');
             expect(formIssues).toBeInTheDocument();
@@ -294,9 +344,14 @@ describe('IntegrationSettingsForm', () => {
         });
 
         it('does not render the form-level issues block when no key=null issues exist', () => {
-            renderForm([{ key: 'host', type: SchemaDataType.String, displayName: 'Host' }], {
-                issues: [{ key: 'host', message: 'Host is required' }],
-            });
+            render(
+                <IntegrationSettingsForm
+                    schema={[{ key: 'host', type: SchemaDataType.String, displayName: 'Host' }]}
+                    values={{}}
+                    onChange={vi.fn()}
+                    issues={[{ key: 'host', message: 'Host is required' }]}
+                />,
+            );
 
             expect(document.querySelector('[data-field="integration-settings-form-issues"]')).not.toBeInTheDocument();
         });
@@ -304,32 +359,46 @@ describe('IntegrationSettingsForm', () => {
 
     describe('disabled', () => {
         it('disables string inputs', () => {
-            renderForm([{ key: 'host', type: SchemaDataType.String, displayName: 'Host' }], {
-                disabled: true,
-            });
+            render(
+                <IntegrationSettingsForm
+                    schema={[{ key: 'host', type: SchemaDataType.String, displayName: 'Host' }]}
+                    values={{}}
+                    onChange={vi.fn()}
+                    disabled={true}
+                />,
+            );
 
             expect(screen.getByLabelText('Host')).toBeDisabled();
         });
 
         it('disables switches', () => {
-            renderForm([{ key: 'useSsl', type: SchemaDataType.Boolean, displayName: 'Use SSL' }], {
-                disabled: true,
-            });
+            render(
+                <IntegrationSettingsForm
+                    schema={[{ key: 'useSsl', type: SchemaDataType.Boolean, displayName: 'Use SSL' }]}
+                    values={{}}
+                    onChange={vi.fn()}
+                    disabled={true}
+                />,
+            );
 
             expect(screen.getByRole('switch', { name: 'Use SSL' })).toBeDisabled();
         });
 
         it('disables select triggers', () => {
-            renderForm(
-                [
-                    {
-                        key: 'protocol',
-                        type: SchemaDataType.String,
-                        displayName: 'Protocol',
-                        options: ['http', 'https'],
-                    },
-                ],
-                { disabled: true },
+            render(
+                <IntegrationSettingsForm
+                    schema={[
+                        {
+                            key: 'protocol',
+                            type: SchemaDataType.String,
+                            displayName: 'Protocol',
+                            options: ['http', 'https'],
+                        },
+                    ]}
+                    values={{}}
+                    onChange={vi.fn()}
+                    disabled={true}
+                />,
             );
 
             const trigger = document.querySelector('[data-field="protocol"]');
@@ -381,7 +450,7 @@ describe('IntegrationSettingsForm', () => {
         });
 
         it('renders an empty-state row when the value is empty', () => {
-            renderForm(mappingsSchema);
+            render(<IntegrationSettingsForm schema={mappingsSchema} values={{}} onChange={vi.fn()} />);
 
             expect(
                 document.querySelector('[data-field="libraryMappings"][data-field-kind="mappings-list"]'),
@@ -391,22 +460,26 @@ describe('IntegrationSettingsForm', () => {
         });
 
         it('renders one row per persisted entry with column inputs prefilled', () => {
-            renderForm(mappingsSchema, {
-                values: {
-                    libraryMappings: JSON.stringify([
-                        {
-                            rootFolderId: 'rf-1',
-                            contentType: 'movies',
-                            serverLibraryId: 'lib-1',
-                        },
-                        {
-                            rootFolderId: 'rf-2',
-                            contentType: 'shows',
-                            serverLibraryId: 'lib-2',
-                        },
-                    ]),
-                },
-            });
+            render(
+                <IntegrationSettingsForm
+                    schema={mappingsSchema}
+                    values={{
+                        libraryMappings: JSON.stringify([
+                            {
+                                rootFolderId: 'rf-1',
+                                contentType: 'movies',
+                                serverLibraryId: 'lib-1',
+                            },
+                            {
+                                rootFolderId: 'rf-2',
+                                contentType: 'shows',
+                                serverLibraryId: 'lib-2',
+                            },
+                        ]),
+                    }}
+                    onChange={vi.fn()}
+                />,
+            );
 
             const inputs = document.querySelectorAll('[data-row-index] input');
             expect(inputs.length).toBe(6);
@@ -416,7 +489,7 @@ describe('IntegrationSettingsForm', () => {
 
         it('adds a row when the Add row button is clicked', async () => {
             const onChange = vi.fn();
-            renderForm(mappingsSchema, { onChange });
+            render(<IntegrationSettingsForm schema={mappingsSchema} values={{}} onChange={onChange} />);
 
             const user = userEvent.setup();
             await user.click(screen.getByRole('button', { name: 'Add row' }));
@@ -429,15 +502,18 @@ describe('IntegrationSettingsForm', () => {
 
         it('removes a row when the row Remove button is clicked', async () => {
             const onChange = vi.fn();
-            renderForm(mappingsSchema, {
-                onChange,
-                values: {
-                    libraryMappings: JSON.stringify([
-                        { rootFolderId: 'rf-1', contentType: 'movies', serverLibraryId: 'lib-1' },
-                        { rootFolderId: 'rf-2', contentType: 'shows', serverLibraryId: 'lib-2' },
-                    ]),
-                },
-            });
+            render(
+                <IntegrationSettingsForm
+                    schema={mappingsSchema}
+                    values={{
+                        libraryMappings: JSON.stringify([
+                            { rootFolderId: 'rf-1', contentType: 'movies', serverLibraryId: 'lib-1' },
+                            { rootFolderId: 'rf-2', contentType: 'shows', serverLibraryId: 'lib-2' },
+                        ]),
+                    }}
+                    onChange={onChange}
+                />,
+            );
 
             const user = userEvent.setup();
             await user.click(screen.getByRole('button', { name: 'Remove row 1' }));
@@ -452,14 +528,17 @@ describe('IntegrationSettingsForm', () => {
 
         it('serialises a single-character edit back to JSON', async () => {
             const onChange = vi.fn();
-            renderForm(mappingsSchema, {
-                onChange,
-                values: {
-                    libraryMappings: JSON.stringify([
-                        { rootFolderId: 'rf-1', contentType: 'movies', serverLibraryId: 'lib-1' },
-                    ]),
-                },
-            });
+            render(
+                <IntegrationSettingsForm
+                    schema={mappingsSchema}
+                    values={{
+                        libraryMappings: JSON.stringify([
+                            { rootFolderId: 'rf-1', contentType: 'movies', serverLibraryId: 'lib-1' },
+                        ]),
+                    }}
+                    onChange={onChange}
+                />,
+            );
 
             const user = userEvent.setup();
             const cell = document.querySelector(
@@ -474,21 +553,27 @@ describe('IntegrationSettingsForm', () => {
         });
 
         it('disables row controls when disabled is true', () => {
-            renderForm(mappingsSchema, {
-                disabled: true,
-                values: {
-                    libraryMappings: JSON.stringify([
-                        { rootFolderId: 'rf-1', contentType: 'movies', serverLibraryId: 'lib-1' },
-                    ]),
-                },
-            });
+            render(
+                <IntegrationSettingsForm
+                    schema={mappingsSchema}
+                    values={{
+                        libraryMappings: JSON.stringify([
+                            { rootFolderId: 'rf-1', contentType: 'movies', serverLibraryId: 'lib-1' },
+                        ]),
+                    }}
+                    onChange={vi.fn()}
+                    disabled={true}
+                />,
+            );
 
             expect(screen.getByRole('button', { name: 'Add row' })).toBeDisabled();
             expect(screen.getByRole('button', { name: 'Remove row 1' })).toBeDisabled();
             const cellInputs = document.querySelectorAll('[data-row-index] input');
-            for (const input of Array.from(cellInputs)) {
-                expect(input).toBeDisabled();
-            }
+            expect(Array.from(cellInputs).map((input) => (input as HTMLInputElement).disabled)).toEqual([
+                true,
+                true,
+                true,
+            ]);
         });
 
         describe('secret cells', () => {
@@ -518,9 +603,13 @@ describe('IntegrationSettingsForm', () => {
             }
 
             it('masks a stored secret cell for a pre-existing mapping row', () => {
-                renderForm(secretMappingsSchema, {
-                    values: { credentials: JSON.stringify([{ account: 'acct-1', token: '' }]) },
-                });
+                render(
+                    <IntegrationSettingsForm
+                        schema={secretMappingsSchema}
+                        values={{ credentials: JSON.stringify([{ account: 'acct-1', token: '' }]) }}
+                        onChange={vi.fn()}
+                    />,
+                );
 
                 const cell = document.querySelector(
                     '[data-row-index="0"] input[data-field="token"]',
@@ -534,10 +623,13 @@ describe('IntegrationSettingsForm', () => {
             it('unlocks a stored secret cell and flows the replacement through onChange', async () => {
                 const user = userEvent.setup();
                 const onChange = vi.fn();
-                renderForm(secretMappingsSchema, {
-                    onChange,
-                    values: { credentials: JSON.stringify([{ account: 'acct-1', token: '' }]) },
-                });
+                render(
+                    <IntegrationSettingsForm
+                        schema={secretMappingsSchema}
+                        values={{ credentials: JSON.stringify([{ account: 'acct-1', token: '' }]) }}
+                        onChange={onChange}
+                    />,
+                );
 
                 await user.click(screen.getByRole('button', { name: 'Replace Token' }));
                 const cell = document.querySelector(
@@ -624,17 +716,33 @@ describe('IntegrationSettingsForm', () => {
                 (window as unknown as Record<string, unknown>).sampleProvider = { listLibraries: () => [] };
 
                 render(
-                    withQueryClient(
-                        <IntegrationSettingsForm
-                            schema={optionsSchema}
-                            values={{
-                                libraryMappings: JSON.stringify([
-                                    { rootFolderPath: '', contentType: '', serverLibraryId: '' },
-                                ]),
-                            }}
-                            onChange={vi.fn()}
-                        />,
-                    ),
+                    <ExtensionContext.Provider
+                        value={{
+                            state: { state: 'ready', error: null, manifest: { assets: [], extensions: [] } },
+                            retriesExhausted: false,
+                            context: { apiBaseUrl: '/api', userId: 'user-1', username: 'admin', role: 'Admin' },
+                            getExtensionsForSlot: () => [],
+                            retry: () => Promise.resolve(),
+                        }}
+                    >
+                        <QueryClientProvider
+                            client={
+                                new QueryClient({
+                                    defaultOptions: { queries: { retry: false, gcTime: 0, staleTime: 0 } },
+                                })
+                            }
+                        >
+                            <IntegrationSettingsForm
+                                schema={optionsSchema}
+                                values={{
+                                    libraryMappings: JSON.stringify([
+                                        { rootFolderPath: '', contentType: '', serverLibraryId: '' },
+                                    ]),
+                                }}
+                                onChange={vi.fn()}
+                            />
+                        </QueryClientProvider>
+                    </ExtensionContext.Provider>,
                 );
 
                 await waitFor(() => {
@@ -664,13 +772,29 @@ describe('IntegrationSettingsForm', () => {
                 ];
 
                 render(
-                    withQueryClient(
-                        <IntegrationSettingsForm
-                            schema={schema}
-                            values={{ mappings: JSON.stringify([{ rootFolderPath: '' }]) }}
-                            onChange={vi.fn()}
-                        />,
-                    ),
+                    <ExtensionContext.Provider
+                        value={{
+                            state: { state: 'ready', error: null, manifest: { assets: [], extensions: [] } },
+                            retriesExhausted: false,
+                            context: { apiBaseUrl: '/api', userId: 'user-1', username: 'admin', role: 'Admin' },
+                            getExtensionsForSlot: () => [],
+                            retry: () => Promise.resolve(),
+                        }}
+                    >
+                        <QueryClientProvider
+                            client={
+                                new QueryClient({
+                                    defaultOptions: { queries: { retry: false, gcTime: 0, staleTime: 0 } },
+                                })
+                            }
+                        >
+                            <IntegrationSettingsForm
+                                schema={schema}
+                                values={{ mappings: JSON.stringify([{ rootFolderPath: '' }]) }}
+                                onChange={vi.fn()}
+                            />
+                        </QueryClientProvider>
+                    </ExtensionContext.Provider>,
                 );
 
                 expect(await screen.findByText(/Failed to load options/)).toBeInTheDocument();
@@ -697,13 +821,29 @@ describe('IntegrationSettingsForm', () => {
                 ];
 
                 render(
-                    withQueryClient(
-                        <IntegrationSettingsForm
-                            schema={schema}
-                            values={{ mappings: JSON.stringify([{ rootFolderPath: '' }]) }}
-                            onChange={vi.fn()}
-                        />,
-                    ),
+                    <ExtensionContext.Provider
+                        value={{
+                            state: { state: 'ready', error: null, manifest: { assets: [], extensions: [] } },
+                            retriesExhausted: false,
+                            context: { apiBaseUrl: '/api', userId: 'user-1', username: 'admin', role: 'Admin' },
+                            getExtensionsForSlot: () => [],
+                            retry: () => Promise.resolve(),
+                        }}
+                    >
+                        <QueryClientProvider
+                            client={
+                                new QueryClient({
+                                    defaultOptions: { queries: { retry: false, gcTime: 0, staleTime: 0 } },
+                                })
+                            }
+                        >
+                            <IntegrationSettingsForm
+                                schema={schema}
+                                values={{ mappings: JSON.stringify([{ rootFolderPath: '' }]) }}
+                                onChange={vi.fn()}
+                            />
+                        </QueryClientProvider>
+                    </ExtensionContext.Provider>,
                 );
 
                 expect(await screen.findByText('No options are available.')).toBeInTheDocument();
@@ -727,15 +867,31 @@ describe('IntegrationSettingsForm', () => {
                 };
 
                 render(
-                    withQueryClient(
-                        <IntegrationSettingsForm
-                            schema={optionsSchema}
-                            values={values}
-                            onChange={vi.fn()}
-                            extensionId="provider-extension"
-                            entityId="server-1"
-                        />,
-                    ),
+                    <ExtensionContext.Provider
+                        value={{
+                            state: { state: 'ready', error: null, manifest: { assets: [], extensions: [] } },
+                            retriesExhausted: false,
+                            context: { apiBaseUrl: '/api', userId: 'user-1', username: 'admin', role: 'Admin' },
+                            getExtensionsForSlot: () => [],
+                            retry: () => Promise.resolve(),
+                        }}
+                    >
+                        <QueryClientProvider
+                            client={
+                                new QueryClient({
+                                    defaultOptions: { queries: { retry: false, gcTime: 0, staleTime: 0 } },
+                                })
+                            }
+                        >
+                            <IntegrationSettingsForm
+                                schema={optionsSchema}
+                                values={values}
+                                onChange={vi.fn()}
+                                extensionId="provider-extension"
+                                entityId="server-1"
+                            />
+                        </QueryClientProvider>
+                    </ExtensionContext.Provider>,
                 );
 
                 await waitFor(() => {
@@ -763,20 +919,36 @@ describe('IntegrationSettingsForm', () => {
                 (window as unknown as Record<string, unknown>).sampleProvider = { listLibraries };
 
                 render(
-                    withQueryClient(
-                        <IntegrationSettingsForm
-                            schema={optionsSchema}
-                            values={{
-                                host: 'http://provider.local:8096',
-                                apiKey: 'secret',
-                                libraryMappings: JSON.stringify([
-                                    { rootFolderPath: '', contentType: '', serverLibraryId: '' },
-                                ]),
-                            }}
-                            onChange={vi.fn()}
-                            entityId="server-1"
-                        />,
-                    ),
+                    <ExtensionContext.Provider
+                        value={{
+                            state: { state: 'ready', error: null, manifest: { assets: [], extensions: [] } },
+                            retriesExhausted: false,
+                            context: { apiBaseUrl: '/api', userId: 'user-1', username: 'admin', role: 'Admin' },
+                            getExtensionsForSlot: () => [],
+                            retry: () => Promise.resolve(),
+                        }}
+                    >
+                        <QueryClientProvider
+                            client={
+                                new QueryClient({
+                                    defaultOptions: { queries: { retry: false, gcTime: 0, staleTime: 0 } },
+                                })
+                            }
+                        >
+                            <IntegrationSettingsForm
+                                schema={optionsSchema}
+                                values={{
+                                    host: 'http://provider.local:8096',
+                                    apiKey: 'secret',
+                                    libraryMappings: JSON.stringify([
+                                        { rootFolderPath: '', contentType: '', serverLibraryId: '' },
+                                    ]),
+                                }}
+                                onChange={vi.fn()}
+                                entityId="server-1"
+                            />
+                        </QueryClientProvider>
+                    </ExtensionContext.Provider>,
                 );
 
                 const failure = await screen.findByText('Failed to load options. Check the source connection.');
@@ -809,19 +981,35 @@ describe('IntegrationSettingsForm', () => {
                 };
 
                 render(
-                    withQueryClient(
-                        <IntegrationSettingsForm
-                            schema={optionsSchema}
-                            values={{
-                                host: 'http://provider.local:8096',
-                                apiKey: 'secret',
-                                libraryMappings: JSON.stringify([
-                                    { rootFolderPath: '', contentType: '', serverLibraryId: '' },
-                                ]),
-                            }}
-                            onChange={vi.fn()}
-                        />,
-                    ),
+                    <ExtensionContext.Provider
+                        value={{
+                            state: { state: 'ready', error: null, manifest: { assets: [], extensions: [] } },
+                            retriesExhausted: false,
+                            context: { apiBaseUrl: '/api', userId: 'user-1', username: 'admin', role: 'Admin' },
+                            getExtensionsForSlot: () => [],
+                            retry: () => Promise.resolve(),
+                        }}
+                    >
+                        <QueryClientProvider
+                            client={
+                                new QueryClient({
+                                    defaultOptions: { queries: { retry: false, gcTime: 0, staleTime: 0 } },
+                                })
+                            }
+                        >
+                            <IntegrationSettingsForm
+                                schema={optionsSchema}
+                                values={{
+                                    host: 'http://provider.local:8096',
+                                    apiKey: 'secret',
+                                    libraryMappings: JSON.stringify([
+                                        { rootFolderPath: '', contentType: '', serverLibraryId: '' },
+                                    ]),
+                                }}
+                                onChange={vi.fn()}
+                            />
+                        </QueryClientProvider>
+                    </ExtensionContext.Provider>,
                 );
 
                 expect(await screen.findByText(/rejected the API key/)).toBeInTheDocument();
@@ -840,9 +1028,25 @@ describe('IntegrationSettingsForm', () => {
                 };
 
                 render(
-                    withQueryClient(
-                        <IntegrationSettingsForm schema={optionsSchema} values={values} onChange={vi.fn()} />,
-                    ),
+                    <ExtensionContext.Provider
+                        value={{
+                            state: { state: 'ready', error: null, manifest: { assets: [], extensions: [] } },
+                            retriesExhausted: false,
+                            context: { apiBaseUrl: '/api', userId: 'user-1', username: 'admin', role: 'Admin' },
+                            getExtensionsForSlot: () => [],
+                            retry: () => Promise.resolve(),
+                        }}
+                    >
+                        <QueryClientProvider
+                            client={
+                                new QueryClient({
+                                    defaultOptions: { queries: { retry: false, gcTime: 0, staleTime: 0 } },
+                                })
+                            }
+                        >
+                            <IntegrationSettingsForm schema={optionsSchema} values={values} onChange={vi.fn()} />
+                        </QueryClientProvider>
+                    </ExtensionContext.Provider>,
                 );
 
                 await waitFor(() => {
@@ -867,14 +1071,30 @@ describe('IntegrationSettingsForm', () => {
                 };
 
                 render(
-                    withQueryClient(
-                        <IntegrationSettingsForm
-                            schema={optionsSchema}
-                            values={values}
-                            onChange={vi.fn()}
-                            entityId="server-1"
-                        />,
-                    ),
+                    <ExtensionContext.Provider
+                        value={{
+                            state: { state: 'ready', error: null, manifest: { assets: [], extensions: [] } },
+                            retriesExhausted: false,
+                            context: { apiBaseUrl: '/api', userId: 'user-1', username: 'admin', role: 'Admin' },
+                            getExtensionsForSlot: () => [],
+                            retry: () => Promise.resolve(),
+                        }}
+                    >
+                        <QueryClientProvider
+                            client={
+                                new QueryClient({
+                                    defaultOptions: { queries: { retry: false, gcTime: 0, staleTime: 0 } },
+                                })
+                            }
+                        >
+                            <IntegrationSettingsForm
+                                schema={optionsSchema}
+                                values={values}
+                                onChange={vi.fn()}
+                                entityId="server-1"
+                            />
+                        </QueryClientProvider>
+                    </ExtensionContext.Provider>,
                 );
 
                 await waitFor(() => {
@@ -897,18 +1117,34 @@ describe('IntegrationSettingsForm', () => {
                 });
                 (window as unknown as Record<string, unknown>).sampleProvider = { listLibraries };
                 render(
-                    withQueryClient(
-                        <IntegrationSettingsForm
-                            schema={optionsSchema}
-                            values={{
-                                libraryMappings: JSON.stringify([
-                                    { rootFolderPath: '', contentType: '', serverLibraryId: '' },
-                                ]),
-                            }}
-                            onChange={vi.fn()}
-                            entityId={null}
-                        />,
-                    ),
+                    <ExtensionContext.Provider
+                        value={{
+                            state: { state: 'ready', error: null, manifest: { assets: [], extensions: [] } },
+                            retriesExhausted: false,
+                            context: { apiBaseUrl: '/api', userId: 'user-1', username: 'admin', role: 'Admin' },
+                            getExtensionsForSlot: () => [],
+                            retry: () => Promise.resolve(),
+                        }}
+                    >
+                        <QueryClientProvider
+                            client={
+                                new QueryClient({
+                                    defaultOptions: { queries: { retry: false, gcTime: 0, staleTime: 0 } },
+                                })
+                            }
+                        >
+                            <IntegrationSettingsForm
+                                schema={optionsSchema}
+                                values={{
+                                    libraryMappings: JSON.stringify([
+                                        { rootFolderPath: '', contentType: '', serverLibraryId: '' },
+                                    ]),
+                                }}
+                                onChange={vi.fn()}
+                                entityId={null}
+                            />
+                        </QueryClientProvider>
+                    </ExtensionContext.Provider>,
                 );
 
                 expect(screen.getByLabelText('Provider library').tagName).toBe('BUTTON');
@@ -932,19 +1168,35 @@ describe('IntegrationSettingsForm', () => {
                 (window as unknown as Record<string, unknown>).sampleProvider = { listLibraries: () => [] };
 
                 render(
-                    withQueryClient(
-                        <IntegrationSettingsForm
-                            schema={optionsSchema}
-                            values={{
-                                host: 'http://provider.local:8096',
-                                apiKey: 'secret',
-                                libraryMappings: JSON.stringify([
-                                    { rootFolderPath: '', contentType: '', serverLibraryId: '' },
-                                ]),
-                            }}
-                            onChange={vi.fn()}
-                        />,
-                    ),
+                    <ExtensionContext.Provider
+                        value={{
+                            state: { state: 'ready', error: null, manifest: { assets: [], extensions: [] } },
+                            retriesExhausted: false,
+                            context: { apiBaseUrl: '/api', userId: 'user-1', username: 'admin', role: 'Admin' },
+                            getExtensionsForSlot: () => [],
+                            retry: () => Promise.resolve(),
+                        }}
+                    >
+                        <QueryClientProvider
+                            client={
+                                new QueryClient({
+                                    defaultOptions: { queries: { retry: false, gcTime: 0, staleTime: 0 } },
+                                })
+                            }
+                        >
+                            <IntegrationSettingsForm
+                                schema={optionsSchema}
+                                values={{
+                                    host: 'http://provider.local:8096',
+                                    apiKey: 'secret',
+                                    libraryMappings: JSON.stringify([
+                                        { rootFolderPath: '', contentType: '', serverLibraryId: '' },
+                                    ]),
+                                }}
+                                onChange={vi.fn()}
+                            />
+                        </QueryClientProvider>
+                    </ExtensionContext.Provider>,
                 );
 
                 expect(await screen.findByText(/No options are available./)).toBeInTheDocument();
@@ -959,19 +1211,35 @@ describe('IntegrationSettingsForm', () => {
                 };
 
                 render(
-                    withQueryClient(
-                        <IntegrationSettingsForm
-                            schema={optionsSchema}
-                            values={{
-                                host: 'http://provider.local:8096',
-                                apiKey: 'secret',
-                                libraryMappings: JSON.stringify([
-                                    { rootFolderPath: '', contentType: '', serverLibraryId: '' },
-                                ]),
-                            }}
-                            onChange={vi.fn()}
-                        />,
-                    ),
+                    <ExtensionContext.Provider
+                        value={{
+                            state: { state: 'ready', error: null, manifest: { assets: [], extensions: [] } },
+                            retriesExhausted: false,
+                            context: { apiBaseUrl: '/api', userId: 'user-1', username: 'admin', role: 'Admin' },
+                            getExtensionsForSlot: () => [],
+                            retry: () => Promise.resolve(),
+                        }}
+                    >
+                        <QueryClientProvider
+                            client={
+                                new QueryClient({
+                                    defaultOptions: { queries: { retry: false, gcTime: 0, staleTime: 0 } },
+                                })
+                            }
+                        >
+                            <IntegrationSettingsForm
+                                schema={optionsSchema}
+                                values={{
+                                    host: 'http://provider.local:8096',
+                                    apiKey: 'secret',
+                                    libraryMappings: JSON.stringify([
+                                        { rootFolderPath: '', contentType: '', serverLibraryId: '' },
+                                    ]),
+                                }}
+                                onChange={vi.fn()}
+                            />
+                        </QueryClientProvider>
+                    </ExtensionContext.Provider>,
                 );
 
                 expect(await screen.findByText('Loading options...')).toBeInTheDocument();
@@ -984,21 +1252,35 @@ describe('IntegrationSettingsForm', () => {
                 (window as unknown as Record<string, unknown>).sampleProvider = { listLibraries };
 
                 render(
-                    withQueryClient(
-                        <IntegrationSettingsForm
-                            schema={optionsSchema}
-                            values={{
-                                host: 'http://provider.local:8096',
-                                apiKey: 'secret',
-                                libraryMappings: JSON.stringify([
-                                    { rootFolderPath: '', contentType: '', serverLibraryId: '' },
-                                ]),
-                            }}
-                            onChange={vi.fn()}
-                        />,
-                        createQueryClient(),
-                        { state: 'loading', error: null, manifest: null },
-                    ),
+                    <ExtensionContext.Provider
+                        value={{
+                            state: { state: 'loading', error: null, manifest: null },
+                            retriesExhausted: false,
+                            context: { apiBaseUrl: '/api', userId: 'user-1', username: 'admin', role: 'Admin' },
+                            getExtensionsForSlot: () => [],
+                            retry: () => Promise.resolve(),
+                        }}
+                    >
+                        <QueryClientProvider
+                            client={
+                                new QueryClient({
+                                    defaultOptions: { queries: { retry: false, gcTime: 0, staleTime: 0 } },
+                                })
+                            }
+                        >
+                            <IntegrationSettingsForm
+                                schema={optionsSchema}
+                                values={{
+                                    host: 'http://provider.local:8096',
+                                    apiKey: 'secret',
+                                    libraryMappings: JSON.stringify([
+                                        { rootFolderPath: '', contentType: '', serverLibraryId: '' },
+                                    ]),
+                                }}
+                                onChange={vi.fn()}
+                            />
+                        </QueryClientProvider>
+                    </ExtensionContext.Provider>,
                 );
 
                 expect(
@@ -1017,30 +1299,54 @@ describe('IntegrationSettingsForm', () => {
                 mockApiGet.mockResolvedValue([]);
                 const listLibraries = vi.fn((_context: unknown) => [{ value: 'lib-1', label: 'Movies' }]);
                 (window as unknown as Record<string, unknown>).sampleProvider = { listLibraries };
-                const client = createQueryClient();
+                const client = new QueryClient({
+                    defaultOptions: { queries: { retry: false, gcTime: 0, staleTime: 0 } },
+                });
                 const mappings = JSON.stringify([{ rootFolderPath: '', contentType: '', serverLibraryId: 'lib-1' }]);
                 const { rerender } = render(
-                    withQueryClient(
-                        <IntegrationSettingsForm
-                            schema={optionsSchema}
-                            values={{ host: 'http://one.local', apiKey: 'first-secret', libraryMappings: mappings }}
-                            onChange={vi.fn()}
-                        />,
-                        client,
-                    ),
+                    <ExtensionContext.Provider
+                        value={{
+                            state: { state: 'ready', error: null, manifest: { assets: [], extensions: [] } },
+                            retriesExhausted: false,
+                            context: { apiBaseUrl: '/api', userId: 'user-1', username: 'admin', role: 'Admin' },
+                            getExtensionsForSlot: () => [],
+                            retry: () => Promise.resolve(),
+                        }}
+                    >
+                        <QueryClientProvider client={client}>
+                            <IntegrationSettingsForm
+                                schema={optionsSchema}
+                                values={{ host: 'http://one.local', apiKey: 'first-secret', libraryMappings: mappings }}
+                                onChange={vi.fn()}
+                            />
+                        </QueryClientProvider>
+                    </ExtensionContext.Provider>,
                 );
 
                 await waitFor(() => expect(listLibraries).toHaveBeenCalledTimes(1));
 
                 rerender(
-                    withQueryClient(
-                        <IntegrationSettingsForm
-                            schema={optionsSchema}
-                            values={{ host: 'http://two.local', apiKey: 'second-secret', libraryMappings: mappings }}
-                            onChange={vi.fn()}
-                        />,
-                        client,
-                    ),
+                    <ExtensionContext.Provider
+                        value={{
+                            state: { state: 'ready', error: null, manifest: { assets: [], extensions: [] } },
+                            retriesExhausted: false,
+                            context: { apiBaseUrl: '/api', userId: 'user-1', username: 'admin', role: 'Admin' },
+                            getExtensionsForSlot: () => [],
+                            retry: () => Promise.resolve(),
+                        }}
+                    >
+                        <QueryClientProvider client={client}>
+                            <IntegrationSettingsForm
+                                schema={optionsSchema}
+                                values={{
+                                    host: 'http://two.local',
+                                    apiKey: 'second-secret',
+                                    libraryMappings: mappings,
+                                }}
+                                onChange={vi.fn()}
+                            />
+                        </QueryClientProvider>
+                    </ExtensionContext.Provider>,
                 );
 
                 await waitFor(() => expect(listLibraries).toHaveBeenCalledTimes(2));
@@ -1078,9 +1384,25 @@ describe('IntegrationSettingsForm', () => {
                     ]),
                 };
                 const { rerender } = render(
-                    withQueryClient(
-                        <IntegrationSettingsForm schema={optionsSchema} values={baseValues} onChange={onChange} />,
-                    ),
+                    <ExtensionContext.Provider
+                        value={{
+                            state: { state: 'ready', error: null, manifest: { assets: [], extensions: [] } },
+                            retriesExhausted: false,
+                            context: { apiBaseUrl: '/api', userId: 'user-1', username: 'admin', role: 'Admin' },
+                            getExtensionsForSlot: () => [],
+                            retry: () => Promise.resolve(),
+                        }}
+                    >
+                        <QueryClientProvider
+                            client={
+                                new QueryClient({
+                                    defaultOptions: { queries: { retry: false, gcTime: 0, staleTime: 0 } },
+                                })
+                            }
+                        >
+                            <IntegrationSettingsForm schema={optionsSchema} values={baseValues} onChange={onChange} />
+                        </QueryClientProvider>
+                    </ExtensionContext.Provider>,
                 );
 
                 await waitFor(() => expect(screen.getByLabelText('Provider library')).toHaveTextContent('Movies'));
@@ -1093,13 +1415,29 @@ describe('IntegrationSettingsForm', () => {
                 expect(persisted[0].serverLibraryId).toBe('lib-2');
 
                 rerender(
-                    withQueryClient(
-                        <IntegrationSettingsForm
-                            schema={optionsSchema}
-                            values={{ ...baseValues, libraryMappings: JSON.stringify(persisted) }}
-                            onChange={onChange}
-                        />,
-                    ),
+                    <ExtensionContext.Provider
+                        value={{
+                            state: { state: 'ready', error: null, manifest: { assets: [], extensions: [] } },
+                            retriesExhausted: false,
+                            context: { apiBaseUrl: '/api', userId: 'user-1', username: 'admin', role: 'Admin' },
+                            getExtensionsForSlot: () => [],
+                            retry: () => Promise.resolve(),
+                        }}
+                    >
+                        <QueryClientProvider
+                            client={
+                                new QueryClient({
+                                    defaultOptions: { queries: { retry: false, gcTime: 0, staleTime: 0 } },
+                                })
+                            }
+                        >
+                            <IntegrationSettingsForm
+                                schema={optionsSchema}
+                                values={{ ...baseValues, libraryMappings: JSON.stringify(persisted) }}
+                                onChange={onChange}
+                            />
+                        </QueryClientProvider>
+                    </ExtensionContext.Provider>,
                 );
                 await waitFor(() => expect(screen.getByLabelText('Provider library')).toHaveTextContent('Shows'));
             });

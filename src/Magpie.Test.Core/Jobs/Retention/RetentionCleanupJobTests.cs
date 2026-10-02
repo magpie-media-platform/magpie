@@ -104,15 +104,18 @@ public sealed class RetentionCleanupJobTests
         }
     }
 
-    [Test]
-    public async Task ExecuteAsync_HonorsParameterOverride_WhenJobExecutionRetentionIsOverridden()
+    [TestCase("5", 15)]
+    [TestCase("0", 20)]
+    public async Task ExecuteAsync_HonorsParameterOverride_WhenJobExecutionRetentionIsOverridden(
+        string days,
+        int expectedDay)
     {
         // Arrange
         var jobContext = _jobContext with
         {
             Parameters = new Dictionary<string, string>(StringComparer.Ordinal)
             {
-                ["jobExecutionRetentionDays"] = "5"
+                ["jobExecutionRetentionDays"] = days
             }
         };
 
@@ -120,18 +123,21 @@ public sealed class RetentionCleanupJobTests
         await _subject.ExecuteAsync(jobContext).ConfigureAwait(false);
 
         // Assert
-        Assert.That(_jobExecutionCutoff, Is.EqualTo(new DateTime(2026, 5, 15, 12, 0, 0, DateTimeKind.Utc)));
+        Assert.That(_jobExecutionCutoff, Is.EqualTo(new DateTime(2026, 5, expectedDay, 12, 0, 0, DateTimeKind.Utc)));
     }
 
-    [Test]
-    public async Task ExecuteAsync_UsesTheCurrentTimeAsCutoff_WhenRetentionDaysIsZero()
+    [TestCase("1", 19)]
+    [TestCase("0", 20)]
+    public async Task ExecuteAsync_HonorsParameterOverride_WhenFailedDownloadRetentionIsOverridden(
+        string days,
+        int expectedDay)
     {
         // Arrange
         var jobContext = _jobContext with
         {
             Parameters = new Dictionary<string, string>(StringComparer.Ordinal)
             {
-                ["jobExecutionRetentionDays"] = "0"
+                ["failedDownloadRetentionDays"] = days
             }
         };
 
@@ -139,44 +145,6 @@ public sealed class RetentionCleanupJobTests
         await _subject.ExecuteAsync(jobContext).ConfigureAwait(false);
 
         // Assert
-        Assert.That(_jobExecutionCutoff, Is.EqualTo(new DateTime(2026, 5, 20, 12, 0, 0, DateTimeKind.Utc)));
-    }
-
-    [Test]
-    public async Task ExecuteAsync_HonorsParameterOverride_WhenFailedDownloadRetentionIsOverridden()
-    {
-        // Arrange
-        var jobContext = _jobContext with
-        {
-            Parameters = new Dictionary<string, string>(StringComparer.Ordinal)
-            {
-                ["failedDownloadRetentionDays"] = "1"
-            }
-        };
-
-        // Act
-        await _subject.ExecuteAsync(jobContext).ConfigureAwait(false);
-
-        // Assert
-        Assert.That(_failedDownloadCutoff, Is.EqualTo(new DateTime(2026, 5, 19, 12, 0, 0, DateTimeKind.Utc)));
-    }
-
-    [Test]
-    public async Task ExecuteAsync_HonorsZeroRetentionDays_WhenFailedDownloadRetentionIsZero()
-    {
-        // Arrange
-        var jobContext = _jobContext with
-        {
-            Parameters = new Dictionary<string, string>(StringComparer.Ordinal)
-            {
-                ["failedDownloadRetentionDays"] = "0"
-            }
-        };
-
-        // Act
-        await _subject.ExecuteAsync(jobContext).ConfigureAwait(false);
-
-        // Assert
-        Assert.That(_failedDownloadCutoff, Is.EqualTo(new DateTime(2026, 5, 20, 12, 0, 0, DateTimeKind.Utc)));
+        Assert.That(_failedDownloadCutoff, Is.EqualTo(new DateTime(2026, 5, expectedDay, 12, 0, 0, DateTimeKind.Utc)));
     }
 }

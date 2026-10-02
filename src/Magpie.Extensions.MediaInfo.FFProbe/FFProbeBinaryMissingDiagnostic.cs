@@ -30,7 +30,7 @@ internal sealed class FFProbeBinaryMissingDiagnostic : IDiagnosticCheck
         var path = Environment.GetEnvironmentVariable("PATH");
         if (!string.IsNullOrEmpty(path))
         {
-            directories.AddRange(path!.Split(Path.PathSeparator));
+            directories.AddRange(path.Split(Path.PathSeparator));
         }
 
         return directories;

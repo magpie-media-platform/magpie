@@ -6,7 +6,7 @@ import { checkA11y } from './axe-helper';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Label } from '@/components/ui/Label';
-import { Card, CardHeader, CardBody, CardFooter } from '@/components/ui/Card';
+import { Card, CardHeader, CardBody } from '@/components/ui/Card';
 import { Alert } from '@/components/ui/Alert';
 import { Badge } from '@/components/ui/Badge';
 import { Skeleton } from '@/components/ui/Skeleton';
@@ -32,14 +32,14 @@ describe('Accessibility: Button', () => {
         expect(results).toHaveNoViolations();
     });
 
-    it('has no a11y violations for all variants', async () => {
-        const variants = ['primary', 'secondary', 'ghost', 'destructive'] as const;
-        for (const variant of variants) {
+    it.each(['primary', 'secondary', 'ghost', 'destructive'] as const)(
+        'has no a11y violations for the %s variant',
+        async (variant) => {
             const { container } = render(<Button variant={variant}>{variant}</Button>);
             const results = await checkA11y(container);
             expect(results).toHaveNoViolations();
-        }
-    });
+        },
+    );
 });
 
 describe('Accessibility: Input', () => {
@@ -93,9 +93,6 @@ describe('Accessibility: Card', () => {
                     <p>Card description text</p>
                 </CardHeader>
                 <CardBody>Card body content</CardBody>
-                <CardFooter>
-                    <Button>Action</Button>
-                </CardFooter>
             </Card>,
         );
         const results = await checkA11y(container);
@@ -156,14 +153,14 @@ describe('Accessibility: Badge', () => {
         expect(results).toHaveNoViolations();
     });
 
-    it('has no a11y violations for all semantic variants', async () => {
-        const variants = ['healthy', 'degraded', 'unhealthy', 'unknown', 'stabilizing', 'missing'] as const;
-        for (const variant of variants) {
+    it.each(['healthy', 'degraded', 'unhealthy', 'unknown', 'stabilizing', 'missing'] as const)(
+        'has no a11y violations for the %s semantic variant',
+        async (variant) => {
             const { container } = render(<Badge variant={variant}>{variant}</Badge>);
             const results = await checkA11y(container);
             expect(results).toHaveNoViolations();
-        }
-    });
+        },
+    );
 });
 
 describe('Accessibility: Avatar', () => {

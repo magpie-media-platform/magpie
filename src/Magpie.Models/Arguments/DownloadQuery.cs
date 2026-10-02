@@ -56,7 +56,7 @@ public sealed record DownloadQuery
     public IReadOnlyCollection<Guid>? ExcludeIds { get; init; }
 
     /// <summary>
-    /// The inclusive range of modification times, or creation times for unmodified downloads, to match.
+    /// The inclusive range of last changed times to match.
     /// </summary>
     public Range<DateTime>? LastChangedAt { get; init; }
 

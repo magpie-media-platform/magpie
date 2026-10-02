@@ -182,6 +182,8 @@ export interface MetadataReference {
     language?: string | null;
 }
 
+export type TemporalPrecision = 'Year' | 'Month' | 'Day' | 'Instant';
+
 export interface MetadataContribution {
     id: string;
     metadataContainerId?: string;
@@ -195,6 +197,7 @@ export interface MetadataContribution {
     language?: string | null;
     overview?: string | null;
     publishDate?: string | null;
+    publishDatePrecision?: TemporalPrecision | null;
     duration?: string | null;
     sequenceNumber?: number | null;
     productionStatus?: string | null;
@@ -229,6 +232,7 @@ export interface MaterializedMetadata {
     language?: string | null;
     overview?: string | null;
     publishDate?: string | null;
+    publishDatePrecision?: TemporalPrecision | null;
     duration?: string | null;
     sequenceNumber?: number | null;
     productionStatus?: string | null;

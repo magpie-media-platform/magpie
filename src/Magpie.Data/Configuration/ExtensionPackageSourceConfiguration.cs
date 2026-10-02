@@ -10,13 +10,6 @@ internal sealed class ExtensionPackageSourceConfiguration : IEntityTypeConfigura
     public void Configure(EntityTypeBuilder<ExtensionPackageSource> builder)
     {
         builder.ToTable("extension_packageSource");
-        builder.HasKey(e => e.Id);
-        builder.Property(e => e.Id).ValueGeneratedOnAdd();
-        builder.Property(e => e.Name).IsRequired();
-        builder.Property(e => e.SourceUrl).IsRequired();
-        builder.Property(e => e.Enabled).IsRequired();
-        builder.Property(e => e.SearchFilterKind).IsRequired();
-        builder.Property(e => e.CredentialKind).IsRequired();
         builder.HasIndex(e => e.Name).IsUnique();
         builder.HasIndex(e => e.Enabled);
     }

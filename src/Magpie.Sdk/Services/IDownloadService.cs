@@ -178,7 +178,7 @@ public interface IDownloadService
     /// <param name="source">The download client that receives the release</param>
     /// <param name="settings">The resolved settings of the download client</param>
     /// <param name="contentType">The slug of the content type for the download, or <see langword="null"/></param>
-    /// <param name="interactive">Whether the grab is interactive, which prior Failed downloads do not suppress</param>
+    /// <param name="interactive">Whether the grab is interactive</param>
     /// <param name="cancellationToken">The token that cancels the operation</param>
     Task<GrabResult> GrabAsync(
         Release release,
@@ -198,6 +198,36 @@ public interface IDownloadService
     Task ApplyRefreshedClientStateAsync(
         Download download,
         DownloadInfo info,
+        Guid? userId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Updates the refreshed client state of a download without publishing its status.
+    /// </summary>
+    /// <param name="download">The tracked download to update</param>
+    /// <param name="info">The status as the download client reports it</param>
+    /// <param name="userId">The user to record as the actor, or <see langword="null"/> for the system</param>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
+    /// <returns>
+    /// <see langword="true"/> when the caller must include the download in <see cref="PublishRefreshedStatusAsync"/>
+    /// </returns>
+    Task<bool> UpdateRefreshedClientStateAsync(
+        Download download,
+        DownloadInfo info,
+        Guid? userId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Publishes the refreshed status of the downloads.
+    /// </summary>
+    /// <param name="downloadIds">
+    /// The downloads for which <see cref="UpdateRefreshedClientStateAsync"/> returned <see langword="true"/>
+    /// </param>
+    /// <param name="userId">The user to record as the actor, or <see langword="null"/> for the system</param>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
+    /// <returns>A task that completes after every content item and event is processed</returns>
+    Task PublishRefreshedStatusAsync(
+        IReadOnlyCollection<Guid> downloadIds,
         Guid? userId,
         CancellationToken cancellationToken = default);
 

@@ -497,24 +497,4 @@ describe('useDownloadClients', () => {
             expect(result.current.clients[0].lastChecked).toBeNull();
         });
     });
-
-    describe('status labels and variants', () => {
-        it('should export status labels for all values', async () => {
-            const { downloadClientStatusLabels } = await import('./useDownloadClients');
-
-            expect(downloadClientStatusLabels.Unknown).toBe('Unknown');
-            expect(downloadClientStatusLabels.Healthy).toBe('Healthy');
-            expect(downloadClientStatusLabels.Unhealthy).toBe('Unhealthy');
-            expect(downloadClientStatusLabels.Stale).toBe('Stale');
-        });
-
-        it('should export status variants for all values', async () => {
-            const { downloadClientStatusVariants } = await import('./useDownloadClients');
-
-            expect(downloadClientStatusVariants.Unknown).toBe('unknown');
-            expect(downloadClientStatusVariants.Healthy).toBe('healthy');
-            expect(downloadClientStatusVariants.Unhealthy).toBe('unhealthy');
-            expect(downloadClientStatusVariants.Stale).toBe('stale');
-        });
-    });
 });

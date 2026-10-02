@@ -289,7 +289,8 @@ internal sealed class WishlistRepository(
                     {
                         await transactionManager.OnCommittedAsync(
                             token => eventBus.PublishAsync(
-                                WishlistEventBuilder.BuildWishlistUpdatedEvent(model.Id, changedFields), token),
+                                WishlistEventBuilder.BuildWishlistUpdatedEvent(model.Id, changedFields),
+                                token),
                             cancellationToken).ConfigureAwait(false);
                     }
 

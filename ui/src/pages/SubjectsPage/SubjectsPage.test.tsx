@@ -341,7 +341,7 @@ describe('SubjectsPage', () => {
                     <RouterProvider router={router} />
                 </QueryClientProvider>,
             );
-            const input = screen.getByRole('textbox', { name: 'Related' });
+            const input = screen.getByRole('textbox', { name: 'Name' });
             expect(input).toBeEnabled();
             expect(screen.getByRole('textbox', { name: 'Tag' })).toBeEnabled();
 
@@ -410,10 +410,7 @@ describe('SubjectsPage', () => {
             const user = userEvent.setup();
             renderSubjectsPage('filter=kind+%3D+%22person%22');
 
-            const toggle = document.querySelector('[data-action="toggle-filter"]') as HTMLElement | null;
-            if (toggle) {
-                await user.click(toggle);
-            }
+            await user.click(document.querySelector('[data-action="toggle-filter"]') as HTMLElement);
 
             expect(document.querySelector('[data-action="apply-saved-filter"]')).not.toBeInTheDocument();
             expect(document.querySelector('[data-action="save-filter"]')).not.toBeInTheDocument();
@@ -424,10 +421,7 @@ describe('SubjectsPage', () => {
             const user = userEvent.setup();
             renderSubjectsPage('filter=kind+%3D+%22person%22');
 
-            const advancedToggle = document.querySelector('[data-action="switch-to-advanced"]') as HTMLElement | null;
-            if (advancedToggle) {
-                await user.click(advancedToggle);
-            }
+            await user.click(document.querySelector('[data-action="switch-to-advanced"]') as HTMLElement);
 
             const hint = document.querySelector('.filter-bar__hint');
             expect(hint).toBeInTheDocument();

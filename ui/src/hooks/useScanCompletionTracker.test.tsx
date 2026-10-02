@@ -36,17 +36,13 @@ function makePage(totalItems: number): PagedLibraryImportCandidates {
     return { items: [], pageNumber: 1, pageSize: 1, totalItems };
 }
 
-function createQueryClient() {
-    return new QueryClient({
+function Providers({ children }: { children: ReactNode }) {
+    const queryClient = new QueryClient({
         defaultOptions: {
             queries: { retry: false, gcTime: 0, staleTime: 0 },
             mutations: { retry: false },
         },
     });
-}
-
-function Providers({ children }: { children: ReactNode }) {
-    const queryClient = createQueryClient();
     return (
         <QueryClientProvider client={queryClient}>
             <MemoryRouter>
@@ -131,6 +127,7 @@ describe('useScanCompletionTracker', () => {
         const toast = await screen.findByText('"Movies": 4 files ready to import.');
         expect(toast).toBeInTheDocument();
         expect(screen.getByText(/Scan complete/i)).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Import now' })).toBeInTheDocument();
     });
 
     it('refreshes the import queue and content when a tracked scan completes', async () => {
@@ -208,6 +205,7 @@ describe('useScanCompletionTracker', () => {
         ).toBeInTheDocument();
         expect(screen.queryByText(/ready to import/)).not.toBeInTheDocument();
         expect(screen.queryByText(/up to date/)).not.toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Open import' })).toBeInTheDocument();
     });
 
     it('does not claim nothing was queued when the post-scan pending read fails', async () => {

@@ -43,7 +43,6 @@ async function fetchTags(params?: TagsQueryParams): Promise<ApiTag[]> {
 export function useTags(params?: TagsQueryParams) {
     useInvalidateQueriesOnEvents(TAG_CHANGE_EVENTS, [tagQueryKeys.list(params)], {
         exact: true,
-        owner: 'tags:list',
     });
     const query = useQuery({
         queryKey: tagQueryKeys.list(params),
@@ -65,7 +64,7 @@ export function useTagsByEntity(entityId: string, enabled = true) {
     useInvalidateQueriesOnEvents(
         enabled && entityId.length > 0 ? TAG_CHANGE_EVENTS : [],
         [tagQueryKeys.byEntity(entityId)],
-        { entityIds: entityId ? [entityId] : [], exact: true, owner: 'tags:entity' },
+        { entityIds: entityId ? [entityId] : [], exact: true },
     );
     const query = useQuery({
         queryKey: tagQueryKeys.byEntity(entityId),

@@ -27,6 +27,7 @@ namespace Magpie.Core.Jobs;
 
 internal sealed class MediaFileReconciliationJob(
     IMediaFileRepository mediaFileRepository,
+    ILibraryImportCandidateRepository libraryImportCandidateRepository,
     IContentRepository contentRepository,
     IContentHierarchyItemRepository hierarchyRepository,
     IRootFolderRepository rootFolderRepository,
@@ -57,14 +58,22 @@ internal sealed class MediaFileReconciliationJob(
         ConcurrencyScope = ConcurrencyScope.PerType,
         Parameters =
         [
-            new(MagpieJobs.Parameters.RootFolderId, "The root folder to inspect, or empty for all roots.",
-                DataType.String, false, null)
+            new(
+                MagpieJobs.Parameters.RootFolderId,
+                "The root folder to inspect, or empty for all roots.",
+                DataType.String,
+                false,
+                null)
             {
                 ValidateValue = value => string.IsNullOrWhiteSpace(value) || Guid.TryParse(value, out _)
                     ? null : "must be a valid GUID."
             },
-            new(MagpieJobs.Parameters.ContentHierarchyItemId, "The item to inspect, or empty for the library.",
-                DataType.String, false, null)
+            new(
+                MagpieJobs.Parameters.ContentHierarchyItemId,
+                "The item to inspect, or empty for the library.",
+                DataType.String,
+                false,
+                null)
             {
                 ValidateValue = value => string.IsNullOrWhiteSpace(value) || Guid.TryParse(value, out _)
                     ? null : "must be a valid GUID."
@@ -73,8 +82,6 @@ internal sealed class MediaFileReconciliationJob(
     };
 
     private const double RecodeDurationToleranceSeconds = 2d;
-
-    private const double SameFileDurationToleranceSeconds = 0.1d;
 
     private static readonly StringComparison NameComparison =
         OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
@@ -85,10 +92,9 @@ internal sealed class MediaFileReconciliationJob(
         before?.DurationSeconds is { } expected && after?.DurationSeconds is { } actual &&
         Math.Abs(expected - actual) <= toleranceSeconds;
 
-    private static bool HasSameStreams(MediaInfo before, MediaInfo after) =>
-        before.Tracks.Select(track => (track.Type, track.Codec, track.Width, track.Height, track.Channels))
-            .SequenceEqual(after.Tracks.Select(track => (track.Type, track.Codec, track.Width, track.Height,
-                track.Channels)));
+    // PostgreSQL keeps only microseconds, so a stored time can differ by less than one microsecond.
+    private static bool IsSameWriteTime(DateTime? stored, DateTime actual) =>
+        stored is { } value && Math.Abs(value.Ticks - actual.Ticks) < TimeSpan.TicksPerMicrosecond;
 
     private static Guid? ReadId(JobContext context, string parameter, string eventKey)
     {
@@ -107,22 +113,27 @@ internal sealed class MediaFileReconciliationJob(
     {
         var rootId = ReadId(context, MagpieJobs.Parameters.RootFolderId, MagpieEvents.Keys.RootFolderId);
         var targetId = ReadId(
-            context, MagpieJobs.Parameters.ContentHierarchyItemId, MagpieEvents.Keys.ContentHierarchyItemId);
+            context,
+            MagpieJobs.Parameters.ContentHierarchyItemId,
+            MagpieEvents.Keys.ContentHierarchyItemId);
         if (context.EventTriggerId is not null && rootId is null && targetId is null)
         {
             throw new ArgumentException("A media reconciliation event requires a root folder or content item.");
         }
 
         var files = await mediaFileRepository.QueryAllAsync(
-            new MediaFileQuery { ContentHierarchyItemId = targetId }, cancellationToken: cancellationToken)
+            new MediaFileQuery { ContentHierarchyItemId = targetId },
+            cancellationToken: cancellationToken)
             .ConfigureAwait(false);
         var contentIds = files.Select(file => file.ContentItemId).Distinct().ToHashSet();
         var filesByContent = files.ToLookup(file => file.ContentItemId);
         var previouslyReconciled = await contentRepository.QueryAllAsync(
-            new ContentItemQuery { ContentHierarchyItemId = targetId }, cancellationToken: cancellationToken)
+            new ContentItemQuery { ContentHierarchyItemId = targetId },
+            cancellationToken: cancellationToken)
             .ConfigureAwait(false);
         contentIds.UnionWith(previouslyReconciled
             .Where(item => item.MediaReconciledAt is not null).Select(item => item.Id));
+        contentIds.UnionWith(files.SelectMany(file => file.Coverage).Select(coverage => coverage.ContentItemId));
         var inspected = 0;
         var changed = 0;
         var failed = 0;
@@ -144,7 +155,8 @@ internal sealed class MediaFileReconciliationJob(
             {
                 failed++;
                 logger.LogWarning(
-                    "Media reconciliation kept item {ItemId} because its root folder is unavailable", node.Id);
+                    "Media reconciliation kept item {ItemId} because its root folder is unavailable",
+                    node.Id);
                 continue;
             }
 
@@ -169,7 +181,9 @@ internal sealed class MediaFileReconciliationJob(
                 {
                     failed++;
                     logger.LogWarning(
-                        ex, "Media reconciliation kept file {MediaFileId} for another inspection", file.Id);
+                        ex,
+                        "Media reconciliation kept file {MediaFileId} for another inspection",
+                        file.Id);
                 }
 
                 inspected++;
@@ -201,7 +215,10 @@ internal sealed class MediaFileReconciliationJob(
             throw new IOException("The media file is outside its configured root folder.");
         }
 
-        FileSystem.RequireListable(fileSystem, rootPath);
+        using (var entries = fileSystem.EnumerateFileSystemEntries(rootPath).GetEnumerator())
+        {
+            entries.MoveNext();
+        }
 
         try
         {
@@ -227,7 +244,7 @@ internal sealed class MediaFileReconciliationJob(
             : (null, false);
         var replacement = state is not null &&
             (state.Size != file.FileSize ||
-                file.FileModifiedAt is { } priorWrite && state.LastWriteTimeUtc != priorWrite);
+                file.FileModifiedAt is not null && !IsSameWriteTime(file.FileModifiedAt, state.LastWriteTimeUtc));
         var primary = IsPrimary(node, file);
         var needsAnalysis = state is not null && primary &&
             (replacement || file.MediaInfo is null || file.FileModifiedAt is null);
@@ -242,8 +259,8 @@ internal sealed class MediaFileReconciliationJob(
             throw new IOException("The media file changed while its information was read.");
         }
 
-        if (state is not null && !replacement && file.FileModifiedAt == state.LastWriteTimeUtc &&
-            file.FileSize == state.Size && !needsAnalysis)
+        if (state is not null && !replacement && IsSameWriteTime(file.FileModifiedAt, state.LastWriteTimeUtc) &&
+            file.FileSize == state.Size && (!needsAnalysis || mediaInfo is null))
         {
             return false;
         }
@@ -287,18 +304,20 @@ internal sealed class MediaFileReconciliationJob(
                         return false;
                     }
 
-                    await auditRecordRepository.CreateAsync(new AuditRecord
-                    {
-                        Category = AuditCategories.Content,
-                        Operation = "MediaFileDeleted",
-                        EntityType = nameof(MediaFile),
-                        EntityId = file.Id.ToString(),
-                        ParentEntityId = node.Id.ToString(),
-                        Detail = $"Deleted the record of {file.FilePath} because the file no longer exists.",
-                        Timestamp = timeProvider.GetUtcNow().UtcDateTime,
-                        UserId = context.ManualTriggerUserId,
-                        CorrelationId = context.CorrelationId
-                    }, ct).ConfigureAwait(false);
+                    await auditRecordRepository.CreateAsync(
+                        new AuditRecord
+                        {
+                            Category = AuditCategories.Content,
+                            Operation = "MediaFileDeleted",
+                            EntityType = nameof(MediaFile),
+                            EntityId = file.Id.ToString(),
+                            ParentEntityId = node.Id.ToString(),
+                            Detail = $"Deleted the record of {file.FilePath} because the file no longer exists.",
+                            Timestamp = timeProvider.GetUtcNow().UtcDateTime,
+                            UserId = context.ManualTriggerUserId,
+                            CorrelationId = context.CorrelationId
+                        },
+                        ct).ConfigureAwait(false);
 
                     var topLevelId = lineage[^1].Id;
                     if (hasUnattachedFile)
@@ -315,17 +334,22 @@ internal sealed class MediaFileReconciliationJob(
 
                 var now = timeProvider.GetUtcNow().UtcDateTime;
                 var mimeType = await fileSystem.LookupMimeTypeAsync(current.FilePath, ct).ConfigureAwait(false);
-                var updated = await mediaFileRepository.UpdateAsync(current with
-                {
-                    FileSize = state.Size,
-                    FileModifiedAt = state.LastWriteTimeUtc,
-                    ReplacedAt = replacement ? now : current.ReplacedAt,
-                    DownloadId = replacement ? null : current.DownloadId,
-                    MediaInfo = mediaInfo,
-                    MimeType = mimeType ?? current.MimeType,
-                    FileKind = mimeType is null ? current.FileKind : fileSystem.ResolveFileKind(mimeType).ToString(),
-                    ModifiedAt = now
-                }, context.ManualTriggerUserId, ct).ConfigureAwait(false);
+                var updated = await mediaFileRepository.UpdateAsync(
+                    current with
+                    {
+                        FileSize = state.Size,
+                        FileModifiedAt = state.LastWriteTimeUtc,
+                        ReplacedAt = replacement ? now : current.ReplacedAt,
+                        DownloadId = replacement ? null : current.DownloadId,
+                        MediaInfo = mediaInfo,
+                        MimeType = mimeType ?? current.MimeType,
+                        FileKind = mimeType is null
+                            ? current.FileKind
+                            : fileSystem.ResolveFileKind(mimeType).ToString(),
+                        ModifiedAt = now
+                    },
+                    context.ManualTriggerUserId,
+                    ct).ConfigureAwait(false);
                 if (!updated)
                 {
                     throw new IOException("The stored file changed before reconciliation could save its state.");
@@ -333,23 +357,26 @@ internal sealed class MediaFileReconciliationJob(
 
                 if (replacement)
                 {
-                    await auditRecordRepository.CreateAsync(new AuditRecord
-                    {
-                        Category = AuditCategories.Content,
-                        Operation = "MediaFileReplaced",
-                        EntityType = nameof(MediaFile),
-                        EntityId = file.Id.ToString(),
-                        ParentEntityId = node.Id.ToString(),
-                        Detail = $"Reconciled replacement contents at {file.FilePath}.",
-                        Timestamp = now,
-                        UserId = context.ManualTriggerUserId,
-                        CorrelationId = context.CorrelationId
-                    }, ct).ConfigureAwait(false);
+                    await auditRecordRepository.CreateAsync(
+                        new AuditRecord
+                        {
+                            Category = AuditCategories.Content,
+                            Operation = "MediaFileReplaced",
+                            EntityType = nameof(MediaFile),
+                            EntityId = file.Id.ToString(),
+                            ParentEntityId = node.Id.ToString(),
+                            Detail = $"Reconciled replacement contents at {file.FilePath}.",
+                            Timestamp = now,
+                            UserId = context.ManualTriggerUserId,
+                            CorrelationId = context.CorrelationId
+                        },
+                        ct).ConfigureAwait(false);
                 }
 
                 await RefreshStateAsync(node.Id, context, ct).ConfigureAwait(false);
                 return replacement;
-            }, cancellationToken).ConfigureAwait(false);
+            },
+            cancellationToken).ConfigureAwait(false);
     }
 
     private async Task<(RenamedFile? Renamed, bool HasUnattachedFile)> FindRenamedFileAsync(
@@ -366,7 +393,6 @@ internal sealed class MediaFileReconciliationJob(
         }
 
         var baseName = Path.GetFileNameWithoutExtension(file.FilePath);
-        var size = file.FileSize;
         var found = new List<RenamedFile>();
         var hasUnattachedFile = false;
         var otherFiles = new List<string>();
@@ -374,7 +400,8 @@ internal sealed class MediaFileReconciliationJob(
         {
             var recoded = string.Equals(Path.GetFileNameWithoutExtension(path), baseName, NameComparison);
             var state = fileSystem.ReadFileState(path);
-            if (!recoded && state.Size != size)
+            if (!recoded && (state.Size != file.FileSize ||
+                !IsSameWriteTime(file.FileModifiedAt, state.LastWriteTimeUtc)))
             {
                 otherFiles.Add(path);
                 continue;
@@ -387,15 +414,11 @@ internal sealed class MediaFileReconciliationJob(
 
             hasUnattachedFile = true;
 
-            var mediaInfo = mediaInfoExtractor is null
-                ? null
-                : await mediaInfoExtractor.ExtractAsync(path, cancellationToken).ConfigureAwait(false);
-            var same = recoded
-                ? file.MediaInfo?.DurationSeconds is null || mediaInfoExtractor is null ||
-                    IsSameDuration(file.MediaInfo, mediaInfo, RecodeDurationToleranceSeconds)
-                : IsSameDuration(file.MediaInfo, mediaInfo, SameFileDurationToleranceSeconds) &&
-                    HasSameStreams(file.MediaInfo!, mediaInfo!);
-            if (same)
+            var mediaInfo = recoded && mediaInfoExtractor is not null
+                ? await mediaInfoExtractor.ExtractAsync(path, cancellationToken).ConfigureAwait(false)
+                : null;
+            if (!recoded || file.MediaInfo?.DurationSeconds is null || mediaInfoExtractor is null ||
+                IsSameDuration(file.MediaInfo, mediaInfo, RecodeDurationToleranceSeconds))
             {
                 found.Add(new RenamedFile(path, state, mediaInfo, recoded));
             }
@@ -455,7 +478,9 @@ internal sealed class MediaFileReconciliationJob(
         catch (Exception ex)
         {
             logger.LogWarning(
-                ex, "Media reconciliation could not queue discovery for item {ItemId}", contentHierarchyItemId);
+                ex,
+                "Media reconciliation could not queue discovery for item {ItemId}",
+                contentHierarchyItemId);
         }
     }
 
@@ -473,37 +498,54 @@ internal sealed class MediaFileReconciliationJob(
             return false;
         }
 
+        var rejected = await libraryImportCandidateRepository.QueryAllAsync(
+            new LibraryImportCandidateQuery
+            {
+                RootFolderId = node.EffectiveRootFolderId,
+                Status = LibraryImportCandidateStatus.Rejected
+            },
+            cancellationToken: cancellationToken).ConfigureAwait(false);
+        if (rejected.Any(candidate => fileSystem.PathsEqual(candidate.FilePath, renamed.Path)))
+        {
+            return false;
+        }
+
         var now = timeProvider.GetUtcNow().UtcDateTime;
         var mimeType = await fileSystem.LookupMimeTypeAsync(renamed.Path, cancellationToken).ConfigureAwait(false);
-        var updated = await mediaFileRepository.UpdateAsync(current with
-        {
-            FilePath = renamed.Path,
-            FileSize = renamed.State.Size,
-            FileModifiedAt = renamed.State.LastWriteTimeUtc,
-            ReplacedAt = renamed.Recoded ? now : current.ReplacedAt,
-            DownloadId = renamed.Recoded ? null : current.DownloadId,
-            MediaInfo = renamed.MediaInfo ?? (renamed.Recoded ? null : current.MediaInfo),
-            MimeType = mimeType ?? current.MimeType,
-            FileKind = mimeType is null ? current.FileKind : fileSystem.ResolveFileKind(mimeType).ToString(),
-            ModifiedAt = now
-        }, context.ManualTriggerUserId, cancellationToken).ConfigureAwait(false);
+        var updated = await mediaFileRepository.UpdateAsync(
+            current with
+            {
+                FilePath = renamed.Path,
+                FileSize = renamed.State.Size,
+                FileModifiedAt = renamed.State.LastWriteTimeUtc,
+                ReplacedAt = renamed.Recoded ? now : current.ReplacedAt,
+                DownloadId = renamed.Recoded ? null : current.DownloadId,
+                MediaInfo = renamed.MediaInfo ?? (renamed.Recoded ? null : current.MediaInfo),
+                MimeType = mimeType ?? current.MimeType,
+                FileKind = mimeType is null ? current.FileKind : fileSystem.ResolveFileKind(mimeType).ToString(),
+                ModifiedAt = now
+            },
+            context.ManualTriggerUserId,
+            cancellationToken).ConfigureAwait(false);
         if (!updated)
         {
             throw new IOException("The stored file changed before reconciliation could reattach it.");
         }
 
-        await auditRecordRepository.CreateAsync(new AuditRecord
-        {
-            Category = AuditCategories.Content,
-            Operation = renamed.Recoded ? "MediaFileRecoded" : "MediaFileRenamed",
-            EntityType = nameof(MediaFile),
-            EntityId = current.Id.ToString(),
-            ParentEntityId = node.Id.ToString(),
-            Detail = $"Reattached {current.FilePath} to {renamed.Path}.",
-            Timestamp = now,
-            UserId = context.ManualTriggerUserId,
-            CorrelationId = context.CorrelationId
-        }, cancellationToken).ConfigureAwait(false);
+        await auditRecordRepository.CreateAsync(
+            new AuditRecord
+            {
+                Category = AuditCategories.Content,
+                Operation = renamed.Recoded ? "MediaFileRecoded" : "MediaFileRenamed",
+                EntityType = nameof(MediaFile),
+                EntityId = current.Id.ToString(),
+                ParentEntityId = node.Id.ToString(),
+                Detail = $"Reattached {current.FilePath} to {renamed.Path}.",
+                Timestamp = now,
+                UserId = context.ManualTriggerUserId,
+                CorrelationId = context.CorrelationId
+            },
+            cancellationToken).ConfigureAwait(false);
         await RefreshStateAsync(node.Id, context, cancellationToken).ConfigureAwait(false);
         return true;
     }
@@ -522,83 +564,98 @@ internal sealed class MediaFileReconciliationJob(
 
     private Task RefreshStateAsync(Guid hierarchyId, JobContext context, CancellationToken cancellationToken)
     {
-        return transactionManager.ExecuteWithTransactionAsync(async ct =>
-        {
-            var lineage = await hierarchyRepository.GetLineageAsync(hierarchyId, ct).ConfigureAwait(false);
-            if (lineage.Count == 0)
+        return transactionManager.ExecuteWithTransactionAsync(
+            async ct =>
             {
-                return;
-            }
-
-            await hierarchyRepository.LockAsync(lineage[^1].Id, ct).ConfigureAwait(false);
-            foreach (var ancestor in lineage)
-            {
-                var node = await hierarchyRepository.GetByIdAsync(ancestor.Id, ct).ConfigureAwait(false);
-                if (node is null)
+                var lineage = await hierarchyRepository.GetLineageAsync(hierarchyId, ct).ConfigureAwait(false);
+                if (lineage.Count == 0)
                 {
-                    continue;
+                    return;
                 }
 
-                var files = node.ContentItem?.MediaFiles
-                    .Where(file => IsPrimary(node, file))
-                    .ToList() ?? [];
-
-                var now = timeProvider.GetUtcNow().UtcDateTime;
-                var current = node.ContentItem ?? await contentService.GetOrCreateContentItemAsync(
-                    node.Id, now, context.ManualTriggerUserId, cancellationToken: ct).ConfigureAwait(false);
-                var scores = new List<ReleaseAssessment>();
-                foreach (var file in files)
+                await hierarchyRepository.LockAsync(lineage[^1].Id, ct).ConfigureAwait(false);
+                foreach (var ancestor in lineage)
                 {
-                    var score = await releaseEvaluationService.ScoreFileForContentAsync(file, node.Id, ct)
-                        .ConfigureAwait(false);
-                    if (score?.MatchedRankOrdinal is not null)
+                    var node = await hierarchyRepository.GetByIdAsync(ancestor.Id, ct).ConfigureAwait(false);
+                    if (node is null)
                     {
-                        scores.Add(score);
+                        continue;
                     }
+
+                    var files = (node.ContentItem?.MediaFiles ?? [])
+                        .Concat(node.ContentItem?.CoveringMediaFiles ?? [])
+                        .Where(file => IsPrimary(node, file))
+                        .ToList();
+
+                    var now = timeProvider.GetUtcNow().UtcDateTime;
+                    var current = node.ContentItem ?? await contentService.GetOrCreateContentItemAsync(
+                        node.Id,
+                        now,
+                        context.ManualTriggerUserId,
+                        cancellationToken: ct).ConfigureAwait(false);
+                    var scores = new List<ReleaseAssessment>();
+                    foreach (var file in files)
+                    {
+                        var score = await releaseEvaluationService.ScoreFileForContentAsync(file, node.Id, ct)
+                            .ConfigureAwait(false);
+                        if (score?.MatchedRankOrdinal is not null)
+                        {
+                            scores.Add(score);
+                        }
+                    }
+
+                    var profile = node.EffectiveQualityTierListId is { } profileId
+                        ? await qualityTierListRepository.GetByIdAsync(profileId, ct).ConfigureAwait(false) : null;
+                    var quality = files.Count == 0 || scores.Count == 0 ? (QualityStatus?)null
+                        : profile?.UpgradeAllowed == true &&
+                            !scores.Any(score => score.IsAcceptable == true && score.IsCutoffMet == true)
+                            ? QualityStatus.UpgradeWanted : QualityStatus.Met;
+                    var rank = scores.Select(score => score.MatchedRankOrdinal).Min();
+                    if (current.QualityStatus == quality && current.CurrentFileQualityRank == rank)
+                    {
+                        continue;
+                    }
+
+                    await contentRepository.UpdateMediaStateAsync(
+                        current with
+                        {
+                            QualityStatus = quality,
+                            CurrentFileQualityRank = rank,
+                            ModifiedAt = now
+                        },
+                        context.ManualTriggerUserId,
+                        ct).ConfigureAwait(false);
+                    var fulfillment = current.Fulfillment;
+                    var impact = new ContentEventImpact
+                    {
+                        HierarchyItemId = node.Id,
+                        ItemId = current.Id,
+                        MetadataContainerId = node.MetadataContainerId,
+                        ParentId = node.ParentId,
+                        ContentType = node.ContentType,
+                        Level = node.Level,
+                        TopLevel = node.ParentId is null,
+                        RootFolderId = node.EffectiveRootFolderId,
+                        QualityTierListId = node.EffectiveQualityTierListId,
+                        Monitoring = node.EffectiveMonitoring != MonitoringMode.Unmonitored,
+                        Fulfillment = fulfillment.ToString()
+                    };
+                    await transactionManager.OnCommittedAsync(
+                        token => eventBus.PublishAsync(
+                            ContentEventBuilder.BuildContentHierarchyItemUpdatedEvent(impact,
+                                [
+                                    nameof(ContentItem.FulfilledAt),
+                                    nameof(ContentItem.PrimaryMediaSize),
+                                    nameof(ContentItem.PrimaryMediaFileCount),
+                                    nameof(ContentItem.QualityStatus)]),
+                            token),
+                        ct)
+                        .ConfigureAwait(false);
                 }
 
-                var profile = node.EffectiveQualityTierListId is { } profileId
-                    ? await qualityTierListRepository.GetByIdAsync(profileId, ct).ConfigureAwait(false) : null;
-                var quality = files.Count == 0 || scores.Count == 0 ? (QualityStatus?)null
-                    : profile?.UpgradeAllowed == true &&
-                        !scores.Any(score => score.IsAcceptable == true && score.IsCutoffMet == true)
-                        ? QualityStatus.UpgradeWanted : QualityStatus.Met;
-                var rank = scores.Select(score => score.MatchedRankOrdinal).Min();
-                if (current.QualityStatus == quality && current.CurrentFileQualityRank == rank)
-                {
-                    continue;
-                }
-
-                await contentRepository.UpdateMediaStateAsync(current with
-                {
-                    QualityStatus = quality,
-                    CurrentFileQualityRank = rank,
-                    ModifiedAt = now
-                }, context.ManualTriggerUserId, ct).ConfigureAwait(false);
-                var fulfillment = current.Fulfillment;
-                var impact = new ContentEventImpact
-                {
-                    HierarchyItemId = node.Id,
-                    ItemId = current.Id,
-                    MetadataContainerId = node.MetadataContainerId,
-                    ParentId = node.ParentId,
-                    ContentType = node.ContentType,
-                    Level = node.Level,
-                    TopLevel = node.ParentId is null,
-                    RootFolderId = node.EffectiveRootFolderId,
-                    QualityTierListId = node.EffectiveQualityTierListId,
-                    Monitoring = node.EffectiveMonitoring != MonitoringMode.Unmonitored,
-                    Fulfillment = fulfillment.ToString()
-                };
-                await transactionManager.OnCommittedAsync(token => eventBus.PublishAsync(
-                    ContentEventBuilder.BuildContentHierarchyItemUpdatedEvent(impact,
-                        [nameof(ContentItem.FulfilledAt), nameof(ContentItem.PrimaryMediaSize),
-                            nameof(ContentItem.PrimaryMediaFileCount), nameof(ContentItem.QualityStatus)]), token), ct)
+                await contentRepository.ReconcileMediaStateAsync(hierarchyId, context.ManualTriggerUserId, ct)
                     .ConfigureAwait(false);
-            }
-
-            await contentRepository.ReconcileMediaStateAsync(hierarchyId, context.ManualTriggerUserId, ct)
-                .ConfigureAwait(false);
-        }, cancellationToken);
+            },
+            cancellationToken);
     }
 }

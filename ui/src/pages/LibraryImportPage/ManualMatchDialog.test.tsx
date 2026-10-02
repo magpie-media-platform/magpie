@@ -51,8 +51,10 @@ vi.mock('@phosphor-icons/react', () => {
     return {
         CaretDoubleLeftIcon: Icon,
         CaretDoubleRightIcon: Icon,
+        CaretDownIcon: Icon,
         CaretLeftIcon: Icon,
         CaretRightIcon: Icon,
+        CheckIcon: Icon,
         EyeIcon: Icon,
         LinkSimpleIcon: Icon,
         MagnifyingGlassIcon: Icon,

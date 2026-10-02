@@ -1,6 +1,6 @@
 export { resolveSubjectKindLabel, resolveSubjectKindPluralLabel } from './subjects';
 
-export type { DownloadClientOption, StateFilterOption, DownloadFilterState } from './downloads';
+export type { DownloadClientOption, DownloadFilterState } from './downloads';
 
 export type { ContentFilterCriteria, CriteriaSet } from './filters';
 

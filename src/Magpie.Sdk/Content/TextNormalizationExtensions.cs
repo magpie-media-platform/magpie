@@ -22,18 +22,18 @@ public static class TextNormalizationExtensions
         = new(() => BuildLanguageCodes(static culture => culture.ThreeLetterISOLanguageName));
 
     /// <summary>
-    /// Trims text, or returns <see langword="null"/> when it is blank.
+    /// Trims text and converts blank text to null.
     /// </summary>
-    /// <param name="value">Text to inspect</param>
+    /// <param name="value">The text to inspect</param>
     public static string? NullIfBlank(this string? value)
     {
-        return string.IsNullOrWhiteSpace(value) ? null : value!.Trim();
+        return string.IsNullOrWhiteSpace(value) ? null : value.Trim();
     }
 
     /// <summary>
-    /// Replaces filename separator punctuation with spaces and collapses whitespace runs.
+    /// Normalizes a file name or folder name.
     /// </summary>
-    /// <param name="input">Filename or folder name to normalize</param>
+    /// <param name="input">The file name or folder name to normalize</param>
     public static string NormalizeMediaFilename(this string input)
     {
         if (string.IsNullOrEmpty(input))
@@ -56,9 +56,9 @@ public static class TextNormalizationExtensions
     }
 
     /// <summary>
-    /// Strips HTML tags, decodes entities, and collapses whitespace runs.
+    /// Converts HTML markup to plain text.
     /// </summary>
-    /// <param name="value">Markup to convert to plain text</param>
+    /// <param name="value">The markup to convert to plain text</param>
     public static string? NormalizeHtmlToText(this string? value)
     {
         if (string.IsNullOrWhiteSpace(value))
@@ -66,7 +66,7 @@ public static class TextNormalizationExtensions
             return null;
         }
 
-        var text = WebUtility.HtmlDecode(HtmlTagPattern.Replace(value!.Trim(), " "));
+        var text = WebUtility.HtmlDecode(HtmlTagPattern.Replace(value.Trim(), " "));
         text = WhitespaceRunPattern.Replace(text, " ").Trim();
         return text.Length == 0 ? null : text;
     }
@@ -74,7 +74,7 @@ public static class TextNormalizationExtensions
     /// <summary>
     /// Resolves any culture name, tag, or English/native language name to its ISO 639-1 two-letter code.
     /// </summary>
-    /// <param name="value">Language name or code to resolve</param>
+    /// <param name="value">The language name or code to resolve</param>
     public static string? NormalizeTwoLetterLanguageCode(this string? value)
     {
         return LookupLanguageCode(TwoLetterCodes.Value, value);
@@ -83,7 +83,7 @@ public static class TextNormalizationExtensions
     /// <summary>
     /// Resolves any culture name, tag, or English/native language name to its ISO 639-2 three-letter code.
     /// </summary>
-    /// <param name="value">Language name or code to resolve</param>
+    /// <param name="value">The language name or code to resolve</param>
     public static string? NormalizeThreeLetterLanguageCode(this string? value)
     {
         return LookupLanguageCode(ThreeLetterCodes.Value, value);
@@ -94,7 +94,7 @@ public static class TextNormalizationExtensions
         var normalized = value?.Trim();
         return string.IsNullOrWhiteSpace(normalized)
             ? null
-            : codes.TryGetValue(normalized!, out var code)
+            : codes.TryGetValue(normalized, out var code)
                 ? code
                 : null;
     }
@@ -120,7 +120,7 @@ public static class TextNormalizationExtensions
     {
         if (!string.IsNullOrWhiteSpace(value))
         {
-            codes[value!.Trim()] = code;
+            codes[value.Trim()] = code;
         }
     }
 }

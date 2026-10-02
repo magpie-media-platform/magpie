@@ -45,7 +45,7 @@ public interface IAuthService
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Rotates a refresh token or recovers the same committed renewal.
+    /// Refreshes a session with a renewal key.
     /// </summary>
     /// <param name="refreshToken">The previous or current refresh token</param>
     /// <param name="renewalKey">The client proof retained until renewal completes</param>

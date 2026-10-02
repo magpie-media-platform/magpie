@@ -28,9 +28,7 @@ public sealed class JwtBearerAuthenticationProviderTests
     [SetUp]
     public void SetUp()
     {
-        _principal = new ClaimsPrincipal(new ClaimsIdentity(
-            [new Claim(ClaimTypes.NameIdentifier, "user-1")],
-            "Test"));
+        _principal = new ClaimsPrincipal(new ClaimsIdentity([new Claim(ClaimTypes.NameIdentifier, "user-1")], "Test"));
 
         _tokenService = new Mock<ITokenService>();
         _tokenService
@@ -196,7 +194,8 @@ public sealed class JwtBearerAuthenticationProviderTests
 
         // Assert
         Assert.That(result.Status, Is.EqualTo(AuthenticationAttemptStatus.Authenticated));
-        _tokenService.Verify(service => service.TryValidateAccessTokenAsync(
-            "other-token", It.IsAny<CancellationToken>()), Times.Never);
+        _tokenService.Verify(
+            service => service.TryValidateAccessTokenAsync("other-token", It.IsAny<CancellationToken>()),
+            Times.Never);
     }
 }

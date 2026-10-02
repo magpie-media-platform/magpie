@@ -60,10 +60,12 @@ describe('session renewal', () => {
         expect(failure).not.toHaveBeenCalled();
     });
 
-    it.each([0, 503])('retains credentials after temporary status %i and permits recovery', async (status) => {
+    it.each([
+        [0, () => Promise.reject(new TypeError('Connection interrupted'))],
+        [503, () => Promise.resolve(new Response(null, { status: 503 }))],
+    ])('retains credentials after temporary status %i and permits recovery', async (status, respond) => {
         // Arrange
-        if (status === 0) fetchMock.mockRejectedValueOnce(new TypeError('Connection interrupted'));
-        else fetchMock.mockResolvedValueOnce(new Response(null, { status }));
+        fetchMock.mockImplementationOnce(respond);
 
         // Act
         await expect(renewAccessToken()).rejects.toMatchObject({ status });
@@ -115,9 +117,12 @@ describe('session renewal', () => {
         expect(failure).not.toHaveBeenCalled();
     });
 
-    it.each([200, 401])(
+    it.each([
+        [200, 409],
+        [401, 401],
+    ])(
         'does not apply an older renewal response with status %i to a different account',
-        async (status) => {
+        async (status, expectedStatus) => {
             // Arrange
             let finish!: (response: Response) => void;
             fetchMock.mockReturnValueOnce(
@@ -126,7 +131,7 @@ describe('session renewal', () => {
                 }),
             );
             const renewal = renewAccessToken();
-            const rejected = expect(renewal).rejects.toMatchObject({ status: status === 200 ? 409 : 401 });
+            const rejected = expect(renewal).rejects.toMatchObject({ status: expectedStatus });
             clearAuthStorage();
             storeAuthTokens('other-account', '2099-01-01T00:00:00Z');
 

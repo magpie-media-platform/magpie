@@ -15,25 +15,34 @@ vi.mock('@/hooks/useLibraryTypes', () => ({
     useLibraryTypes: () => ({ subjectTypes: [{ slug: 'person', name: 'Person', iconName: null, levels: [] }] }),
 }));
 
-function makeSubject(id: string, title: string): ApiSubject {
-    return {
-        id,
-        metadataContainerId: `mc-${id}`,
-        kind: 'person',
-        dateLastRefreshed: null,
-        createdAt: '2024-01-01T00:00:00Z',
-        metadataContainer: {
-            id: `mc-${id}`,
-            createdAt: '2024-01-01T00:00:00Z',
-            contributions: [{ id: `c-${id}`, ordinal: 0, locked: false, providerType: 'provider-a', title }],
-        },
-    };
-}
-
 describe('SubjectPicker server-side search', () => {
     beforeEach(() => {
         vi.clearAllMocks();
-        mockUseSubjects.mockReturnValue({ subjects: [makeSubject('subject-1', 'Bryan Cranston')], isLoading: false });
+        mockUseSubjects.mockReturnValue({
+            subjects: [
+                {
+                    id: 'subject-1',
+                    metadataContainerId: 'mc-subject-1',
+                    kind: 'person',
+                    dateLastRefreshed: null,
+                    createdAt: '2024-01-01T00:00:00Z',
+                    metadataContainer: {
+                        id: 'mc-subject-1',
+                        createdAt: '2024-01-01T00:00:00Z',
+                        contributions: [
+                            {
+                                id: 'c-subject-1',
+                                ordinal: 0,
+                                locked: false,
+                                providerType: 'provider-a',
+                                title: 'Bryan Cranston',
+                            },
+                        ],
+                    },
+                } as ApiSubject,
+            ],
+            isLoading: false,
+        });
     });
 
     it('requests a bounded page sorted by title, never the 1000-row cap', () => {

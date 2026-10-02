@@ -12,9 +12,6 @@ import { useLibraryContent } from './useLibraryContent';
 import { useLibrarySelection } from './useLibrarySelection';
 import { useLibraryBulkActions } from './useLibraryBulkActions';
 
-export { PAGE_SIZE } from './libraryPageConstants';
-export type { SavedFilterReference } from './libraryPageConstants';
-
 export function useLibraryPage() {
     useDocumentTitle('Library');
 
@@ -71,8 +68,6 @@ export function useLibraryPage() {
     const bulk = useLibraryBulkActions({
         selection: selection.selection,
         bulkFilter: content.bulkFilter,
-        contentType: route.contentTypeSlug,
-        level: route.selectedLevel?.slug,
     });
 
     const [selectionMode, setSelectionMode] = useState(false);
@@ -98,106 +93,24 @@ export function useLibraryPage() {
     }, [content.isLoading, filters.isRestoringFilter, pageNumber, pageCount, goToPage]);
 
     return {
-        hasInvalidContentTypeSlug: route.hasInvalidContentTypeSlug,
-        showTypePicker: route.showTypePicker,
-        currentContentType: route.currentContentType,
-        rootLevels: route.rootLevels,
-        selectedLevel: route.selectedLevel,
-        routeContentTypeSlug: route.routeContentTypeSlug,
-        pageTitle: route.pageTitle,
-        pageIconName: route.pageIconName,
+        route,
+        filters,
+        content,
+        pagination,
+        selection,
+        bulk,
         allLevels,
         handleRefresh: filters.isRestoringFilter ? filters.retrySavedFilters : content.handleRefresh,
-
         canEditContent,
         canAddContent,
         canManageContent,
         canDeleteContent,
         hasBulkActions,
-
-        filterQuery: filters.filterQuery,
-        isRestoringFilter: filters.isRestoringFilter,
-        filterRestoreError: filters.filterRestoreError,
-        retrySavedFilters: filters.retrySavedFilters,
-        handleFilterQueryChange: filters.handleFilterQueryChange,
-        showSaveControl: filters.showSaveControl,
-        saveControlLabel: filters.saveControlLabel,
-        handleOpenSaveFilter: filters.handleOpenSaveFilter,
-        filterBarExpanded: filters.filterBarExpanded,
-        setFilterBarExpanded: filters.setFilterBarExpanded,
-        referencedSavedFilter: filters.referencedSavedFilter,
-        isAppliedFilterDirty: filters.isAppliedFilterDirty,
-        hasActiveSearchOrFilter: filters.hasActiveSearchOrFilter,
-        handleClearSearchAndFilters: filters.handleClearSearchAndFilters,
-        addContentTo: route.addContentTo,
-
         isLoading: content.isLoading || filters.isRestoringFilter,
-        contentTypeValidationPending: route.contentTypeValidationPending,
-        error: content.error,
-        refetch: content.refetch,
-        contentItems: content.contentItems,
-        totalItems: content.totalItems,
-        handleContentClick: route.handleContentClick,
-        sorting: filters.sorting,
-        handleSortingChange: filters.handleSortingChange,
-        pagination: pagination.pagination,
-        handlePaginationChange: pagination.handlePaginationChange,
-        headerFilters: filters.headerFilters,
-        headerFilterHandlers: filters.headerFilterHandlers,
         pageCount,
-        currentPage: pagination.currentPage,
-        goToPage: pagination.goToPage,
-
-        selection: selection.selection,
-        selectedItems: selection.selectedItems,
-        selectedCount: selection.selectedCount,
-        hasSelection: selection.hasSelection,
-        handleClearSelection: selection.handleClearSelection,
-
         selectionMode,
         enterSelectionMode,
         exitSelectionMode,
         beginCardSelection,
-
-        bulkTags: bulk.bulkTags,
-        rootFolderOptions: bulk.rootFolderOptions,
-        qualityTierListOptions: bulk.qualityTierListOptions,
-        handleOpenBulkTags: bulk.handleOpenBulkTags,
-        handleApplyTags: bulk.handleApplyTags,
-        handleBulkSetMonitoring: bulk.handleBulkSetMonitoring,
-        handleConfirmBulkDelete: bulk.handleConfirmBulkDelete,
-        handleApplyRootFolder: bulk.handleApplyRootFolder,
-        handleApplyQualityTierList: bulk.handleApplyQualityTierList,
-        openBulkRootFolder: bulk.openBulkRootFolder,
-        openBulkQualityTierList: bulk.openBulkQualityTierList,
-        openBulkDeleteConfirm: bulk.openBulkDeleteConfirm,
-
-        bulkTagsOpen: bulk.bulkTagsOpen,
-        closeBulkTags: bulk.closeBulkTags,
-        bulkRootFolderOpen: bulk.bulkRootFolderOpen,
-        closeBulkRootFolder: bulk.closeBulkRootFolder,
-        bulkQualityTierListOpen: bulk.bulkQualityTierListOpen,
-        closeBulkQualityTierList: bulk.closeBulkQualityTierList,
-        saveFilterDialogOpen: filters.saveFilterDialogOpen,
-        closeSaveFilterDialog: filters.closeSaveFilterDialog,
-        bulkDeleteConfirmOpen: bulk.bulkDeleteConfirmOpen,
-        closeBulkDeleteConfirm: bulk.closeBulkDeleteConfirm,
-        bulkDeleteFiles: bulk.bulkDeleteFiles,
-        setBulkDeleteFiles: bulk.setBulkDeleteFiles,
-
-        canOfferUpdate: filters.canOfferUpdate,
-        handleSaveFilter: filters.handleSaveFilter,
-        handleUpdateFilter: filters.handleUpdateFilter,
-        saveFilterError: filters.saveFilterError,
-        saveFilterQueryError: filters.saveFilterQueryError,
-        savedContentFilters: filters.savedContentFilters,
-
-        isSavingFilter: filters.isSavingFilter,
-        isUpdatingFilter: filters.isUpdatingFilter,
-        isApplyingTags: bulk.isApplyingTags,
-        isSettingMonitoring: bulk.isSettingMonitoring,
-        isDeleting: bulk.isDeleting,
-        isApplyingRootFolder: bulk.isApplyingRootFolder,
-        isApplyingQualityTierList: bulk.isApplyingQualityTierList,
     };
 }

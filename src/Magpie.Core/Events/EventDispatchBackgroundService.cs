@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
-using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading;
@@ -12,6 +11,7 @@ using Magpie.Abstractions;
 using Magpie.Abstractions.Jobs;
 using Magpie.Abstractions.Repositories;
 using Magpie.Core.Jobs;
+using Magpie.Core.Jobs.Runtime;
 using Magpie.Core.Observability;
 using Magpie.Models;
 using Magpie.Models.Arguments;
@@ -246,7 +246,7 @@ internal sealed class EventDispatchBackgroundService(
             return true;
         }
 
-        if (rawContentHierarchyItemId.Contains("${", StringComparison.Ordinal))
+        if (JobManager.ContainsEventBinding(rawContentHierarchyItemId))
         {
             return true;
         }
@@ -338,9 +338,7 @@ internal sealed class EventDispatchBackgroundService(
     {
         try
         {
-            using var listener = eventBus is EventBus bus
-                ? bus.CreateListener(eventName: null, localOnly: false, callSite: "dispatch")
-                : eventBus.CreateListener(localOnly: false);
+            using var listener = eventBus.CreateListener(eventName: null, localOnly: false, callSite: "dispatch");
             _listenerReady.TrySetResult();
             await databaseMigration.Completion.WaitAsync(stoppingToken).ConfigureAwait(false);
 
@@ -552,8 +550,7 @@ internal sealed class EventDispatchBackgroundService(
                         .ToList();
                     if (droppedTriggerIds.Count > 0)
                     {
-                        requests.RemoveAll(
-                            request => IsUnforcedReleaseSearchFor(request, fulfilledTarget.Id));
+                        requests.RemoveAll(request => IsUnforcedReleaseSearchFor(request, fulfilledTarget.Id));
                         logger.LogInformation(
                             "The event dispatch service dropped {DroppedCount} automatic release searches for " +
                             "content hierarchy item {ContentHierarchyItemId} because the item needs no release",
@@ -579,11 +576,7 @@ internal sealed class EventDispatchBackgroundService(
             contentHierarchyItemRepository,
             systemUserId,
             cancellationToken).ConfigureAwait(false));
-        requests.AddRange(CollectNotificationRequests(
-            magpieEvent,
-            correlationId,
-            rules,
-            notificationProviders));
+        requests.AddRange(CollectNotificationRequests(magpieEvent, correlationId, rules, notificationProviders));
 
         foreach (var (trigger, status, reason) in triggerOutcomes)
         {
@@ -653,7 +646,7 @@ internal sealed class EventDispatchBackgroundService(
                 EventTriggerId = trigger.Id,
                 JobType = trigger.JobType,
                 Scope = trigger.Scope,
-                Parameters = new Dictionary<string, string>(trigger.Parameters),
+                Parameters = new(trigger.Parameters),
                 TriggerContext = triggeringEvent.ToTriggerContext(),
                 ExecutionMode = JobExecutionMode.Queue,
                 Status = status,
@@ -770,19 +763,14 @@ internal sealed class EventDispatchBackgroundService(
             var executionId = search.Id;
             try
             {
-                if (!await CancelAsync(search, jobManager, jobExecutionRepository, cancellationToken)
-                    .ConfigureAwait(false))
+                var current = search;
+                while (current is not null &&
+                    IsAutomaticUnforcedSearchFor(current, contentHierarchyItemId) &&
+                    !await CancelAsync(current, jobManager, jobExecutionRepository, cancellationToken)
+                        .ConfigureAwait(false))
                 {
-                    var current = await jobExecutionRepository.GetByIdAsync(executionId, cancellationToken)
+                    current = await jobExecutionRepository.GetByIdAsync(executionId, cancellationToken)
                         .ConfigureAwait(false);
-                    if (current is not null && IsAutomaticUnforcedSearchFor(current, contentHierarchyItemId))
-                    {
-                        await CancelAsync(
-                            current,
-                            jobManager,
-                            jobExecutionRepository,
-                            cancellationToken).ConfigureAwait(false);
-                    }
                 }
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -922,8 +910,8 @@ internal sealed class EventDispatchBackgroundService(
         {
             logger.LogWarning(
                 ex,
-                "The event dispatch service failed to collect the alternate-release retries " +
-                "for failed download {DownloadId} and scheduled no retry",
+                "The event dispatch service failed to collect the alternate-release retries for failed " +
+                "download {DownloadId}",
                 downloadId);
             return [];
         }
@@ -962,9 +950,7 @@ internal sealed class EventDispatchBackgroundService(
             pageNumber++;
         }
 
-        if (trigger?.Parameters.TryGetValue(
-            MagpieJobs.Parameters.RetryCooldownHours,
-            out var raw) is true)
+        if (trigger?.Parameters.TryGetValue(MagpieJobs.Parameters.RetryCooldownHours, out var raw) is true)
         {
             if (int.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var configured) &&
                 configured >= 0)
@@ -973,8 +959,7 @@ internal sealed class EventDispatchBackgroundService(
             }
 
             logger.LogWarning(
-                "Retry cooldown {Raw} for the auto-grab scan is not a non-negative integer; using " +
-                "default {Default}",
+                "Retry cooldown {Raw} for the auto-grab scan is not a non-negative integer; using default {Default}",
                 raw,
                 MagpieJobs.ParameterValues.DefaultRetryCooldownHours);
         }
@@ -1018,9 +1003,7 @@ internal sealed class EventDispatchBackgroundService(
                         JobType = MagpieJobs.Types.ContentMetadataRefreshItem,
                         CorrelationId = parent.CorrelationId,
                         ParameterValueReferences =
-                            [
-                                contentHierarchyItemId.ToString("D", CultureInfo.InvariantCulture)
-                            ],
+                            [contentHierarchyItemId.ToString("D", CultureInfo.InvariantCulture)],
                     },
                     new PagingParameter { PageNumber = pageNumber, PageSize = pageSize },
                     sort: null,
@@ -1050,8 +1033,8 @@ internal sealed class EventDispatchBackgroundService(
         {
             logger.LogWarning(
                 ex,
-                "The event dispatch service failed to resolve the authoritative metadata refresh " +
-                "for content hierarchy item {ContentHierarchyItemId} and will use the event trigger",
+                "The event dispatch service failed to resolve the authoritative metadata refresh for content " +
+                "hierarchy item {ContentHierarchyItemId}",
                 contentHierarchyItemId);
             return null;
         }
@@ -1132,11 +1115,9 @@ internal sealed class EventDispatchBackgroundService(
         return requests;
     }
 
-    private string ResolveEventParameter(
-        string expression,
-        IReadOnlyDictionary<string, string> eventContext)
+    private string ResolveEventParameter(string expression, IReadOnlyDictionary<string, string> eventContext)
     {
-        return TransformEventParameter(
+        return JobManager.TransformEventParameter(
             expression,
             key => eventContext.TryGetValue(key, out var value)
                 ? value
@@ -1156,9 +1137,7 @@ internal sealed class EventDispatchBackgroundService(
         return result;
     }
 
-    private void ValidateResolvedParameterTypes(
-        JobSpec spec,
-        IReadOnlyDictionary<string, string> parameters)
+    private void ValidateResolvedParameterTypes(JobSpec spec, IReadOnlyDictionary<string, string> parameters)
     {
         foreach (var parameter in spec.Parameters)
         {
@@ -1189,57 +1168,6 @@ internal sealed class EventDispatchBackgroundService(
                 throw new MagpieException($"Parameter {parameter.Name} must be a valid {typeName}.");
             }
         }
-    }
-
-    private string TransformEventParameter(
-        string expression,
-        Func<string, string> resolve)
-    {
-        var result = new StringBuilder(expression.Length);
-        for (var index = 0; index < expression.Length;)
-        {
-            if (expression.AsSpan(index).StartsWith("$${", StringComparison.Ordinal))
-            {
-                result.Append("${");
-                index += 3;
-                continue;
-            }
-
-            if (expression.AsSpan(index).StartsWith("${", StringComparison.Ordinal))
-            {
-                const string prefix = "${event.";
-                if (!expression.AsSpan(index).StartsWith(prefix, StringComparison.Ordinal))
-                {
-                    throw new MagpieException("Event binding is malformed.");
-                }
-
-                var keyStart = index + prefix.Length;
-                var end = keyStart;
-                while (end < expression.Length && expression[end] != '}')
-                {
-                    if (expression[end] == '{')
-                    {
-                        throw new MagpieException("Event binding is malformed.");
-                    }
-
-                    end++;
-                }
-
-                if (end == expression.Length || end == keyStart)
-                {
-                    throw new MagpieException("Event binding is malformed.");
-                }
-
-                result.Append(resolve(expression[keyStart..end]));
-                index = end + 1;
-                continue;
-            }
-
-            result.Append(expression[index]);
-            index++;
-        }
-
-        return result.ToString();
     }
 
     private List<JobEnqueueRequest> CollectNotificationRequests(

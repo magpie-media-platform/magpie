@@ -5888,8 +5888,7 @@ internal sealed class QueryExecutorTests
                 FallbackLanguages = ["de", "en"],
                 UserAgent = "Magpie/test"
             },
-            default)
-            .ConfigureAwait(false);
+            default).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -6572,8 +6571,7 @@ internal sealed class QueryExecutorTests
                 FallbackLanguages = ["en"],
                 UserAgent = "Magpie/test"
             },
-            default)
-            .ConfigureAwait(false);
+            default).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())

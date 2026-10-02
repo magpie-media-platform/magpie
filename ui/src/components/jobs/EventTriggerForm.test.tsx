@@ -601,7 +601,7 @@ describe('EventTriggerForm - Parameter bindings', () => {
             name: 'Parameterized Job',
             supportedTriggerModes: ['Event'],
             parameters: [
-                { name: 'TargetId', description: 'The target id.', type: 1, required: true, defaultValue: null },
+                { name: 'TargetId', description: 'The target id.', type: 'Number', required: true, defaultValue: null },
             ],
         },
     ];
@@ -686,15 +686,135 @@ describe('EventTriggerForm - Parameter bindings', () => {
         });
     });
 
-    it.each([
-        [Role.Requester, false],
-        [Role.Manager, true],
-    ])(
-        'offers event binding on a Content job only when the owner role %s meets its scope',
-        async (ownerRole, canBind) => {
+    it('withholds event binding on a Content job when the owner role Requester does not meet its scope', async () => {
+        const user = userEvent.setup();
+        const onSubmit = vi.fn();
+        const templates = templatesWithParameters.map((template) => ({ ...template, scope: 'Content' as const }));
+
+        render(
+            <TestWrapper>
+                <EventTriggerForm
+                    open={true}
+                    onOpenChange={() => {}}
+                    initialValues={{
+                        id: 'trigger-1',
+                        name: 'Personal Trigger',
+                        templateId: 'parameterized-job',
+                        eventNamePatterns: ['content\\.hierarchyItem\\.created'],
+                        filters: [],
+                        enabled: true,
+                        delaySeconds: 0,
+                        parameters: { TargetId: '${event.content.hierarchyItemId}' },
+                    }}
+                    templates={templates}
+                    onSubmit={onSubmit}
+                    ownerRole={Role.Requester}
+                />
+            </TestWrapper>,
+        );
+
+        expect(screen.queryAllByRole('switch', { name: 'Bind to event' }).length > 0).toBe(false);
+        expect(screen.queryByTestId('event-trigger-form__literal-target') !== null).toBe(true);
+        await user.click(screen.getByRole('button', { name: /save/i }));
+
+        expect(await screen.findByText('A user trigger must target a specific item.')).toBeInTheDocument();
+        expect(onSubmit).not.toHaveBeenCalled();
+    });
+
+    it('offers event binding on a Content job when the owner role Manager meets its scope', async () => {
+        const user = userEvent.setup();
+        const onSubmit = vi.fn();
+        const templates = templatesWithParameters.map((template) => ({ ...template, scope: 'Content' as const }));
+
+        render(
+            <TestWrapper>
+                <EventTriggerForm
+                    open={true}
+                    onOpenChange={() => {}}
+                    initialValues={{
+                        id: 'trigger-1',
+                        name: 'Personal Trigger',
+                        templateId: 'parameterized-job',
+                        eventNamePatterns: ['content\\.hierarchyItem\\.created'],
+                        filters: [],
+                        enabled: true,
+                        delaySeconds: 0,
+                        parameters: { TargetId: '${event.content.hierarchyItemId}' },
+                    }}
+                    templates={templates}
+                    onSubmit={onSubmit}
+                    ownerRole={Role.Manager}
+                />
+            </TestWrapper>,
+        );
+
+        expect(screen.queryAllByRole('switch', { name: 'Bind to event' }).length > 0).toBe(true);
+        expect(screen.queryByTestId('event-trigger-form__literal-target') !== null).toBe(false);
+        await user.click(screen.getByRole('button', { name: /save/i }));
+
+        await waitFor(() => expect(onSubmit).toHaveBeenCalled());
+    });
+
+    it('accepts an escaped event binding on a user trigger', async () => {
+        const user = userEvent.setup();
+        const onSubmit = vi.fn();
+        const templates: JobTemplateOption[] = [
+            {
+                id: 'parameterized-job',
+                name: 'Parameterized Job',
+                supportedTriggerModes: ['Event'],
+                scope: 'Content',
+                parameters: [{ name: 'Tag', description: 'A tag', type: 'String', required: true, defaultValue: null }],
+            },
+        ];
+
+        render(
+            <TestWrapper>
+                <EventTriggerForm
+                    open={true}
+                    onOpenChange={() => {}}
+                    initialValues={{
+                        id: 'trigger-1',
+                        name: 'Personal Trigger',
+                        templateId: 'parameterized-job',
+                        eventNamePatterns: ['content\\.hierarchyItem\\.created'],
+                        filters: [],
+                        enabled: true,
+                        delaySeconds: 0,
+                        parameters: { Tag: '$${event.content.hierarchyItemId}' },
+                    }}
+                    templates={templates}
+                    onSubmit={onSubmit}
+                    ownerRole={Role.Requester}
+                />
+            </TestWrapper>,
+        );
+
+        await user.click(screen.getByRole('button', { name: /save/i }));
+
+        await waitFor(() =>
+            expect(onSubmit).toHaveBeenCalledWith(
+                expect.objectContaining({ parameters: { Tag: '$${event.content.hierarchyItemId}' } }),
+            ),
+        );
+    });
+
+    it.each(['${event.content.hierarchyItemId}', '${event.content', '${oops}'])(
+        'rejects %s on a user trigger because the value holds an event binding',
+        async (value) => {
             const user = userEvent.setup();
             const onSubmit = vi.fn();
-            const templates = templatesWithParameters.map((template) => ({ ...template, scope: 'Content' as const }));
+            const templates: JobTemplateOption[] = [
+                {
+                    id: 'parameterized-job',
+                    name: 'Parameterized Job',
+                    supportedTriggerModes: ['Event'],
+                    scope: 'Content',
+                    parameters: [
+                        { name: 'Tag', description: 'A tag', type: 'String', required: true, defaultValue: null },
+                    ],
+                },
+            ];
 
             render(
                 <TestWrapper>
@@ -709,25 +829,19 @@ describe('EventTriggerForm - Parameter bindings', () => {
                             filters: [],
                             enabled: true,
                             delaySeconds: 0,
-                            parameters: { TargetId: '${event.content.hierarchyItemId}' },
+                            parameters: { Tag: value },
                         }}
                         templates={templates}
                         onSubmit={onSubmit}
-                        ownerRole={ownerRole}
+                        ownerRole={Role.Requester}
                     />
                 </TestWrapper>,
             );
 
-            expect(screen.queryAllByRole('switch', { name: 'Bind to event' }).length > 0).toBe(canBind);
-            expect(screen.queryByTestId('event-trigger-form__literal-target') !== null).toBe(!canBind);
             await user.click(screen.getByRole('button', { name: /save/i }));
 
-            if (canBind) {
-                await waitFor(() => expect(onSubmit).toHaveBeenCalled());
-            } else {
-                expect(await screen.findByText('A user trigger must target a specific item.')).toBeInTheDocument();
-                expect(onSubmit).not.toHaveBeenCalled();
-            }
+            expect(await screen.findByText('A user trigger must target a specific item.')).toBeInTheDocument();
+            expect(onSubmit).not.toHaveBeenCalled();
         },
     );
 
@@ -739,8 +853,8 @@ describe('EventTriggerForm - Parameter bindings', () => {
                 name: 'Typed Job',
                 supportedTriggerModes: ['Event'],
                 parameters: [
-                    { name: 'Enabled', description: null, type: 2, required: false, defaultValue: null },
-                    { name: 'StartDate', description: null, type: 3, required: false, defaultValue: null },
+                    { name: 'Enabled', description: null, type: 'Boolean', required: false, defaultValue: null },
+                    { name: 'StartDate', description: null, type: 'Date', required: false, defaultValue: null },
                 ],
             },
         ];
@@ -902,7 +1016,9 @@ describe('EventTriggerForm - Parameter bindings', () => {
                 id: 'date-job',
                 name: 'Date job',
                 supportedTriggerModes: ['Event'],
-                parameters: [{ name: 'StartDate', description: null, type: 3, required: false, defaultValue: null }],
+                parameters: [
+                    { name: 'StartDate', description: null, type: 'Date', required: false, defaultValue: null },
+                ],
             },
         ];
 

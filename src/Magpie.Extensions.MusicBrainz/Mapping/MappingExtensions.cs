@@ -17,6 +17,8 @@ internal static class MappingExtensions
     private const string CountryFact = "country";
     private const string TrackCountFact = "trackCount";
     private const string FormatFact = "format";
+    private const string ReleaseGroupSourcePrefix = "musicbrainz:release-group:";
+    private const string TrackSourcePrefix = "musicbrainz:track:";
     private const int PerformerRelationshipCap = 30;
     private const int CrewRelationshipCap = 20;
     private const int WriterRelationshipCap = 10;
@@ -119,7 +121,6 @@ internal static class MappingExtensions
     public static MetadataSearchCandidate ToCandidate(this SearchHit hit, Uri? thumbnailUrl = null)
     {
         var level = Level(hit.Target);
-        var source = PrimarySource(hit.Target);
         var references = hit.ArtistReferences
             .Where(reference => reference.CreditName is not null || reference.CanonicalName is not null)
             .Select(reference => new ProviderMetadataSearchSubjectReference
@@ -146,7 +147,7 @@ internal static class MappingExtensions
         return new MetadataSearchCandidate
         {
             ProviderType = Constants.ProviderType,
-            ExternalIdSource = source,
+            ExternalIdSource = Constants.ProviderType,
             ExternalId = hit.PrimaryMbid,
             ContentType = Constants.ContentTypeSlug,
             Level = level,
@@ -192,13 +193,15 @@ internal static class MappingExtensions
     public static MetadataContribution InitialReleaseGroupContribution(this ReleaseGroupDto releaseGroup)
     {
         var mbid = NormalizeMbid(releaseGroup.Id);
+        var published = ParseTemporal(releaseGroup.FirstReleaseDate);
         var contribution = new MetadataContribution
         {
             ProviderType = Constants.ProviderType,
             Source = Source(QueryTarget.Album, mbid ?? string.Empty),
             Title = releaseGroup.Title.NullIfBlank(),
             Overview = releaseGroup.Disambiguation.NullIfBlank(),
-            PublishDate = ParseTemporal(releaseGroup.FirstReleaseDate)?.Value
+            PublishDate = published?.Value,
+            PublishDatePrecision = published?.Precision
         };
         AddExternalId(contribution, Constants.ProviderType, mbid);
         AddAliases(contribution, releaseGroup.Aliases);
@@ -229,8 +232,7 @@ internal static class MappingExtensions
 
         var formats = release?.Media?
             .Select(medium => medium?.Format.NullIfBlank())
-            .Where(format => format is not null)
-            .Select(format => format!)
+            .OfType<string>()
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray() ??
             [];
@@ -261,13 +263,15 @@ internal static class MappingExtensions
     public static MetadataContribution RecordingContribution(this RecordingDto recording, DateTime utcNow)
     {
         var mbid = NormalizeMbid(recording.Id);
+        var published = ParseTemporal(recording.FirstReleaseDate);
         var contribution = new MetadataContribution
         {
             ProviderType = Constants.ProviderType,
             Source = Source(QueryTarget.Track, mbid ?? string.Empty),
             Title = recording.Title.NullIfBlank(),
             Overview = recording.Disambiguation.NullIfBlank(),
-            PublishDate = ParseTemporal(recording.FirstReleaseDate)?.Value,
+            PublishDate = published?.Value,
+            PublishDatePrecision = published?.Precision,
             Duration = Duration(recording.Length),
             DateLastRefreshed = utcNow
         };
@@ -277,6 +281,39 @@ internal static class MappingExtensions
         AddGenres(contribution, recording.Genres);
         AddReferences(contribution, recording.Relations);
         return contribution;
+    }
+
+    public static MetadataContribution? TrackContribution(
+        this ReleaseDto? release,
+        string trackMbid,
+        RecordingDto recording,
+        DateTime utcNow)
+    {
+        var contribution = release.TrackChildren()
+            .FirstOrDefault(child => string.Equals(child.Slug, trackMbid, StringComparison.Ordinal))
+            ?.InitialContribution;
+        if (contribution is null)
+        {
+            return null;
+        }
+
+        var published = ParseTemporal(recording.FirstReleaseDate);
+        contribution.Overview ??= recording.Disambiguation.NullIfBlank();
+        contribution.PublishDate = published?.Value;
+        contribution.PublishDatePrecision = published?.Precision;
+        contribution.DateLastRefreshed = utcNow;
+        AddAliases(contribution, recording.Aliases);
+        AddGenres(contribution, recording.Genres);
+        AddReferences(contribution, recording.Relations);
+        return contribution;
+    }
+
+    public static string? TrackRecordingMbid(this ReleaseDto? release, string trackMbid)
+    {
+        return NormalizeMbid(release?.Media?
+            .SelectMany(medium => medium?.Tracks ?? [])
+            .FirstOrDefault(track => string.Equals(NormalizeMbid(track?.Id), trackMbid, StringComparison.Ordinal))
+            ?.Recording?.Id);
     }
 
     public static IReadOnlyList<ChildHierarchyDefinition> ReleaseGroupChildren(
@@ -470,15 +507,30 @@ internal static class MappingExtensions
         return fallback;
     }
 
+    public static bool IsTrackAppearance(this IEnumerable<MetadataContribution> contributions)
+    {
+        return contributions
+            .FirstOrDefault(contribution => contribution.ProviderType == Constants.ProviderType)
+            ?.Source?.StartsWith(TrackSourcePrefix, StringComparison.Ordinal) == true;
+    }
+
+    public static string? FindReleaseGroupId(this IEnumerable<MetadataContribution> contributions)
+    {
+        return contributions
+            .Where(contribution =>
+                contribution.Source?.StartsWith(ReleaseGroupSourcePrefix, StringComparison.Ordinal) == true)
+            .FindExternalId(Constants.ProviderType);
+    }
+
     public static ReleaseDto? SelectRepresentativeRelease(this ReleaseGroupDto releaseGroup)
     {
         return releaseGroup.Releases?
             .Where(release => TryMbid(release?.Id, out _))
             .OrderByDescending(
-                release => string.Equals(release!.Status, "Official", StringComparison.OrdinalIgnoreCase))
-            .ThenByDescending(release => ParseTemporal(release!.Date) is not null)
-            .ThenBy(release => ParseTemporal(release!.Date)?.Value ?? DateTime.MaxValue)
-            .ThenBy(release => release!.Id, StringComparer.Ordinal)
+                release => string.Equals(release.Status, "Official", StringComparison.OrdinalIgnoreCase))
+            .ThenByDescending(release => ParseTemporal(release.Date) is not null)
+            .ThenBy(release => ParseTemporal(release.Date)?.Value ?? DateTime.MaxValue)
+            .ThenBy(release => release.Id, StringComparer.Ordinal)
             .FirstOrDefault();
     }
 
@@ -487,14 +539,14 @@ internal static class MappingExtensions
         return releaseGroup.Releases?
             .Where(release => TryMbid(release?.Id, out _))
             .OrderByDescending(
-                release => string.Equals(release!.Status, "Official", StringComparison.OrdinalIgnoreCase))
-            .ThenByDescending(release => ParseTemporal(release!.Date) is not null)
-            .ThenBy(release => ParseTemporal(release!.Date)?.Value.Year ?? int.MaxValue)
-            .ThenByDescending(release => ParseTemporal(release!.Date)?.Precision)
-            .ThenBy(release => ParseTemporal(release!.Date)?.Value ?? DateTime.MaxValue)
-            .ThenByDescending(release => ReleaseTrackCount(release!) is > 0)
-            .ThenByDescending(release => ReleaseTrackCount(release!) ?? 0)
-            .ThenBy(release => release!.Id, StringComparer.Ordinal)
+                release => string.Equals(release.Status, "Official", StringComparison.OrdinalIgnoreCase))
+            .ThenByDescending(release => ParseTemporal(release.Date) is not null)
+            .ThenBy(release => ParseTemporal(release.Date)?.Value.Year ?? int.MaxValue)
+            .ThenByDescending(release => ParseTemporal(release.Date)?.Precision)
+            .ThenBy(release => ParseTemporal(release.Date)?.Value ?? DateTime.MaxValue)
+            .ThenByDescending(release => ReleaseTrackCount(release) is > 0)
+            .ThenByDescending(release => ReleaseTrackCount(release) ?? 0)
+            .ThenBy(release => release.Id, StringComparer.Ordinal)
             .FirstOrDefault();
     }
 
@@ -514,7 +566,7 @@ internal static class MappingExtensions
         var contribution = new MetadataContribution
         {
             ProviderType = Constants.ProviderType,
-            Source = "musicbrainz:track:" + trackMbid,
+            Source = TrackSourcePrefix + trackMbid,
             Title = track.Title.NullIfBlank() ?? track.Recording?.Title.NullIfBlank(),
             Overview = string.Equals(trackArtistCredit, recordingArtistCredit, StringComparison.Ordinal)
                 ? null
@@ -618,8 +670,7 @@ internal static class MappingExtensions
                 relation,
                 Constants.PerformerRelationshipKind,
                 RelationQualifier(relation)))
-            .Where(person => person is not null)
-            .Select(person => person!)
+            .OfType<PendingRelationship>()
             .GroupBy(person => person.Mbid, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(
                 group => group.Key,
@@ -661,8 +712,7 @@ internal static class MappingExtensions
         return [.. relations
             .Select(
                 relation => RelationPerson(relation, Constants.CrewRelationshipKind, CrewRole(relation.Type)))
-            .Where(person => person is not null)
-            .Select(person => person!)
+            .OfType<PendingRelationship>()
             .GroupBy(person => string.Concat(person.Mbid, "\0", person.Qualifier), StringComparer.OrdinalIgnoreCase)
             .Select(group => group.First())
             .OrderBy(person => CrewRoleOrder(person.Qualifier))
@@ -678,8 +728,7 @@ internal static class MappingExtensions
                 relation,
                 Constants.WriterRelationshipKind,
                 WriterRole(relation.Type)))
-            .Where(person => person is not null)
-            .Select(person => person!)
+            .OfType<PendingRelationship>()
             .GroupBy(person => string.Concat(person.Mbid, "\0", person.Qualifier), StringComparer.OrdinalIgnoreCase)
             .Select(group => group.First())
             .OrderBy(person => WriterRoleOrder(person.Qualifier))
@@ -803,8 +852,8 @@ internal static class MappingExtensions
     {
         return values?
             .Select(value => value.NullIfBlank())
-            .Where(value => value is not null && !IsPerformerModifier(value))
-            .Select(value => value!)
+            .OfType<string>()
+            .Where(value => !IsPerformerModifier(value))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray() ??
             [];
@@ -1086,18 +1135,7 @@ internal static class MappingExtensions
             QueryTarget.Artist => Constants.ArtistLevelSlug,
             QueryTarget.Album => Constants.AlbumLevelSlug,
             QueryTarget.Track => Constants.TrackLevelSlug,
-            _ => throw new InvalidOperationException("target")
-        };
-    }
-
-    private static string PrimarySource(QueryTarget target)
-    {
-        return target switch
-        {
-            QueryTarget.Artist => Constants.ProviderType,
-            QueryTarget.Album => Constants.ProviderType,
-            QueryTarget.Track => Constants.ProviderType,
-            _ => throw new InvalidOperationException("target")
+            _ => throw new InvalidOperationException("Unsupported MusicBrainz query target.")
         };
     }
 
@@ -1106,9 +1144,9 @@ internal static class MappingExtensions
         return target switch
         {
             QueryTarget.Artist => "musicbrainz:artist:" + mbid,
-            QueryTarget.Album => "musicbrainz:release-group:" + mbid,
+            QueryTarget.Album => ReleaseGroupSourcePrefix + mbid,
             QueryTarget.Track => "musicbrainz:recording:" + mbid,
-            _ => throw new InvalidOperationException("target")
+            _ => throw new InvalidOperationException("Unsupported MusicBrainz query target.")
         };
     }
 

@@ -15,7 +15,7 @@ export type JobTriggerModeValue = 'Manual' | 'Schedule' | 'Event';
 export interface JobParameterDefinition {
     name: string;
     description?: string | null;
-    type: number;
+    type: 'String' | 'Number' | 'Boolean' | 'Date' | 'MappingsList';
     required: boolean;
     defaultValue?: string | null;
 }

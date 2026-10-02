@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Text.Json;
 using System.Threading;
@@ -9,6 +10,7 @@ using Magpie.Core;
 using Magpie.Models;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
+using Magpie.Models.Enums;
 using Magpie.Sdk.Services;
 
 using Moq;
@@ -20,6 +22,8 @@ namespace Magpie.Test.Core;
 [TestFixture]
 public sealed class RootFolderServiceTests
 {
+    private static readonly string Root = OperatingSystem.IsWindows() ? @"C:\" : "/";
+
     private Mock<IContentTypeRegistry> _contentTypeRegistry = null!;
     private Mock<IFileSystem> _fileSystem = null!;
     private Mock<IQualityService> _qualityService = null!;
@@ -73,6 +77,9 @@ public sealed class RootFolderServiceTests
             .Returns((string path) => Path.GetFullPath(path));
         _fileSystem.Setup(fileSystem => fileSystem.PathsEqual(It.IsAny<string>(), It.IsAny<string>()))
             .Returns((string left, string right) => Path.GetRelativePath(left, right) == ".");
+        _fileSystem.Setup(fileSystem => fileSystem.MatchesAnyFileType(
+                It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<IReadOnlyList<string>?>()))
+            .Returns(true);
         _qualityService = new Mock<IQualityService>();
         _qualityService.Setup(service => service.ListTierListsAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync([defaultQualityTierList]);
@@ -146,7 +153,7 @@ public sealed class RootFolderServiceTests
     public void CreateAsync_Throws_WhenPathMatchesStoredRootWithTrailingSeparator()
     {
         // Arrange
-        _fileSystem.Setup(fileSystem => fileSystem.DirectoryExists(@"D:\Tv")).Returns(true);
+        _fileSystem.Setup(fileSystem => fileSystem.DirectoryExists(Path.Combine(Root, "Tv"))).Returns(true);
         _rootFolderRepository
             .Setup(repository => repository.ListAllAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(
@@ -155,14 +162,14 @@ public sealed class RootFolderServiceTests
                 {
                     Id = Guid.NewGuid(),
                     Name = "Television",
-                    Path = @"D:\Tv",
+                    Path = Path.Combine(Root, "Tv"),
                     ContentType = "movies"
                 }
             ]);
         var create = new RootFolderCreate
         {
             Name = "Television",
-            Path = @"D:\Tv\",
+            Path = Path.Combine(Root, "Tv") + Path.DirectorySeparatorChar,
             ContentType = "movies"
         };
 
@@ -190,10 +197,11 @@ public sealed class RootFolderServiceTests
         {
             Id = Guid.Parse("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"),
             Name = "Movies",
-            Path = @"C:\media\movies",
+            Path = Path.Combine(Root, "media", "movies"),
             ContentType = "movies"
         };
-        _fileSystem.Setup(fileSystem => fileSystem.DirectoryExists(@"C:\media\movies")).Returns(true);
+        _fileSystem.Setup(fileSystem => fileSystem.DirectoryExists(Path.Combine(Root, "media", "movies")))
+            .Returns(true);
         _rootFolderRepository
             .Setup(repository => repository.CreateAsync(
                 It.IsAny<RootFolder>(),
@@ -203,7 +211,7 @@ public sealed class RootFolderServiceTests
         var create = new RootFolderCreate
         {
             Name = "Movies",
-            Path = @"C:\media\shows\..\movies",
+            Path = Path.Combine(Root, "media", "shows", "..", "movies"),
             ContentType = "movies",
             IsDefault = true,
             Defaults = new()
@@ -225,7 +233,7 @@ public sealed class RootFolderServiceTests
             _rootFolderRepository.Verify(repository => repository.CreateAsync(
                 It.Is<RootFolder>(folder =>
                     folder.Name == "Movies" &&
-                    folder.Path == @"C:\media\movies" &&
+                    folder.Path == Path.Combine(Root, "media", "movies") &&
                     folder.ContentType == "movies"),
                 actingUserId,
                 It.IsAny<CancellationToken>()), Times.Once);
@@ -236,11 +244,11 @@ public sealed class RootFolderServiceTests
     public void CreateAsync_Throws_WhenDirectoryDoesNotExist()
     {
         // Arrange
-        _fileSystem.Setup(fileSystem => fileSystem.DirectoryExists(@"C:\missing")).Returns(false);
+        _fileSystem.Setup(fileSystem => fileSystem.DirectoryExists(Path.Combine(Root, "missing"))).Returns(false);
         var create = new RootFolderCreate
         {
             Name = "Movies",
-            Path = @"C:\missing",
+            Path = Path.Combine(Root, "missing"),
             ContentType = "movies"
         };
 
@@ -260,6 +268,7 @@ public sealed class RootFolderServiceTests
     }
 
     [Test]
+    [Platform("Win", Reason = "Only Windows compares paths without case.")]
     public void CreateAsync_Throws_WhenPathMatchesStoredRootIgnoringCase()
     {
         // Arrange
@@ -302,11 +311,11 @@ public sealed class RootFolderServiceTests
     public void CreateAsync_Throws_WhenContentTypeIsNotRegistered()
     {
         // Arrange
-        _fileSystem.Setup(fileSystem => fileSystem.DirectoryExists(@"C:\media")).Returns(true);
+        _fileSystem.Setup(fileSystem => fileSystem.DirectoryExists(Path.Combine(Root, "media"))).Returns(true);
         var create = new RootFolderCreate
         {
             Name = "Unknown",
-            Path = @"C:\media",
+            Path = Path.Combine(Root, "media"),
             ContentType = "unknown"
         };
 
@@ -329,7 +338,8 @@ public sealed class RootFolderServiceTests
     public async Task CreateAsync_CreatesRootFolder_WhenTheContentTypeHasNoDefaultYet()
     {
         // Arrange
-        _fileSystem.Setup(fileSystem => fileSystem.DirectoryExists(@"C:\media\movies")).Returns(true);
+        _fileSystem.Setup(fileSystem => fileSystem.DirectoryExists(Path.Combine(Root, "media", "movies")))
+            .Returns(true);
         _rootFolderRepository.Setup(repository => repository.CreateAsync(
                 It.IsAny<RootFolder>(),
                 null,
@@ -338,7 +348,7 @@ public sealed class RootFolderServiceTests
         var create = new RootFolderCreate
         {
             Name = "Movies",
-            Path = @"C:\media\movies",
+            Path = Path.Combine(Root, "media", "movies"),
             ContentType = "movies",
             IsDefault = false,
             Defaults = new()
@@ -364,7 +374,8 @@ public sealed class RootFolderServiceTests
     public async Task CreateAsync_CreatesRootFolder_WhenContentTypeAlreadyHasADefault()
     {
         // Arrange
-        _fileSystem.Setup(fileSystem => fileSystem.DirectoryExists(@"C:\media\movies-2")).Returns(true);
+        _fileSystem.Setup(fileSystem => fileSystem.DirectoryExists(Path.Combine(Root, "media", "movies-2")))
+            .Returns(true);
         _rootFolderRepository
             .Setup(repository => repository.ListAllAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(
@@ -373,7 +384,7 @@ public sealed class RootFolderServiceTests
                 {
                     Id = Guid.NewGuid(),
                     Name = "Movies",
-                    Path = @"C:\media\movies",
+                    Path = Path.Combine(Root, "media", "movies"),
                     ContentType = "movies",
                     IsDefault = true
                 }
@@ -386,7 +397,7 @@ public sealed class RootFolderServiceTests
         var create = new RootFolderCreate
         {
             Name = "Movies 2",
-            Path = @"C:\media\movies-2",
+            Path = Path.Combine(Root, "media", "movies-2"),
             ContentType = "movies",
             IsDefault = false,
             Defaults = new()
@@ -491,14 +502,14 @@ public sealed class RootFolderServiceTests
     {
         // Arrange
         var rootFolderId = Guid.Parse("77777777-7777-7777-7777-777777777777");
-        _fileSystem.Setup(fileSystem => fileSystem.DirectoryExists(@"C:\missing")).Returns(false);
+        _fileSystem.Setup(fileSystem => fileSystem.DirectoryExists(Path.Combine(Root, "missing"))).Returns(false);
         _rootFolderRepository
             .Setup(repository => repository.GetByIdAsync(rootFolderId, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new RootFolder
             {
                 Id = rootFolderId,
                 Name = "Movies",
-                Path = @"C:\missing",
+                Path = Path.Combine(Root, "missing"),
                 ContentType = "movies",
                 Defaults = new()
                 {
@@ -517,7 +528,7 @@ public sealed class RootFolderServiceTests
         var patch = new RootFolderPatch
         {
             Name = new() { Value = "Films" },
-            Path = new() { Value = @"C:\missing" }
+            Path = new() { Value = Path.Combine(Root, "missing") }
         };
 
         // Act
@@ -536,7 +547,7 @@ public sealed class RootFolderServiceTests
                 It.Is<RootFolderPatch>(applied =>
                     applied.Id == rootFolderId &&
                     applied.Name!.Value == "Films" &&
-                    applied.Path!.Value == @"C:\missing"),
+                    applied.Path!.Value == Path.Combine(Root, "missing")),
                 null,
                 It.IsAny<CancellationToken>()), Times.Once);
         }
@@ -544,6 +555,62 @@ public sealed class RootFolderServiceTests
 
     [Test]
     public async Task PatchAsync_UpdatesName_WhenResentStoredPathHasTrailingSeparatorAndDoesNotExist()
+    {
+        // Arrange
+        var rootFolderId = Guid.Parse("88888888-8888-8888-8888-888888888888");
+        _rootFolderRepository
+            .Setup(repository => repository.GetByIdAsync(rootFolderId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new RootFolder
+            {
+                Id = rootFolderId,
+                Name = "Movies",
+                Path = Path.Combine(Root, "nas", "media") + Path.DirectorySeparatorChar,
+                ContentType = "movies",
+                Defaults = new()
+                {
+                    ["movie"] = new RootFolderDefault
+                    {
+                        QualityTierListId = Guid.Parse("01010101-0101-0101-0101-010101010101")
+                    }
+                }
+            });
+        _rootFolderRepository
+            .Setup(repository => repository.PatchAsync(
+                It.IsAny<RootFolderPatch>(),
+                null,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        var patch = new RootFolderPatch
+        {
+            Name = new() { Value = "Films" },
+            Path = new() { Value = Path.Combine(Root, "nas", "media") + Path.DirectorySeparatorChar }
+        };
+
+        // Act
+        var result = await _subject.PatchAsync(rootFolderId, patch, null).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result, Is.True);
+            _fileSystem.Verify(
+                fileSystem => fileSystem.DirectoryExists(It.IsAny<string>()),
+                Times.Never);
+            _rootFolderRepository.Verify(repository => repository.ListAllAsync(It.IsAny<CancellationToken>()),
+                Times.Never);
+            _rootFolderRepository.Verify(repository => repository.PatchAsync(
+                It.Is<RootFolderPatch>(applied =>
+                    applied.Id == rootFolderId &&
+                    applied.Name!.Value == "Films" &&
+                    applied.Path!.Value == Path.Combine(Root, "nas", "media")),
+                null,
+                It.IsAny<CancellationToken>()), Times.Once);
+        }
+    }
+
+    [Test]
+    [Platform("Win", Reason = "Only Windows has UNC paths.")]
+    public async Task PatchAsync_UpdatesName_WhenResentStoredUncPathHasTrailingSeparatorAndDoesNotExist()
     {
         // Arrange
         var rootFolderId = Guid.Parse("88888888-8888-8888-8888-888888888888");
@@ -608,7 +675,7 @@ public sealed class RootFolderServiceTests
             {
                 Id = rootFolderId,
                 Name = "Movies",
-                Path = @"C:\media",
+                Path = Path.Combine(Root, "media"),
                 ContentType = "movies",
                 Defaults = new()
                 {
@@ -624,7 +691,7 @@ public sealed class RootFolderServiceTests
                 null,
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(true);
-        var patch = new RootFolderPatch { Path = new() { Value = @"C:\media" } };
+        var patch = new RootFolderPatch { Path = new() { Value = Path.Combine(Root, "media") } };
 
         // Act
         var result = await _subject.PatchAsync(rootFolderId, patch, null).ConfigureAwait(false);
@@ -640,7 +707,7 @@ public sealed class RootFolderServiceTests
                 Times.Never);
             _rootFolderRepository.Verify(repository => repository.PatchAsync(
                 It.Is<RootFolderPatch>(applied =>
-                    applied.Id == rootFolderId && applied.Path!.Value == @"C:\media"),
+                    applied.Id == rootFolderId && applied.Path!.Value == Path.Combine(Root, "media")),
                 null,
                 It.IsAny<CancellationToken>()), Times.Once);
         }
@@ -656,7 +723,7 @@ public sealed class RootFolderServiceTests
         {
             Id = rootFolderId,
             Name = "Movies",
-            Path = @"C:\old",
+            Path = Path.Combine(Root, "old"),
             ContentType = "series",
             Defaults = new()
             {
@@ -666,7 +733,8 @@ public sealed class RootFolderServiceTests
                 }
             }
         };
-        _fileSystem.Setup(fileSystem => fileSystem.DirectoryExists(@"C:\media\movies")).Returns(true);
+        _fileSystem.Setup(fileSystem => fileSystem.DirectoryExists(Path.Combine(Root, "media", "movies")))
+            .Returns(true);
         _rootFolderRepository
             .Setup(repository => repository.GetByIdAsync(rootFolderId, It.IsAny<CancellationToken>()))
             .ReturnsAsync(existing);
@@ -682,7 +750,7 @@ public sealed class RootFolderServiceTests
         var patch = new RootFolderPatch
         {
             Name = new() { Value = "Films" },
-            Path = new() { Value = @"C:\media\shows\..\movies" },
+            Path = new() { Value = Path.Combine(Root, "media", "shows", "..", "movies") },
             ContentType = new() { Value = "movies" },
             Defaults = new()
             {
@@ -707,7 +775,7 @@ public sealed class RootFolderServiceTests
                 It.Is<RootFolderPatch>(applied =>
                     applied.Id == rootFolderId &&
                     applied.Name!.Value == "Films" &&
-                    applied.Path!.Value == @"C:\media\movies" &&
+                    applied.Path!.Value == Path.Combine(Root, "media", "movies") &&
                     applied.ContentType!.Value == "movies"),
                 actingUserId,
                 It.IsAny<CancellationToken>()), Times.Once);
@@ -719,14 +787,14 @@ public sealed class RootFolderServiceTests
     {
         // Arrange
         var rootFolderId = Guid.Parse("22222222-2222-2222-2222-222222222222");
-        _fileSystem.Setup(fileSystem => fileSystem.DirectoryExists(@"C:\missing")).Returns(false);
+        _fileSystem.Setup(fileSystem => fileSystem.DirectoryExists(Path.Combine(Root, "missing"))).Returns(false);
         _rootFolderRepository
             .Setup(repository => repository.GetByIdAsync(rootFolderId, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new RootFolder
             {
                 Id = rootFolderId,
                 Name = "Movies",
-                Path = @"C:\media",
+                Path = Path.Combine(Root, "media"),
                 ContentType = "movies",
                 Defaults = new()
                 {
@@ -736,7 +804,7 @@ public sealed class RootFolderServiceTests
                     }
                 }
             });
-        var patch = new RootFolderPatch { Path = new() { Value = @"C:\missing" } };
+        var patch = new RootFolderPatch { Path = new() { Value = Path.Combine(Root, "missing") } };
 
         // Act
         var exception = Assert.ThrowsAsync<ArgumentException>(
@@ -755,6 +823,7 @@ public sealed class RootFolderServiceTests
     }
 
     [Test]
+    [Platform("Win", Reason = "Only Windows compares paths without case.")]
     public void PatchAsync_Throws_WhenPathMatchesAnotherStoredRootIgnoringCase()
     {
         // Arrange
@@ -1042,7 +1111,7 @@ public sealed class RootFolderServiceTests
         var create = new RootFolderCreate
         {
             Name = "Publications",
-            Path = @"C:\library",
+            Path = Path.Combine(Root, "library"),
             ContentType = "publication",
             IsDefault = true,
             Defaults = new()
@@ -1091,7 +1160,7 @@ public sealed class RootFolderServiceTests
         var create = new RootFolderCreate
         {
             Name = "Books",
-            Path = @"C:\books",
+            Path = Path.Combine(Root, "books"),
             ContentType = "book",
             IsDefault = true
         };
@@ -1129,7 +1198,7 @@ public sealed class RootFolderServiceTests
         var create = new RootFolderCreate
         {
             Name = "Books",
-            Path = @"C:\books",
+            Path = Path.Combine(Root, "books"),
             ContentType = "book",
             IsDefault = true,
             Defaults = new()
@@ -1188,7 +1257,7 @@ public sealed class RootFolderServiceTests
         var create = new RootFolderCreate
         {
             Name = "Books",
-            Path = @"C:\books",
+            Path = Path.Combine(Root, "books"),
             ContentType = "book",
             IsDefault = true,
             Defaults = new()
@@ -1264,7 +1333,7 @@ public sealed class RootFolderServiceTests
                 Name = "Old name",
                 Path = "/library",
                 ContentType = "book",
-                DefaultMonitoring = true,
+                DefaultMonitoring = MonitoringMode.Monitored,
                 RenameTemplate = "{Title}.{Ext}",
                 Defaults = new()
                 {
@@ -1451,7 +1520,7 @@ public sealed class RootFolderServiceTests
                 Name = "Movies",
                 Path = "/movies",
                 ContentType = "movies",
-                DefaultMonitoring = true,
+                DefaultMonitoring = MonitoringMode.Monitored,
                 RenameTemplate = "{Title}.{Ext}",
                 Defaults = new()
                 {

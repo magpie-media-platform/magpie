@@ -8,6 +8,7 @@ using System.Text;
 using System.Threading.Tasks;
 
 using Magpie.Extensions.Qbittorrent;
+using Magpie.Models;
 using Magpie.Sdk.Caching;
 
 using Microsoft.Extensions.Logging.Abstractions;
@@ -205,7 +206,7 @@ public class QbittorrentClientTests
             .Respond("application/json", $"[{{\"hash\":\"{Hash}\",\"name\":\"Release\"}}]");
 
         // Act
-        var torrents = await _client.GetTorrentInfoAsync(_anonymousSettings, Hash, default)
+        var torrents = await _client.GetTorrentInfoAsync(_anonymousSettings, [Hash], default)
             .ConfigureAwait(false);
 
         // Assert
@@ -221,7 +222,9 @@ public class QbittorrentClientTests
     }
 
     [TestCase(HttpStatusCode.OK, true)]
-    public async Task DeleteAsync_Result_WhenWebUiReturnsStatus(HttpStatusCode statusCode, bool expected)
+    public async Task DeleteAsync_ReturnsExpectedOutcome_WhenWebUiReturnsStatus(
+        HttpStatusCode statusCode,
+        bool expected)
     {
         // Arrange
         string? body = null;
@@ -409,20 +412,22 @@ public class QbittorrentClientTests
         _handler.VerifyNoOutstandingExpectation();
     }
 
-    [Test]
-    public async Task AddMagnetAsync_Fields_WhenSettingsAndTagsAreSupplied()
+    [TestCase("true", "true")]
+    [TestCase("false", "false")]
+    public async Task AddMagnetAsync_Fields_WhenSettingsAndTagsAreSupplied(string addPaused, string expected)
     {
         // Arrange
         var settings = QbittorrentSettings.Parse(new Dictionary<string, string>
         {
             ["host"] = "http://qbit.local:8080",
             ["category"] = "custom",
-            ["paused"] = "true"
+            ["paused"] = addPaused
         });
         string? urls = null;
         string? category = null;
         string? tags = null;
         string? paused = null;
+        string? stopped = null;
         var hasTorrents = true;
         _handler.Expect(HttpMethod.Post, "http://qbit.local:8080/api/v2/torrents/add")
             .With(request =>
@@ -435,6 +440,8 @@ public class QbittorrentClientTests
                 tags = parts.Single(part => part.Headers.ContentDisposition?.Name?.Trim('"') == "tags")
                     .ReadAsStringAsync().GetAwaiter().GetResult();
                 paused = parts.Single(part => part.Headers.ContentDisposition?.Name?.Trim('"') == "paused")
+                    .ReadAsStringAsync().GetAwaiter().GetResult();
+                stopped = parts.Single(part => part.Headers.ContentDisposition?.Name?.Trim('"') == "stopped")
                     .ReadAsStringAsync().GetAwaiter().GetResult();
                 hasTorrents = parts.Any(part => part.Headers.ContentDisposition?.Name?.Trim('"') == "torrents");
                 return true;
@@ -450,20 +457,29 @@ public class QbittorrentClientTests
             Assert.That(urls, Is.EqualTo(Magnet));
             Assert.That(category, Is.EqualTo("custom"));
             Assert.That(tags, Is.EqualTo("movie"));
-            Assert.That(paused, Is.EqualTo("true"));
+            Assert.That(paused, Is.EqualTo(expected));
+            Assert.That(stopped, Is.EqualTo(expected));
             Assert.That(hasTorrents, Is.False);
         }
 
         _handler.VerifyNoOutstandingExpectation();
     }
 
-    [Test]
-    public async Task AddTorrentFileAsync_FilePart_WhenTorrentIsSupplied()
+    [TestCase("true", "true")]
+    [TestCase("false", "false")]
+    public async Task AddTorrentFileAsync_Fields_WhenTorrentIsSupplied(string addPaused, string expected)
     {
         // Arrange
+        var settings = QbittorrentSettings.Parse(new Dictionary<string, string>
+        {
+            ["host"] = "http://qbit.local:8080",
+            ["paused"] = addPaused
+        });
         byte[]? bytes = null;
         string? fileName = null;
         string? contentType = null;
+        string? paused = null;
+        string? stopped = null;
         var hasUrls = true;
         _handler.Expect(HttpMethod.Post, "http://qbit.local:8080/api/v2/torrents/add")
             .With(request =>
@@ -473,6 +489,10 @@ public class QbittorrentClientTests
                 bytes = torrent.ReadAsByteArrayAsync().GetAwaiter().GetResult();
                 fileName = torrent.Headers.ContentDisposition!.FileName!.Trim('"');
                 contentType = torrent.Headers.ContentType!.MediaType;
+                paused = parts.Single(part => part.Headers.ContentDisposition?.Name?.Trim('"') == "paused")
+                    .ReadAsStringAsync().GetAwaiter().GetResult();
+                stopped = parts.Single(part => part.Headers.ContentDisposition?.Name?.Trim('"') == "stopped")
+                    .ReadAsStringAsync().GetAwaiter().GetResult();
                 hasUrls = parts.Any(part => part.Headers.ContentDisposition?.Name?.Trim('"') == "urls");
                 return true;
             })
@@ -480,7 +500,7 @@ public class QbittorrentClientTests
 
         // Act
         await _client.AddTorrentFileAsync(
-            _anonymousSettings,
+            settings,
             TorrentBytes,
             "release.torrent",
             tags: null,
@@ -492,6 +512,8 @@ public class QbittorrentClientTests
             Assert.That(bytes, Is.EqualTo(TorrentBytes));
             Assert.That(fileName, Is.EqualTo("release.torrent"));
             Assert.That(contentType, Is.EqualTo("application/x-bittorrent"));
+            Assert.That(paused, Is.EqualTo(expected));
+            Assert.That(stopped, Is.EqualTo(expected));
             Assert.That(hasUrls, Is.False);
         }
 
@@ -534,14 +556,14 @@ public class QbittorrentClientTests
     }
 
     [Test]
-    public void AddTorrentFileAsync_Throws_WhenWebUiRejectsMediaType()
+    public void AddTorrentFileAsync_ThrowsAPermanentPayloadRejection_WhenWebUiRejectsMediaType()
     {
         // Arrange
         _handler.Expect(HttpMethod.Post, "http://qbit.local:8080/api/v2/torrents/add")
             .Respond(HttpStatusCode.UnsupportedMediaType);
 
         // Act
-        var exception = Assert.ThrowsAsync<QbittorrentAddRejectedException>(
+        var exception = Assert.ThrowsAsync<ReleasePayloadRejectedException>(
             async () => await _client.AddTorrentFileAsync(
                 _anonymousSettings,
                 TorrentBytes,
@@ -550,7 +572,15 @@ public class QbittorrentClientTests
                 default).ConfigureAwait(false));
 
         // Assert
-        Assert.That(exception!.Message, Does.Contain("HTTP 415"));
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(
+                exception!.Message,
+                Is.EqualTo("qBittorrent rejected the .torrent file release.torrent: the .torrent file is not valid " +
+                    "(HTTP 415)."));
+            Assert.That(exception.Transient, Is.False);
+        }
+
         _handler.VerifyNoOutstandingExpectation();
     }
 
@@ -651,7 +681,7 @@ public class QbittorrentClientTests
         using var client = new QbittorrentClient(http, NullLogger<QbittorrentClient>.Instance, _cacheFactory);
 
         // Act
-        var action = async () => await client.GetTorrentInfoAsync(_credentialSettings, Hash, default)
+        var action = async () => await client.GetTorrentInfoAsync(_credentialSettings, [Hash], default)
             .ConfigureAwait(false);
 
         // Assert

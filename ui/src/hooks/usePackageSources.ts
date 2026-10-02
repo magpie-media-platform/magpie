@@ -79,7 +79,7 @@ export function usePackageSources() {
     useInvalidateQueriesOnEvents(
         ['extensionPackageSource.created', 'extensionPackageSource.updated', 'extensionPackageSource.deleted'],
         [packageSourceQueryKeys.list()],
-        { exact: true, owner: 'extension-package-sources' },
+        { exact: true },
     );
     const queryClient = useQueryClient();
 

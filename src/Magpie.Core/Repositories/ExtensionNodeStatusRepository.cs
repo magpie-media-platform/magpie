@@ -63,8 +63,10 @@ internal sealed class ExtensionNodeStatusRepository(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "The node status repository failed to write the status " +
-                "of node {NodeId}.", status.NodeId);
+            logger.LogError(
+                ex,
+                "The node status repository failed to write the status of node {NodeId}.",
+                status.NodeId);
             throw;
         }
     }

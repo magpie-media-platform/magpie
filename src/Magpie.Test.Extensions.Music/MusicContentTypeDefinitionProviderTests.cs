@@ -68,7 +68,7 @@ public class MusicContentTypeDefinitionProviderTests
         ReleaseMatchResult.Confident)]
     [TestCase("album", "Court.Ordered.Smoothie.Wrong.Album.FLAC", 4, ReleaseMatchResult.NoMatch)]
     [TestCase("artist", "Court.Ordered.Smoothie.Any.Album.FLAC", 4, ReleaseMatchResult.Confident)]
-    public void IsMatch_Result_WhenMusicReleaseEvidenceIsEvaluated(
+    public void IsMatch_ReturnsExpectedMatch_WhenMusicReleaseEvidenceIsEvaluated(
         string targetLevel,
         string releaseTitle,
         int trackNumber,
@@ -158,6 +158,89 @@ public class MusicContentTypeDefinitionProviderTests
         Assert.That(result, Is.EqualTo(expected));
     }
 
+    [TestCase("album", "Choking Victim", "No Gods / No Managers", "500 Channels", 1,
+        "Choking Victim - No Gods + No Managers - 01 - 500 Channels.flac", ReleaseMatchResult.Confident)]
+    [TestCase("album", "NOFX", "Self/Entitled", "72 Hookers", 1,
+        "NOFX - Self+Entitled - 01 - 72 Hookers.flac", ReleaseMatchResult.Confident)]
+    [TestCase("album", "Choking Victim", "No Gods / No Managers", "500 Channels", 1,
+        "Choking Victim - Crack Rock Steady - 01 - Crack Rock Steady.flac", ReleaseMatchResult.NoMatch)]
+    [TestCase("track", "Jeff Rosenstock", "NO DREAM", "***BNB", 10,
+        "Jeff Rosenstock - NO DREAM - 10 - -BNB.flac", ReleaseMatchResult.Confident)]
+    [TestCase("track", "Jeff Rosenstock", "SKA DREAM", "***SKA", 10,
+        "Jeff Rosenstock - SKA DREAM - 10 - -SKA.flac", ReleaseMatchResult.Confident)]
+    [TestCase("track", "Jeff Rosenstock", "POST\u2010", "9/10", 9,
+        "Jeff Rosenstock - POST\u2010 - 09 - 9+10.flac", ReleaseMatchResult.Confident)]
+    [TestCase("track", "Jeff Rosenstock", "NO DREAM", "NO DREAM", 1,
+        "Jeff Rosenstock - NO DREAM - 10 - -BNB.flac", ReleaseMatchResult.NoMatch)]
+    [TestCase("track", "Jeff Rosenstock", "POST\u2010", "USA", 1,
+        "Jeff Rosenstock - POST\u2010 - 09 - 9+10.flac", ReleaseMatchResult.NoMatch)]
+    [TestCase("track", "Adele", "21", "Rolling in the Deep", 1,
+        "Adele - 21 - 01 - Rolling in the Deep.flac", ReleaseMatchResult.Confident)]
+    public void IsMatch_TreatsFilesystemSafeSubstitutesAsEqual_WhenTheFileNameReplacedATitleCharacter(
+        string targetLevel,
+        string artistName,
+        string albumName,
+        string trackName,
+        int trackOrdinal,
+        string fileName,
+        ReleaseMatchResult expected)
+    {
+        // Arrange
+        var artist = new ContentHierarchyItem
+        {
+            Id = Guid.NewGuid(),
+            ContentType = "music",
+            Level = "artist",
+            Slug = "artist",
+            Name = artistName,
+            CreatedAt = DateTime.UtcNow,
+        };
+        var album = new ContentHierarchyItem
+        {
+            Id = Guid.NewGuid(),
+            ParentId = artist.Id,
+            ContentType = "music",
+            Level = "album",
+            Slug = "album",
+            Name = albumName,
+            CreatedAt = DateTime.UtcNow,
+        };
+        var track = new ContentHierarchyItem
+        {
+            Id = Guid.NewGuid(),
+            ParentId = album.Id,
+            ContentType = "music",
+            Level = "track",
+            Slug = "track",
+            Name = trackName,
+            Ordinal = trackOrdinal,
+            CreatedAt = DateTime.UtcNow,
+        };
+        var target = targetLevel == "album"
+            ? new ContentTarget
+            {
+                Item = album,
+                Lineage = [album, artist],
+                Metadata = new Dictionary<Guid, MaterializedMetadata>(),
+            }
+            : new ContentTarget
+            {
+                Item = track,
+                Lineage = [track, album, artist],
+                Metadata = new Dictionary<Guid, MaterializedMetadata>(),
+            };
+
+        // Act
+        var result = _subject.IsMatch(
+            target,
+            [],
+            new Release { Protocol = "file", Title = fileName },
+            []);
+
+        // Assert
+        Assert.That(result, Is.EqualTo(expected));
+    }
+
     [TestCase("", null, "Pack Artist - Album - Song.flac", ReleaseMatchResult.Indeterminate)]
     [TestCase("", null, "Pack Artist - Track 02 - Song.flac", ReleaseMatchResult.Confident)]
     [TestCase("Other", null, "01 - Pack Artist - Title.flac", ReleaseMatchResult.NoMatch)]
@@ -224,7 +307,7 @@ public class MusicContentTypeDefinitionProviderTests
     }
 
     [Test]
-    public void Parse_Result_WhenTrackFileIsProvided()
+    public void Parse_ReturnsArtistAndAlbumSignals_WhenTrackFileIsProvided()
     {
         // Arrange
         // Act
@@ -246,7 +329,7 @@ public class MusicContentTypeDefinitionProviderTests
     }
 
     [Test]
-    public void BuildPath_Result_WhenArtistAlbumTrackAreAvailable()
+    public void BuildPath_ReturnsArtistAlbumTrackPath_WhenArtistAlbumTrackAreAvailable()
     {
         // Arrange
         var ancestors = new ContentHierarchyItem[]
@@ -288,7 +371,7 @@ public class MusicContentTypeDefinitionProviderTests
     }
 
     [Test]
-    public void BuildPathPlan_Result_WhenArtistAlbumTrackAreAvailable()
+    public void BuildPathPlan_ReturnsArtistAndAlbumDirectories_WhenArtistAlbumTrackAreAvailable()
     {
         // Arrange
         var ancestors = new ContentHierarchyItem[]
@@ -338,7 +421,7 @@ public class MusicContentTypeDefinitionProviderTests
     }
 
     [Test]
-    public void ResolveDirectoryLevelChain_Result_WhenTrackLevelIsGiven()
+    public void ResolveDirectoryLevelChain_ReturnsArtistAndAlbum_WhenTrackLevelIsGiven()
     {
         // Arrange
         // Act

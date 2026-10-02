@@ -220,7 +220,7 @@ internal sealed class RemotePathMappingService(
 
             using var enumerator = fileSystem.EnumerateFileSystemEntries(path).GetEnumerator();
             _ = enumerator.MoveNext();
-            return new ConfigurationTestResult
+            return new()
             {
                 Success = true,
                 Message = "Local path is reachable and readable.",

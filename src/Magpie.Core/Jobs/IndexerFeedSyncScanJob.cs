@@ -54,7 +54,8 @@ internal sealed class IndexerFeedSyncScanJob(
             var feed = feeds[i];
             progressReporter.ReportFraction(
                 i,
-                feeds.Length, $"The scan will queue a sync for indexer feed {feed.Name}.");
+                feeds.Length,
+                $"The scan will queue a sync for indexer feed {feed.Name}.");
 
             try
             {

@@ -94,15 +94,9 @@ internal sealed class MlfqJobConcurrencyScheduler : IJobConcurrencyScheduler
         _time = time;
         _config = Create(options, logger);
 
-        _ = JobsTelemetry.Meter.CreateObservableGauge(
-            "magpie.jobs.mlfq_level_occupancy",
-            ObserveLevelOccupancy);
-        _ = JobsTelemetry.Meter.CreateObservableGauge(
-            "magpie.jobs.mlfq_level_capacity",
-            ObserveLevelCapacity);
-        _ = JobsTelemetry.Meter.CreateObservableGauge(
-            "magpie.jobs.fast_lane_in_use",
-            ObserveFastLaneInUse);
+        _ = JobsTelemetry.Meter.CreateObservableGauge("magpie.jobs.mlfq_level_occupancy", ObserveLevelOccupancy);
+        _ = JobsTelemetry.Meter.CreateObservableGauge("magpie.jobs.mlfq_level_capacity", ObserveLevelCapacity);
+        _ = JobsTelemetry.Meter.CreateObservableGauge("magpie.jobs.fast_lane_in_use", ObserveFastLaneInUse);
     }
 
     public int Total => _config.General + _config.FastLane;
@@ -140,7 +134,7 @@ internal sealed class MlfqJobConcurrencyScheduler : IJobConcurrencyScheduler
         return widths;
     }
 
-    public bool TryReserveSlot(out IDisposable reservation)
+    private bool TryReserveSlot(out IDisposable reservation)
     {
         lock (_lock)
         {
@@ -346,7 +340,7 @@ internal sealed class MlfqJobConcurrencyScheduler : IJobConcurrencyScheduler
         {
             if (!_pageByType.TryGetValue(candidate.JobType, out var queue))
             {
-                queue = new Queue<JobClaimCandidate>();
+                queue = new();
                 _pageByType[candidate.JobType] = queue;
                 EnsureType(candidate.JobType);
             }

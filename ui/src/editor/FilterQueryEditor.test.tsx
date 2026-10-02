@@ -242,16 +242,14 @@ describe('FilterQueryEditor', () => {
     });
 
     describe('external value changes', () => {
-        it('accepts different initial values', () => {
-            const queries = ['monitoring = true', 'genre has "Action"', 'name contains "test" and status = Active'];
-
-            for (const query of queries) {
-                const { container, unmount } = render(<FilterQueryEditor value={query} onChange={vi.fn()} />);
+        it.each(['monitoring = true', 'genre has "Action"', 'name contains "test" and status = Active'])(
+            'accepts the initial value %s',
+            (query) => {
+                const { container } = render(<FilterQueryEditor value={query} onChange={vi.fn()} />);
 
                 expect(container.querySelector('.filter-query-editor')).toBeInTheDocument();
-                unmount();
-            }
-        });
+            },
+        );
 
         it('handles value prop changes', async () => {
             const { container, rerender } = render(<FilterQueryEditor value="initial" onChange={vi.fn()} />);
@@ -292,10 +290,12 @@ describe('FilterQueryEditor', () => {
         });
 
         it('handles multiple mount/unmount cycles', () => {
-            for (let i = 0; i < 3; i++) {
-                const { unmount } = render(<FilterQueryEditor value={`test ${i}`} onChange={vi.fn()} />);
-                unmount();
-            }
+            const first = render(<FilterQueryEditor value="test 0" onChange={vi.fn()} />);
+            first.unmount();
+            const second = render(<FilterQueryEditor value="test 1" onChange={vi.fn()} />);
+            second.unmount();
+            const third = render(<FilterQueryEditor value="test 2" onChange={vi.fn()} />);
+            third.unmount();
         });
     });
 

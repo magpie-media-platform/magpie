@@ -104,7 +104,7 @@ internal sealed class ContentRepository(
             var totalItems = await items.CountAsync(cancellationToken).ConfigureAwait(false);
             items = items.Skip((paging.PageNumber - 1) * paging.PageSize).Take(paging.PageSize);
 
-            return new PagedList<ContentItem>
+            return new()
             {
                 Items = await items.ToListAsync(cancellationToken).ConfigureAwait(false),
                 TotalItems = totalItems,
@@ -185,10 +185,7 @@ internal sealed class ContentRepository(
         }
         catch (Exception ex)
         {
-            logger.LogError(
-                ex,
-                "The content item repository failed to update item {ContentItemId}.",
-                contentItem.Id);
+            logger.LogError(ex, "The content item repository failed to update item {ContentItemId}.", contentItem.Id);
             throw;
         }
     }
@@ -229,15 +226,14 @@ internal sealed class ContentRepository(
         catch (Exception ex)
         {
             logger.LogError(
-                ex, "The content repository failed to save media state for {ContentItemId}.", contentItem.Id);
+                ex,
+                "The content repository failed to save media state for {ContentItemId}.",
+                contentItem.Id);
             throw;
         }
     }
 
-    public async Task<bool> DeleteAsync(
-        Guid id,
-        Guid? deletedByUserId,
-        CancellationToken cancellationToken = default)
+    public async Task<bool> DeleteAsync(Guid id, Guid? deletedByUserId, CancellationToken cancellationToken = default)
     {
         try
         {
@@ -337,8 +333,10 @@ internal sealed class ContentRepository(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "The content item repository failed to update the fulfillment of item " +
-                "{ContentItemId}.", contentItemId);
+            logger.LogError(
+                ex,
+                "The content item repository failed to update the fulfillment of item {ContentItemId}.",
+                contentItemId);
             throw;
         }
     }
@@ -378,8 +376,10 @@ internal sealed class ContentRepository(
                     }
 
                     await context.ContentHierarchyItems.Where(item => item.Id == rootId)
-                        .ExecuteUpdateAsync(setters => setters.SetProperty(item => item.ModifiedAt,
-                            item => item.ModifiedAt), ct).ConfigureAwait(false);
+                        .ExecuteUpdateAsync(
+                            setters => setters.SetProperty(item => item.ModifiedAt, item => item.ModifiedAt),
+                            ct)
+                        .ConfigureAwait(false);
 
                     var lockedRootId = hierarchyItemId;
                     visited.Clear();
@@ -413,8 +413,10 @@ internal sealed class ContentRepository(
                     }
 
                     var nodes = await context.ContentHierarchyItems.AsNoTracking()
-                        .Where(item => item.Id == rootId).Include(item => item.ContentItem)
-                        .ThenInclude(item => item!.MediaFiles).ToListAsync(ct).ConfigureAwait(false);
+                        .Where(item => item.Id == rootId)
+                        .Include(item => item.ContentItem).ThenInclude(item => item!.MediaFiles)
+                        .Include(item => item.ContentItem).ThenInclude(item => item!.CoveringMediaFiles)
+                        .ToListAsync(ct).ConfigureAwait(false);
                     for (var offset = 0; offset < nodes.Count;)
                     {
                         var ids = nodes.Skip(offset).Select(item => item.Id).ToArray();
@@ -422,10 +424,12 @@ internal sealed class ContentRepository(
                         nodes.AddRange(await context.ContentHierarchyItems.AsNoTracking()
                             .Where(item => item.ParentId != null && ids.Contains(item.ParentId.Value))
                             .Include(item => item.ContentItem).ThenInclude(item => item!.MediaFiles)
+                            .Include(item => item.ContentItem).ThenInclude(item => item!.CoveringMediaFiles)
                             .ToListAsync(ct).ConfigureAwait(false));
                     }
 
                     var children = nodes.Where(item => item.ParentId != null).ToLookup(item => item.ParentId!.Value);
+                    var primaryFiles = new Dictionary<Guid, Dictionary<Guid, long>>();
                     foreach (var node in nodes.AsEnumerable().Reverse())
                     {
                         var level = contentTypeRegistry.GetDefinitionFor(node.ContentType)?.LevelDefinitions
@@ -449,9 +453,14 @@ internal sealed class ContentRepository(
                             continue;
                         }
 
-                        var files = current.MediaFiles
+                        var files = current.MediaFiles.Concat(current.CoveringMediaFiles)
                             .Where(file => FileSystem.IsPrimaryFile(fileSystem, level, file))
                             .ToList();
+                        var subtreeFiles = children[node.Id].SelectMany(item => primaryFiles[item.Id])
+                            .Concat(files.Select(file => KeyValuePair.Create(file.Id, file.FileSize)))
+                            .DistinctBy(file => file.Key)
+                            .ToDictionary();
+                        primaryFiles[node.Id] = subtreeFiles;
 
                         var childItems = children[node.Id].Select(item => item.ContentItem!).ToList();
                         var states = childItems.Select(item => item.Fulfillment).ToList();
@@ -478,8 +487,8 @@ internal sealed class ContentRepository(
                                 .Select(item => item.FulfilledAt));
                         var date = fulfillment == FulfillmentStatus.Missing ? null
                             : fulfillment == FulfillmentStatus.FulfilledExternally ? current.FulfilledAt : dates.Max();
-                        var size = files.Sum(file => file.FileSize) + childItems.Sum(item => item.PrimaryMediaSize);
-                        var count = files.Count + childItems.Sum(item => item.PrimaryMediaFileCount);
+                        var size = subtreeFiles.Values.Sum();
+                        var count = subtreeFiles.Count;
                         node.ContentItem = current with
                         {
                             Fulfillment = fulfillment,
@@ -522,10 +531,17 @@ internal sealed class ContentRepository(
                             Monitoring = node.EffectiveMonitoring != MonitoringMode.Unmonitored,
                             Fulfillment = fulfillment.ToString()
                         };
-                        await transactionManager.OnCommittedAsync(token => eventBus.PublishAsync(
-                            ContentEventBuilder.BuildContentHierarchyItemUpdatedEvent(impact,
-                                [nameof(ContentItem.PrimaryMediaSize), nameof(ContentItem.PrimaryMediaFileCount),
-                                nameof(ContentItem.FulfilledAt)]), token), ct).ConfigureAwait(false);
+                        await transactionManager.OnCommittedAsync(
+                            token => eventBus.PublishAsync(
+                                ContentEventBuilder.BuildContentHierarchyItemUpdatedEvent(
+                                    impact,
+                                    [
+                                        nameof(ContentItem.PrimaryMediaSize),
+                                        nameof(ContentItem.PrimaryMediaFileCount),
+                                        nameof(ContentItem.FulfilledAt)
+                                    ]),
+                                token),
+                            ct).ConfigureAwait(false);
                     }
 
                     return true;
@@ -534,7 +550,9 @@ internal sealed class ContentRepository(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "The content repository failed to reconcile media state for {HierarchyItemId}.",
+            logger.LogError(
+                ex,
+                "The content repository failed to reconcile media state for {HierarchyItemId}.",
                 hierarchyItemId);
             throw;
         }

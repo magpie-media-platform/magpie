@@ -48,7 +48,7 @@ function renderContentDetailSurface(queryFn: () => Promise<unknown>) {
                     'job.execution.completed',
                 ],
                 [['content', 'detail', ACTIVE_ID]],
-                { debounceMs: 0, entityIds: [ACTIVE_ID], exact: true, owner: 'content-detail' },
+                { debounceMs: 0, entityIds: [ACTIVE_ID], exact: true },
             );
         },
         { wrapper: Wrapper },

@@ -82,8 +82,8 @@ export function RestartHostPanel() {
                         <DialogTitle>Restart Magpie?</DialogTitle>
                         <DialogDescription>
                             Magpie will shut down and the supervisor will relaunch it. The interface will be briefly
-                            unavailable while it reconnects. In-progress jobs are interrupted and resume after the
-                            restart.
+                            unavailable while it reconnects. Running jobs stop. Each job retries or stays failed,
+                            according to its recovery policy.
                         </DialogDescription>
                     </DialogHeader>
                     <DialogFooter>

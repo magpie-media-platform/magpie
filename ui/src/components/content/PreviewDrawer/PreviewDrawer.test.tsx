@@ -64,26 +64,31 @@ const preview: ContentPreview = {
     ],
 };
 
-function mockHook(overrides: Partial<ReturnType<typeof usePreviewByExternalId>>) {
-    const mutate = vi.fn();
-    const reset = vi.fn();
-    mockUsePreview.mockReturnValue({
-        mutate,
-        reset,
-        data: undefined,
-        error: null,
-        isPending: false,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        ...(overrides as any),
-    } as ReturnType<typeof usePreviewByExternalId>);
-    return { mutate, reset };
-}
+const sparsePreview: ContentPreview = {
+    providerType: 'provider-a',
+    contentType: 'movies',
+    levelSlug: 'movie',
+    title: 'Inception',
+    genres: [],
+    contentRatings: [],
+    images: [],
+    previews: [],
+    externalIds: [{ source: 'provider-a.movie', value: '27205' }],
+    relatedSubjects: [],
+};
 
 describe('PreviewDrawer', () => {
     beforeEach(() => vi.clearAllMocks());
 
     it('fetches the preview with the target identifiers when opened', async () => {
-        const { mutate } = mockHook({ data: preview });
+        const mutate = vi.fn();
+        mockUsePreview.mockReturnValue({
+            mutate,
+            reset: vi.fn(),
+            data: preview,
+            error: null,
+            isPending: false,
+        } as unknown as ReturnType<typeof usePreviewByExternalId>);
 
         render(
             <PreviewDrawer
@@ -106,8 +111,44 @@ describe('PreviewDrawer', () => {
         });
     });
 
-    it.each(['Escape', 'Close'])('returns focus to the opener after %s', async (dismissal) => {
-        mockHook({ data: preview });
+    it('returns focus to the opener after Escape', async () => {
+        mockUsePreview.mockReturnValue({
+            mutate: vi.fn(),
+            reset: vi.fn(),
+            data: preview,
+            error: null,
+            isPending: false,
+        } as unknown as ReturnType<typeof usePreviewByExternalId>);
+        const user = userEvent.setup();
+        function Opener() {
+            const [open, setOpen] = useState(false);
+            return (
+                <>
+                    <button onClick={() => setOpen(true)}>Open preview</button>
+                    <PreviewDrawer open={open} onOpenChange={setOpen} target={target} />
+                </>
+            );
+        }
+        render(<Opener />);
+
+        const opener = screen.getByRole('button', { name: 'Open preview' });
+        opener.focus();
+        await user.keyboard('{Enter}');
+        await screen.findByTestId('preview-drawer');
+        await user.keyboard('{Escape}');
+
+        await waitFor(() => expect(screen.queryByTestId('preview-drawer')).not.toBeInTheDocument());
+        expect(opener).toHaveFocus();
+    });
+
+    it('returns focus to the opener after Close', async () => {
+        mockUsePreview.mockReturnValue({
+            mutate: vi.fn(),
+            reset: vi.fn(),
+            data: preview,
+            error: null,
+            isPending: false,
+        } as unknown as ReturnType<typeof usePreviewByExternalId>);
         const user = userEvent.setup();
         function Opener() {
             const [open, setOpen] = useState(false);
@@ -124,15 +165,20 @@ describe('PreviewDrawer', () => {
         opener.focus();
         await user.keyboard('{Enter}');
         const drawer = await screen.findByTestId('preview-drawer');
-        if (dismissal === 'Escape') await user.keyboard('{Escape}');
-        else await user.click(within(drawer).getByRole('button', { name: /^close$/i }));
+        await user.click(within(drawer).getByRole('button', { name: /^close$/i }));
 
         await waitFor(() => expect(screen.queryByTestId('preview-drawer')).not.toBeInTheDocument());
         expect(opener).toHaveFocus();
     });
 
     it('renders title, preview hero, and related subjects from the preview', async () => {
-        mockHook({ data: preview });
+        mockUsePreview.mockReturnValue({
+            mutate: vi.fn(),
+            reset: vi.fn(),
+            data: preview,
+            error: null,
+            isPending: false,
+        } as unknown as ReturnType<typeof usePreviewByExternalId>);
 
         render(
             <PreviewDrawer
@@ -154,7 +200,9 @@ describe('PreviewDrawer', () => {
     });
 
     it('uses provider ordering without interpreting preview or image kinds', async () => {
-        mockHook({
+        mockUsePreview.mockReturnValue({
+            mutate: vi.fn(),
+            reset: vi.fn(),
             data: {
                 ...preview,
                 images: [
@@ -174,7 +222,9 @@ describe('PreviewDrawer', () => {
                     },
                 ],
             },
-        });
+            error: null,
+            isPending: false,
+        } as unknown as ReturnType<typeof usePreviewByExternalId>);
 
         render(
             <PreviewDrawer
@@ -192,7 +242,9 @@ describe('PreviewDrawer', () => {
     });
 
     it('groups related subjects by their generic subject kind', async () => {
-        mockHook({
+        mockUsePreview.mockReturnValue({
+            mutate: vi.fn(),
+            reset: vi.fn(),
             data: {
                 ...preview,
                 relatedSubjects: [
@@ -205,7 +257,9 @@ describe('PreviewDrawer', () => {
                     },
                 ],
             },
-        });
+            error: null,
+            isPending: false,
+        } as unknown as ReturnType<typeof usePreviewByExternalId>);
 
         render(
             <PreviewDrawer
@@ -227,7 +281,9 @@ describe('PreviewDrawer', () => {
     });
 
     it('caps each related-subject group after grouping', async () => {
-        mockHook({
+        mockUsePreview.mockReturnValue({
+            mutate: vi.fn(),
+            reset: vi.fn(),
             data: {
                 ...preview,
                 relatedSubjects: [
@@ -244,7 +300,9 @@ describe('PreviewDrawer', () => {
                     },
                 ],
             },
-        });
+            error: null,
+            isPending: false,
+        } as unknown as ReturnType<typeof usePreviewByExternalId>);
 
         render(
             <PreviewDrawer
@@ -263,7 +321,13 @@ describe('PreviewDrawer', () => {
     });
 
     it('hides the related-subject section when the preview has no related subjects', async () => {
-        mockHook({ data: { ...preview, relatedSubjects: [] } });
+        mockUsePreview.mockReturnValue({
+            mutate: vi.fn(),
+            reset: vi.fn(),
+            data: { ...preview, relatedSubjects: [] },
+            error: null,
+            isPending: false,
+        } as unknown as ReturnType<typeof usePreviewByExternalId>);
 
         render(
             <PreviewDrawer
@@ -283,7 +347,13 @@ describe('PreviewDrawer', () => {
     });
 
     it('renders artwork-only previews inside the bounded artwork frame', async () => {
-        mockHook({ data: { ...preview, previews: [] } });
+        mockUsePreview.mockReturnValue({
+            mutate: vi.fn(),
+            reset: vi.fn(),
+            data: { ...preview, previews: [] },
+            error: null,
+            isPending: false,
+        } as unknown as ReturnType<typeof usePreviewByExternalId>);
 
         render(
             <PreviewDrawer
@@ -310,7 +380,13 @@ describe('PreviewDrawer', () => {
 
     it('calls onAdd with the target when the Add button is clicked', async () => {
         const user = userEvent.setup();
-        mockHook({ data: preview });
+        mockUsePreview.mockReturnValue({
+            mutate: vi.fn(),
+            reset: vi.fn(),
+            data: preview,
+            error: null,
+            isPending: false,
+        } as unknown as ReturnType<typeof usePreviewByExternalId>);
         const onAdd = vi.fn();
 
         render(
@@ -331,7 +407,13 @@ describe('PreviewDrawer', () => {
 
     it('adds straight to the sole destination when one addOption is given', async () => {
         const user = userEvent.setup();
-        mockHook({ data: preview });
+        mockUsePreview.mockReturnValue({
+            mutate: vi.fn(),
+            reset: vi.fn(),
+            data: preview,
+            error: null,
+            isPending: false,
+        } as unknown as ReturnType<typeof usePreviewByExternalId>);
         const onAdd = vi.fn();
 
         render(
@@ -353,7 +435,13 @@ describe('PreviewDrawer', () => {
 
     it('opens a destination menu on Add when several addOptions are given', async () => {
         const user = userEvent.setup();
-        mockHook({ data: preview });
+        mockUsePreview.mockReturnValue({
+            mutate: vi.fn(),
+            reset: vi.fn(),
+            data: preview,
+            error: null,
+            isPending: false,
+        } as unknown as ReturnType<typeof usePreviewByExternalId>);
         const onAdd = vi.fn();
 
         render(
@@ -378,7 +466,13 @@ describe('PreviewDrawer', () => {
     });
 
     it('disables Add and shows the reason when addDisabledReason is set', async () => {
-        mockHook({ data: preview });
+        mockUsePreview.mockReturnValue({
+            mutate: vi.fn(),
+            reset: vi.fn(),
+            data: preview,
+            error: null,
+            isPending: false,
+        } as unknown as ReturnType<typeof usePreviewByExternalId>);
         const onAdd = vi.fn();
 
         render(
@@ -400,7 +494,13 @@ describe('PreviewDrawer', () => {
     });
 
     it('shows the empty state on a 404', async () => {
-        mockHook({ error: new ApiError(404, 'Not found') });
+        mockUsePreview.mockReturnValue({
+            mutate: vi.fn(),
+            reset: vi.fn(),
+            data: undefined,
+            error: new ApiError(404, 'Not found'),
+            isPending: false,
+        } as unknown as ReturnType<typeof usePreviewByExternalId>);
 
         render(
             <PreviewDrawer
@@ -419,8 +519,63 @@ describe('PreviewDrawer', () => {
         expect(screen.getByTestId('preview-drawer-not-found')).toHaveTextContent(/no metadata found/i);
     });
 
+    it('shows the no-details state when a successful preview has only its identity', async () => {
+        mockUsePreview.mockReturnValue({
+            mutate: vi.fn(),
+            reset: vi.fn(),
+            data: sparsePreview,
+            error: null,
+            isPending: false,
+        } as unknown as ReturnType<typeof usePreviewByExternalId>);
+
+        render(<PreviewDrawer open onOpenChange={() => {}} target={target} />);
+
+        const noDetails = await screen.findByTestId('preview-drawer-no-details');
+        expect(within(noDetails).getByRole('heading', { name: 'No more details' })).toBeInTheDocument();
+        expect(within(noDetails).getByText('This item has no more details.')).toBeInTheDocument();
+        expect(screen.getByRole('heading', { name: 'Inception 2010' })).toBeInTheDocument();
+        expect(screen.queryByTestId('preview-drawer-loading')).not.toBeInTheDocument();
+        expect(screen.queryByTestId('preview-drawer-not-found')).not.toBeInTheDocument();
+        expect(screen.queryByTestId('preview-drawer-error')).not.toBeInTheDocument();
+    });
+
+    it.each<[string, Partial<ContentPreview>]>([
+        ['a preview clip', { previews: [{ kind: 'trailer', url: 'https://www.youtube.com/watch?v=YoHD9XEInc0' }] }],
+        ['artwork', { images: [{ type: 'poster', url: 'https://img/poster.jpg' }] }],
+        ['a runtime', { duration: '02:28:00' }],
+        ['a language', { language: 'en' }],
+        ['a content rating', { contentRatings: [{ body: 'MPAA', rating: 'PG-13' }] }],
+        ['an overview', { overview: 'A thief who steals corporate secrets.' }],
+        ['a genre', { genres: ['Action'] }],
+        [
+            'a related subject',
+            {
+                relatedSubjects: [{ name: 'Leonardo DiCaprio', kind: 'person', relationshipKind: 'actor', ordinal: 0 }],
+            },
+        ],
+    ])('does not show the no-details state when the preview has only %s', async (_, details) => {
+        mockUsePreview.mockReturnValue({
+            mutate: vi.fn(),
+            reset: vi.fn(),
+            data: { ...sparsePreview, ...details },
+            error: null,
+            isPending: false,
+        } as unknown as ReturnType<typeof usePreviewByExternalId>);
+
+        render(<PreviewDrawer open onOpenChange={() => {}} target={target} />);
+
+        expect(await screen.findByRole('heading', { name: 'Inception 2010' })).toBeInTheDocument();
+        expect(screen.queryByTestId('preview-drawer-no-details')).not.toBeInTheDocument();
+    });
+
     it('reflects an added candidate on the Add button', async () => {
-        mockHook({ data: preview });
+        mockUsePreview.mockReturnValue({
+            mutate: vi.fn(),
+            reset: vi.fn(),
+            data: preview,
+            error: null,
+            isPending: false,
+        } as unknown as ReturnType<typeof usePreviewByExternalId>);
 
         render(
             <PreviewDrawer open onOpenChange={() => {}} target={target} isAdded isAdding={false} onAdd={() => {}} />,

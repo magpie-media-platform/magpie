@@ -119,10 +119,46 @@ describe('MonitoringDefaultPanel', () => {
             expect(mockApiPatch).toHaveBeenCalledWith(
                 '/settings/groups/system/monitoring',
                 expect.objectContaining({
-                    settings: expect.objectContaining({ add: { 'system-default': 'false' } }),
+                    settings: expect.objectContaining({ add: { 'system-default': 'false', 'max-spread': '0' } }),
                 }),
             );
         });
+    });
+
+    it('saves the max spread with the default monitoring', async () => {
+        mockApiGet.mockResolvedValue([]);
+        mockApiPatch.mockResolvedValue(undefined);
+        const user = userEvent.setup();
+
+        render(<MonitoringDefaultPanel />, { wrapper: createTestWrapper() });
+
+        const maxSpread = await screen.findByRole('spinbutton', { name: 'Max spread' });
+        await user.clear(maxSpread);
+        await user.type(maxSpread, '2');
+        await user.click(screen.getByRole('button', { name: /save/i }));
+
+        await waitFor(() => {
+            expect(mockApiPatch).toHaveBeenCalledWith(
+                '/settings/groups/system/monitoring',
+                expect.objectContaining({
+                    settings: expect.objectContaining({ add: { 'system-default': 'true', 'max-spread': '2' } }),
+                }),
+            );
+        });
+    });
+
+    it('does not save a max spread that is not a whole number of 0 or more', async () => {
+        mockApiGet.mockResolvedValue([]);
+        const user = userEvent.setup();
+
+        render(<MonitoringDefaultPanel />, { wrapper: createTestWrapper() });
+
+        const maxSpread = await screen.findByRole('spinbutton', { name: 'Max spread' });
+        await user.clear(maxSpread);
+        await user.type(maxSpread, '-1');
+
+        expect(screen.getByText('Max spread must be a whole number, 0 or more.')).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: /save/i })).toBeDisabled();
     });
 
     it('keeps a newer toggle change dirty when the pending save succeeds', async () => {

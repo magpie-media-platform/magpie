@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 
-using Magpie.Models;
 using Magpie.Models.Api;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
@@ -72,7 +71,11 @@ internal sealed class MediaServersEndpointGroup : IApiEndpointGroup
     {
         var servers = await mediaServerService.ListAsync(cancellationToken).ConfigureAwait(false);
 
-        var redacted = await RedactSecretsAsync(mediaServerService, servers, cancellationToken).ConfigureAwait(false);
+        var redacted = new List<MediaServer>(servers.Count);
+        foreach (var server in servers)
+        {
+            redacted.Add(await RedactSecretsAsync(mediaServerService, server, cancellationToken).ConfigureAwait(false));
+        }
 
         return Results.Ok(redacted);
     }
@@ -161,29 +164,6 @@ internal sealed class MediaServersEndpointGroup : IApiEndpointGroup
             .ConfigureAwait(false);
 
         return Results.Ok(result);
-    }
-
-    private static async Task<IReadOnlyList<MediaServer>> RedactSecretsAsync(
-        IMediaServerService mediaServerService,
-        IReadOnlyList<MediaServer> servers,
-        CancellationToken cancellationToken)
-    {
-        var schemasByProviderType =
-            new Dictionary<string, IReadOnlyList<SettingSchemaDefinition>>(StringComparer.OrdinalIgnoreCase);
-        var redacted = new List<MediaServer>(servers.Count);
-        foreach (var server in servers)
-        {
-            if (!schemasByProviderType.TryGetValue(server.ProviderType, out var schema))
-            {
-                schema = await mediaServerService.GetSettingsSchemaAsync(server.ProviderType, cancellationToken)
-                    .ConfigureAwait(false);
-                schemasByProviderType[server.ProviderType] = schema;
-            }
-
-            redacted.Add(server with { Settings = server.Settings.RedactSecrets(schema) });
-        }
-
-        return redacted;
     }
 
     private static async Task<MediaServer> RedactSecretsAsync(

@@ -1,7 +1,11 @@
 using System;
+using System.Collections.Generic;
+using System.Threading;
+using System.Threading.Tasks;
 
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
+using Magpie.Sdk.Extensions;
 
 namespace Magpie.Abstractions.Repositories;
 
@@ -11,4 +15,16 @@ namespace Magpie.Abstractions.Repositories;
 public interface IExtensionRepository :
     ICrudRepository<Guid, Extension>,
     IPatchRepository<Guid, Extension, ExtensionPatch>,
-    IQueryRepository<Extension, ExtensionQuery>;
+    IQueryRepository<Extension, ExtensionQuery>
+{
+    /// <summary>
+    /// Registers the loaded extensions.
+    /// </summary>
+    /// <param name="discovered">The extensions that the host discovered</param>
+    /// <param name="loaded">The loaded extensions</param>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
+    Task RegisterLoadedExtensionsAsync(
+        IReadOnlyList<Extension> discovered,
+        IReadOnlyList<IExtension> loaded,
+        CancellationToken cancellationToken = default);
+}

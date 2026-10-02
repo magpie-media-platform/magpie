@@ -13,15 +13,11 @@ internal sealed class ContentHierarchyItemConfiguration : IEntityTypeConfigurati
     public void Configure(EntityTypeBuilder<ContentHierarchyItem> builder)
     {
         builder.ToTable("content_hierarchyItem");
-        builder.HasKey(e => e.Id);
-        builder.Property(e => e.Id).ValueGeneratedOnAdd();
         builder.Property(e => e.Settings).UseStringDictionaryConversion();
         builder.Property(e => e.LanguagePreferences).HasConversion(
             v => JsonSerializer.Serialize(v, JsonSerializerOptions.Default),
             v => JsonSerializer.Deserialize<List<string>>(v, JsonSerializerOptions.Default) ?? new())
             .UseListComparer();
-        builder.Property(e => e.Ordinal);
-        builder.Property(e => e.AlignmentKey);
         builder.Property(e => e.PendingMetadataRefresh).HasDefaultValue(false);
 
         builder.Ignore(e => e.ImportPending);
@@ -43,7 +39,6 @@ internal sealed class ContentHierarchyItemConfiguration : IEntityTypeConfigurati
             .HasForeignKey<ContentHierarchyItem>(e => e.MetadataContainerId)
             .IsRequired()
             .OnDelete(DeleteBehavior.Restrict);
-        builder.HasIndex(e => e.ParentId);
         builder.HasIndex(e => e.MetadataContainerId).IsUnique();
         builder.HasIndex(e => new { e.ContentType, e.Level });
         builder.HasIndex(e => new { e.ContentType, e.ParentId, e.Level, e.Slug }).IsUnique();

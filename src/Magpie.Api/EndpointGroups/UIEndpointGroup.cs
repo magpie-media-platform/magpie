@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -19,17 +20,10 @@ namespace Magpie.Api.EndpointGroups;
 
 internal sealed class UIEndpointGroup : IApiEndpointGroup
 {
-    private Dictionary<Guid, IAssetProvider>? _assetOwners;
-
     public string Name => "ui";
 
     private static bool IsSafeRelativePath(string relativePath)
     {
-        if (string.IsNullOrWhiteSpace(relativePath))
-        {
-            return false;
-        }
-
         if (Path.IsPathRooted(relativePath))
         {
             return false;
@@ -51,44 +45,6 @@ internal sealed class UIEndpointGroup : IApiEndpointGroup
         }
 
         return true;
-    }
-
-    private static Dictionary<Guid, IAssetProvider> BuildAssetOwners(
-        IEnumerable<IAssetProvider> assetProviders,
-        ILogger logger)
-    {
-        var owners = new Dictionary<Guid, IAssetProvider>();
-        foreach (var provider in assetProviders)
-        {
-            IEnumerable<Asset> assets;
-            try
-            {
-                assets = provider.ListAssets();
-            }
-            catch (Exception ex)
-            {
-                logger.LogWarning(
-                    ex,
-                    "The asset provider {Provider} failed to list assets, so the endpoint skipped it",
-                    provider.GetType().FullName);
-                continue;
-            }
-
-            foreach (var asset in assets)
-            {
-                owners.TryAdd(asset.ExtensionId, provider);
-            }
-        }
-
-        return owners;
-    }
-
-    private IAssetProvider? ResolveOwningProvider(
-        IEnumerable<IAssetProvider> assetProviders,
-        Guid extensionId,
-        ILogger logger)
-    {
-        return (_assetOwners ??= BuildAssetOwners(assetProviders, logger)).GetValueOrDefault(extensionId);
     }
 
     public void MapEndpoints(IEndpointRouteBuilder builder)
@@ -122,7 +78,7 @@ internal sealed class UIEndpointGroup : IApiEndpointGroup
             {
                 logger.LogWarning(
                     ex,
-                    "The UI extension provider {Provider} failed to list extensions, so the endpoint skipped it",
+                    "UI extension provider {Provider} failed to list extensions",
                     provider.GetType().FullName);
             }
         }
@@ -138,16 +94,12 @@ internal sealed class UIEndpointGroup : IApiEndpointGroup
             {
                 logger.LogWarning(
                     ex,
-                    "The asset provider {Provider} failed to list assets, so the endpoint skipped it",
+                    "Asset provider {Provider} failed to list assets",
                     provider.GetType().FullName);
             }
         }
 
-        return Results.Ok(new UIManifest
-        {
-            Extensions = extensions,
-            Assets = assets
-        });
+        return Results.Ok(new UIManifest { Extensions = extensions, Assets = assets });
     }
 
     internal async Task<IResult> GetAssetAsync(
@@ -168,7 +120,7 @@ internal sealed class UIEndpointGroup : IApiEndpointGroup
         if (!IsSafeRelativePath(relativePath))
         {
             logger.LogWarning(
-                "The endpoint rejected the asset request with unsafe path {RelativePath} for extension {ExtensionId}",
+                "Asset request rejected for unsafe path {RelativePath} of extension {ExtensionId}",
                 relativePath,
                 extensionId);
             return Results.Problem(
@@ -176,7 +128,30 @@ internal sealed class UIEndpointGroup : IApiEndpointGroup
                 statusCode: StatusCodes.Status400BadRequest);
         }
 
-        var owningProvider = ResolveOwningProvider(assetProviders, extensionId, logger);
+        IAssetProvider? owningProvider = null;
+        foreach (var provider in assetProviders)
+        {
+            IEnumerable<Asset> assets;
+            try
+            {
+                assets = provider.ListAssets();
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(
+                    ex,
+                    "Asset provider {Provider} failed to list assets",
+                    provider.GetType().FullName);
+                continue;
+            }
+
+            if (assets.Any(asset => asset.ExtensionId == extensionId))
+            {
+                owningProvider = provider;
+                break;
+            }
+        }
+
         if (owningProvider is null)
         {
             return Results.NotFound();
@@ -192,7 +167,7 @@ internal sealed class UIEndpointGroup : IApiEndpointGroup
         {
             logger.LogWarning(
                 ex,
-                "The asset provider {Provider} failed to resolve {RelativePath}",
+                "Asset provider {Provider} failed to resolve {RelativePath}",
                 owningProvider.GetType().FullName,
                 relativePath);
             return Results.NotFound();

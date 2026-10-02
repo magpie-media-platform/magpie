@@ -1,6 +1,14 @@
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
 import { useLocalContentPreview } from '@/hooks/useLocalContentPreview';
-import { PlusIcon, CheckIcon, CaretDownIcon, FilmStripIcon, WarningCircleIcon, UserIcon } from '@phosphor-icons/react';
+import {
+    PlusIcon,
+    CheckIcon,
+    CaretDownIcon,
+    FilmStripIcon,
+    InfoIcon,
+    WarningCircleIcon,
+    UserIcon,
+} from '@phosphor-icons/react';
 
 import { ContentPoster } from '@/components/content/ContentCardPrimitives';
 import { Avatar } from '@/components/ui/Avatar';
@@ -154,6 +162,15 @@ export function PreviewDrawer({
     const artwork = preview ? pickArtwork(preview) : undefined;
     const runtime = formatTimeSpanDuration(preview?.duration);
     const relatedSubjectGroups = groupRelatedSubjects(preview?.relatedSubjects ?? []);
+    const hasDetails =
+        !!hero ||
+        !!artwork ||
+        !!runtime ||
+        !!preview?.language ||
+        !!preview?.contentRatings.length ||
+        !!preview?.overview ||
+        !!preview?.genres.length ||
+        relatedSubjectGroups.length > 0;
     const notFound = isNotFoundError(error);
     const openLabel = `Open ${title}`;
     const openLabelRef = useRef<HTMLSpanElement>(null);
@@ -227,7 +244,17 @@ export function PreviewDrawer({
                         />
                     )}
 
-                    {!isPending && preview && (
+                    {!isPending && preview && !hasDetails && (
+                        <EmptyState
+                            icon={<InfoIcon weight="duotone" />}
+                            title="No more details"
+                            description="This item has no more details."
+                            size="sm"
+                            data-testid="preview-drawer-no-details"
+                        />
+                    )}
+
+                    {!isPending && preview && hasDetails && (
                         <div className="preview-drawer__content">
                             {hero ? (
                                 <PreviewPlayer preview={hero} posterUrl={artwork} />

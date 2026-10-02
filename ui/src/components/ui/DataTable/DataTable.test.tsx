@@ -66,29 +66,11 @@ describe('DataTable', () => {
 
         rerender(<DataTable columns={testColumns} data={testData} size="md" />);
         expect(container.querySelector('.data-table')).toHaveAttribute('data-size', 'md');
-
-        rerender(<DataTable columns={testColumns} data={testData} size="lg" />);
-        expect(container.querySelector('.data-table')).toHaveAttribute('data-size', 'lg');
     });
 
     it('defaults to md size', () => {
         const { container } = render(<DataTable columns={testColumns} data={testData} />);
         expect(container.querySelector('.data-table')).toHaveAttribute('data-size', 'md');
-    });
-
-    it('applies bordered class', () => {
-        const { container } = render(<DataTable columns={testColumns} data={testData} bordered />);
-        expect(container.querySelector('.data-table')).toHaveAttribute('data-bordered', 'true');
-    });
-
-    it('applies striped class', () => {
-        const { container } = render(<DataTable columns={testColumns} data={testData} striped />);
-        expect(container.querySelector('.data-table')).toHaveAttribute('data-striped', 'true');
-    });
-
-    it('applies stickyHeader class', () => {
-        const { container } = render(<DataTable columns={testColumns} data={testData} stickyHeader />);
-        expect(container.querySelector('.data-table')).toHaveAttribute('data-sticky-header', 'true');
     });
 
     it('shows empty state when no data', () => {

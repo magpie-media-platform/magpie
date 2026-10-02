@@ -68,30 +68,36 @@ describe('ColumnHeaderFilter', () => {
         expect(trigger).toBeDisabled();
     });
 
-    it.each([
-        ['numberRange', 'spinbutton', 'Size minimum', '2', { min: '2', max: '' }],
-        ['dateRange', 'textbox', 'Size from', '2020-01-01', { from: '2020-01-01', to: '' }],
-    ] as const)('Range_AppliesOnce_WhenEnterIsPressedIn%s', async (type, role, name, typed, expected) => {
+    it('Range_AppliesOnce_WhenEnterIsPressedInnumberRange', async () => {
         // Arrange
         const user = userEvent.setup();
         const onChange = vi.fn();
-        render(
-            type === 'numberRange' ? (
-                <ColumnHeaderFilter type="numberRange" label="Size" active={false} min="" max="" onChange={onChange} />
-            ) : (
-                <ColumnHeaderFilter type="dateRange" label="Size" active={false} from="" to="" onChange={onChange} />
-            ),
-        );
+        render(<ColumnHeaderFilter type="numberRange" label="Size" active={false} min="" max="" onChange={onChange} />);
         await user.click(screen.getByRole('button', { name: 'Filter by Size' }));
-        const field = role === 'spinbutton' ? screen.getByRole(role, { name }) : screen.getByLabelText(name);
-        await user.type(field, typed);
+        await user.type(screen.getByRole('spinbutton', { name: 'Size minimum' }), '2');
 
         // Act
         await user.keyboard('{Enter}');
 
         // Assert
         expect(onChange).toHaveBeenCalledTimes(1);
-        expect(onChange).toHaveBeenCalledWith(expected);
+        expect(onChange).toHaveBeenCalledWith({ min: '2', max: '' });
+    });
+
+    it('Range_AppliesOnce_WhenEnterIsPressedIndateRange', async () => {
+        // Arrange
+        const user = userEvent.setup();
+        const onChange = vi.fn();
+        render(<ColumnHeaderFilter type="dateRange" label="Size" active={false} from="" to="" onChange={onChange} />);
+        await user.click(screen.getByRole('button', { name: 'Filter by Size' }));
+        await user.type(screen.getByLabelText('Size from'), '2020-01-01');
+
+        // Act
+        await user.keyboard('{Enter}');
+
+        // Assert
+        expect(onChange).toHaveBeenCalledTimes(1);
+        expect(onChange).toHaveBeenCalledWith({ from: '2020-01-01', to: '' });
     });
 
     it('NumberRange_CommitsFractionalMinimum_WhenAppliedFromHeader', async () => {

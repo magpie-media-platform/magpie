@@ -40,22 +40,6 @@ export function isTerminalJobExecutionStatus(status: JobExecutionStatusValue | u
     return status !== undefined && terminalJobExecutionStatuses.has(status);
 }
 
-export const jobExecutionStatusVariants: Record<JobExecutionStatusValue, string> = {
-    Queued: 'queued',
-    Running: 'running',
-    Completed: 'completed',
-    Failed: 'failed',
-    Cancelled: 'cancelled',
-    CancellationRequested: 'cancelling',
-};
-
-export const jobScopeLabels: Record<JobScopeValue, string> = {
-    System: 'System',
-    Administrative: 'Administrative',
-    Content: 'Content',
-    User: 'User',
-};
-
 export interface ApiJobSpec {
     jobType: string;
 
@@ -205,7 +189,6 @@ function useJobExecutionInvalidation(
         entityIds,
         exact: true,
         maxWaitMs: 600,
-        owner: 'jobs-query',
         prePredicate,
         predicate,
         unprovableMembership,
@@ -237,7 +220,6 @@ async function cancelJob(id: string): Promise<void> {
 export function useJobSpecs(userTriggerMode?: JobTriggerModeValue) {
     useInvalidateQueriesOnEvents(EXTENSION_CATALOG_EVENTS, [jobQueryKeys.specs(userTriggerMode)], {
         exact: true,
-        owner: 'jobs:specs',
     });
     const specsQuery = useQuery({
         queryKey: jobQueryKeys.specs(userTriggerMode),

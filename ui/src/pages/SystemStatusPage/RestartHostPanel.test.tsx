@@ -114,6 +114,25 @@ describe('RestartHostPanel', () => {
         expect(screen.queryByTestId('restart-unavailable')).not.toBeInTheDocument();
     });
 
+    it('tells the user that running jobs stop and do not always resume', async () => {
+        // Arrange
+        wireApi({ capability: { canRestart: true } });
+        const user = userEvent.setup();
+        render(<RestartHostPanel />, { wrapper: createWrapper().wrapper });
+        const button = await screen.findByRole('button', { name: /restart service/i });
+        await waitFor(() => expect(button).toBeEnabled());
+
+        // Act
+        await user.click(button);
+
+        // Assert
+        const dialog = await screen.findByRole('dialog', { name: 'Restart Magpie?' });
+        expect(dialog).toHaveTextContent(
+            'Running jobs stop. Each job retries or stays failed, according to its recovery policy.',
+        );
+        expect(dialog).not.toHaveTextContent(/resume/i);
+    });
+
     it('confirms, calls the endpoint, shows reconnecting, then recovers on a new process', async () => {
         wireApi({ capability: { canRestart: true } });
 

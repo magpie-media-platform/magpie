@@ -376,7 +376,7 @@ test.describe.serial('Journey 9: the night the downloads went wrong', () => {
                             'the stalled download to be marked stuck',
                             async () => {
                                 const current = await api.get<Download>(`/api/downloads/${stuckDownload.id}`);
-                                return current.status === 'Failed' ? current : undefined;
+                                return current.status === 'Faulted' ? current : undefined;
                             },
                             30_000,
                             250,
@@ -389,13 +389,13 @@ test.describe.serial('Journey 9: the night the downloads went wrong', () => {
                 }
                 stuckDownload = detectedDownload!;
                 expect(stuckDownload).toMatchObject({
-                    status: 'Failed',
+                    status: 'Faulted',
                     failureReason: 'DownloadStuck',
                     progress: 41,
                 });
                 expect(stuckDownload.statusReason).toMatch(/^No progress reported since .+ \(threshold 00:01:00\)\.$/);
 
-                await page.goto('/downloads?tab=history&hstate=Failed');
+                await page.goto('/downloads?tab=history&hstate=Faulted');
                 const row = page.locator(`[data-row-id="${stuckDownload.id}"]`);
                 await row.locator('[data-action="row-menu"]').click();
                 await page.locator(`[data-action="view-details"][data-target="${stuckDownload.id}"]`).click();
@@ -685,7 +685,7 @@ test.describe.serial('Journey 9: the night the downloads went wrong', () => {
                     const releases = batch.map(releaseFor);
                     await mocks.indexer.armSearch('Queue Journey Movie', releases);
                     await mocks.indexer.armSearchFallback(releases);
-                    const candidates = await api.post<InteractiveCandidate[]>(
+                    const { candidates } = await api.post<{ candidates: InteractiveCandidate[] }>(
                         `/api/interactive-search/${movieId}`,
                     );
                     const byExternalId = new Map(
@@ -715,7 +715,7 @@ test.describe.serial('Journey 9: the night the downloads went wrong', () => {
 
                 await page.goto('/downloads');
                 let panel = page.locator('[role="tabpanel"][data-state="active"]');
-                await panel.getByRole('button', { name: 'Filter by Status' }).click();
+                await panel.locator('thead').getByRole('button', { name: 'Filter by Status' }).click();
                 await page.getByRole('menuitemradio', { name: 'Queued', exact: true }).click();
                 await expect(panel.locator('[data-component="pager"]')).toContainText('Page 1 of 2');
                 await panel.locator('[data-action="next-page"]').click();
@@ -725,7 +725,7 @@ test.describe.serial('Journey 9: the night the downloads went wrong', () => {
 
                 await page.getByRole('tab', { name: 'History' }).click();
                 panel = page.locator('[role="tabpanel"][data-state="active"]');
-                await panel.getByRole('button', { name: 'Filter by Status' }).click();
+                await panel.locator('thead').getByRole('button', { name: 'Filter by Status' }).click();
                 await page.getByRole('menuitemradio', { name: 'Failed', exact: true }).click();
                 await expect(panel.locator('[data-component="pager"]')).toContainText('Page 1 of 2');
                 await panel.locator('[data-action="next-page"]').click();
@@ -740,12 +740,16 @@ test.describe.serial('Journey 9: the night the downloads went wrong', () => {
                 await page.getByRole('tab', { name: 'Active' }).click();
                 panel = page.locator('[role="tabpanel"][data-state="active"]');
                 await expect(panel.locator('[data-component="pager"]')).toContainText('Page 2 of 2');
-                await expect(panel.getByRole('button', { name: 'Status filtered, edit filter' })).toBeVisible();
+                await expect(
+                    panel.locator('thead').getByRole('button', { name: 'Status filtered, edit filter' }),
+                ).toBeVisible();
 
                 await page.getByRole('tab', { name: 'History' }).click();
                 panel = page.locator('[role="tabpanel"][data-state="active"]');
                 await expect(panel.locator('[data-component="pager"]')).toContainText('Page 2 of 2');
-                await expect(panel.getByRole('button', { name: 'Status filtered, edit filter' })).toBeVisible();
+                await expect(
+                    panel.locator('thead').getByRole('button', { name: 'Status filtered, edit filter' }),
+                ).toBeVisible();
             });
         } finally {
             const cleanupResults: PromiseSettledResult<unknown>[] = [];
@@ -921,7 +925,9 @@ async function grab(
     contentId: string,
     fixture: DownloadFixture,
 ): Promise<Download> {
-    const candidates = await api.post<InteractiveCandidate[]>(`/api/interactive-search/${contentId}`);
+    const { candidates } = await api.post<{ candidates: InteractiveCandidate[] }>(
+        `/api/interactive-search/${contentId}`,
+    );
     const candidate = candidates.find((item) => item.release.externalId === fixture.releaseExternalId);
     if (!candidate) {
         throw new Error(`Release ${fixture.releaseExternalId} was not returned for ${fixture.releaseTitle}.`);

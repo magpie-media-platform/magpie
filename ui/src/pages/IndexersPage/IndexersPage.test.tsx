@@ -97,24 +97,15 @@ vi.mock('@/hooks/useIndexers', async (importOriginal) => {
             isLoadingIndexers: false,
             isLoadingFeeds: false,
             error: null,
-            feedsError: null,
             createIndexer: vi.fn(),
-            updateIndexer: vi.fn(),
-            deleteIndexer: vi.fn(),
             isCreatingIndexer: false,
-            isUpdatingIndexer: false,
-            isDeletingIndexer: false,
             createFeed: vi.fn(),
             updateFeed: vi.fn(),
             toggleFeedEnabled: vi.fn(),
             deleteFeed: vi.fn(),
             isCreatingFeed: false,
             isUpdatingFeed: false,
-            isTogglingFeed: false,
-            isDeletingFeed: false,
             refetch: vi.fn(),
-            refetchIndexers: vi.fn(),
-            refetchFeeds: vi.fn(),
         }),
         useAllIndexerConnections: () => ({ rows: mockRows, isLoading: false }),
         useIndexerConnectionMutations: () => ({
@@ -149,12 +140,8 @@ vi.mock('@/lib/api', async (importOriginal) => {
     };
 });
 
-function createTestQueryClient() {
-    return new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
-}
-
 function TestWrapper({ children }: { children: ReactNode }) {
-    const queryClient = createTestQueryClient();
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
     return (
         <QueryClientProvider client={queryClient}>
             <MemoryRouter>

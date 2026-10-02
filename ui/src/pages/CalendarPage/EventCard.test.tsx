@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { ContentLineageProvider } from '@/components/content/ContentLineageTitle';
 import type { CalendarEvent } from '@/types/calendar';
@@ -31,6 +31,10 @@ function makeEvent(overrides: Partial<CalendarEvent> = {}): CalendarEvent {
 }
 
 describe('EventCard', () => {
+    afterEach(() => {
+        vi.unstubAllEnvs();
+    });
+
     it('renders the event title', () => {
         render(<EventCard event={makeEvent()} onClick={vi.fn()} />, { wrapper: TooltipProvider });
         expect(screen.getByText('Shogun', { selector: '.content-lineage-title__segment--leaf' })).toBeInTheDocument();
@@ -163,22 +167,13 @@ describe('EventCard', () => {
     });
 
     it('shows midnight publication dates on their calendar date without a time', () => {
-        const originalTimeZone = process.env.TZ;
-        process.env.TZ = 'America/Los_Angeles';
-        try {
-            render(<EventCard event={makeEvent({ date: '2026-07-20T00:00:00Z' })} onClick={vi.fn()} showDate />, {
-                wrapper: TooltipProvider,
-            });
+        vi.stubEnv('TZ', 'America/Los_Angeles');
+        render(<EventCard event={makeEvent({ date: '2026-07-20T00:00:00Z' })} onClick={vi.fn()} showDate />, {
+            wrapper: TooltipProvider,
+        });
 
-            expect(screen.getByTestId('calendar-page__event-date')).toHaveTextContent('Mon, Jul 20');
-            expect(document.querySelector('.calendar-page__event-time')).not.toBeInTheDocument();
-        } finally {
-            if (originalTimeZone === undefined) {
-                delete process.env.TZ;
-            } else {
-                process.env.TZ = originalTimeZone;
-            }
-        }
+        expect(screen.getByTestId('calendar-page__event-date')).toHaveTextContent('Mon, Jul 20');
+        expect(document.querySelector('.calendar-page__event-time')).not.toBeInTheDocument();
     });
 
     it('does not show date by default', () => {

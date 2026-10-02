@@ -22,7 +22,15 @@ using Microsoft.Extensions.Logging;
 
 namespace Magpie.Core.Jobs.Runtime;
 
-internal sealed class DefaultJobRuntime : IJobRuntime
+internal sealed class DefaultJobRuntime(
+    IJobExecutionScopeFactory jobExecutionScopeFactory,
+    IServiceScopeFactory scopeFactory,
+    IJobRegistry registry,
+    MagpieHostEnvironment hostEnvironment,
+    IEventBus eventBus,
+    JobShutdownSignal shutdownSignal,
+    TimeProvider timeProvider,
+    ILogger<DefaultJobRuntime> logger) : IJobRuntime
 {
     private sealed class RunningExecution(CancellationTokenSource cts)
     {
@@ -39,62 +47,17 @@ internal sealed class DefaultJobRuntime : IJobRuntime
 
     private static readonly TimeSpan DefaultHeartbeatInterval = TimeSpan.FromSeconds(30);
 
-    private readonly IJobExecutionScopeFactory _jobExecutionScopeFactory;
-    private readonly IServiceScopeFactory _scopeFactory;
-    private readonly IJobRegistry _registry;
-    private readonly IEventBus _eventBus;
-    private readonly ILogger<DefaultJobRuntime> _logger;
-    private readonly TimeProvider _timeProvider;
-    private readonly TimeSpan _heartbeatInterval;
+    private readonly IJobExecutionScopeFactory _jobExecutionScopeFactory = jobExecutionScopeFactory;
+    private readonly IServiceScopeFactory _scopeFactory = scopeFactory;
+    private readonly IJobRegistry _registry = registry;
+    private readonly IEventBus _eventBus = eventBus;
+    private readonly ILogger<DefaultJobRuntime> _logger = logger;
+    private readonly TimeProvider _timeProvider = timeProvider;
     private readonly ConcurrentDictionary<Guid, RunningExecution> _running = new();
-    private readonly JobShutdownSignal _shutdownSignal;
-    private string _nodeId;
+    private readonly JobShutdownSignal _shutdownSignal = shutdownSignal;
+    private string _nodeId = hostEnvironment.NodeId;
 
     private volatile bool _disposing;
-
-    public DefaultJobRuntime(
-        IJobExecutionScopeFactory jobExecutionScopeFactory,
-        IServiceScopeFactory scopeFactory,
-        IJobRegistry registry,
-        MagpieHostEnvironment hostEnvironment,
-        IEventBus eventBus,
-        JobShutdownSignal shutdownSignal,
-        TimeProvider timeProvider,
-        ILogger<DefaultJobRuntime> logger)
-        : this(
-            jobExecutionScopeFactory,
-            scopeFactory,
-            registry,
-            hostEnvironment,
-            eventBus,
-            shutdownSignal,
-            timeProvider,
-            logger,
-            DefaultHeartbeatInterval)
-    {
-    }
-
-    internal DefaultJobRuntime(
-        IJobExecutionScopeFactory jobScopes,
-        IServiceScopeFactory scopeFactory,
-        IJobRegistry registry,
-        MagpieHostEnvironment hostEnvironment,
-        IEventBus eventBus,
-        JobShutdownSignal shutdownSignal,
-        TimeProvider timeProvider,
-        ILogger<DefaultJobRuntime> logger,
-        TimeSpan heartbeatInterval)
-    {
-        _jobExecutionScopeFactory = jobScopes;
-        _scopeFactory = scopeFactory;
-        _registry = registry;
-        _eventBus = eventBus;
-        _shutdownSignal = shutdownSignal;
-        _timeProvider = timeProvider;
-        _logger = logger;
-        _heartbeatInterval = heartbeatInterval;
-        _nodeId = hostEnvironment.NodeId;
-    }
 
     public string Name => "in-process";
 
@@ -115,7 +78,6 @@ internal sealed class DefaultJobRuntime : IJobRuntime
         await using var reposHandle = repos.ConfigureAwait(false);
         var executions = repos.ServiceProvider.GetRequiredService<IJobExecutionRepository>();
         var transactionManager = repos.ServiceProvider.GetRequiredService<ITransactionManager>();
-        var jobManager = repos.ServiceProvider.GetRequiredService<IJobManager>();
         var retryPolicy = repos.ServiceProvider.GetRequiredService<IJobRetryPolicy>();
 
         var execution = await executions.GetByIdAsync(executionId, default).ConfigureAwait(false);
@@ -370,10 +332,8 @@ internal sealed class DefaultJobRuntime : IJobRuntime
                 var failedByThisRun = await TransitionFailureAsync(
                     executions,
                     transactionManager,
-                    jobManager,
                     retryPolicy,
                     execution,
-                    spec,
                     failurePolicy,
                     reason)
                     .ConfigureAwait(false);
@@ -421,8 +381,10 @@ internal sealed class DefaultJobRuntime : IJobRuntime
             {
                 outcome = "deferred";
                 activity?.SetTag("job.not_before", notBefore);
-                _logger.LogInformation("Upstream throttling deferred execution {ExecutionId} until {NotBefore:O}",
-                    executionId, notBefore);
+                _logger.LogInformation(
+                    "Upstream throttling deferred execution {ExecutionId} until {NotBefore:O}",
+                    executionId,
+                    notBefore);
             }
             else if (await executions.TryMarkCancellationRequestedCancelledAsync(executionId, null, default)
                 .ConfigureAwait(false))
@@ -444,10 +406,8 @@ internal sealed class DefaultJobRuntime : IJobRuntime
             var failedByThisRun = await TransitionFailureAsync(
                 executions,
                 transactionManager,
-                jobManager,
                 retryPolicy,
                 execution,
-                spec,
                 failurePolicy,
                 ex.Message)
                 .ConfigureAwait(false);
@@ -515,14 +475,12 @@ internal sealed class DefaultJobRuntime : IJobRuntime
     private static async Task<JobFailureTransitionResult> TransitionRunningToFailureAsync(
         IJobExecutionRepository executions,
         ITransactionManager transactionManager,
-        IJobManager jobManager,
         IJobRetryPolicy retryPolicy,
         JobExecution failed,
-        JobSpec? spec,
         JobFailurePolicy policy,
         string reason)
     {
-        var result = new JobFailureTransitionResult(false, false, null);
+        var result = new JobFailureTransitionResult(false, null);
         await transactionManager.ExecuteWithTransactionAsync(
             async transactionToken =>
             {
@@ -537,21 +495,19 @@ internal sealed class DefaultJobRuntime : IJobRuntime
                 if (policy is JobFailurePolicy.Fail ||
                     (policy is JobFailurePolicy.Retry && failed.ExecutionMode is JobExecutionMode.Immediate))
                 {
-                    result = new(true, PublishFailure: true, Retry: null);
+                    result = new(true, null);
                     return;
                 }
 
                 var retry = await retryPolicy.BuildRetryAsync(failed, transactionToken).ConfigureAwait(false);
                 if (retry is null)
                 {
-                    result = new(true, PublishFailure: true, Retry: null);
+                    result = new(true, null);
                     return;
                 }
 
-                retry.LockPartition = failed.LockPartition
-                    ?? jobManager.ResolveLockPartition(failed.JobType, BuildLockPartitionParameters(failed, spec));
                 await executions.CreateAsync(retry, failed.CreatedByUserId, transactionToken).ConfigureAwait(false);
-                result = new(true, PublishFailure: false, retry);
+                result = new(true, retry);
             },
             default).ConfigureAwait(false);
 
@@ -569,20 +525,16 @@ internal sealed class DefaultJobRuntime : IJobRuntime
     private async Task<bool> TransitionFailureAsync(
         IJobExecutionRepository executions,
         ITransactionManager transactionManager,
-        IJobManager jobManager,
         IJobRetryPolicy retryPolicy,
         JobExecution failed,
-        JobSpec spec,
         JobFailurePolicy policy,
         string reason)
     {
         var result = await TransitionRunningToFailureAsync(
             executions,
             transactionManager,
-            jobManager,
             retryPolicy,
             failed,
-            spec,
             policy,
             reason).ConfigureAwait(false);
 
@@ -604,7 +556,7 @@ internal sealed class DefaultJobRuntime : IJobRuntime
                 retry.Attempt,
                 retry.NotBeforeAt);
         }
-        else if (result.PublishFailure)
+        else
         {
             await _eventBus.PublishAsync(
                 JobEventBuilder.BuildJobExecutionFailedEvent(failed.Id, failed.JobType, reason) with
@@ -625,7 +577,7 @@ internal sealed class DefaultJobRuntime : IJobRuntime
         {
             try
             {
-                await Task.Delay(_heartbeatInterval, _timeProvider, cancellationToken).ConfigureAwait(false);
+                await Task.Delay(DefaultHeartbeatInterval, _timeProvider, cancellationToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -760,35 +712,5 @@ internal sealed class DefaultJobRuntime : IJobRuntime
         }
 
         _running.Clear();
-    }
-
-    private static Dictionary<string, string?> BuildLockPartitionParameters(JobExecution execution, JobSpec? spec)
-    {
-        var parameters = new Dictionary<string, string?>(StringComparer.Ordinal);
-        foreach (var parameter in execution.Parameters)
-        {
-            parameters[parameter.Key] = parameter.Value;
-        }
-
-        if (spec is null || spec.LockPartitionEventContextKeys.Count == 0)
-        {
-            return parameters;
-        }
-
-        foreach (var (field, eventContextKey) in spec.LockPartitionEventContextKeys)
-        {
-            if (parameters.TryGetValue(field, out var existing) && !string.IsNullOrWhiteSpace(existing))
-            {
-                continue;
-            }
-
-            if (execution.TriggerContext.TryGetValue(eventContextKey.ToEventContextKey(), out var value) &&
-                !string.IsNullOrWhiteSpace(value))
-            {
-                parameters[field] = value;
-            }
-        }
-
-        return parameters;
     }
 }

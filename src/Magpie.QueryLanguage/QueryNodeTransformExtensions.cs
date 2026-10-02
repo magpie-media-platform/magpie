@@ -170,13 +170,7 @@ internal static class QueryNodeTransformExtensions
             return new ParseError($"Unknown field: {node.Field}", node.Position, []);
         }
 
-        var operatorResult = MapScalarOperator(node.Operator);
-        if (!operatorResult.HasValue)
-        {
-            return new ParseError($"Unsupported operator: {node.Operator}", node.Position, []);
-        }
-
-        var op = operatorResult.Value;
+        var op = MapScalarOperator(node.Operator);
 
         if (!field.SupportsOperator(op))
         {
@@ -270,9 +264,9 @@ internal static class QueryNodeTransformExtensions
         foreach (var node in nodes)
         {
             var itemCriteriaResult = BuildCollectionItemCriteria(node.Item, field.Definition);
-            if (!itemCriteriaResult.IsSuccess)
+            if (itemCriteriaResult.Error is { } error)
             {
-                return itemCriteriaResult.Error!.Value;
+                return error;
             }
 
             if (node.Operator == CollectionOperator.Has)
@@ -334,15 +328,8 @@ internal static class QueryNodeTransformExtensions
         }
 
         var op = MapScalarOperator(node.Operator);
-        if (!op.HasValue)
-        {
-            return ParseResult<object>.Failure(new ParseError(
-                $"Unsupported operator: {node.Operator}",
-                node.Position,
-                []));
-        }
 
-        if (!itemField.SupportedOperators.Contains(op.Value))
+        if (!itemField.SupportedOperators.Contains(op))
         {
             return ParseResult<object>.Failure(new ParseError(
                 $"Operator {node.Operator} is not supported for field {node.Field}",
@@ -350,9 +337,9 @@ internal static class QueryNodeTransformExtensions
                 []));
         }
 
-        if (op.Value is CriteriaValueOperator.IsNull or CriteriaValueOperator.IsNotNull)
+        if (op is CriteriaValueOperator.IsNull or CriteriaValueOperator.IsNotNull)
         {
-            return ParseResult<object>.Success(field.CreateFieldCriteria(itemField.PropertyName, op.Value, null));
+            return ParseResult<object>.Success(field.CreateFieldCriteria(itemField.PropertyName, op, null));
         }
 
         if (node.Value == null)
@@ -369,13 +356,13 @@ internal static class QueryNodeTransformExtensions
                 []));
         }
 
-        var uriError = ValidateAbsoluteUri(itemField, op.Value, value, node.Field, node.Value.Position);
+        var uriError = ValidateAbsoluteUri(itemField, op, value, node.Field, node.Value.Position);
         if (uriError != null)
         {
             return ParseResult<object>.Failure(uriError.Value);
         }
 
-        return ParseResult<object>.Success(field.CreateFieldCriteria(itemField.PropertyName, op.Value, value));
+        return ParseResult<object>.Success(field.CreateFieldCriteria(itemField.PropertyName, op, value));
     }
 
     private static ParseResult<object> BuildBinaryItemCriteria(ItemBinaryNode node, CollectionFieldDefinition field)
@@ -421,7 +408,7 @@ internal static class QueryNodeTransformExtensions
         return ParseResult<object>.Success(merged!);
     }
 
-    private static CriteriaValueOperator? MapScalarOperator(ScalarOperator op)
+    private static CriteriaValueOperator MapScalarOperator(ScalarOperator op)
     {
         return op switch
         {
@@ -441,7 +428,7 @@ internal static class QueryNodeTransformExtensions
             ScalarOperator.NotIn => CriteriaValueOperator.NotIn,
             ScalarOperator.IsNull => CriteriaValueOperator.IsNull,
             ScalarOperator.IsNotNull => CriteriaValueOperator.IsNotNull,
-            _ => null
+            _ => throw new ArgumentOutOfRangeException(nameof(op))
         };
     }
 

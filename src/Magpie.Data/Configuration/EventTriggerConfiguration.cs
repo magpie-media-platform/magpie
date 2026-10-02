@@ -12,8 +12,6 @@ internal sealed class EventTriggerConfiguration : IEntityTypeConfiguration<Event
     public void Configure(EntityTypeBuilder<EventTrigger> builder)
     {
         builder.ToTable("job_eventTrigger");
-        builder.HasKey(e => e.Id);
-        builder.Property(e => e.Id).ValueGeneratedOnAdd();
         builder.Property(e => e.EventFilter).HasConversion(
             v => JsonSerializer.Serialize(v, JsonSerializerOptions.Default),
             v => JsonSerializer.Deserialize<EventFilter>(v, JsonSerializerOptions.Default) ?? new())

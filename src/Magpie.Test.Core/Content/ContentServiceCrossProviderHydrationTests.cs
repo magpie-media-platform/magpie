@@ -125,9 +125,72 @@ public sealed class ContentServiceCrossProviderHydrationTests
     public async Task HydrateFromExternalIdAsync_ReturnsTheExistingItemUnchanged_WhenAFetchedIdentityMatches()
     {
         // Arrange
-        var existing = await SeedAsync("tv", "show", "tvmaze-180", ("tvmaze", "180"), ("imdb", "tt0303461"))
-            .ConfigureAwait(false);
-        var subject = CreateSubject(Provider("wikidata", "tv", ("wikidata", "Q11622"), ("imdb", "tt0303461")));
+        var existing = new ContentHierarchyItem
+        {
+            Id = Guid.NewGuid(),
+            Name = "Firefly",
+            Slug = "tvmaze-180",
+            ContentType = "tv",
+            Level = "show",
+            Monitoring = MonitoringMode.Monitored,
+            Path = "Firefly (2002)",
+            CreatedAt = _time.GetUtcNow().UtcDateTime,
+            MetadataContainer = new()
+            {
+                Id = Guid.NewGuid(),
+                Contributions =
+                {
+                    new MetadataContribution
+                    {
+                        ProviderType = "seed",
+                        Title = "Firefly",
+                        ExternalIds =
+                        {
+                            new ExternalId { Source = "tvmaze", Value = "180", Ordinal = 0 },
+                            new ExternalId { Source = "imdb", Value = "tt0303461", Ordinal = 1 },
+                        },
+                    },
+                },
+            },
+        };
+        _context.ContentHierarchyItems.Add(existing);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.ChangeTracker.Clear();
+        existing.MetadataContainerId = existing.MetadataContainer.Id;
+        var provider = new Mock<IContentHierarchyMetadataProvider>();
+        provider.SetupGet(item => item.ProviderType).Returns("wikidata");
+        provider.SetupGet(item => item.SupportedContentTypes).Returns(["tv"]);
+        provider
+            .Setup(item => item.TryGetMetadataAsync(It.IsAny<MetadataFetchRequest>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() => new ContentHierarchyMetadataResult
+            {
+                Contribution = new MetadataContribution
+                {
+                    ProviderType = "wikidata",
+                    Title = "Firefly",
+                    ExternalIds =
+                    {
+                        new ExternalId { Source = "wikidata", Value = "Q11622", Ordinal = 0 },
+                        new ExternalId { Source = "imdb", Value = "tt0303461", Ordinal = 1 },
+                    },
+                },
+            });
+        var subject = new ContentService(
+            _hierarchy,
+            _content,
+            _audit,
+            Mock.Of<IRootFolderRepository>(),
+            Mock.Of<IQualityTierListRepository>(),
+            _metadata,
+            [provider.Object],
+            Mock.Of<IDownloadRepository>(),
+            Mock.Of<IDownloadClientRepository>(),
+            [],
+            _transactions,
+            _registry.Object,
+            Mock.Of<IContentFileService>(),
+            _time,
+            NullLogger<ContentService>.Instance);
 
         // Act
         var result = await subject.HydrateFromExternalIdAsync(
@@ -170,12 +233,85 @@ public sealed class ContentServiceCrossProviderHydrationTests
         string expectedSlug)
     {
         // Arrange
-        var existing = await SeedAsync("tv", "show", storedSlug, ("tvmaze", "180"), ("wikidata", "Q11622"))
-            .ConfigureAwait(false);
-        var subject = CreateSubject(Provider(providerType, "tv", (providerType, externalId)));
+        var existing = new ContentHierarchyItem
+        {
+            Id = Guid.NewGuid(),
+            Name = "Firefly",
+            Slug = storedSlug,
+            ContentType = "tv",
+            Level = "show",
+            Monitoring = MonitoringMode.Monitored,
+            Path = "Firefly (2002)",
+            CreatedAt = _time.GetUtcNow().UtcDateTime,
+            MetadataContainer = new()
+            {
+                Id = Guid.NewGuid(),
+                Contributions =
+                {
+                    new MetadataContribution
+                    {
+                        ProviderType = "seed",
+                        Title = "Firefly",
+                        ExternalIds =
+                        {
+                            new ExternalId { Source = "tvmaze", Value = "180", Ordinal = 0 },
+                            new ExternalId { Source = "wikidata", Value = "Q11622", Ordinal = 1 },
+                        },
+                    },
+                },
+            },
+        };
+        _context.ContentHierarchyItems.Add(existing);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.ChangeTracker.Clear();
+        existing.MetadataContainerId = existing.MetadataContainer.Id;
+        var provider = new Mock<IContentHierarchyMetadataProvider>();
+        provider.SetupGet(item => item.ProviderType).Returns(providerType);
+        provider.SetupGet(item => item.SupportedContentTypes).Returns(["tv"]);
+        provider
+            .Setup(item => item.TryGetMetadataAsync(It.IsAny<MetadataFetchRequest>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() => new ContentHierarchyMetadataResult
+            {
+                Contribution = new MetadataContribution
+                {
+                    ProviderType = providerType,
+                    Title = "Firefly",
+                    ExternalIds =
+                    {
+                        new ExternalId { Source = providerType, Value = externalId, Ordinal = 0 },
+                    },
+                },
+            });
+        var subject = new ContentService(
+            _hierarchy,
+            _content,
+            _audit,
+            Mock.Of<IRootFolderRepository>(),
+            Mock.Of<IQualityTierListRepository>(),
+            _metadata,
+            [provider.Object],
+            Mock.Of<IDownloadRepository>(),
+            Mock.Of<IDownloadClientRepository>(),
+            [],
+            _transactions,
+            _registry.Object,
+            Mock.Of<IContentFileService>(),
+            _time,
+            NullLogger<ContentService>.Instance);
 
         // Act
-        var result = await AddAsync(subject, providerType, externalId, "tv", "show").ConfigureAwait(false);
+        var result = await subject.HydrateFromExternalIdAsync(
+            providerType,
+            providerType,
+            externalId,
+            "tv",
+            "show",
+            rootFolderId: null,
+            monitoring: false,
+            qualityTierListId: null,
+            requestedViaWishlistId: null,
+            tags: null,
+            actingUserId: null).ConfigureAwait(false);
 
         // Assert
         _context.ChangeTracker.Clear();
@@ -192,12 +328,86 @@ public sealed class ContentServiceCrossProviderHydrationTests
     public async Task HydrateFromExternalIdAsync_CreatesASeparateItem_WhenTheSharedIdentityIsOnAnotherLevel()
     {
         // Arrange
-        var existing = await SeedAsync("book", "ebook", "openlibrary-ol1w", ("openlibrary", "OL1W"), ("goodreads", "1"))
-            .ConfigureAwait(false);
-        var subject = CreateSubject(Provider("other", "book", ("other", "9"), ("goodreads", "1")));
+        var existing = new ContentHierarchyItem
+        {
+            Id = Guid.NewGuid(),
+            Name = "Firefly",
+            Slug = "openlibrary-ol1w",
+            ContentType = "book",
+            Level = "ebook",
+            Monitoring = MonitoringMode.Monitored,
+            Path = "Firefly (2002)",
+            CreatedAt = _time.GetUtcNow().UtcDateTime,
+            MetadataContainer = new()
+            {
+                Id = Guid.NewGuid(),
+                Contributions =
+                {
+                    new MetadataContribution
+                    {
+                        ProviderType = "seed",
+                        Title = "Firefly",
+                        ExternalIds =
+                        {
+                            new ExternalId { Source = "openlibrary", Value = "OL1W", Ordinal = 0 },
+                            new ExternalId { Source = "goodreads", Value = "1", Ordinal = 1 },
+                        },
+                    },
+                },
+            },
+        };
+        _context.ContentHierarchyItems.Add(existing);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.ChangeTracker.Clear();
+        existing.MetadataContainerId = existing.MetadataContainer.Id;
+        var provider = new Mock<IContentHierarchyMetadataProvider>();
+        provider.SetupGet(item => item.ProviderType).Returns("other");
+        provider.SetupGet(item => item.SupportedContentTypes).Returns(["book"]);
+        provider
+            .Setup(item => item.TryGetMetadataAsync(It.IsAny<MetadataFetchRequest>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() => new ContentHierarchyMetadataResult
+            {
+                Contribution = new MetadataContribution
+                {
+                    ProviderType = "other",
+                    Title = "Firefly",
+                    ExternalIds =
+                    {
+                        new ExternalId { Source = "other", Value = "9", Ordinal = 0 },
+                        new ExternalId { Source = "goodreads", Value = "1", Ordinal = 1 },
+                    },
+                },
+            });
+        var subject = new ContentService(
+            _hierarchy,
+            _content,
+            _audit,
+            Mock.Of<IRootFolderRepository>(),
+            Mock.Of<IQualityTierListRepository>(),
+            _metadata,
+            [provider.Object],
+            Mock.Of<IDownloadRepository>(),
+            Mock.Of<IDownloadClientRepository>(),
+            [],
+            _transactions,
+            _registry.Object,
+            Mock.Of<IContentFileService>(),
+            _time,
+            NullLogger<ContentService>.Instance);
 
         // Act
-        var result = await AddAsync(subject, "other", "9", "book", "audiobook").ConfigureAwait(false);
+        var result = await subject.HydrateFromExternalIdAsync(
+            "other",
+            "other",
+            "9",
+            "book",
+            "audiobook",
+            rootFolderId: null,
+            monitoring: false,
+            qualityTierListId: null,
+            requestedViaWishlistId: null,
+            tags: null,
+            actingUserId: null).ConfigureAwait(false);
 
         // Assert
         Assert.That(result?.Id, Is.Not.Null.And.Not.EqualTo(existing.Id));
@@ -207,11 +417,85 @@ public sealed class ContentServiceCrossProviderHydrationTests
     public async Task HydrateFromExternalIdAsync_CreatesASeparateItem_WhenTheSharedValueHasAnotherSource()
     {
         // Arrange
-        var existing = await SeedAsync("tv", "show", "tvmaze-180", ("tvmaze", "180")).ConfigureAwait(false);
-        var subject = CreateSubject(Provider("wikidata", "tv", ("wikidata", "Q1"), ("tvdb", "180")));
+        var existing = new ContentHierarchyItem
+        {
+            Id = Guid.NewGuid(),
+            Name = "Firefly",
+            Slug = "tvmaze-180",
+            ContentType = "tv",
+            Level = "show",
+            Monitoring = MonitoringMode.Monitored,
+            Path = "Firefly (2002)",
+            CreatedAt = _time.GetUtcNow().UtcDateTime,
+            MetadataContainer = new()
+            {
+                Id = Guid.NewGuid(),
+                Contributions =
+                {
+                    new MetadataContribution
+                    {
+                        ProviderType = "seed",
+                        Title = "Firefly",
+                        ExternalIds =
+                        {
+                            new ExternalId { Source = "tvmaze", Value = "180", Ordinal = 0 },
+                        },
+                    },
+                },
+            },
+        };
+        _context.ContentHierarchyItems.Add(existing);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.ChangeTracker.Clear();
+        existing.MetadataContainerId = existing.MetadataContainer.Id;
+        var provider = new Mock<IContentHierarchyMetadataProvider>();
+        provider.SetupGet(item => item.ProviderType).Returns("wikidata");
+        provider.SetupGet(item => item.SupportedContentTypes).Returns(["tv"]);
+        provider
+            .Setup(item => item.TryGetMetadataAsync(It.IsAny<MetadataFetchRequest>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() => new ContentHierarchyMetadataResult
+            {
+                Contribution = new MetadataContribution
+                {
+                    ProviderType = "wikidata",
+                    Title = "Firefly",
+                    ExternalIds =
+                    {
+                        new ExternalId { Source = "wikidata", Value = "Q1", Ordinal = 0 },
+                        new ExternalId { Source = "tvdb", Value = "180", Ordinal = 1 },
+                    },
+                },
+            });
+        var subject = new ContentService(
+            _hierarchy,
+            _content,
+            _audit,
+            Mock.Of<IRootFolderRepository>(),
+            Mock.Of<IQualityTierListRepository>(),
+            _metadata,
+            [provider.Object],
+            Mock.Of<IDownloadRepository>(),
+            Mock.Of<IDownloadClientRepository>(),
+            [],
+            _transactions,
+            _registry.Object,
+            Mock.Of<IContentFileService>(),
+            _time,
+            NullLogger<ContentService>.Instance);
 
         // Act
-        var result = await AddAsync(subject, "wikidata", "Q1", "tv", "show").ConfigureAwait(false);
+        var result = await subject.HydrateFromExternalIdAsync(
+            "wikidata",
+            "wikidata",
+            "Q1",
+            "tv",
+            "show",
+            rootFolderId: null,
+            monitoring: false,
+            qualityTierListId: null,
+            requestedViaWishlistId: null,
+            tags: null,
+            actingUserId: null).ConfigureAwait(false);
 
         // Assert
         Assert.That(result?.Id, Is.Not.Null.And.Not.EqualTo(existing.Id));
@@ -221,12 +505,87 @@ public sealed class ContentServiceCrossProviderHydrationTests
     public async Task HydrateFromExternalIdAsync_CreatesASeparateItem_WhenSourcesAndValuesMatchOnlyAcrossPairs()
     {
         // Arrange
-        var existing = await SeedAsync("tv", "show", "tvmaze-180", ("tvmaze", "180"), ("imdb", "tt1"))
-            .ConfigureAwait(false);
-        var subject = CreateSubject(Provider("wikidata", "tv", ("wikidata", "Q3"), ("tvmaze", "tt1"), ("imdb", "180")));
+        var existing = new ContentHierarchyItem
+        {
+            Id = Guid.NewGuid(),
+            Name = "Firefly",
+            Slug = "tvmaze-180",
+            ContentType = "tv",
+            Level = "show",
+            Monitoring = MonitoringMode.Monitored,
+            Path = "Firefly (2002)",
+            CreatedAt = _time.GetUtcNow().UtcDateTime,
+            MetadataContainer = new()
+            {
+                Id = Guid.NewGuid(),
+                Contributions =
+                {
+                    new MetadataContribution
+                    {
+                        ProviderType = "seed",
+                        Title = "Firefly",
+                        ExternalIds =
+                        {
+                            new ExternalId { Source = "tvmaze", Value = "180", Ordinal = 0 },
+                            new ExternalId { Source = "imdb", Value = "tt1", Ordinal = 1 },
+                        },
+                    },
+                },
+            },
+        };
+        _context.ContentHierarchyItems.Add(existing);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.ChangeTracker.Clear();
+        existing.MetadataContainerId = existing.MetadataContainer.Id;
+        var provider = new Mock<IContentHierarchyMetadataProvider>();
+        provider.SetupGet(item => item.ProviderType).Returns("wikidata");
+        provider.SetupGet(item => item.SupportedContentTypes).Returns(["tv"]);
+        provider
+            .Setup(item => item.TryGetMetadataAsync(It.IsAny<MetadataFetchRequest>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() => new ContentHierarchyMetadataResult
+            {
+                Contribution = new MetadataContribution
+                {
+                    ProviderType = "wikidata",
+                    Title = "Firefly",
+                    ExternalIds =
+                    {
+                        new ExternalId { Source = "wikidata", Value = "Q3", Ordinal = 0 },
+                        new ExternalId { Source = "tvmaze", Value = "tt1", Ordinal = 1 },
+                        new ExternalId { Source = "imdb", Value = "180", Ordinal = 2 },
+                    },
+                },
+            });
+        var subject = new ContentService(
+            _hierarchy,
+            _content,
+            _audit,
+            Mock.Of<IRootFolderRepository>(),
+            Mock.Of<IQualityTierListRepository>(),
+            _metadata,
+            [provider.Object],
+            Mock.Of<IDownloadRepository>(),
+            Mock.Of<IDownloadClientRepository>(),
+            [],
+            _transactions,
+            _registry.Object,
+            Mock.Of<IContentFileService>(),
+            _time,
+            NullLogger<ContentService>.Instance);
 
         // Act
-        var result = await AddAsync(subject, "wikidata", "Q3", "tv", "show").ConfigureAwait(false);
+        var result = await subject.HydrateFromExternalIdAsync(
+            "wikidata",
+            "wikidata",
+            "Q3",
+            "tv",
+            "show",
+            rootFolderId: null,
+            monitoring: false,
+            qualityTierListId: null,
+            requestedViaWishlistId: null,
+            tags: null,
+            actingUserId: null).ConfigureAwait(false);
 
         // Assert
         Assert.That(result?.Id, Is.Not.Null.And.Not.EqualTo(existing.Id));
@@ -236,11 +595,84 @@ public sealed class ContentServiceCrossProviderHydrationTests
     public async Task HydrateFromExternalIdAsync_CreatesASeparateItem_WhenOnlyTheTitleMatches()
     {
         // Arrange
-        var existing = await SeedAsync("tv", "show", "tvmaze-180", ("tvmaze", "180")).ConfigureAwait(false);
-        var subject = CreateSubject(Provider("wikidata", "tv", ("wikidata", "Q2")));
+        var existing = new ContentHierarchyItem
+        {
+            Id = Guid.NewGuid(),
+            Name = "Firefly",
+            Slug = "tvmaze-180",
+            ContentType = "tv",
+            Level = "show",
+            Monitoring = MonitoringMode.Monitored,
+            Path = "Firefly (2002)",
+            CreatedAt = _time.GetUtcNow().UtcDateTime,
+            MetadataContainer = new()
+            {
+                Id = Guid.NewGuid(),
+                Contributions =
+                {
+                    new MetadataContribution
+                    {
+                        ProviderType = "seed",
+                        Title = "Firefly",
+                        ExternalIds =
+                        {
+                            new ExternalId { Source = "tvmaze", Value = "180", Ordinal = 0 },
+                        },
+                    },
+                },
+            },
+        };
+        _context.ContentHierarchyItems.Add(existing);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.ChangeTracker.Clear();
+        existing.MetadataContainerId = existing.MetadataContainer.Id;
+        var provider = new Mock<IContentHierarchyMetadataProvider>();
+        provider.SetupGet(item => item.ProviderType).Returns("wikidata");
+        provider.SetupGet(item => item.SupportedContentTypes).Returns(["tv"]);
+        provider
+            .Setup(item => item.TryGetMetadataAsync(It.IsAny<MetadataFetchRequest>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() => new ContentHierarchyMetadataResult
+            {
+                Contribution = new MetadataContribution
+                {
+                    ProviderType = "wikidata",
+                    Title = "Firefly",
+                    ExternalIds =
+                    {
+                        new ExternalId { Source = "wikidata", Value = "Q2", Ordinal = 0 },
+                    },
+                },
+            });
+        var subject = new ContentService(
+            _hierarchy,
+            _content,
+            _audit,
+            Mock.Of<IRootFolderRepository>(),
+            Mock.Of<IQualityTierListRepository>(),
+            _metadata,
+            [provider.Object],
+            Mock.Of<IDownloadRepository>(),
+            Mock.Of<IDownloadClientRepository>(),
+            [],
+            _transactions,
+            _registry.Object,
+            Mock.Of<IContentFileService>(),
+            _time,
+            NullLogger<ContentService>.Instance);
 
         // Act
-        var result = await AddAsync(subject, "wikidata", "Q2", "tv", "show").ConfigureAwait(false);
+        var result = await subject.HydrateFromExternalIdAsync(
+            "wikidata",
+            "wikidata",
+            "Q2",
+            "tv",
+            "show",
+            rootFolderId: null,
+            monitoring: false,
+            qualityTierListId: null,
+            requestedViaWishlistId: null,
+            tags: null,
+            actingUserId: null).ConfigureAwait(false);
 
         // Assert
         Assert.That(result?.Id, Is.Not.Null.And.Not.EqualTo(existing.Id));
@@ -250,80 +682,32 @@ public sealed class ContentServiceCrossProviderHydrationTests
     public async Task HydrateFromExternalIdAsync_ReturnsTheOriginalItem_WhenTheSameProviderAddsAgain()
     {
         // Arrange
-        var subject = CreateSubject(Provider("tvmaze", "tv", ("tvmaze", "180"), ("imdb", "tt0303461")));
-        var first = await AddAsync(subject, "tvmaze", "180", "tv", "show").ConfigureAwait(false);
-
-        // Act
-        var second = await AddAsync(subject, "tvmaze", "180", "tv", "show").ConfigureAwait(false);
-
-        // Assert
-        _context.ChangeTracker.Clear();
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(second?.Id, Is.EqualTo(first?.Id));
-            Assert.That(await _context.ContentHierarchyItems.CountAsync().ConfigureAwait(false), Is.EqualTo(1));
-        }
-    }
-
-    private static IContentHierarchyMetadataProvider Provider(
-        string providerType,
-        string contentType,
-        params (string Source, string Value)[] identities)
-    {
         var provider = new Mock<IContentHierarchyMetadataProvider>();
-        provider.SetupGet(item => item.ProviderType).Returns(providerType);
-        provider.SetupGet(item => item.SupportedContentTypes).Returns([contentType]);
+        provider.SetupGet(item => item.ProviderType).Returns("tvmaze");
+        provider.SetupGet(item => item.SupportedContentTypes).Returns(["tv"]);
         provider
             .Setup(item => item.TryGetMetadataAsync(It.IsAny<MetadataFetchRequest>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(() =>
+            .ReturnsAsync(() => new ContentHierarchyMetadataResult
             {
-                var contribution = new MetadataContribution { ProviderType = providerType, Title = "Firefly" };
-                foreach (var (source, value) in identities)
+                Contribution = new MetadataContribution
                 {
-                    contribution.ExternalIds.Add(new ExternalId
+                    ProviderType = "tvmaze",
+                    Title = "Firefly",
+                    ExternalIds =
                     {
-                        Source = source,
-                        Value = value,
-                        Ordinal = contribution.ExternalIds.Count
-                    });
-                }
-
-                return new ContentHierarchyMetadataResult { Contribution = contribution };
+                        new ExternalId { Source = "tvmaze", Value = "180", Ordinal = 0 },
+                        new ExternalId { Source = "imdb", Value = "tt0303461", Ordinal = 1 },
+                    },
+                },
             });
-        return provider.Object;
-    }
-
-    private static Task<ContentHierarchyItem?> AddAsync(
-        ContentService subject,
-        string providerType,
-        string externalId,
-        string contentType,
-        string level)
-    {
-        return subject.HydrateFromExternalIdAsync(
-            providerType,
-            providerType,
-            externalId,
-            contentType,
-            level,
-            rootFolderId: null,
-            monitoring: false,
-            qualityTierListId: null,
-            requestedViaWishlistId: null,
-            tags: null,
-            actingUserId: null);
-    }
-
-    private ContentService CreateSubject(IContentHierarchyMetadataProvider provider)
-    {
-        return new ContentService(
+        var subject = new ContentService(
             _hierarchy,
             _content,
             _audit,
             Mock.Of<IRootFolderRepository>(),
             Mock.Of<IQualityTierListRepository>(),
             _metadata,
-            [provider],
+            [provider.Object],
             Mock.Of<IDownloadRepository>(),
             Mock.Of<IDownloadClientRepository>(),
             [],
@@ -332,42 +716,39 @@ public sealed class ContentServiceCrossProviderHydrationTests
             Mock.Of<IContentFileService>(),
             _time,
             NullLogger<ContentService>.Instance);
-    }
+        var first = await subject.HydrateFromExternalIdAsync(
+            "tvmaze",
+            "tvmaze",
+            "180",
+            "tv",
+            "show",
+            rootFolderId: null,
+            monitoring: false,
+            qualityTierListId: null,
+            requestedViaWishlistId: null,
+            tags: null,
+            actingUserId: null).ConfigureAwait(false);
 
-    private async Task<ContentHierarchyItem> SeedAsync(
-        string contentType,
-        string level,
-        string slug,
-        params (string Source, string Value)[] identities)
-    {
-        var item = new ContentHierarchyItem
-        {
-            Id = Guid.NewGuid(),
-            Name = "Firefly",
-            Slug = slug,
-            ContentType = contentType,
-            Level = level,
-            Monitoring = MonitoringMode.Monitored,
-            Path = "Firefly (2002)",
-            CreatedAt = _time.GetUtcNow().UtcDateTime,
-            MetadataContainer = new() { Id = Guid.NewGuid() }
-        };
-        var contribution = new MetadataContribution { ProviderType = "seed", Title = "Firefly" };
-        foreach (var (source, value) in identities)
-        {
-            contribution.ExternalIds.Add(new ExternalId
-            {
-                Source = source,
-                Value = value,
-                Ordinal = contribution.ExternalIds.Count
-            });
-        }
+        // Act
+        var second = await subject.HydrateFromExternalIdAsync(
+            "tvmaze",
+            "tvmaze",
+            "180",
+            "tv",
+            "show",
+            rootFolderId: null,
+            monitoring: false,
+            qualityTierListId: null,
+            requestedViaWishlistId: null,
+            tags: null,
+            actingUserId: null).ConfigureAwait(false);
 
-        item.MetadataContainer.Contributions.Add(contribution);
-        _context.ContentHierarchyItems.Add(item);
-        await _context.SaveChangesAsync().ConfigureAwait(false);
+        // Assert
         _context.ChangeTracker.Clear();
-        item.MetadataContainerId = item.MetadataContainer.Id;
-        return item;
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(second?.Id, Is.EqualTo(first?.Id));
+            Assert.That(await _context.ContentHierarchyItems.CountAsync().ConfigureAwait(false), Is.EqualTo(1));
+        }
     }
 }

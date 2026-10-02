@@ -18,13 +18,6 @@
         color: var(--accent-primary);
     }
 
-    .system-status-page__title {
-        margin: 0;
-        font-size: var(--text-2xl);
-        font-weight: var(--weight-semibold);
-        color: var(--text-primary);
-    }
-
     .system-status-page__content {
         display: flex;
         flex-direction: column;
@@ -97,10 +90,6 @@
 
         .system-status-page__header {
             margin-bottom: var(--space-md);
-        }
-
-        .system-status-page__title {
-            font-size: var(--text-xl);
         }
 
         .system-status-page__content {

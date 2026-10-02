@@ -75,6 +75,12 @@ export interface MediaFile {
     dateAdded?: string;
 
     mediaInfo?: MediaInfo | null;
+
+    /** The number of items that the file covers. */
+    coveredItemCount?: number;
+
+    /** Another item owns the file, and the file also covers this item. */
+    covering?: boolean;
 }
 
 export interface FilesTabProps extends Omit<ComponentPropsWithoutRef<'div'>, 'children'> {
@@ -711,11 +717,12 @@ export const FilesTab = forwardRef<HTMLDivElement, FilesTabProps>(
                         const isDeleting = deletingFileId === file.id;
                         const isUnlinking = unlinkingFileId === file.id;
                         const isMutating = isDeleting || isUnlinking;
+                        const renameFile = file.covering ? undefined : onRenameFile;
 
                         return (
                             <div key={file.id} className="files-tab__panel" data-file-id={file.id}>
                                 <div className="files-tab__panel-header">
-                                    {onRenameFiles && (
+                                    {onRenameFiles && !file.covering && (
                                         <Checkbox
                                             aria-label={`Select ${file.fileName} for rename`}
                                             checked={selectedIds.includes(file.id)}
@@ -734,7 +741,7 @@ export const FilesTab = forwardRef<HTMLDivElement, FilesTabProps>(
                                             file={file}
                                             busy={isMutating}
                                             onReassign={onReassignFile}
-                                            onRename={onRenameFile}
+                                            onRename={renameFile}
                                             onUnlink={onUnlinkFile}
                                             onDelete={onDeleteFile}
                                         />
@@ -743,6 +750,11 @@ export const FilesTab = forwardRef<HTMLDivElement, FilesTabProps>(
                                 <div className="files-tab__panel-meta">
                                     <QualityCell mediaInfo={file.mediaInfo} />
                                     <SizeCell size={file.size} />
+                                    {file.coveredItemCount !== undefined && (
+                                        <Badge variant="info" size="sm">
+                                            Covers {file.coveredItemCount} items
+                                        </Badge>
+                                    )}
                                     {file.dateAdded && (
                                         <span className="files-tab__panel-date">
                                             Added {formatInstantDate(file.dateAdded)}
@@ -762,11 +774,11 @@ export const FilesTab = forwardRef<HTMLDivElement, FilesTabProps>(
                                                 Correct episode association
                                             </Button>
                                         )}
-                                        {onRenameFile && (
+                                        {renameFile && (
                                             <Button
                                                 variant="outline"
                                                 size="sm"
-                                                onClick={() => onRenameFile(file)}
+                                                onClick={() => renameFile(file)}
                                                 disabled={isMutating}
                                             >
                                                 Apply rename mask

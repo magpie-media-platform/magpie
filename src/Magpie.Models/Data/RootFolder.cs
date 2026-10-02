@@ -41,9 +41,9 @@ public record RootFolder
     public bool IsDefault { get; set; }
 
     /// <summary>
-    /// The default monitoring state for new items, or <see langword="null"/> to inherit.
+    /// The default monitoring mode for new items, or <see langword="null"/> to inherit.
     /// </summary>
-    public bool? DefaultMonitoring { get; set; }
+    public MonitoringMode? DefaultMonitoring { get; set; }
 
     /// <summary>
     /// The template for the names of imported files.

@@ -79,7 +79,7 @@ function rootFolder(id: string, name: string, contentType: string) {
         name,
         path: `/data/${name.toLowerCase()}`,
         contentType,
-        defaultMonitoring: 'None' as const,
+        defaultMonitoring: 'Monitored' as const,
         upgradeFileHandling: 'Replace' as const,
         createdAt: '2026-01-01T00:00:00Z',
     };
@@ -419,12 +419,80 @@ describe('LibraryAddPage', () => {
         expect(screen.getByRole('button', { name: /next page/i })).toBeDisabled();
     });
 
+    it('NextPage_ShowsMissingProviderResults_WhenEmptyPageHasWarnings', async () => {
+        // Arrange
+        mockCandidateSearchResponse = {
+            ...candidateSearchResult([candidateSearchedCandidate], {
+                hasMore: true,
+                warnings: ['tmdb: TMDb search is unavailable because the provider is not configured.'],
+            }),
+            continuation: 'first-page',
+            nextContinuation: 'second-page',
+        };
+        const user = userEvent.setup();
+        renderLive();
+        await user.click(screen.getByRole('button', { name: /^search$/i }));
+        expect(await resultsTable().findByText('The Matrix')).toBeInTheDocument();
+        expect(screen.queryByTestId('library-add-page__empty-no-results')).not.toBeInTheDocument();
+        mockCandidateSearchResponse = {
+            ...candidateSearchResult([], {
+                hasMore: true,
+                requestedPage: 2,
+                warnings: ['tmdb: TMDb search is unavailable because the provider is not configured.'],
+            }),
+            continuation: 'second-page',
+            nextContinuation: 'third-page',
+        };
+
+        // Act
+        await user.click(screen.getByRole('button', { name: /next page/i }));
+
+        // Assert
+        const empty = await screen.findByTestId('library-add-page__empty-no-results');
+        expect(empty).toHaveTextContent('No matches on this page');
+        expect(empty).toHaveTextContent('Results from some providers are missing; the warnings below say why.');
+        expect(screen.queryByText('Continue to the next page to see more results.')).not.toBeInTheDocument();
+        expect(screen.getByTestId('library-add-page__warnings')).toHaveTextContent(
+            'tmdb: TMDb search is unavailable because the provider is not configured.',
+        );
+        expect(screen.getByTestId('library-add-page__warnings')).toHaveTextContent('Some results may be missing');
+        expect(screen.getByRole('button', { name: /next page/i })).toBeEnabled();
+    });
+
+    it('LastPage_ShowsMissingProviderResults_WhenEmptyPageHasWarnings', async () => {
+        // Arrange
+        mockCandidateSearchResponse = {
+            ...candidateSearchResult([candidateSearchedCandidate], {
+                hasMore: true,
+                warnings: ['tmdb: TMDb search is unavailable because the provider is not configured.'],
+            }),
+            continuation: 'first-page',
+            nextContinuation: 'second-page',
+        };
+        const user = userEvent.setup();
+        renderLive();
+        await user.click(screen.getByRole('button', { name: /^search$/i }));
+        expect(await resultsTable().findByText('The Matrix')).toBeInTheDocument();
+        mockCandidateSearchResponse = candidateSearchResult([], {
+            hasMore: false,
+            requestedPage: 2,
+            warnings: ['tmdb: TMDb search is unavailable because the provider is not configured.'],
+        });
+
+        // Act
+        await user.click(screen.getByRole('button', { name: /next page/i }));
+
+        // Assert
+        const empty = await screen.findByTestId('library-add-page__empty-no-results');
+        expect(empty).toHaveTextContent('Results from some providers are missing; the warnings below say why.');
+        expect(screen.queryByText('Return to a previous page to see earlier results.')).not.toBeInTheDocument();
+        expect(screen.getByRole('button', { name: /next page/i })).toBeDisabled();
+    });
+
     it.each([
-        ['table', 400, 'Choose a writable root folder.'],
-        ['drawer', 400, 'Choose a writable root folder.'],
-        ['table', 503, 'The provider is busy. Try again later.'],
-        ['drawer', 503, 'The provider is busy. Try again later.'],
-    ])('Add_ShowsServerMessage_WhenRejected %s %i', async (surface, status, message) => {
+        [400, 'Choose a writable root folder.'],
+        [503, 'The provider is busy. Try again later.'],
+    ])('Add_ShowsServerMessage_WhenRejected table %i', async (status, message) => {
         // Arrange
         mockApiGetByPath({
             rootFolders: [rootFolder('rf-archive', 'Archive', candidateSearchedCandidate.contentType)],
@@ -437,13 +505,31 @@ describe('LibraryAddPage', () => {
         await screen.findByText('The Matrix');
 
         // Act
-        if (surface === 'drawer') {
-            vi.mocked(apiPost).mockResolvedValueOnce(candidatePreview);
-            await user.click(resultsTable().getByRole('button', { name: 'The Matrix' }));
-            await user.click(await screen.findByRole('button', { name: /^add to library$/i }));
-        } else {
-            await user.click(resultsTable().getByRole('button', { name: /^add$/i }));
-        }
+        await user.click(resultsTable().getByRole('button', { name: /^add$/i }));
+
+        // Assert
+        expect(await screen.findByText(message)).toBeInTheDocument();
+    });
+
+    it.each([
+        [400, 'Choose a writable root folder.'],
+        [503, 'The provider is busy. Try again later.'],
+    ])('Add_ShowsServerMessage_WhenRejected drawer %i', async (status, message) => {
+        // Arrange
+        mockApiGetByPath({
+            rootFolders: [rootFolder('rf-archive', 'Archive', candidateSearchedCandidate.contentType)],
+        });
+        mockCandidateSearchResponse = candidateSearchResult([candidateSearchedCandidate]);
+        vi.mocked(apiPost).mockRejectedValue(new ApiError(status, message, { status, detail: message }));
+        const user = userEvent.setup();
+        renderLive();
+        await user.click(screen.getByRole('button', { name: /^search$/i }));
+        await screen.findByText('The Matrix');
+
+        // Act
+        vi.mocked(apiPost).mockResolvedValueOnce(candidatePreview);
+        await user.click(resultsTable().getByRole('button', { name: 'The Matrix' }));
+        await user.click(await screen.findByRole('button', { name: /^add to library$/i }));
 
         // Assert
         expect(await screen.findByText(message)).toBeInTheDocument();
@@ -862,7 +948,7 @@ describe('LibraryAddPage', () => {
             await user.click(screen.getByRole('button', { name: /^search$/i }));
 
             expect(await screen.findByTestId('library-add-page__empty-no-results')).toHaveTextContent(
-                'No usable matches were returned',
+                'Results from some providers are missing; the warnings below say why.',
             );
             expect(screen.getByTestId('library-add-page__warnings')).toHaveTextContent(
                 'This search could not return results',
@@ -1266,9 +1352,9 @@ describe('LibraryAddPage', () => {
             expect(resultsTable().getByRole('columnheader', { name: /title/i })).not.toHaveAttribute('aria-sort');
         });
 
-        it.each([640, 1024])('PublishedSort_UsesSameOrder_WhenLayoutChanges %s', async (width) => {
+        it('PublishedSort_UsesSameOrder_WhenLayoutChanges 640', async () => {
             // Arrange
-            installMatchMedia(width);
+            installMatchMedia(640);
             mockCandidateSearchResponse = candidateSearchResult([
                 alien,
                 matrix,
@@ -1281,12 +1367,8 @@ describe('LibraryAddPage', () => {
             await screen.findByText('The Matrix');
 
             // Act
-            if (width === 640) {
-                await user.click(screen.getByRole('combobox', { name: 'Sort by field' }));
-                await user.click(screen.getByRole('option', { name: 'Published' }));
-            } else {
-                await user.click(screen.getByRole('button', { name: /sort by published/i }));
-            }
+            await user.click(screen.getByRole('combobox', { name: 'Sort by field' }));
+            await user.click(screen.getByRole('option', { name: 'Published' }));
 
             // Assert
             expect(screen.getAllByRole('heading', { level: 3 }).map((heading) => heading.textContent)).toEqual([
@@ -1297,9 +1379,44 @@ describe('LibraryAddPage', () => {
             ]);
 
             // Act
-            await user.click(
-                screen.getByRole('button', { name: width === 640 ? 'Sort ascending' : 'Sort by Published' }),
-            );
+            await user.click(screen.getByRole('button', { name: 'Sort ascending' }));
+
+            // Assert
+            expect(screen.getAllByRole('heading', { level: 3 }).map((heading) => heading.textContent)).toEqual([
+                'Alien1979',
+                'The Matrix1999',
+                'Another title1999',
+                'Zodiac',
+            ]);
+        });
+
+        it('PublishedSort_UsesSameOrder_WhenLayoutChanges 1024', async () => {
+            // Arrange
+            installMatchMedia(1024);
+            mockCandidateSearchResponse = candidateSearchResult([
+                alien,
+                matrix,
+                { ...matrix, externalId: 'same-year', title: 'Another title' },
+                undated,
+            ]);
+            const user = userEvent.setup();
+            renderLive();
+            await user.click(screen.getByRole('button', { name: /^search$/i }));
+            await screen.findByText('The Matrix');
+
+            // Act
+            await user.click(screen.getByRole('button', { name: /sort by published/i }));
+
+            // Assert
+            expect(screen.getAllByRole('heading', { level: 3 }).map((heading) => heading.textContent)).toEqual([
+                'The Matrix1999',
+                'Another title1999',
+                'Alien1979',
+                'Zodiac',
+            ]);
+
+            // Act
+            await user.click(screen.getByRole('button', { name: 'Sort by Published' }));
 
             // Assert
             expect(screen.getAllByRole('heading', { level: 3 }).map((heading) => heading.textContent)).toEqual([
@@ -1557,10 +1674,9 @@ describe('LibraryAddPage', () => {
             await user.click(savedTrigger);
             await user.click(await screen.findByRole('option', { name: 'Action Hits' }));
 
-            const openEditor = await screen.findByRole('button', { name: /edit on filters page/i });
-            await user.click(openEditor);
+            const openEditor = await screen.findByRole('link', { name: /edit on filters page/i });
 
-            expect(mockNavigate).toHaveBeenCalledWith('/filters?edit=shared-1');
+            expect(openEditor).toHaveAttribute('href', '/filters?edit=shared-1');
         });
 
         it('Search_EnablesButton_WhenSavedFilterIsSelected', async () => {

@@ -42,9 +42,7 @@ internal sealed record QbittorrentSettings
     {
         if (!TryGet(settings, HostKey, out var rawHost) || string.IsNullOrWhiteSpace(rawHost))
         {
-            throw new ArgumentException(
-                $"qBittorrent setting {HostKey} is required.",
-                nameof(settings));
+            throw new ArgumentException($"qBittorrent setting {HostKey} is required.", nameof(settings));
         }
 
         if (!Uri.TryCreate(rawHost, UriKind.Absolute, out var hostUri))

@@ -77,12 +77,10 @@ public sealed class ApiKeyRepositoryTests
 
         _userId = user.Id;
 
-        var loggerFactory = NullLoggerFactory.Instance;
-
         var auditRecordRepository = new AuditRecordRepository(
             _context,
             Mock.Of<IEventBus>(),
-            loggerFactory.CreateLogger<AuditRecordRepository>(),
+            NullLogger<AuditRecordRepository>.Instance,
             new TransactionManager(_context, NullLogger<TransactionManager>.Instance),
             Mock.Of<IJobExecutionScopeFactory>(),
             timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
@@ -100,14 +98,13 @@ public sealed class ApiKeyRepositoryTests
             auditRecordRepository,
             transactionManager,
             eventBus.Object,
-            loggerFactory.CreateLogger<ApiKeyRepository>(),
+            NullLogger<ApiKeyRepository>.Instance,
             timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
     }
 
     [TearDown]
     public void TearDown()
     {
-        _context.Database.CloseConnection();
         _context.Dispose();
     }
 
@@ -683,8 +680,9 @@ public sealed class ApiKeyRepositoryTests
         }
     }
 
-    [Test]
-    public async Task QueryAsync_ReturnsEnabledApiKeys_WhenEnabledTrue()
+    [TestCase(true, "EnabledKey")]
+    [TestCase(false, "DisabledKey")]
+    public async Task QueryAsync_ReturnsMatchingApiKeys_WhenEnabledIsSet(bool enabled, string expectedName)
     {
         // Arrange
         var enabledKey = new ApiKey
@@ -709,7 +707,7 @@ public sealed class ApiKeyRepositoryTests
         await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
-        var result = await _subject.QueryAsync(new ApiKeyQuery { Enabled = true },
+        var result = await _subject.QueryAsync(new ApiKeyQuery { Enabled = enabled },
             new() { PageNumber = 1, PageSize = 100 },
             null)
             .ConfigureAwait(false);
@@ -718,46 +716,7 @@ public sealed class ApiKeyRepositoryTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(result.Items, Has.Exactly(1).Items);
-            Assert.That(result.Items, Has.One.With.Property(nameof(ApiKey.Name)).EqualTo("EnabledKey"));
-        }
-    }
-
-    [Test]
-    public async Task QueryAsync_ReturnsDisabledApiKeys_WhenEnabledFalse()
-    {
-        // Arrange
-        var enabledKey = new ApiKey
-        {
-            UserId = _userId,
-            KeyPrefix = "test",
-            Name = "EnabledKey",
-            KeyHash = "hash1",
-            Enabled = true,
-            CreatedAt = DateTime.UtcNow
-        };
-        var disabledKey = new ApiKey
-        {
-            UserId = _userId,
-            KeyPrefix = "test",
-            Name = "DisabledKey",
-            KeyHash = "hash2",
-            Enabled = false,
-            CreatedAt = DateTime.UtcNow
-        };
-        _context.ApiKeys.AddRange(enabledKey, disabledKey);
-        await _context.SaveChangesAsync().ConfigureAwait(false);
-
-        // Act
-        var result = await _subject.QueryAsync(new ApiKeyQuery { Enabled = false },
-            new() { PageNumber = 1, PageSize = 100 },
-            null)
-            .ConfigureAwait(false);
-
-        // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(result.Items, Has.Exactly(1).Items);
-            Assert.That(result.Items, Has.One.With.Property(nameof(ApiKey.Name)).EqualTo("DisabledKey"));
+            Assert.That(result.Items, Has.One.With.Property(nameof(ApiKey.Name)).EqualTo(expectedName));
         }
     }
 

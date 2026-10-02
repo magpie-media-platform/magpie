@@ -176,7 +176,6 @@ export function useContentMagpieActivity(contentId: string | null | undefined, p
             entityIds: relatedIds,
             exact: true,
             maxWaitMs: 800,
-            owner: 'activity:content',
         },
     );
 
@@ -224,7 +223,6 @@ export function useJobExecutionAudits(executionId: string | null | undefined) {
             debounceMs: 200,
             exact: true,
             maxWaitMs: 800,
-            owner: 'activity:execution-audits',
         },
     );
     const lastPage = query.data?.pages[query.data.pages.length - 1];
@@ -266,7 +264,6 @@ export function useJobExecutionTreeActivity(executionId: string | null | undefin
             entityIds: executionIds,
             exact: true,
             maxWaitMs: 600,
-            owner: 'activity:execution-tree',
         },
     );
 

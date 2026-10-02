@@ -18,9 +18,7 @@ internal static class TextNormalizationExtensions
         var pendingSeparator = false;
         foreach (var character in trimmed)
         {
-            if (character == ' ' ||
-                WindowsInvalidFileNameCharacters.Contains(character) ||
-                char.IsControl(character))
+            if (character == ' ' || WindowsInvalidFileNameCharacters.Contains(character) || char.IsControl(character))
             {
                 pendingSeparator = length > 0;
                 continue;

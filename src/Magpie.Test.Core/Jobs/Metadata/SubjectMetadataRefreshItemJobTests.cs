@@ -9,6 +9,7 @@ using Magpie.Core.Jobs.Metadata;
 using Magpie.Models;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
+using Magpie.Models.Enums;
 using Magpie.Sdk.Content;
 using Magpie.Sdk.Jobs;
 
@@ -32,6 +33,7 @@ public sealed class SubjectMetadataRefreshItemJobTests
     private Mock<ISubjectRepository> _subjectRepository = null!;
     private Mock<IMetadataContainerRepository> _containerRepository = null!;
     private SubjectMetadataRefreshItemJob _subject = null!;
+    private JobContext _jobContext = null!;
     private Mock<ISubjectMetadataProvider> _provider = null!;
 
     [SetUp]
@@ -76,10 +78,18 @@ public sealed class SubjectMetadataRefreshItemJobTests
             new FakeTimeProvider(new DateTimeOffset(2026, 9, 2, 12, 0, 0, TimeSpan.Zero)),
             NullLogger<SubjectMetadataRefreshItemJob>.Instance,
             _progressReporter);
+        _jobContext = new JobContext(
+            ExecutionId: Guid.NewGuid(),
+            ScheduleTriggerId: null,
+            EventTriggerId: null,
+            ManualTriggerUserId: null,
+            ExecutionMode: JobExecutionMode.Queue,
+            Parameters: new Dictionary<string, string> { ["subjectId"] = SubjectId.ToString("D") },
+            Event: null);
     }
 
     [Test]
-    public void RefreshAsync_DefersWithoutMarkingRefreshed_WhenTheProviderThrottles()
+    public void ExecuteAsync_DefersWithoutMarkingRefreshed_WhenTheProviderThrottles()
     {
         // Arrange
         _provider.Setup(value => value.TryGetMetadataAsync(It.IsAny<Subject>(),
@@ -87,8 +97,7 @@ public sealed class SubjectMetadataRefreshItemJobTests
             .ThrowsAsync(new UpstreamThrottledException(new DateTimeOffset(2027, 1, 1, 0, 0, 0, TimeSpan.Zero)));
 
         // Act
-        var throttle = Assert.ThrowsAsync<UpstreamThrottledException>(() =>
-            _subject.RefreshAsync(SubjectId, null, null, _progressReporter));
+        var throttle = Assert.ThrowsAsync<UpstreamThrottledException>(() => _subject.ExecuteAsync(_jobContext));
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -100,11 +109,11 @@ public sealed class SubjectMetadataRefreshItemJobTests
     }
 
     [Test]
-    public async Task RefreshAsync_StampsTheRefreshTimeWithoutRewritingTheSubject_WhenTheRefreshCompletes()
+    public async Task ExecuteAsync_StampsTheRefreshTimeWithoutRewritingTheSubject_WhenTheRefreshCompletes()
     {
         // Arrange
         // Act
-        await _subject.RefreshAsync(SubjectId, null, null, _progressReporter).ConfigureAwait(false);
+        await _subject.ExecuteAsync(_jobContext).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())

@@ -12,10 +12,11 @@ const runnableJobs: TemplateOption[] = [
         id: 'ParameterizedJob',
         name: 'Parameterized Job',
         parameters: [
-            { name: 'Tag', description: 'A tag', type: 0, required: true, defaultValue: null },
-            { name: 'Limit', description: 'Item count', type: 1, required: false, defaultValue: '10' },
-            { name: 'DryRun', description: 'Preview only', type: 2, required: false, defaultValue: null },
-            { name: 'Note', description: 'Optional note', type: 0, required: false, defaultValue: null },
+            { name: 'Tag', description: 'A tag', type: 'String', required: true, defaultValue: null },
+            { name: 'Limit', description: 'Item count', type: 'Number', required: false, defaultValue: '10' },
+            { name: 'DryRun', description: 'Preview only', type: 'Boolean', required: false, defaultValue: null },
+            { name: 'Note', description: 'Optional note', type: 'String', required: false, defaultValue: null },
+            { name: 'Since', description: 'Start date', type: 'Date', required: false, defaultValue: null },
         ],
     },
 ];
@@ -38,7 +39,7 @@ describe('RunJobDialog parameters', () => {
                                     {
                                         name: 'collisionMode',
                                         description: 'When omitted, inherit the root-folder policy.',
-                                        type: 0,
+                                        type: 'String',
                                         required: false,
                                         defaultValue: null,
                                     },
@@ -157,12 +158,38 @@ describe('RunJobDialog parameters', () => {
         const tagInput = dialog.querySelector('[data-field="parameter-Tag"]') as HTMLInputElement;
         const limitInput = dialog.querySelector('[data-field="parameter-Limit"]') as HTMLInputElement;
         const dryRunToggle = dialog.querySelector('[data-field="parameter-DryRun"]') as HTMLButtonElement;
+        const sinceInput = dialog.querySelector('[data-field="parameter-Since"]') as HTMLInputElement;
 
         expect(tagInput).toBeInTheDocument();
         expect(tagInput).toHaveAttribute('aria-describedby', 'run-job-parameter-Tag-help');
         expect(limitInput.type).toBe('number');
         expect(limitInput.value).toBe('10');
+        expect(dryRunToggle).toHaveAttribute('role', 'switch');
         expect(dryRunToggle).toHaveAttribute('data-state', 'unchecked');
+        expect(sinceInput.type).toBe('date');
+        expect(sinceInput.value).toBe('');
+    });
+
+    it('shows the help text of a Boolean parameter and links it to the switch', async () => {
+        const user = userEvent.setup();
+
+        render(
+            <ToastProvider>
+                <ToastStateProvider>
+                    <RunJobDialog open={true} onOpenChange={() => {}} runnableJobs={runnableJobs} runJob={vi.fn()} />
+                    <ToastViewport />
+                </ToastStateProvider>
+            </ToastProvider>,
+        );
+
+        const dialog = document.querySelector('[data-component="run-job-dialog"]') as HTMLElement;
+        await user.click(dialog.querySelector('[data-field="jobType"]') as HTMLElement);
+        await user.click(screen.getByRole('option', { name: 'Parameterized Job' }));
+
+        const dryRunToggle = within(dialog).getByRole('switch', { name: 'DryRun' });
+        expect(within(dialog).getByText('Preview only')).toHaveAttribute('id', 'run-job-parameter-DryRun-help');
+        expect(dryRunToggle).toHaveAttribute('aria-describedby', 'run-job-parameter-DryRun-help');
+        expect(dryRunToggle).toHaveAccessibleDescription('Preview only');
     });
 
     it('validates required parameters and submits normalized values', async () => {

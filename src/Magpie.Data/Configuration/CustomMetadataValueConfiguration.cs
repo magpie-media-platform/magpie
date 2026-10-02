@@ -10,8 +10,6 @@ internal sealed class CustomMetadataValueConfiguration : IEntityTypeConfiguratio
     public void Configure(EntityTypeBuilder<CustomMetadataValue> builder)
     {
         builder.ToTable("metadata_customValue");
-        builder.HasKey(e => e.Id);
-        builder.Property(e => e.Id).ValueGeneratedOnAdd();
         builder.HasOne<MetadataContribution>()
             .WithMany(e => e.CustomMetadata)
             .HasForeignKey(e => e.MetadataContributionId)

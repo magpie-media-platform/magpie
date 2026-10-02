@@ -1,9 +1,6 @@
 import type { JobParameterDefinition } from '@/hooks/useJobs';
+import { SchemaDataType } from '@/hooks/useProviderSchema';
 import type { DictionaryPatch } from '@/types/patch';
-
-const JOB_PARAMETER_DATA_TYPE_NUMBER = 1;
-export const JOB_PARAMETER_DATA_TYPE_BOOLEAN = 2;
-const JOB_PARAMETER_DATA_TYPE_DATE = 3;
 
 export type JobParameterValues = Record<string, string>;
 
@@ -15,7 +12,7 @@ export function defaultJobParameterValue(parameter: JobParameterDefinition): str
     if (parameter.defaultValue !== null && parameter.defaultValue !== undefined) {
         return parameter.defaultValue;
     }
-    return parameter.type === JOB_PARAMETER_DATA_TYPE_BOOLEAN ? 'false' : '';
+    return parameter.type === SchemaDataType.Boolean ? 'false' : '';
 }
 
 export function seedJobParameters(
@@ -102,10 +99,10 @@ export function areJobParameterValuesEqual(a: JobParameterValues | undefined, b:
 }
 
 export function getJobParameterInputType(parameter: JobParameterDefinition): 'text' | 'number' | 'date' {
-    if (parameter.type === JOB_PARAMETER_DATA_TYPE_NUMBER) {
+    if (parameter.type === SchemaDataType.Number) {
         return 'number';
     }
-    if (parameter.type === JOB_PARAMETER_DATA_TYPE_DATE) {
+    if (parameter.type === SchemaDataType.Date) {
         return 'date';
     }
     return 'text';
@@ -122,7 +119,7 @@ export function validateJobParameters(
         if (
             !allowEventBindings &&
             parameter.required &&
-            parameter.type !== JOB_PARAMETER_DATA_TYPE_BOOLEAN &&
+            parameter.type !== SchemaDataType.Boolean &&
             value.trim() === ''
         ) {
             errors[jobParameterErrorKey(parameter.name)] = `${parameter.name} is required`;
@@ -143,17 +140,17 @@ export function validateJobParameters(
                 valueToValidate = analysis.value;
             }
         }
-        if (parameter.type === JOB_PARAMETER_DATA_TYPE_NUMBER) {
+        if (parameter.type === SchemaDataType.Number) {
             const number = valueToValidate.trim();
             if (!/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i.test(number) || !Number.isFinite(Number(number))) {
                 errors[jobParameterErrorKey(parameter.name)] = `${parameter.name} must be a number`;
             }
-        } else if (parameter.type === JOB_PARAMETER_DATA_TYPE_BOOLEAN) {
+        } else if (parameter.type === SchemaDataType.Boolean) {
             const boolean = valueToValidate.trim().toLowerCase();
             if (boolean !== 'true' && boolean !== 'false') {
                 errors[jobParameterErrorKey(parameter.name)] = `${parameter.name} must be true or false`;
             }
-        } else if (parameter.type === JOB_PARAMETER_DATA_TYPE_DATE) {
+        } else if (parameter.type === SchemaDataType.Date) {
             const date = /^\d{4}-\d{2}-\d{2}$/.test(valueToValidate) ? new Date(`${valueToValidate}T00:00:00Z`) : null;
             if (!date || Number.isNaN(date.getTime()) || date.toISOString().slice(0, 10) !== valueToValidate) {
                 errors[jobParameterErrorKey(parameter.name)] = `${parameter.name} must be a valid date`;
@@ -171,14 +168,14 @@ interface EventBindingAnalysis {
     value: string;
 }
 
-function eventBindingValidationSample(type: number): string {
-    if (type === JOB_PARAMETER_DATA_TYPE_NUMBER) {
+function eventBindingValidationSample(type: JobParameterDefinition['type']): string {
+    if (type === SchemaDataType.Number) {
         return '0';
     }
-    if (type === JOB_PARAMETER_DATA_TYPE_BOOLEAN) {
+    if (type === SchemaDataType.Boolean) {
         return 'true';
     }
-    if (type === JOB_PARAMETER_DATA_TYPE_DATE) {
+    if (type === SchemaDataType.Date) {
         return '2000-01-01';
     }
     return '';

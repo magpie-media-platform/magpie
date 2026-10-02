@@ -246,7 +246,6 @@ function useDownloadEventInvalidation(
         exact: true,
         failOpenEventNames: options.failOpenEventNames,
         maxWaitMs: 800,
-        owner: 'downloads-query',
         prePredicate: options.prePredicate,
         predicate: options.predicate,
         unprovableMembership: options.unprovableMembership ?? false,
@@ -337,7 +336,6 @@ export function useDownloads(params?: DownloadQueryParams, enabled = true) {
         debounceMs: 200,
         exact: true,
         maxWaitMs: 800,
-        owner: 'downloads:content-lineage',
         predicate: (event) => {
             const current = queryClient.getQueryData<PagedDownloads>(downloadQueryKeys.list(params));
             return !!current?.items.some(
@@ -482,7 +480,6 @@ export function useDownloadStatusCounts(statuses: readonly DownloadStatusValue[]
             exact: true,
             failOpenEventNames: downloadClientId ? ['download.created'] : undefined,
             maxWaitMs: 800,
-            owner: 'downloads:status-counts',
             prePredicate: (event) => event.name !== 'download.updated' || changesDownloadStatus(event),
             predicate: (event) =>
                 (event.name !== 'download.updated' || changesDownloadStatus(event)) &&

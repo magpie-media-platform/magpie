@@ -112,7 +112,6 @@ public sealed class IndexerFeedRepositoryTests
     [TearDown]
     public void TearDown()
     {
-        _context.Database.CloseConnection();
         _context.Dispose();
     }
 

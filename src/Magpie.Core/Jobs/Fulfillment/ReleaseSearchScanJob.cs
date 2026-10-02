@@ -9,7 +9,9 @@ using Magpie.Models;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
+using Magpie.Models.Filtering;
 using Magpie.Models.Jobs;
+using Magpie.Models.Paging;
 using Magpie.Sdk.Jobs;
 using Magpie.Sdk.Services;
 
@@ -21,6 +23,7 @@ internal sealed class ReleaseSearchScanJob(
     IJobManager jobManager,
     IJobExecutionRepository jobExecutionRepository,
     IContentHierarchyItemRepository contentHierarchyItemRepository,
+    TimeProvider timeProvider,
     ILogger<ReleaseSearchScanJob> logger,
     IProgressReporter progressReporter) : IJob
 {
@@ -44,7 +47,14 @@ internal sealed class ReleaseSearchScanJob(
                 "Maximum queued or running downstream ReleaseSearchItem executions before the sweep skips.",
                 DataType.Number,
                 false,
-                DefaultBackpressureThreshold.ToString(CultureInfo.InvariantCulture))
+                DefaultBackpressureThreshold.ToString(CultureInfo.InvariantCulture)),
+            new(
+                MagpieJobs.Parameters.LeadTimeDays,
+                "Days before its publish date that the scan starts to search content. Content with no publish " +
+                "date is always searched.",
+                DataType.Number,
+                false,
+                DefaultLeadTimeDays.ToString(CultureInfo.InvariantCulture))
         ],
     };
 
@@ -52,14 +62,22 @@ internal sealed class ReleaseSearchScanJob(
 
     private const int DefaultBackpressureThreshold = 50;
 
+    private const int DefaultLeadTimeDays = 1;
+
     public async Task ExecuteAsync(JobContext jobContext, CancellationToken cancellationToken = default)
     {
         var userId = jobContext.ManualTriggerUserId;
         var correlationId = jobContext.CorrelationId;
-        var backpressureThreshold = ReadPositiveIntParameter(
+        var backpressureThreshold = ReadIntParameter(
             jobContext.Parameters,
             MagpieJobs.Parameters.BackpressureThreshold,
-            DefaultBackpressureThreshold);
+            DefaultBackpressureThreshold,
+            minimum: 1);
+        var leadTimeDays = ReadIntParameter(
+            jobContext.Parameters,
+            MagpieJobs.Parameters.LeadTimeDays,
+            DefaultLeadTimeDays,
+            minimum: 0);
 
         var activeReleaseSearches = await jobExecutionRepository
             .QueryAsync(
@@ -91,7 +109,8 @@ internal sealed class ReleaseSearchScanJob(
 
         progressReporter.Report(0, "The scan will select the monitored hierarchy roots.");
 
-        var roots = await GetSubtreeRootsAsync(cancellationToken).ConfigureAwait(false);
+        var publishedBy = timeProvider.GetUtcNow().UtcDateTime.AddDays(leadTimeDays);
+        var roots = await GetSubtreeRootsAsync(publishedBy, cancellationToken).ConfigureAwait(false);
 
         var totalItems = roots.Count;
         var completedItems = 0;
@@ -102,7 +121,7 @@ internal sealed class ReleaseSearchScanJob(
 
             try
             {
-                await EnqueueReleaseSearchAsync(rootId, userId, correlationId, cancellationToken)
+                await EnqueueReleaseSearchAsync(rootId, leadTimeDays, userId, correlationId, cancellationToken)
                     .ConfigureAwait(false);
             }
             catch (OperationCanceledException)
@@ -124,9 +143,12 @@ internal sealed class ReleaseSearchScanJob(
         progressReporter.Report(1, "The release-search scan completed.");
     }
 
-    private async Task<IReadOnlyList<Guid>> GetSubtreeRootsAsync(CancellationToken cancellationToken)
+    private async Task<IReadOnlyList<Guid>> GetSubtreeRootsAsync(
+        DateTime publishedBy,
+        CancellationToken cancellationToken)
     {
-        var needyLeafIds = await LoadUnfulfilledMonitoredLeafIdsAsync(cancellationToken).ConfigureAwait(false);
+        var needyLeafIds = await LoadUnfulfilledMonitoredLeafIdsAsync(publishedBy, cancellationToken)
+            .ConfigureAwait(false);
         if (needyLeafIds.Count == 0)
         {
             return [];
@@ -162,10 +184,12 @@ internal sealed class ReleaseSearchScanJob(
         return [.. roots];
     }
 
-    private async Task<List<Guid>> LoadUnfulfilledMonitoredLeafIdsAsync(CancellationToken cancellationToken)
+    private async Task<List<Guid>> LoadUnfulfilledMonitoredLeafIdsAsync(
+        DateTime publishedBy,
+        CancellationToken cancellationToken)
     {
         var leafIds = new List<Guid>();
-        var pageNumber = 1;
+        Guid? afterId = null;
         while (true)
         {
             var page = await contentHierarchyItemRepository.QueryIdsAsync(
@@ -182,9 +206,29 @@ internal sealed class ReleaseSearchScanJob(
                             Values = [FulfillmentStatus.Missing, FulfillmentStatus.Upgradable],
                         }],
                     },
+                    Metadata = new()
+                    {
+                        And = [new()
+                        {
+                            PublishDate = new()
+                            {
+                                And = [new()
+                                {
+                                    Operator = CriteriaValueOperator.GreaterThan,
+                                    Value = new TemporalValue
+                                    {
+                                        Value = publishedBy,
+                                        Precision = TemporalPrecision.Instant,
+                                    },
+                                    Negate = true,
+                                }],
+                            },
+                        }],
+                    },
+                    AfterId = afterId,
                 },
-                new Models.Paging.PagingParameter { PageNumber = pageNumber, PageSize = PageSize },
-                sort: null,
+                new PagingParameter { PageNumber = 1, PageSize = PageSize },
+                new() { PropertyName = nameof(ContentHierarchyItem.Id), Direction = SortDirection.Ascending },
                 cancellationToken).ConfigureAwait(false);
 
             leafIds.AddRange(page);
@@ -193,7 +237,7 @@ internal sealed class ReleaseSearchScanJob(
                 break;
             }
 
-            pageNumber++;
+            afterId = page[^1];
         }
 
         return leafIds;
@@ -201,6 +245,7 @@ internal sealed class ReleaseSearchScanJob(
 
     private async Task EnqueueReleaseSearchAsync(
         Guid contentHierarchyItemId,
+        int leadTimeDays,
         Guid? userId,
         Guid? correlationId,
         CancellationToken cancellationToken)
@@ -213,6 +258,7 @@ internal sealed class ReleaseSearchScanJob(
                 {
                     [MagpieJobs.Parameters.ContentHierarchyItemId] = contentHierarchyItemId.ToString("D"),
                     [MagpieJobs.Parameters.SearchKind] = MagpieJobs.ParameterValues.NodeSearchKind,
+                    [MagpieJobs.Parameters.LeadTimeDays] = leadTimeDays.ToString(CultureInfo.InvariantCulture),
                 },
                 Mode = JobExecutionMode.Queue,
                 UserId = userId,
@@ -225,25 +271,29 @@ internal sealed class ReleaseSearchScanJob(
             contentHierarchyItemId);
     }
 
-    private int ReadPositiveIntParameter(
+    private int ReadIntParameter(
         IReadOnlyDictionary<string, string> parameters,
         string parameterName,
-        int defaultValue)
+        int defaultValue,
+        int minimum)
     {
         if (!parameters.TryGetValue(parameterName, out var raw))
         {
             return defaultValue;
         }
 
-        if (int.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var configured) && configured > 0)
+        if (int.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var configured) &&
+            configured >= minimum)
         {
             return configured;
         }
 
         logger.LogWarning(
-            "Parameter {Parameter} value {Raw} is not a positive integer, so the job will use the default {Default}",
+            "Parameter {Parameter} value {Raw} is not an integer of at least {Minimum}, so the job will use the " +
+            "default {Default}",
             parameterName,
             raw,
+            minimum,
             defaultValue);
 
         return defaultValue;

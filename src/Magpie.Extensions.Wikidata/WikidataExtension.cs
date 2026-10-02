@@ -21,13 +21,7 @@ public sealed class WikidataExtension : IExtension
     public Guid Id { get; } = new("A70A2CC8-9BC7-4E24-9584-A4A458E4FCFD");
 
     /// <inheritdoc />
-    public Version Version => new(1, 0, 0);
-
-    /// <inheritdoc />
     public string Name => "Wikidata";
-
-    /// <inheritdoc />
-    public string? TargetABI => "[1.0.0,)";
 
     /// <inheritdoc />
     public void RegisterServices(IServiceCollection services)

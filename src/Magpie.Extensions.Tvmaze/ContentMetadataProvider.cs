@@ -53,7 +53,7 @@ internal sealed class ContentMetadataProvider(
         if (item.ContentType != TvContentType)
         {
             logger.LogDebug(
-                "The TVmaze provider does not support content type {ContentType} at level {Level}.",
+                "TVmaze does not support content type {ContentType} at level {Level}",
                 item.ContentType,
                 item.Level);
             return null;
@@ -68,7 +68,7 @@ internal sealed class ContentMetadataProvider(
         if (item.Level != ShowLevel)
         {
             logger.LogDebug(
-                "The TVmaze provider does not support content type {ContentType} at level {Level}.",
+                "TVmaze does not support content type {ContentType} at level {Level}",
                 item.ContentType,
                 item.Level);
             return null;
@@ -77,7 +77,7 @@ internal sealed class ContentMetadataProvider(
         var show = await ResolveShowAsync(request.ExistingMetadata, cancellationToken).ConfigureAwait(false);
         if (show is null)
         {
-            logger.LogDebug("The TVmaze provider did not resolve a show for ContentHierarchyItem {Id}.", item.Id);
+            logger.LogInformation("TVmaze resolved no show for ContentHierarchyItem {Id}", item.Id);
             return null;
         }
 
@@ -125,9 +125,7 @@ internal sealed class ContentMetadataProvider(
             !int.TryParse(tvmazeId, NumberStyles.Integer, CultureInfo.InvariantCulture, out var showId) ||
             showId <= 0)
         {
-            logger.LogDebug(
-                "The TVmaze subject expander found no TVmaze show id for ContentHierarchyItem {Id}.",
-                item.Id);
+            logger.LogInformation("TVmaze has no show id for ContentHierarchyItem {Id}", item.Id);
             return [];
         }
 
@@ -209,7 +207,7 @@ internal sealed class ContentMetadataProvider(
         var imdbId = existingMetadata.FindExternalIdBySource(Constants.ImdbSource);
         if (!string.IsNullOrWhiteSpace(imdbId))
         {
-            var byImdb = await LookupAndHydrateAsync("imdb", imdbId!, cancellationToken)
+            var byImdb = await LookupAndHydrateAsync("imdb", imdbId, cancellationToken)
                 .ConfigureAwait(false);
             if (byImdb is not null)
             {
@@ -220,7 +218,7 @@ internal sealed class ContentMetadataProvider(
         var theTvdbId = existingMetadata.FindExternalIdBySource(Constants.TheTvdbSource);
         if (!string.IsNullOrWhiteSpace(theTvdbId))
         {
-            var byTvdb = await LookupAndHydrateAsync("thetvdb", theTvdbId!, cancellationToken)
+            var byTvdb = await LookupAndHydrateAsync("thetvdb", theTvdbId, cancellationToken)
                 .ConfigureAwait(false);
             if (byTvdb is not null)
             {

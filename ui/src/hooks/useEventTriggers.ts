@@ -104,7 +104,7 @@ export function useEventTriggers(params?: EventTriggerQueryParams) {
     useInvalidateQueriesOnEvents(
         ['eventTrigger.created', 'eventTrigger.updated', 'eventTrigger.deleted'],
         [eventTriggerQueryKeys.list(params)],
-        { exact: true, owner: 'event-triggers:list' },
+        { exact: true },
     );
     const queryClient = useQueryClient();
 

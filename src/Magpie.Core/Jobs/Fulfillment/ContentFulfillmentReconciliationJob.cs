@@ -6,7 +6,6 @@ using System.Threading.Tasks;
 
 using Magpie.Abstractions.Releases;
 using Magpie.Abstractions.Repositories;
-using Magpie.Core.Releases;
 using Magpie.Models;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
@@ -24,7 +23,6 @@ internal sealed class ContentFulfillmentReconciliationJob(
     IContentHierarchyItemRepository contentHierarchyItemRepository,
     IContentRepository contentRepository,
     IDownloadRepository downloadRepository,
-    IReleaseRepository releaseRepository,
     IQualityService qualityService,
     IReleaseEvaluationService releaseEvaluationService,
     TimeProvider timeProvider,
@@ -260,11 +258,8 @@ internal sealed class ContentFulfillmentReconciliationJob(
         IDictionary<Guid, QualityTierList?> tierLists,
         CancellationToken cancellationToken)
     {
-        var release = await ReleaseEvaluationService
-            .ResolveDownloadReleaseAsync(releaseRepository, download, cancellationToken)
-            .ConfigureAwait(false);
         var score = await releaseEvaluationService
-            .ScoreForContentAsync(release, leaf.Id, currentQualityOrdinal: null, cancellationToken)
+            .ScoreDownloadForContentAsync(download, leaf.Id, cancellationToken)
             .ConfigureAwait(false);
         if (score is null)
         {

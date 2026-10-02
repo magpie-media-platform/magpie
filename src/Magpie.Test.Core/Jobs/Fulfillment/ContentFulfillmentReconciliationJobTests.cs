@@ -36,7 +36,6 @@ public sealed class ContentFulfillmentReconciliationJobTests
     private Mock<IContentHierarchyItemRepository> _hierarchyRepository = null!;
     private Mock<IContentRepository> _contentRepository = null!;
     private Mock<IDownloadRepository> _downloadRepository = null!;
-    private Mock<IReleaseRepository> _releaseRepository = null!;
     private Mock<IQualityService> _qualityService = null!;
     private Mock<IReleaseEvaluationService> _releaseEvaluationService = null!;
     private IJob _subject = null!;
@@ -92,7 +91,6 @@ public sealed class ContentFulfillmentReconciliationJobTests
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(new PagedList<Download>());
 
-        _releaseRepository = new Mock<IReleaseRepository> { CallBase = true };
         _qualityService = new Mock<IQualityService>();
         _releaseEvaluationService = new Mock<IReleaseEvaluationService>();
 
@@ -110,7 +108,6 @@ public sealed class ContentFulfillmentReconciliationJobTests
             _hierarchyRepository.Object,
             _contentRepository.Object,
             _downloadRepository.Object,
-            _releaseRepository.Object,
             _qualityService.Object,
             _releaseEvaluationService.Object,
             TimeProvider.System,
@@ -460,22 +457,10 @@ public sealed class ContentFulfillmentReconciliationJobTests
                 ],
                 TotalItems = 1
             });
-        _releaseRepository
-            .Setup(r => r.GetByIdAsync(releaseId, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new Release
-            {
-                Id = releaseId,
-                Protocol = "torrent",
-                Title = "Imported",
-                ExternalId = Guid.NewGuid().ToString("N"),
-                PublishDate = DateTime.UtcNow,
-                CreatedAt = DateTime.UtcNow
-            });
         _releaseEvaluationService
-            .Setup(s => s.ScoreForContentAsync(
-                It.IsAny<Release>(),
+            .Setup(s => s.ScoreDownloadForContentAsync(
+                It.Is<Download>(download => download.Id == downloadId),
                 leafId,
-                It.IsAny<int?>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(new ReleaseAssessment
             {
@@ -556,22 +541,10 @@ public sealed class ContentFulfillmentReconciliationJobTests
                 ],
                 TotalItems = 1
             });
-        _releaseRepository
-            .Setup(r => r.GetByIdAsync(releaseId, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new Release
-            {
-                Id = releaseId,
-                Protocol = "torrent",
-                Title = "Imported",
-                ExternalId = Guid.NewGuid().ToString("N"),
-                PublishDate = DateTime.UtcNow,
-                CreatedAt = DateTime.UtcNow
-            });
         _releaseEvaluationService
-            .Setup(s => s.ScoreForContentAsync(
-                It.IsAny<Release>(),
+            .Setup(s => s.ScoreDownloadForContentAsync(
+                It.Is<Download>(download => download.Id == downloadId),
                 leafId,
-                It.IsAny<int?>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(new ReleaseAssessment
             {
@@ -592,13 +565,13 @@ public sealed class ContentFulfillmentReconciliationJobTests
             Times.Once);
     }
 
-    [TestCase(true)]
-    [TestCase(false)]
-    public async Task ExecuteAsync_ScoresTheDownloadTitle_WhenImportedReleaseIsDeleted(bool hasReleaseId)
+    [Test]
+    public async Task ExecuteAsync_ClearsQualityStatus_WhenTheImportedDownloadCannotBeScored()
     {
         // Arrange
         var leafId = Guid.NewGuid();
         var contentItemId = Guid.NewGuid();
+        var downloadId = Guid.NewGuid();
         _hierarchyRepository
             .Setup(r => r.QueryAsync(
                 It.IsAny<ContentHierarchyItemCriteria>(),
@@ -616,14 +589,14 @@ public sealed class ContentFulfillmentReconciliationJobTests
                         Level = "movie",
                         Slug = "a",
                         Name = "A",
-                        ContentItem = new ContentItem { Id = contentItemId }
+                        ContentItem = new ContentItem { Id = contentItemId, QualityStatus = QualityStatus.Met }
                     }
                 ],
                 TotalItems = 1
             });
         _contentRepository
             .Setup(r => r.GetByIdAsync(contentItemId, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new ContentItem { Id = contentItemId });
+            .ReturnsAsync(new ContentItem { Id = contentItemId, QualityStatus = QualityStatus.Met });
         _downloadRepository
             .Setup(r => r.QueryAsync(
                 It.IsAny<DownloadQuery>(),
@@ -636,11 +609,10 @@ public sealed class ContentFulfillmentReconciliationJobTests
                 [
                     new Download
                     {
-                        Id = Guid.NewGuid(),
-                        ReleaseId = hasReleaseId ? Guid.NewGuid() : null,
+                        Id = downloadId,
                         DownloadClientId = Guid.NewGuid(),
                         ExternalId = Guid.NewGuid().ToString("N"),
-                        Title = "A 2026 1080p WEB-DL-GRP",
+                        Title = "A 2026 WEB-GRP",
                         Status = DownloadStatus.Imported,
                         CreatedAt = DateTime.UtcNow
                     }
@@ -648,17 +620,11 @@ public sealed class ContentFulfillmentReconciliationJobTests
                 TotalItems = 1
             });
         _releaseEvaluationService
-            .Setup(s => s.ScoreForContentAsync(
-                It.Is<Release>(release => release.Title == "A 2026 1080p WEB-DL-GRP"),
+            .Setup(s => s.ScoreDownloadForContentAsync(
+                It.Is<Download>(download => download.Id == downloadId),
                 leafId,
-                It.IsAny<int?>(),
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new ReleaseAssessment
-            {
-                MatchResult = ReleaseMatchResult.Indeterminate,
-                IsAcceptable = true,
-                IsCutoffMet = true
-            });
+            .ReturnsAsync((ReleaseAssessment?)null);
 
         // Act
         await _subject.ExecuteAsync(_jobContext).ConfigureAwait(false);
@@ -666,7 +632,7 @@ public sealed class ContentFulfillmentReconciliationJobTests
         // Assert
         _contentRepository.Verify(
             r => r.UpdateAsync(
-                It.Is<ContentItem>(item => item.Id == contentItemId && item.QualityStatus == QualityStatus.Met),
+                It.Is<ContentItem>(item => item.Id == contentItemId && item.QualityStatus == null),
                 _userId,
                 It.IsAny<CancellationToken>()),
             Times.Once);
@@ -789,22 +755,10 @@ public sealed class ContentFulfillmentReconciliationJobTests
                 ],
                 TotalItems = 1
             });
-        _releaseRepository
-            .Setup(r => r.GetByIdAsync(releaseId, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new Release
-            {
-                Id = releaseId,
-                Protocol = "torrent",
-                Title = "Imported",
-                ExternalId = Guid.NewGuid().ToString("N"),
-                PublishDate = DateTime.UtcNow,
-                CreatedAt = DateTime.UtcNow
-            });
         _releaseEvaluationService
-            .Setup(s => s.ScoreForContentAsync(
-                It.IsAny<Release>(),
+            .Setup(s => s.ScoreDownloadForContentAsync(
+                It.Is<Download>(download => download.Id == downloadId),
                 leafId,
-                It.IsAny<int?>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(new ReleaseAssessment
             {

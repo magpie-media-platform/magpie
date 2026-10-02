@@ -118,11 +118,6 @@
         font-size: var(--text-xs);
     }
 
-    .filter-bar__saved-trigger {
-        font-size: var(--text-xs);
-        gap: var(--space-xs);
-    }
-
     .filter-bar__content {
         padding: var(--space-md);
         padding-top: 0;

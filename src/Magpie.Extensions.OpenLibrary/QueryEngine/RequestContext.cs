@@ -31,7 +31,7 @@ internal sealed record RequestContext
             return null;
         }
 
-        var contact = value!.Trim();
+        var contact = value.Trim();
         var at = contact.IndexOf('@');
         var qualified = (at > 0 && at < contact.Length - 1) || contact.Count(char.IsDigit) >= 7;
         return qualified ? contact : null;

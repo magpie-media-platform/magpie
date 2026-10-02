@@ -31,26 +31,6 @@
         color: var(--bg-primary);
     }
 
-    .about-page__title-group {
-        display: flex;
-        align-items: center;
-        gap: var(--space-sm);
-        margin-bottom: var(--space-xs);
-    }
-
-    .about-page__title {
-        margin: 0;
-        font-size: var(--text-2xl);
-        font-weight: var(--weight-bold);
-        color: var(--text-primary);
-    }
-
-    .about-page__tagline {
-        margin: 0;
-        font-size: var(--text-sm);
-        color: var(--text-secondary);
-    }
-
     .about-page__content {
         display: flex;
         flex-direction: column;
@@ -212,13 +192,6 @@
         text-decoration: underline;
     }
 
-    .about-page__thanks {
-        margin: 0;
-        font-size: var(--text-sm);
-        color: var(--text-secondary);
-        line-height: var(--leading-relaxed);
-    }
-
     @media (max-width: 480px) {
         .about-page {
             padding: var(--space-md);
@@ -235,15 +208,6 @@
 
         .about-page__logo-icon {
             font-size: var(--icon-size-sm);
-        }
-
-        .about-page__title {
-            font-size: var(--text-xl);
-        }
-
-        .about-page__title-group {
-            flex-direction: column;
-            gap: var(--space-xs);
         }
 
         .about-page__info-grid {

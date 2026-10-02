@@ -92,7 +92,7 @@ internal sealed class MagpieAuthenticationHandler(
         Telemetry.AuthenticationFailures.Add(1, new KeyValuePair<string, object?>("scheme", failure.Provider));
 
         Logger.LogInformation(
-            "Authentication failed for the {Provider} credential because {Reason}",
+            "Authentication failed for {Provider} credential: {Reason}",
             failure.Provider,
             failure.Reason);
 

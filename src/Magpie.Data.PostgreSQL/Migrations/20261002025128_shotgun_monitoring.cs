@@ -1,0 +1,328 @@
+﻿using System;
+using Microsoft.EntityFrameworkCore.Migrations;
+
+#nullable disable
+
+namespace Magpie.Data.PostgreSQL.Migrations
+{
+    /// <inheritdoc />
+    public partial class shotgun_monitoring : Migration
+    {
+        /// <inheritdoc />
+        protected override void Up(MigrationBuilder migrationBuilder)
+        {
+            migrationBuilder.DropColumn(
+                name: "TimeoutAt",
+                table: "job_execution");
+
+            migrationBuilder.AlterColumn<int>(
+                name: "DefaultMonitoring",
+                table: "system_rootFolder",
+                type: "integer",
+                nullable: true,
+                oldClrType: typeof(bool),
+                oldType: "boolean",
+                oldNullable: true);
+
+            migrationBuilder.AddColumn<bool>(
+                name: "AutoImport",
+                table: "system_rootFolder",
+                type: "boolean",
+                nullable: false,
+                defaultValue: false);
+
+            migrationBuilder.AddColumn<int>(
+                name: "PublishDatePrecision",
+                table: "metadata_contribution",
+                type: "integer",
+                nullable: true);
+
+            migrationBuilder.AddColumn<int>(
+                name: "Status",
+                table: "indexer_releaseScope",
+                type: "integer",
+                nullable: false,
+                defaultValue: 0);
+
+            migrationBuilder.AddColumn<int>(
+                name: "ImportCollisionMode",
+                table: "download_download",
+                type: "integer",
+                nullable: true);
+
+            migrationBuilder.AddColumn<string>(
+                name: "ImportRecoveryState",
+                table: "download_download",
+                type: "text",
+                nullable: true);
+
+            migrationBuilder.AddColumn<Guid>(
+                name: "DownloadId",
+                table: "content_mediaFile",
+                type: "uuid",
+                nullable: true);
+
+            migrationBuilder.AddColumn<DateTime>(
+                name: "FileModifiedAt",
+                table: "content_mediaFile",
+                type: "timestamp with time zone",
+                nullable: true);
+
+            migrationBuilder.AddColumn<DateTime>(
+                name: "ReplacedAt",
+                table: "content_mediaFile",
+                type: "timestamp with time zone",
+                nullable: true);
+
+            migrationBuilder.AddColumn<Guid>(
+                name: "ContentHierarchyItemId",
+                table: "content_libraryImportCandidate",
+                type: "uuid",
+                nullable: true);
+
+            migrationBuilder.AddColumn<int>(
+                name: "CurrentFileQualityRank",
+                table: "content_item",
+                type: "integer",
+                nullable: true);
+
+            migrationBuilder.AddColumn<DateTime>(
+                name: "MediaReconciledAt",
+                table: "content_item",
+                type: "timestamp with time zone",
+                nullable: true);
+
+            migrationBuilder.AddColumn<int>(
+                name: "PrimaryMediaFileCount",
+                table: "content_item",
+                type: "integer",
+                nullable: false,
+                defaultValue: 0);
+
+            migrationBuilder.AddColumn<long>(
+                name: "PrimaryMediaSize",
+                table: "content_item",
+                type: "bigint",
+                nullable: false,
+                defaultValue: 0L);
+
+            migrationBuilder.AlterColumn<int>(
+                name: "Monitoring",
+                table: "content_hierarchyItem",
+                type: "integer",
+                nullable: true,
+                oldClrType: typeof(bool),
+                oldType: "boolean",
+                oldNullable: true);
+
+            migrationBuilder.AlterColumn<int>(
+                name: "EffectiveMonitoring",
+                table: "content_hierarchyItem",
+                type: "integer",
+                nullable: false,
+                oldClrType: typeof(bool),
+                oldType: "boolean");
+
+            migrationBuilder.AddColumn<string>(
+                name: "PreviousTokenHash",
+                table: "auth_refreshToken",
+                type: "character varying(44)",
+                maxLength: 44,
+                nullable: true);
+
+            migrationBuilder.AddColumn<string>(
+                name: "ProtectedRenewal",
+                table: "auth_refreshToken",
+                type: "text",
+                nullable: true);
+
+            migrationBuilder.AddColumn<DateTime>(
+                name: "RenewalExpiresAt",
+                table: "auth_refreshToken",
+                type: "timestamp with time zone",
+                nullable: true);
+
+            migrationBuilder.AddColumn<string>(
+                name: "RenewalKeyHash",
+                table: "auth_refreshToken",
+                type: "character varying(44)",
+                maxLength: 44,
+                nullable: true);
+
+            migrationBuilder.CreateTable(
+                name: "content_mediaFileCoverage",
+                columns: table => new
+                {
+                    MediaFileId = table.Column<Guid>(type: "uuid", nullable: false),
+                    ContentItemId = table.Column<Guid>(type: "uuid", nullable: false)
+                },
+                constraints: table =>
+                {
+                    table.PrimaryKey("PK_content_mediaFileCoverage", x => new { x.MediaFileId, x.ContentItemId });
+                    table.ForeignKey(
+                        name: "FK_content_mediaFileCoverage_content_item_ContentItemId",
+                        column: x => x.ContentItemId,
+                        principalTable: "content_item",
+                        principalColumn: "Id",
+                        onDelete: ReferentialAction.Cascade);
+                    table.ForeignKey(
+                        name: "FK_content_mediaFileCoverage_content_mediaFile_MediaFileId",
+                        column: x => x.MediaFileId,
+                        principalTable: "content_mediaFile",
+                        principalColumn: "Id",
+                        onDelete: ReferentialAction.Cascade);
+                });
+
+            migrationBuilder.CreateIndex(
+                name: "IX_content_mediaFile_DownloadId",
+                table: "content_mediaFile",
+                column: "DownloadId");
+
+            migrationBuilder.CreateIndex(
+                name: "IX_content_libraryImportCandidate_ContentHierarchyItemId",
+                table: "content_libraryImportCandidate",
+                column: "ContentHierarchyItemId");
+
+            migrationBuilder.CreateIndex(
+                name: "IX_auth_refreshToken_RenewalKeyHash",
+                table: "auth_refreshToken",
+                column: "RenewalKeyHash");
+
+            migrationBuilder.CreateIndex(
+                name: "IX_content_mediaFileCoverage_ContentItemId",
+                table: "content_mediaFileCoverage",
+                column: "ContentItemId");
+
+            migrationBuilder.AddForeignKey(
+                name: "FK_content_mediaFile_download_download_DownloadId",
+                table: "content_mediaFile",
+                column: "DownloadId",
+                principalTable: "download_download",
+                principalColumn: "Id",
+                onDelete: ReferentialAction.SetNull);
+        }
+
+        /// <inheritdoc />
+        protected override void Down(MigrationBuilder migrationBuilder)
+        {
+            migrationBuilder.DropForeignKey(
+                name: "FK_content_mediaFile_download_download_DownloadId",
+                table: "content_mediaFile");
+
+            migrationBuilder.DropTable(
+                name: "content_mediaFileCoverage");
+
+            migrationBuilder.DropIndex(
+                name: "IX_content_mediaFile_DownloadId",
+                table: "content_mediaFile");
+
+            migrationBuilder.DropIndex(
+                name: "IX_content_libraryImportCandidate_ContentHierarchyItemId",
+                table: "content_libraryImportCandidate");
+
+            migrationBuilder.DropIndex(
+                name: "IX_auth_refreshToken_RenewalKeyHash",
+                table: "auth_refreshToken");
+
+            migrationBuilder.DropColumn(
+                name: "AutoImport",
+                table: "system_rootFolder");
+
+            migrationBuilder.DropColumn(
+                name: "PublishDatePrecision",
+                table: "metadata_contribution");
+
+            migrationBuilder.DropColumn(
+                name: "Status",
+                table: "indexer_releaseScope");
+
+            migrationBuilder.DropColumn(
+                name: "ImportCollisionMode",
+                table: "download_download");
+
+            migrationBuilder.DropColumn(
+                name: "ImportRecoveryState",
+                table: "download_download");
+
+            migrationBuilder.DropColumn(
+                name: "DownloadId",
+                table: "content_mediaFile");
+
+            migrationBuilder.DropColumn(
+                name: "FileModifiedAt",
+                table: "content_mediaFile");
+
+            migrationBuilder.DropColumn(
+                name: "ReplacedAt",
+                table: "content_mediaFile");
+
+            migrationBuilder.DropColumn(
+                name: "ContentHierarchyItemId",
+                table: "content_libraryImportCandidate");
+
+            migrationBuilder.DropColumn(
+                name: "CurrentFileQualityRank",
+                table: "content_item");
+
+            migrationBuilder.DropColumn(
+                name: "MediaReconciledAt",
+                table: "content_item");
+
+            migrationBuilder.DropColumn(
+                name: "PrimaryMediaFileCount",
+                table: "content_item");
+
+            migrationBuilder.DropColumn(
+                name: "PrimaryMediaSize",
+                table: "content_item");
+
+            migrationBuilder.DropColumn(
+                name: "PreviousTokenHash",
+                table: "auth_refreshToken");
+
+            migrationBuilder.DropColumn(
+                name: "ProtectedRenewal",
+                table: "auth_refreshToken");
+
+            migrationBuilder.DropColumn(
+                name: "RenewalExpiresAt",
+                table: "auth_refreshToken");
+
+            migrationBuilder.DropColumn(
+                name: "RenewalKeyHash",
+                table: "auth_refreshToken");
+
+            migrationBuilder.AlterColumn<bool>(
+                name: "DefaultMonitoring",
+                table: "system_rootFolder",
+                type: "boolean",
+                nullable: true,
+                oldClrType: typeof(int),
+                oldType: "integer",
+                oldNullable: true);
+
+            migrationBuilder.AddColumn<DateTime>(
+                name: "TimeoutAt",
+                table: "job_execution",
+                type: "timestamp with time zone",
+                nullable: true);
+
+            migrationBuilder.AlterColumn<bool>(
+                name: "Monitoring",
+                table: "content_hierarchyItem",
+                type: "boolean",
+                nullable: true,
+                oldClrType: typeof(int),
+                oldType: "integer",
+                oldNullable: true);
+
+            migrationBuilder.AlterColumn<bool>(
+                name: "EffectiveMonitoring",
+                table: "content_hierarchyItem",
+                type: "boolean",
+                nullable: false,
+                oldClrType: typeof(int),
+                oldType: "integer");
+        }
+    }
+}

@@ -97,7 +97,7 @@ public sealed class ExtensionPackageSecurityTests
         // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(error!.Message, Does.StartWith("The package source must be an absolute HTTPS URL."));
+            Assert.That(error!.Message, Is.EqualTo("Source URL must be an absolute HTTPS URL."));
             _sources.Verify(value => value.CreateAsync(It.IsAny<ExtensionPackageSource>(), null,
                 It.IsAny<CancellationToken>()), Times.Never);
         }
@@ -115,7 +115,7 @@ public sealed class ExtensionPackageSecurityTests
             patch, null));
 
         // Assert
-        Assert.That(error!.Message, Does.StartWith("The package source must be an absolute HTTPS URL."));
+        Assert.That(error!.Message, Is.EqualTo("Source URL must be an absolute HTTPS URL."));
     }
 
     [TestCase("https://source.example/query", true)]
@@ -227,7 +227,7 @@ public sealed class ExtensionPackageSecurityTests
         // Assert
         Assert.That(
             error!.Message,
-            Is.EqualTo("NuGet package Package publishes prerelease versions only; name a version to install it."));
+            Is.EqualTo("NuGet package Package publishes prerelease versions only."));
     }
 
     [TestCase("RegistrationsBaseUrl/Versioned", "registration5-gz-semver2")]

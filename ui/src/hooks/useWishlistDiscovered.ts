@@ -103,7 +103,6 @@ export function useWishlistDiscovered(wishlistId: string | undefined, params?: W
         {
             entityIds: wishlistId ? [wishlistId] : [],
             exact: true,
-            owner: 'wishlist-discovered',
         },
     );
     useInvalidateQueriesOnEvents(
@@ -124,7 +123,6 @@ export function useWishlistDiscovered(wishlistId: string | undefined, params?: W
             exact: true,
             failOpenEventNames: ['content.hierarchyItem.created'],
             maxWaitMs: 1000,
-            owner: 'wishlist-discovered',
             predicate: (event) => linkedContentIds.includes(event.context['content.hierarchyItemId']),
         },
     );

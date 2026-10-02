@@ -10,9 +10,7 @@ using Magpie.Sdk.Extensions;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
 
-#pragma warning disable IDE0130
 namespace Microsoft.Extensions.DependencyInjection;
-#pragma warning restore IDE0130
 
 /// <summary>
 /// The dependency-injection registration extensions for the SQL Server data layer.
@@ -49,7 +47,7 @@ public static class MagpieDataSqlServerServiceCollectionExtensions
     }
 
     /// <summary>
-    /// If no backplane exists, registers the SQL Server relay-table cluster backplane.
+    /// Registers the SQL Server cluster backplane.
     /// </summary>
     /// <param name="services">The service collection to register into</param>
     /// <param name="connectionString">The SQL Server connection string</param>

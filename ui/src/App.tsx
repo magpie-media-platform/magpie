@@ -46,8 +46,7 @@ import { usePersistentState } from './hooks/usePersistentState';
 import { useGlobalEventStreamConnection } from './hooks/useEventStream';
 import { useMediaQuery } from './hooks/ui/useMediaQuery';
 import { BottomNav, BottomNavItem } from './components/ui/BottomNav';
-import { HeaderSlot, HeaderLeftSlot, HeaderRightSlot } from './components/ui/Slot/GlobalSlots';
-import { ExtensionMainNavigation } from './components/ui/Slot';
+import { ExtensionMainNavigation, Slot } from './components/ui/Slot';
 import { ToastProvider, ToastViewport, ToastStateProvider, ToastList, ToastTray } from './components/ui/Toast';
 import { TooltipProvider } from './components/ui/Tooltip';
 import { LiveAnnouncerProvider } from './components/ui/LiveAnnouncer';
@@ -66,7 +65,7 @@ import { LibraryQuickSearch } from './components/content/LibraryQuickSearch';
 import { ContentOriginProvider } from './hooks/useContentOrigin';
 import { ExtensionProvider } from './extensions';
 import { queryClient } from '@/lib/queryClient';
-import { isAdminRoute, useIsActive } from '@/lib/routes';
+import { isActivePath, isAdminRoute, useIsActive } from '@/lib/routes';
 import { Logo } from './components/ui/Logo';
 import { LiveUpdateStatus } from './components/ui/LiveUpdateStatus/LiveUpdateStatus';
 
@@ -76,7 +75,7 @@ function AppHeader() {
     const sidebarExpanded = isDesktopSidebar ? !sidebarCollapsed : sidebarOpen;
 
     return (
-        <HeaderSlot>
+        <Slot slot="global.header">
             <Header
                 brand={
                     <Link to="/">
@@ -87,8 +86,8 @@ function AppHeader() {
                 status={<LiveUpdateStatus />}
                 onSidebarToggle={toggleSidebar}
                 sidebarOpen={sidebarExpanded}
-                leftSlot={<HeaderLeftSlot />}
-                rightSlot={<HeaderRightSlot />}
+                leftSlot={<Slot slot="header.left" />}
+                rightSlot={<Slot slot="header.right" />}
                 actions={
                     <>
                         <LibraryQuickSearch />
@@ -97,7 +96,7 @@ function AppHeader() {
                     </>
                 }
             />
-        </HeaderSlot>
+        </Slot>
     );
 }
 
@@ -106,12 +105,8 @@ interface AppSidebarProps {
     subjectTypes: LibraryTypeDefinition[];
 }
 
-function isRouteWithin(pathname: string, route: string): boolean {
-    return pathname === route || pathname.startsWith(`${route}/`);
-}
-
 const AppSidebar = memo(function AppSidebar({ contentTypes, subjectTypes }: AppSidebarProps) {
-    const { sidebarOpen, sidebarCollapsed, toggleSidebarCollapsed, closeSidebar } = useAppShell();
+    const { sidebarOpen, sidebarCollapsed, closeSidebar } = useAppShell();
     const location = useLocation();
     const typeIconName = useTypeIconName();
     const { data: systemInfo } = useSystemInfo();
@@ -119,14 +114,14 @@ const AppSidebar = memo(function AppSidebar({ contentTypes, subjectTypes }: AppS
 
     const isActive = useIsActive();
 
-    const isAddContentActive = isRouteWithin(location.pathname, '/library/add');
-    const isLibraryImportActive = isRouteWithin(location.pathname, '/library/import');
+    const isAddContentActive = isActivePath(location.pathname, '/library/add');
+    const isLibraryImportActive = isActivePath(location.pathname, '/library/import');
     const isLibraryActive =
-        (isRouteWithin(location.pathname, '/library') && !isAddContentActive && !isLibraryImportActive) ||
-        isRouteWithin(location.pathname, '/subjects');
+        (isActivePath(location.pathname, '/library') && !isAddContentActive && !isLibraryImportActive) ||
+        isActivePath(location.pathname, '/subjects');
 
     return (
-        <Sidebar open={sidebarOpen} collapsed={sidebarCollapsed} onCollapsedChange={toggleSidebarCollapsed}>
+        <Sidebar open={sidebarOpen} collapsed={sidebarCollapsed}>
             <SidebarContent>
                 <SidebarGroup>
                     <SidebarItem
@@ -269,8 +264,8 @@ const AppSidebar = memo(function AppSidebar({ contentTypes, subjectTypes }: AppS
 function AppBottomNav() {
     const isActive = useIsActive();
     const { pathname } = useLocation();
-    const isAddContentActive = isRouteWithin(pathname, '/library/add');
-    const isLibraryActive = isRouteWithin(pathname, '/library') && !isAddContentActive;
+    const isAddContentActive = isActivePath(pathname, '/library/add');
+    const isLibraryActive = isActivePath(pathname, '/library') && !isAddContentActive;
 
     return (
         <BottomNav>
@@ -354,7 +349,7 @@ function RouteOutlet() {
 const STANDALONE_ROUTES: string[] = ['/login', '/setup', '/forbidden'];
 
 function isStandaloneRoute(pathname: string): boolean {
-    return STANDALONE_ROUTES.some((route) => pathname === route || pathname.startsWith(route + '/'));
+    return STANDALONE_ROUTES.some((route) => isActivePath(pathname, route));
 }
 
 function SetupRedirectGate({ children }: { children: ReactNode }) {

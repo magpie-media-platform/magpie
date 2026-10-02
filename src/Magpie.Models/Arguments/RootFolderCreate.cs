@@ -31,9 +31,9 @@ public sealed record RootFolderCreate
     public bool IsDefault { get; init; }
 
     /// <summary>
-    /// The default monitoring state for new items in the folder.
+    /// The default monitoring mode for new items in the folder.
     /// </summary>
-    public bool? DefaultMonitoring { get; init; }
+    public MonitoringMode? DefaultMonitoring { get; init; }
 
     /// <summary>
     /// The template for renamed files.

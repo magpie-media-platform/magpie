@@ -11,13 +11,13 @@ namespace Magpie.Sdk.Content;
 public interface IFileRoutingContentTypeDefinitionProvider : IContentTypeDefinitionProvider
 {
     /// <summary>
-    /// Gets the unique child that matches the parsed file signals.
+    /// Gets the children that match the parsed file signals.
     /// </summary>
     /// <param name="parent">The confirmed parent of the file</param>
     /// <param name="children">The direct children available for routing</param>
     /// <param name="signals">The parsed file signals</param>
-    /// <returns>The child ID, or null when routing is unresolved</returns>
-    Guid? ResolveFileChild(
+    /// <returns>The child IDs in ordinal order, or an empty list when routing is unresolved</returns>
+    IReadOnlyList<Guid> ResolveFileChildren(
         ContentHierarchyItem parent,
         IReadOnlyList<ContentHierarchyItem> children,
         IReadOnlyDictionary<string, List<string>> signals);

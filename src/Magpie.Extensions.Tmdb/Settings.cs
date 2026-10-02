@@ -1,4 +1,3 @@
-using System;
 using System.Collections.Generic;
 
 namespace Magpie.Extensions.Tmdb;
@@ -23,12 +22,12 @@ internal sealed record Settings
     {
         if (!string.IsNullOrWhiteSpace(Language))
         {
-            return Language!;
+            return Language;
         }
 
         if (!string.IsNullOrWhiteSpace(defaultLanguagePreference))
         {
-            return defaultLanguagePreference!;
+            return defaultLanguagePreference;
         }
 
         return FallbackLanguage;
@@ -36,31 +35,13 @@ internal sealed record Settings
 
     public static Settings Parse(IReadOnlyDictionary<string, string> settings)
     {
-        var apiKey = TryGet(settings, ApiKeyKey);
-        var language = TryGet(settings, LanguageKey);
+        var apiKey = settings.GetValueOrDefault(ApiKeyKey);
+        var language = settings.GetValueOrDefault(LanguageKey);
 
         return new Settings
         {
-            ApiKey = string.IsNullOrWhiteSpace(apiKey) ? string.Empty : apiKey!.Trim(),
-            Language = string.IsNullOrWhiteSpace(language) ? null : language!.Trim()
+            ApiKey = string.IsNullOrWhiteSpace(apiKey) ? string.Empty : apiKey.Trim(),
+            Language = string.IsNullOrWhiteSpace(language) ? null : language.Trim()
         };
-    }
-
-    private static string? TryGet(IReadOnlyDictionary<string, string> settings, string key)
-    {
-        if (settings.TryGetValue(key, out var direct))
-        {
-            return direct;
-        }
-
-        foreach (var pair in settings)
-        {
-            if (string.Equals(pair.Key, key, StringComparison.OrdinalIgnoreCase))
-            {
-                return pair.Value;
-            }
-        }
-
-        return null;
     }
 }

@@ -59,7 +59,7 @@ public class MagnetUriParsingTests
         var hash = QbittorrentDownloadClientIntegration.ExtractV1InfoHash(base32Magnet);
 
         // Assert
-        Assert.That(hash, Is.EqualTo(new string('0', 40)));
+        Assert.That(hash, Is.EqualTo("0000000000000000000000000000000000000000"));
     }
 
     [Test]

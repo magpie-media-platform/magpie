@@ -37,7 +37,7 @@ function fakeJwt(claims: Record<string, string | number>): string {
 }
 
 function AuthConsumer() {
-    const { isAuthenticated, isLoading, user, hasPermission, hasRole, signIn, signOut, login } = useAuth();
+    const { isAuthenticated, isLoading, user, hasPermission, hasRole, signOut, login } = useAuth();
 
     return (
         <div>
@@ -50,7 +50,6 @@ function AuthConsumer() {
             <span data-testid="has-admin">{hasPermission('users.manage').toString()}</span>
             <span data-testid="is-manager">{hasRole(Role.Manager).toString()}</span>
             <span data-testid="is-admin">{hasRole(Role.Admin).toString()}</span>
-            <button onClick={() => signIn({ id: '1', username: 'testuser', role: Role.Manager })}>Sign In</button>
             <button onClick={signOut}>Sign Out</button>
             <button onClick={() => void login('viewer', 'password')}>Log In</button>
         </div>
@@ -584,8 +583,10 @@ describe('useAuth', () => {
         expect(screen.getByTestId('is-admin')).toHaveTextContent('false');
     });
 
-    it('updates state on signIn', async () => {
+    it('updates state on login', async () => {
         const user = userEvent.setup();
+        vi.mocked(authApiModule.login).mockResolvedValue({ id: 'viewer-id', username: 'viewer', role: Role.Viewer });
+        vi.mocked(authApiModule.fetchEffectivePermissions).mockResolvedValue({ role: Role.Viewer, permissions: {} });
 
         render(
             <AuthProvider skipSessionInit>
@@ -595,10 +596,10 @@ describe('useAuth', () => {
 
         expect(screen.getByTestId('authenticated')).toHaveTextContent('false');
 
-        await user.click(screen.getByRole('button', { name: 'Sign In' }));
+        await user.click(screen.getByRole('button', { name: 'Log In' }));
 
-        expect(screen.getByTestId('authenticated')).toHaveTextContent('true');
-        expect(screen.getByTestId('username')).toHaveTextContent('testuser');
+        await waitFor(() => expect(screen.getByTestId('authenticated')).toHaveTextContent('true'));
+        expect(screen.getByTestId('username')).toHaveTextContent('viewer');
     });
 
     it('clears state on signOut', async () => {

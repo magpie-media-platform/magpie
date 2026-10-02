@@ -72,8 +72,6 @@ internal sealed class DownloadRefreshJob(
 
         TimeSpan? successorDelay = null;
 
-        var deferral = downloadService as IDeferrableDownloadService;
-
         for (var i = 0; i < enabledClients.Length; i++)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -83,7 +81,7 @@ internal sealed class DownloadRefreshJob(
                 enabledClients.Length,
                 $"The download refresh will process client {client.Name}.");
 
-            var deferred = new List<Guid>();
+            var updated = new List<Guid>();
             try
             {
                 var integration = downloadClientIntegrations.LastOrDefault(
@@ -190,17 +188,11 @@ internal sealed class DownloadRefreshJob(
 
                     try
                     {
-                        if (deferral is null)
-                        {
-                            await downloadService
-                                .ApplyRefreshedClientStateAsync(download, info, userId, cancellationToken)
-                                .ConfigureAwait(false);
-                        }
-                        else if (await deferral
-                            .ApplyDeferredRefreshedClientStateAsync(download, info, userId, cancellationToken)
+                        if (await downloadService
+                            .UpdateRefreshedClientStateAsync(download, info, userId, cancellationToken)
                             .ConfigureAwait(false))
                         {
-                            deferred.Add(download.Id);
+                            updated.Add(download.Id);
                         }
                     }
                     catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -245,7 +237,7 @@ internal sealed class DownloadRefreshJob(
             }
             finally
             {
-                await CompleteDeferredRefreshAsync(deferral, deferred, userId).ConfigureAwait(false);
+                await PublishRefreshedStatusAsync(updated, userId).ConfigureAwait(false);
             }
         }
 
@@ -329,27 +321,24 @@ internal sealed class DownloadRefreshJob(
         };
     }
 
-    private async Task CompleteDeferredRefreshAsync(
-        IDeferrableDownloadService? deferral,
-        List<Guid> deferred,
-        Guid? userId)
+    private async Task PublishRefreshedStatusAsync(List<Guid> updated, Guid? userId)
     {
-        if (deferral is null || deferred.Count == 0)
+        if (updated.Count == 0)
         {
             return;
         }
 
         try
         {
-            await deferral.CompleteDeferredRefreshAsync(deferred, userId, CancellationToken.None)
+            await downloadService.PublishRefreshedStatusAsync(updated, userId, CancellationToken.None)
                 .ConfigureAwait(false);
         }
         catch (Exception ex)
         {
             logger.LogWarning(
                 ex,
-                "The job failed to complete the refresh of {DownloadCount} downloads",
-                deferred.Count);
+                "The job failed to publish the refreshed status of {DownloadCount} downloads",
+                updated.Count);
         }
     }
 }

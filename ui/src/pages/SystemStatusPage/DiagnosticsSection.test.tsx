@@ -32,7 +32,6 @@ vi.mock('@/auth', async (importOriginal) => {
             user: { id: 'u1', username: 'admin', role: authState.role },
             hasRole: (minRole: number) => authState.role >= minRole,
             hasPermission: () => true,
-            signIn: vi.fn(),
             signOut: vi.fn(),
             login: vi.fn(),
         }),

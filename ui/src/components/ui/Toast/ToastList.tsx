@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { CheckCircleIcon, InfoIcon, WarningIcon, XCircleIcon } from '@phosphor-icons/react';
 
-import { Toast, ToastClose, ToastTitle, ToastDescription, type ToastVariant } from './Toast';
+import { Toast, ToastAction, ToastClose, ToastTitle, ToastDescription, type ToastVariant } from './Toast';
 import { useToast, type ToastData } from '@/hooks/ui/useToast';
 import { useMediaQuery } from '@/hooks/ui/useMediaQuery';
 
@@ -12,21 +12,19 @@ function getToastRole(variant?: ToastVariant): 'alert' | 'status' {
 /** How many of the newest toasts stay visible in the mobile phone-notification stack. */
 const MAX_MOBILE_STACK_DEPTH = 3;
 
-/** Matches the breakpoint where `Toast.css` hides a stacked toast with `display: none`. */
-const MOBILE_STACK_QUERY = '(max-width: 640px)';
+/** Matches the breakpoint where the bottom navigation shows and `Toast.css` stacks the toasts behind the front toast. */
+const MOBILE_STACK_QUERY = '(max-width: 767px)';
 
 interface ToastItemProps {
     data: ToastData;
     dismiss: (id: string) => void;
-    isFront: boolean;
-    isStacked: boolean;
-    isStackHidden: boolean;
+    stackDepth: number;
 }
 
-function ToastItem({ data, dismiss, isFront, isStacked, isStackHidden }: ToastItemProps) {
+function ToastItem({ data, dismiss, stackDepth }: ToastItemProps) {
     const { id, duration } = data;
     const isMobileStack = useMediaQuery(MOBILE_STACK_QUERY);
-    const isHidden = isStackHidden && isMobileStack;
+    const isConcealed = stackDepth > 0 && isMobileStack;
     const remainingRef = useRef(duration ?? 0);
     const startedAtRef = useRef(0);
     const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -59,19 +57,19 @@ function ToastItem({ data, dismiss, isFront, isStacked, isStackHidden }: ToastIt
     }, [clearTimer]);
 
     const handleResume = useCallback(() => {
-        if (!isHidden) {
+        if (!isConcealed) {
             armTimer(remainingRef.current);
         }
-    }, [armTimer, isHidden]);
+    }, [armTimer, isConcealed]);
 
     useEffect(() => {
-        if (isHidden) {
+        if (isConcealed) {
             handlePause();
         } else {
             handleResume();
         }
         return handlePause;
-    }, [isHidden, handlePause, handleResume]);
+    }, [isConcealed, handlePause, handleResume]);
 
     return (
         <Toast
@@ -82,9 +80,9 @@ function ToastItem({ data, dismiss, isFront, isStacked, isStackHidden }: ToastIt
             onPause={handlePause}
             onResume={handleResume}
             onOpenChange={(open) => !open && dismiss(id)}
-            data-stack-front={isFront}
-            data-stack-peek={isFront && isStacked}
-            data-stack-hidden={isStackHidden}
+            inert={isConcealed}
+            data-stack-depth={stackDepth}
+            data-stack-hidden={stackDepth >= MAX_MOBILE_STACK_DEPTH}
         >
             <div className="toast-list__content">
                 {data.variant === 'success' && (
@@ -116,6 +114,11 @@ function ToastItem({ data, dismiss, isFront, isStacked, isStackHidden }: ToastIt
                     {data.description && <ToastDescription>{data.description}</ToastDescription>}
                 </div>
             </div>
+            {data.action && (
+                <ToastAction altText={data.action.altText} onClick={data.action.onClick}>
+                    {data.action.label}
+                </ToastAction>
+            )}
             <ToastClose />
         </Toast>
     );
@@ -123,24 +126,12 @@ function ToastItem({ data, dismiss, isFront, isStacked, isStackHidden }: ToastIt
 
 export function ToastList() {
     const { toasts, dismiss } = useToast();
-    const frontId = toasts[toasts.length - 1]?.id;
-    const isStacked = toasts.length > 1;
 
     return (
         <>
-            {toasts.map((t, index) => {
-                const stackDepth = toasts.length - 1 - index;
-                return (
-                    <ToastItem
-                        key={t.id}
-                        data={t}
-                        dismiss={dismiss}
-                        isFront={t.id === frontId}
-                        isStacked={isStacked}
-                        isStackHidden={stackDepth >= MAX_MOBILE_STACK_DEPTH}
-                    />
-                );
-            })}
+            {toasts.map((t, index) => (
+                <ToastItem key={t.id} data={t} dismiss={dismiss} stackDepth={toasts.length - 1 - index} />
+            ))}
         </>
     );
 }

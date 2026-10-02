@@ -12,8 +12,6 @@ internal sealed class SubjectFilterConfiguration : IEntityTypeConfiguration<Subj
     public void Configure(EntityTypeBuilder<SubjectFilter> builder)
     {
         builder.ToTable("filter_subject");
-        builder.HasKey(e => e.Id);
-        builder.Property(e => e.Id).ValueGeneratedOnAdd();
         builder.Property(e => e.Criteria).HasConversion(
             v => JsonSerializer.Serialize(v, JsonSerializerOptions.Default),
             v => JsonSerializer.Deserialize<SubjectFilterCriteria>(v, JsonSerializerOptions.Default) ?? new())

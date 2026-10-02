@@ -3,13 +3,6 @@
         max-width: 400px;
     }
 
-    .tier-list-form__media-type-value {
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-        min-width: 0;
-    }
-
     .tier-list-form__body {
         overflow-y: auto;
     }

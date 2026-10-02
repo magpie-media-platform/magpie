@@ -80,12 +80,12 @@ public sealed class ContentHierarchyItemRepositoryRelationshipQueryTests
     [TearDown]
     public void TearDown()
     {
-        _context.Database.CloseConnection();
         _context.Dispose();
     }
 
-    [Test]
-    public async Task QueryAsync_ReturnsFilteredItems_WhenFilteringByRelationshipKind()
+    [TestCase("director")]
+    [TestCase("Director")]
+    public async Task QueryAsync_ReturnsFilteredItems_WhenFilteringByRelationshipKind(string kind)
     {
         // Arrange
         var relationshipSubjectContainer1 = new MetadataContainer { CreatedAt = DateTime.UtcNow };
@@ -200,7 +200,7 @@ public sealed class ContentHierarchyItemRepositoryRelationshipQueryTests
                                 {
                                     Kind = new()
                                     {
-                                        And = [new() { Operator = CriteriaValueOperator.Equals, Value = "director" }]
+                                        And = [new() { Operator = CriteriaValueOperator.Equals, Value = kind }]
                                     }
                                 }
 ]
@@ -364,147 +364,6 @@ public sealed class ContentHierarchyItemRepositoryRelationshipQueryTests
             Assert.That(items, Has.Exactly(1).Items);
             Assert.That(items[0].Id, Is.EqualTo(scopedItem.Id));
             Assert.That(items[0].Name, Is.EqualTo("Super Troopers"));
-        }
-    }
-
-    [Test]
-    public async Task QueryAsync_ReturnsFilteredItems_WhenFilteringByRelationshipKindCaseInsensitively()
-    {
-        // Arrange
-        var relationshipSubjectContainer1 = new MetadataContainer { CreatedAt = DateTime.UtcNow };
-        _context.MetadataContainers.Add(relationshipSubjectContainer1);
-        await _context.SaveChangesAsync().ConfigureAwait(false);
-        var relationshipSubjectContribution1 = new MetadataContribution
-        {
-            MetadataContainerId = relationshipSubjectContainer1.Id,
-            Ordinal = 0,
-            ProviderType = "test",
-            Title = "Delphine Ashworth"
-        };
-        _context.MetadataContributions.Add(relationshipSubjectContribution1);
-        await _context.SaveChangesAsync().ConfigureAwait(false);
-        _context.Subjects.Add(new Subject
-        {
-            MetadataContainerId = relationshipSubjectContainer1.Id,
-            Kind = "person",
-            CreatedAt = DateTime.UtcNow
-        });
-        var relationshipContentContainer1 = new MetadataContainer { CreatedAt = DateTime.UtcNow };
-        _context.MetadataContainers.Add(relationshipContentContainer1);
-        await _context.SaveChangesAsync().ConfigureAwait(false);
-        var relationshipContribution1 = new MetadataContribution
-        {
-            MetadataContainerId = relationshipContentContainer1.Id,
-            Ordinal = 0,
-            ProviderType = "test",
-            Title = "Movie Alpha"
-        };
-        relationshipContribution1.Relationships.Add(new Relationship
-        {
-            Kind = "director",
-            RelatedMetadataContainerId = relationshipSubjectContainer1.Id,
-            Ordinal = 0
-        });
-        _context.MetadataContributions.Add(relationshipContribution1);
-        var directorItem = new ContentHierarchyItem
-        {
-            MetadataContainerId = relationshipContentContainer1.Id,
-            ContentType = "type-a",
-            Level = "level-a",
-            Slug = "item-a",
-            Name = "Item A",
-            Monitoring = MonitoringMode.Monitored,
-            CreatedAt = DateTime.UtcNow
-        };
-        _context.ContentHierarchyItems.Add(directorItem);
-        await _context.SaveChangesAsync().ConfigureAwait(false);
-        var relationshipSubjectContainer2 = new MetadataContainer { CreatedAt = DateTime.UtcNow };
-        _context.MetadataContainers.Add(relationshipSubjectContainer2);
-        await _context.SaveChangesAsync().ConfigureAwait(false);
-        var relationshipSubjectContribution2 = new MetadataContribution
-        {
-            MetadataContainerId = relationshipSubjectContainer2.Id,
-            Ordinal = 0,
-            ProviderType = "test",
-            Title = "Big Publisher"
-        };
-        _context.MetadataContributions.Add(relationshipSubjectContribution2);
-        await _context.SaveChangesAsync().ConfigureAwait(false);
-        _context.Subjects.Add(new Subject
-        {
-            MetadataContainerId = relationshipSubjectContainer2.Id,
-            Kind = "studio",
-            CreatedAt = DateTime.UtcNow
-        });
-        var relationshipContentContainer2 = new MetadataContainer { CreatedAt = DateTime.UtcNow };
-        _context.MetadataContainers.Add(relationshipContentContainer2);
-        await _context.SaveChangesAsync().ConfigureAwait(false);
-        var relationshipContribution2 = new MetadataContribution
-        {
-            MetadataContainerId = relationshipContentContainer2.Id,
-            Ordinal = 0,
-            ProviderType = "test",
-            Title = "Movie Beta"
-        };
-        relationshipContribution2.Relationships.Add(new Relationship
-        {
-            Kind = "publisher",
-            RelatedMetadataContainerId = relationshipSubjectContainer2.Id,
-            Ordinal = 0
-        });
-        _context.MetadataContributions.Add(relationshipContribution2);
-        var relationshipItem1 = new ContentHierarchyItem
-        {
-            MetadataContainerId = relationshipContentContainer2.Id,
-            ContentType = "type-a",
-            Level = "level-a",
-            Slug = "item-b",
-            Name = "Item B",
-            Monitoring = MonitoringMode.Monitored,
-            CreatedAt = DateTime.UtcNow
-        };
-        _context.ContentHierarchyItems.Add(relationshipItem1);
-        await _context.SaveChangesAsync().ConfigureAwait(false);
-
-        var criteria = new ContentHierarchyItemCriteria
-        {
-            Metadata = new()
-            {
-                And =
-                [
-                    new()
-                    {
-                        Relationships = new()
-                        {
-                            Some =
-[
-[
-                                new()
-                                {
-                                    Kind = new()
-                                    {
-                                        And = [new() { Operator = CriteriaValueOperator.Equals, Value = "Director" }]
-                                    }
-                                }
-]
-]
-                        }
-                    }
-                ]
-            }
-        };
-
-        // Act
-        var result = await _subject.QueryAsync(criteria,
-            new() { PageNumber = 1, PageSize = 100 },
-            null).ConfigureAwait(false);
-
-        // Assert
-        var items = result.Items.ToList();
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(items, Has.Exactly(1).Items);
-            Assert.That(items[0].Id, Is.EqualTo(directorItem.Id));
         }
     }
 
@@ -814,16 +673,12 @@ public sealed class ContentHierarchyItemRepositoryRelationshipQueryTests
             ProviderType = "test",
             Title = "Odessandra Kerr"
         };
-        var relationshipAliases1 = new[] { "Odessa Kerr" };
-        for (var i = 0; i < relationshipAliases1.Length; i++)
+        relationshipSubjectContribution1.AlternateTexts.Add(new AlternateText
         {
-            relationshipSubjectContribution1.AlternateTexts.Add(new AlternateText
-            {
-                Ordinal = i,
-                Kind = "Name",
-                Text = relationshipAliases1[i]
-            });
-        }
+            Ordinal = 0,
+            Kind = "Name",
+            Text = "Odessa Kerr"
+        });
 
         _context.MetadataContributions.Add(relationshipSubjectContribution1);
         await _context.SaveChangesAsync().ConfigureAwait(false);
@@ -910,53 +765,113 @@ public sealed class ContentHierarchyItemRepositoryRelationshipQueryTests
         _context.ContentHierarchyItems.Add(relationshipItem1);
         await _context.SaveChangesAsync().ConfigureAwait(false);
 
-        var queryCriteria = new[]
-        {
-            (Operator: CriteriaValueOperator.ContainsString, Value: "odessa kerr"),
-            (Operator: CriteriaValueOperator.Equals, Value: "Odessa Kerr"),
-            (Operator: CriteriaValueOperator.ContainsString, Value: "Odessandra")
-        };
-
         // Act
         var queryResults = new List<List<ContentHierarchyItem>>();
-        foreach (var criterion in queryCriteria)
+        var criteria1 = new ContentHierarchyItemCriteria
         {
-            var criteria = new ContentHierarchyItemCriteria
+            Metadata = new()
             {
-                Metadata = new()
-                {
-                    And =
-                    [
-                        new()
+                And =
+                [
+                    new()
+                    {
+                        Relationships = new()
                         {
-                            Relationships = new()
-                            {
-                                Some =
+                            Some =
+                            [
                                 [
-                                    [
-                                        new()
+                                    new()
+                                    {
+                                        Subject = new()
                                         {
-                                            Subject = new()
+                                            And = [new()
                                             {
-                                                And = [new()
-                                                {
-                                                    Operator = criterion.Operator,
-                                                    Value = criterion.Value
-                                                }]
-                                            }
+                                                Operator = CriteriaValueOperator.ContainsString,
+                                                Value = "odessa kerr"
+                                            }]
                                         }
-                                    ]
+                                    }
                                 ]
-                            }
+                            ]
                         }
-                    ]
-                }
-            };
-            var result = await _subject.QueryAsync(criteria,
-                new() { PageNumber = 1, PageSize = 100 },
-                null).ConfigureAwait(false);
-            queryResults.Add([.. result.Items]);
-        }
+                    }
+                ]
+            }
+        };
+        var result1 = await _subject.QueryAsync(criteria1,
+            new() { PageNumber = 1, PageSize = 100 },
+            null).ConfigureAwait(false);
+        queryResults.Add([.. result1.Items]);
+        var criteria2 = new ContentHierarchyItemCriteria
+        {
+            Metadata = new()
+            {
+                And =
+                [
+                    new()
+                    {
+                        Relationships = new()
+                        {
+                            Some =
+                            [
+                                [
+                                    new()
+                                    {
+                                        Subject = new()
+                                        {
+                                            And = [new()
+                                            {
+                                                Operator = CriteriaValueOperator.Equals,
+                                                Value = "Odessa Kerr"
+                                            }]
+                                        }
+                                    }
+                                ]
+                            ]
+                        }
+                    }
+                ]
+            }
+        };
+        var result2 = await _subject.QueryAsync(criteria2,
+            new() { PageNumber = 1, PageSize = 100 },
+            null).ConfigureAwait(false);
+        queryResults.Add([.. result2.Items]);
+        var criteria3 = new ContentHierarchyItemCriteria
+        {
+            Metadata = new()
+            {
+                And =
+                [
+                    new()
+                    {
+                        Relationships = new()
+                        {
+                            Some =
+                            [
+                                [
+                                    new()
+                                    {
+                                        Subject = new()
+                                        {
+                                            And = [new()
+                                            {
+                                                Operator = CriteriaValueOperator.ContainsString,
+                                                Value = "Odessandra"
+                                            }]
+                                        }
+                                    }
+                                ]
+                            ]
+                        }
+                    }
+                ]
+            }
+        };
+        var result3 = await _subject.QueryAsync(criteria3,
+            new() { PageNumber = 1, PageSize = 100 },
+            null).ConfigureAwait(false);
+        queryResults.Add([.. result3.Items]);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -984,16 +899,12 @@ public sealed class ContentHierarchyItemRepositoryRelationshipQueryTests
             ProviderType = "test",
             Title = "Bob Smith"
         };
-        var relationshipAliases1 = new[] { "Nova" };
-        for (var i = 0; i < relationshipAliases1.Length; i++)
+        relationshipSubjectContribution1.AlternateTexts.Add(new AlternateText
         {
-            relationshipSubjectContribution1.AlternateTexts.Add(new AlternateText
-            {
-                Ordinal = i,
-                Kind = "Name",
-                Text = relationshipAliases1[i]
-            });
-        }
+            Ordinal = 0,
+            Kind = "Name",
+            Text = "Nova"
+        });
 
         _context.MetadataContributions.Add(relationshipSubjectContribution1);
         await _context.SaveChangesAsync().ConfigureAwait(false);
@@ -1080,52 +991,78 @@ public sealed class ContentHierarchyItemRepositoryRelationshipQueryTests
         _context.ContentHierarchyItems.Add(kept);
         await _context.SaveChangesAsync().ConfigureAwait(false);
 
-        var queryCriteria = new[]
-        {
-            (Operator: CriteriaValueOperator.NotContainsString, Value: "nova"),
-            (Operator: CriteriaValueOperator.NotEquals, Value: "Nova")
-        };
-
         // Act
         var queryResults = new List<List<Guid>>();
-        foreach (var criterion in queryCriteria)
+        var criteria1 = new ContentHierarchyItemCriteria
         {
-            var criteria = new ContentHierarchyItemCriteria
+            Metadata = new()
             {
-                Metadata = new()
-                {
-                    And =
-                    [
-                        new()
+                And =
+                [
+                    new()
+                    {
+                        Relationships = new()
                         {
-                            Relationships = new()
-                            {
-                                Some =
+                            Some =
+                            [
                                 [
-                                    [
-                                        new()
+                                    new()
+                                    {
+                                        Subject = new()
                                         {
-                                            Subject = new()
+                                            And = [new()
                                             {
-                                                And = [new()
-                                                {
-                                                    Operator = criterion.Operator,
-                                                    Value = criterion.Value
-                                                }]
-                                            }
+                                                Operator = CriteriaValueOperator.NotContainsString,
+                                                Value = "nova"
+                                            }]
                                         }
-                                    ]
+                                    }
                                 ]
-                            }
+                            ]
                         }
-                    ]
-                }
-            };
-            var result = await _subject.QueryAsync(criteria,
-                new() { PageNumber = 1, PageSize = 100 },
-                null).ConfigureAwait(false);
-            queryResults.Add([.. result.Items.Select(i => i.Id)]);
-        }
+                    }
+                ]
+            }
+        };
+        var result1 = await _subject.QueryAsync(criteria1,
+            new() { PageNumber = 1, PageSize = 100 },
+            null).ConfigureAwait(false);
+        queryResults.Add([.. result1.Items.Select(i => i.Id)]);
+        var criteria2 = new ContentHierarchyItemCriteria
+        {
+            Metadata = new()
+            {
+                And =
+                [
+                    new()
+                    {
+                        Relationships = new()
+                        {
+                            Some =
+                            [
+                                [
+                                    new()
+                                    {
+                                        Subject = new()
+                                        {
+                                            And = [new()
+                                            {
+                                                Operator = CriteriaValueOperator.NotEquals,
+                                                Value = "Nova"
+                                            }]
+                                        }
+                                    }
+                                ]
+                            ]
+                        }
+                    }
+                ]
+            }
+        };
+        var result2 = await _subject.QueryAsync(criteria2,
+            new() { PageNumber = 1, PageSize = 100 },
+            null).ConfigureAwait(false);
+        queryResults.Add([.. result2.Items.Select(i => i.Id)]);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -1692,8 +1629,9 @@ public sealed class ContentHierarchyItemRepositoryRelationshipQueryTests
         }
     }
 
-    [Test]
-    public async Task QueryAsync_ReturnsFilteredItems_WhenFilteringByRelationshipTypePersonSubject()
+    [TestCase("person")]
+    [TestCase("Person")]
+    public async Task QueryAsync_ReturnsFilteredItems_WhenFilteringByRelationshipTypePersonSubject(string type)
     {
         // Arrange
         var relationshipSubjectContainer1 = new MetadataContainer { CreatedAt = DateTime.UtcNow };
@@ -1808,148 +1746,7 @@ public sealed class ContentHierarchyItemRepositoryRelationshipQueryTests
                                 {
                                     Type = new()
                                     {
-                                        And = [new() { Operator = CriteriaValueOperator.Equals, Value = "person" }]
-                                    }
-                                }
-]
-]
-                        }
-                    }
-                ]
-            }
-        };
-
-        // Act
-        var result = await _subject.QueryAsync(criteria,
-            new() { PageNumber = 1, PageSize = 100 },
-            null).ConfigureAwait(false);
-
-        // Assert
-        var items = result.Items.ToList();
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(items, Has.Exactly(1).Items);
-            Assert.That(items[0].Id, Is.EqualTo(personItem.Id));
-        }
-    }
-
-    [Test]
-    public async Task QueryAsync_ReturnsFilteredItems_WhenFilteringByRelationshipTypeCaseInsensitively()
-    {
-        // Arrange
-        var relationshipSubjectContainer1 = new MetadataContainer { CreatedAt = DateTime.UtcNow };
-        _context.MetadataContainers.Add(relationshipSubjectContainer1);
-        await _context.SaveChangesAsync().ConfigureAwait(false);
-        var relationshipSubjectContribution1 = new MetadataContribution
-        {
-            MetadataContainerId = relationshipSubjectContainer1.Id,
-            Ordinal = 0,
-            ProviderType = "test",
-            Title = "Bella Hadid"
-        };
-        _context.MetadataContributions.Add(relationshipSubjectContribution1);
-        await _context.SaveChangesAsync().ConfigureAwait(false);
-        _context.Subjects.Add(new Subject
-        {
-            MetadataContainerId = relationshipSubjectContainer1.Id,
-            Kind = "person",
-            CreatedAt = DateTime.UtcNow
-        });
-        var relationshipContentContainer1 = new MetadataContainer { CreatedAt = DateTime.UtcNow };
-        _context.MetadataContainers.Add(relationshipContentContainer1);
-        await _context.SaveChangesAsync().ConfigureAwait(false);
-        var relationshipContribution1 = new MetadataContribution
-        {
-            MetadataContainerId = relationshipContentContainer1.Id,
-            Ordinal = 0,
-            ProviderType = "test",
-            Title = "Movie Alpha"
-        };
-        relationshipContribution1.Relationships.Add(new Relationship
-        {
-            Kind = "director",
-            RelatedMetadataContainerId = relationshipSubjectContainer1.Id,
-            Ordinal = 0
-        });
-        _context.MetadataContributions.Add(relationshipContribution1);
-        var personItem = new ContentHierarchyItem
-        {
-            MetadataContainerId = relationshipContentContainer1.Id,
-            ContentType = "type-a",
-            Level = "level-a",
-            Slug = "item-a",
-            Name = "Item A",
-            Monitoring = MonitoringMode.Monitored,
-            CreatedAt = DateTime.UtcNow
-        };
-        _context.ContentHierarchyItems.Add(personItem);
-        await _context.SaveChangesAsync().ConfigureAwait(false);
-        var relationshipSubjectContainer2 = new MetadataContainer { CreatedAt = DateTime.UtcNow };
-        _context.MetadataContainers.Add(relationshipSubjectContainer2);
-        await _context.SaveChangesAsync().ConfigureAwait(false);
-        var relationshipSubjectContribution2 = new MetadataContribution
-        {
-            MetadataContainerId = relationshipSubjectContainer2.Id,
-            Ordinal = 0,
-            ProviderType = "test",
-            Title = "Big Publisher"
-        };
-        _context.MetadataContributions.Add(relationshipSubjectContribution2);
-        await _context.SaveChangesAsync().ConfigureAwait(false);
-        _context.Subjects.Add(new Subject
-        {
-            MetadataContainerId = relationshipSubjectContainer2.Id,
-            Kind = "studio",
-            CreatedAt = DateTime.UtcNow
-        });
-        var relationshipContentContainer2 = new MetadataContainer { CreatedAt = DateTime.UtcNow };
-        _context.MetadataContainers.Add(relationshipContentContainer2);
-        await _context.SaveChangesAsync().ConfigureAwait(false);
-        var relationshipContribution2 = new MetadataContribution
-        {
-            MetadataContainerId = relationshipContentContainer2.Id,
-            Ordinal = 0,
-            ProviderType = "test",
-            Title = "Movie Beta"
-        };
-        relationshipContribution2.Relationships.Add(new Relationship
-        {
-            Kind = "publisher",
-            RelatedMetadataContainerId = relationshipSubjectContainer2.Id,
-            Ordinal = 0
-        });
-        _context.MetadataContributions.Add(relationshipContribution2);
-        var relationshipItem1 = new ContentHierarchyItem
-        {
-            MetadataContainerId = relationshipContentContainer2.Id,
-            ContentType = "type-a",
-            Level = "level-a",
-            Slug = "item-b",
-            Name = "Item B",
-            Monitoring = MonitoringMode.Monitored,
-            CreatedAt = DateTime.UtcNow
-        };
-        _context.ContentHierarchyItems.Add(relationshipItem1);
-        await _context.SaveChangesAsync().ConfigureAwait(false);
-
-        var criteria = new ContentHierarchyItemCriteria
-        {
-            Metadata = new()
-            {
-                And =
-                [
-                    new()
-                    {
-                        Relationships = new()
-                        {
-                            Some =
-[
-[
-                                new()
-                                {
-                                    Type = new()
-                                    {
-                                        And = [new() { Operator = CriteriaValueOperator.Equals, Value = "Person" }]
+                                        And = [new() { Operator = CriteriaValueOperator.Equals, Value = type }]
                                     }
                                 }
 ]

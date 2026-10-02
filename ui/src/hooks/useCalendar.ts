@@ -111,7 +111,6 @@ export function useCalendar(params?: CalendarQueryParams): CalendarResult {
             exact: true,
             failOpenEventNames: hasFilters ? ['content.hierarchyItem.created'] : undefined,
             maxWaitMs: 1200,
-            owner: 'calendar-page',
             predicate: (event) => {
                 const current = queryClient.getQueryData<Awaited<ReturnType<typeof fetchCalendarEvents>>>(
                     calendarQueryKeys.events(params),

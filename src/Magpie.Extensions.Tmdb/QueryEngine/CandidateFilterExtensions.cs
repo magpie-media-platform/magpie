@@ -15,13 +15,6 @@ namespace Magpie.Extensions.Tmdb.QueryEngine;
 
 internal static class CandidateFilterExtensions
 {
-    internal static bool MatchesSubjectReference(
-        this ProviderMetadataSearchSubjectReference reference,
-        ResolvedSubject subject)
-    {
-        return MatchesSubject(reference, subject);
-    }
-
     internal static IReadOnlyList<int> ResolveGenreIds(
         this GenreFilter filter,
         IReadOnlyDictionary<string, int> genreIds)
@@ -255,7 +248,7 @@ internal static class CandidateFilterExtensions
             ElementField.PreviewUrl => MatchesText(preview.Url.ToString(), predicate.Operator, predicate.StringValues),
             ElementField.PreviewSource => MatchesText(preview.Source, predicate.Operator, predicate.StringValues),
             ElementField.PreviewTitle => MatchesText(preview.Title, predicate.Operator, predicate.StringValues),
-            ElementField.PreviewReleaseDate => MatchesDate(
+            ElementField.PreviewReleaseDate => MatchesOrdered(
                 preview.ReleaseDate,
                 predicate.Operator,
                 predicate.DateValues),
@@ -274,8 +267,8 @@ internal static class CandidateFilterExtensions
             ElementField.ImageUrl => MatchesText(image.Url.ToString(), predicate.Operator, predicate.StringValues),
             ElementField.ImageSource => MatchesText(image.Source, predicate.Operator, predicate.StringValues),
             ElementField.ImageLanguage => MatchesText(image.Language, predicate.Operator, predicate.StringValues),
-            ElementField.ImageWidth => MatchesNumber(image.Width, predicate.Operator, predicate.NumberValues),
-            ElementField.ImageHeight => MatchesNumber(image.Height, predicate.Operator, predicate.NumberValues),
+            ElementField.ImageWidth => MatchesOrdered(image.Width, predicate.Operator, predicate.NumberValues),
+            ElementField.ImageHeight => MatchesOrdered(image.Height, predicate.Operator, predicate.NumberValues),
             _ => false
         };
         return predicate.Negate ? !matches : matches;
@@ -285,7 +278,7 @@ internal static class CandidateFilterExtensions
     {
         var matches = predicate.Field switch
         {
-            ElementField.ReferenceOrdinal => MatchesNumber(
+            ElementField.ReferenceOrdinal => MatchesOrdered(
                 reference.Ordinal,
                 predicate.Operator,
                 predicate.NumberValues),
@@ -342,7 +335,8 @@ internal static class CandidateFilterExtensions
         };
     }
 
-    private static bool MatchesNumber(int? candidate, CriteriaValueOperator op, IReadOnlyList<int> requested)
+    private static bool MatchesOrdered<T>(T? candidate, CriteriaValueOperator op, IReadOnlyList<T> requested)
+        where T : struct, IComparable<T>
     {
         if (op == CriteriaValueOperator.IsNull)
         {
@@ -361,41 +355,12 @@ internal static class CandidateFilterExtensions
 
         return op switch
         {
-            CriteriaValueOperator.Equals => candidate.Value == requested[0],
+            CriteriaValueOperator.Equals => candidate.Value.CompareTo(requested[0]) == 0,
             CriteriaValueOperator.In => requested.Contains(candidate.Value),
-            CriteriaValueOperator.GreaterThan => candidate.Value > requested[0],
-            CriteriaValueOperator.GreaterThanOrEqual => candidate.Value >= requested[0],
-            CriteriaValueOperator.LessThan => candidate.Value < requested[0],
-            CriteriaValueOperator.LessThanOrEqual => candidate.Value <= requested[0],
-            _ => false
-        };
-    }
-
-    private static bool MatchesDate(DateTime? candidate, CriteriaValueOperator op, IReadOnlyList<DateTime> requested)
-    {
-        if (op == CriteriaValueOperator.IsNull)
-        {
-            return candidate is null;
-        }
-
-        if (op == CriteriaValueOperator.IsNotNull)
-        {
-            return candidate is not null;
-        }
-
-        if (candidate is null || requested.Count == 0)
-        {
-            return false;
-        }
-
-        return op switch
-        {
-            CriteriaValueOperator.Equals => candidate.Value == requested[0],
-            CriteriaValueOperator.In => requested.Contains(candidate.Value),
-            CriteriaValueOperator.GreaterThan => candidate.Value > requested[0],
-            CriteriaValueOperator.GreaterThanOrEqual => candidate.Value >= requested[0],
-            CriteriaValueOperator.LessThan => candidate.Value < requested[0],
-            CriteriaValueOperator.LessThanOrEqual => candidate.Value <= requested[0],
+            CriteriaValueOperator.GreaterThan => candidate.Value.CompareTo(requested[0]) > 0,
+            CriteriaValueOperator.GreaterThanOrEqual => candidate.Value.CompareTo(requested[0]) >= 0,
+            CriteriaValueOperator.LessThan => candidate.Value.CompareTo(requested[0]) < 0,
+            CriteriaValueOperator.LessThanOrEqual => candidate.Value.CompareTo(requested[0]) <= 0,
             _ => false
         };
     }
@@ -419,7 +384,9 @@ internal static class CandidateFilterExtensions
         };
     }
 
-    private static bool MatchesSubject(ProviderMetadataSearchSubjectReference reference, ResolvedSubject subject)
+    internal static bool MatchesSubject(
+        this ProviderMetadataSearchSubjectReference reference,
+        ResolvedSubject subject)
     {
         if (subject.Role == SubjectRole.Network && subject.ViaCompanySearch)
         {
@@ -435,18 +402,7 @@ internal static class CandidateFilterExtensions
             return false;
         }
 
-        return subject.Role switch
-        {
-            SubjectRole.Company => reference.RelationshipKind == Constants.Studio,
-            SubjectRole.Network => reference.RelationshipKind == Constants.Network,
-            SubjectRole.Person => reference.SubjectKind == Constants.Person,
-            SubjectRole.Cast => reference.RelationshipKind == Constants.Cast,
-            SubjectRole.Crew => reference.RelationshipKind is Constants.Crew
-                or Constants.Director or Constants.Writer,
-            SubjectRole.Director => reference.RelationshipKind == Constants.Director,
-            SubjectRole.Writer => reference.RelationshipKind == Constants.Writer,
-            _ => false
-        };
+        return MatchesSubjectRole(reference, subject.Role);
     }
 
     private static bool MatchesLanguage(string? candidate, CriteriaValueOperator op, IReadOnlyList<string> requested)

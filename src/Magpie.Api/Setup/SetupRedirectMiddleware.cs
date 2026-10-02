@@ -9,9 +9,7 @@ using Microsoft.Extensions.Logging;
 
 namespace Magpie.Api.Setup;
 
-internal sealed class SetupRedirectMiddleware(
-    RequestDelegate next,
-    ILogger<SetupRedirectMiddleware> logger)
+internal sealed class SetupRedirectMiddleware(RequestDelegate next, ILogger<SetupRedirectMiddleware> logger)
 {
     private static readonly string[] AlwaysAllowedApiPrefixes =
     [
@@ -69,7 +67,7 @@ internal sealed class SetupRedirectMiddleware(
             return;
         }
 
-        logger.LogDebug("The middleware blocked the API request to {Path} because the setup is not complete", path);
+        logger.LogDebug("API request to {Path} blocked, setup not complete", path);
 
         context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
         context.Response.Headers[SetupRequiredHeader] = "true";

@@ -9,21 +9,23 @@ namespace Magpie.Test.QueryLanguage;
 [TestFixture]
 internal sealed class QueryNodesTests
 {
-    [TestCase("Title >= -12.5",
+    [TestCase(
+        "Title >= -12.5",
+        new[] { FilterQueryToken.Identifier, FilterQueryToken.GreaterThanOrEqual, FilterQueryToken.Number })]
+    [TestCase(
+        "Title !contains \"rock and roll\"",
+        new[] { FilterQueryToken.Identifier, FilterQueryToken.NotContains, FilterQueryToken.String })]
+    [TestCase(
+        "Title = \"x\" AnD Language = \"en\"",
         new[]
         {
-            FilterQueryToken.Identifier, FilterQueryToken.GreaterThanOrEqual, FilterQueryToken.Number
-        })]
-    [TestCase("Title !contains \"rock and roll\"",
-        new[]
-        {
-            FilterQueryToken.Identifier, FilterQueryToken.NotContains, FilterQueryToken.String
-        })]
-    [TestCase("Title = \"x\" AnD Language = \"en\"",
-        new[]
-        {
-            FilterQueryToken.Identifier, FilterQueryToken.Equals, FilterQueryToken.String,
-            FilterQueryToken.And, FilterQueryToken.Identifier, FilterQueryToken.Equals, FilterQueryToken.String
+            FilterQueryToken.Identifier,
+            FilterQueryToken.Equals,
+            FilterQueryToken.String,
+            FilterQueryToken.And,
+            FilterQueryToken.Identifier,
+            FilterQueryToken.Equals,
+            FilterQueryToken.String
         })]
     public void TryTokenize_ReturnsTokens_WhenQueryContainsOperators(string query, FilterQueryToken[] expected)
     {

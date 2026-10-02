@@ -283,13 +283,9 @@ public class QbittorrentDownloadClientIntegrationTests
         }
     }
 
-    [TestCase(null, "magpie", null)]
-    [TestCase("films", "films", null)]
-    [TestCase(null, "magpie", "movie")]
-    [TestCase("films", "films", "documentary")]
-    public async Task DownloadReleaseAsync_SettingsAndTags_WhenMagnetIsAdded(
-        string? configuredCategory,
-        string expectedCategory,
+    [TestCase(null)]
+    [TestCase("movie")]
+    public async Task DownloadReleaseAsync_UsesDefaultCategory_WhenMagnetIsAddedWithoutConfiguredCategory(
         string? contentType)
     {
         // Arrange
@@ -297,10 +293,6 @@ public class QbittorrentDownloadClientIntegrationTests
         {
             ["host"] = "http://qbit.local:8080"
         };
-        if (configuredCategory is not null)
-        {
-            settings["category"] = configuredCategory;
-        }
 
         QbittorrentSettings? suppliedSettings = null;
         string? suppliedTags = null;
@@ -330,7 +322,52 @@ public class QbittorrentDownloadClientIntegrationTests
         // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(suppliedSettings!.Category, Is.EqualTo(expectedCategory));
+            Assert.That(suppliedSettings!.Category, Is.EqualTo("magpie"));
+            Assert.That(suppliedTags, Is.EqualTo(contentType));
+        }
+    }
+
+    [TestCase(null)]
+    [TestCase("documentary")]
+    public async Task DownloadReleaseAsync_UsesConfiguredCategory_WhenMagnetIsAddedWithConfiguredCategory(
+        string? contentType)
+    {
+        // Arrange
+        var settings = new Dictionary<string, string>
+        {
+            ["host"] = "http://qbit.local:8080",
+            ["category"] = "films"
+        };
+
+        QbittorrentSettings? suppliedSettings = null;
+        string? suppliedTags = null;
+        _client.Setup(client => client.AddMagnetAsync(
+                It.IsAny<QbittorrentSettings>(),
+                Magnet,
+                It.IsAny<string?>(),
+                It.IsAny<CancellationToken>()))
+            .Callback<QbittorrentSettings, string, string?, CancellationToken>((parsed, _, tags, _) =>
+            {
+                suppliedSettings = parsed;
+                suppliedTags = tags;
+            })
+            .Returns(Task.CompletedTask);
+        var release = new Release
+        {
+            Title = "Tagged Release",
+            Protocol = "torrent",
+            InfoUrl = new Uri(Magnet),
+            Categories = ["TV", "HD"]
+        };
+        var context = new ReleaseGrabContext { ContentType = contentType };
+
+        // Act
+        await _integration.DownloadReleaseAsync(release, context, settings, default).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(suppliedSettings!.Category, Is.EqualTo("films"));
             Assert.That(suppliedTags, Is.EqualTo(contentType));
         }
     }
@@ -347,7 +384,7 @@ public class QbittorrentDownloadClientIntegrationTests
             .ThrowsAsync(new QbittorrentAddRejectedException("duplicate", "Fails."));
         _client.Setup(client => client.GetTorrentInfoAsync(
                 It.IsAny<QbittorrentSettings>(),
-                Hash,
+                It.Is<IReadOnlyCollection<string>>(hashes => hashes.Contains(Hash)),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(
             [
@@ -391,7 +428,7 @@ public class QbittorrentDownloadClientIntegrationTests
             .ThrowsAsync(new QbittorrentAddRejectedException("duplicate", "Fails."));
         _client.Setup(client => client.GetTorrentInfoAsync(
                 It.IsAny<QbittorrentSettings>(),
-                Hash,
+                It.Is<IReadOnlyCollection<string>>(hashes => hashes.Contains(Hash)),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync([]);
         var release = new Release
@@ -596,7 +633,7 @@ public class QbittorrentDownloadClientIntegrationTests
     }
 
     [TestCase(200, "text/html", "<!DOCTYPE html><html><body>Please log in</body></html>",
-        "The indexer returned an HTML page instead of a .torrent file (HTTP 200, text/html).", true)]
+        "The indexer returned an HTML page instead of a .torrent file (HTTP 200, text/html).", false)]
     [TestCase(200, "application/x-bittorrent", "",
         "The indexer returned an empty response instead of a .torrent file (HTTP 200, application/x-bittorrent).",
         false)]
@@ -605,15 +642,19 @@ public class QbittorrentDownloadClientIntegrationTests
     [TestCase(200, "text/plain", "Invalid passkey",
         "The indexer returned text instead of a .torrent file (HTTP 200, text/plain).", false)]
     [TestCase(403, "text/html", "<html>Forbidden</html>",
-        "The indexer returned HTTP 403 instead of a .torrent file (text/html).", true)]
+        "The indexer returned an HTML page instead of a .torrent file (HTTP 403, text/html).", false)]
     [TestCase(401, "text/html", "<html>Log in</html>",
-        "The indexer returned HTTP 401 instead of a .torrent file (text/html).", true)]
+        "The indexer returned an HTML page instead of a .torrent file (HTTP 401, text/html).", false)]
+    [TestCase(403, "text/plain", "<!DOCTYPE html><html><body>Please log in</body></html>",
+        "The indexer returned an HTML page instead of a .torrent file (HTTP 403, text/plain).", false)]
     [TestCase(403, "text/plain", "Forbidden",
         "The indexer returned HTTP 403 instead of a .torrent file (text/plain).", false)]
     [TestCase(429, "text/plain", "Too many requests",
         "The indexer returned HTTP 429 instead of a .torrent file (text/plain).", true)]
     [TestCase(503, "text/html", "<html>Unavailable</html>",
         "The indexer returned HTTP 503 instead of a .torrent file (text/html).", true)]
+    [TestCase(503, "text/plain", "",
+        "The indexer returned HTTP 503 instead of a .torrent file (text/plain).", true)]
     public void DownloadReleaseAsync_RejectsBeforeDispatch_WhenTheTorrentUrlReturnsNoTorrent(
         int status, string contentType, string body, string expectedReason, bool expectedTransient)
     {
@@ -643,6 +684,35 @@ public class QbittorrentDownloadClientIntegrationTests
                 It.IsAny<string>(),
                 It.IsAny<string?>(),
                 It.IsAny<CancellationToken>()), Times.Never);
+        }
+    }
+
+    [Test]
+    public void DownloadReleaseAsync_RejectsPermanently_WhenTheTorrentUrlReturnsHtmlWithoutAContentType()
+    {
+        // Arrange
+        _torrentHandler.Expect(HttpMethod.Get, "https://tracker.example/download.php?id=8")
+            .Respond(
+                HttpStatusCode.OK,
+                _ => new ByteArrayContent(Encoding.UTF8.GetBytes("<html><body>Please log in</body></html>")));
+        var release = new Release
+        {
+            Title = "Login Page Release",
+            Protocol = "torrent",
+            InfoUrl = new Uri("https://tracker.example/download.php?id=8")
+        };
+
+        // Act
+        var exception = Assert.CatchAsync<ReleasePayloadRejectedException>(
+            async () => await _integration.DownloadReleaseAsync(release, AnonymousSettings, default)
+                .ConfigureAwait(false));
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(exception!.Message, Is.EqualTo(
+                "The indexer returned an HTML page instead of a .torrent file (HTTP 200, no content type)."));
+            Assert.That(exception.Transient, Is.False);
         }
     }
 
@@ -677,7 +747,7 @@ public class QbittorrentDownloadClientIntegrationTests
         // Arrange
         _client.Setup(client => client.GetTorrentInfoAsync(
                 It.IsAny<QbittorrentSettings>(),
-                Hash,
+                It.Is<IReadOnlyCollection<string>>(hashes => hashes.Contains(Hash)),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync([]);
 
@@ -699,7 +769,7 @@ public class QbittorrentDownloadClientIntegrationTests
         // Arrange
         _client.Setup(client => client.GetTorrentInfoAsync(
                 It.IsAny<QbittorrentSettings>(),
-                Hash,
+                It.Is<IReadOnlyCollection<string>>(hashes => hashes.Contains(Hash)),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(
             [
@@ -737,7 +807,7 @@ public class QbittorrentDownloadClientIntegrationTests
         // Arrange
         _client.Setup(client => client.GetTorrentInfoAsync(
                 It.IsAny<QbittorrentSettings>(),
-                Hash,
+                It.Is<IReadOnlyCollection<string>>(hashes => hashes.Contains(Hash)),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(
             [
@@ -788,7 +858,7 @@ public class QbittorrentDownloadClientIntegrationTests
         // Arrange
         _client.Setup(client => client.GetTorrentInfoAsync(
                 It.IsAny<QbittorrentSettings>(),
-                Hash,
+                It.Is<IReadOnlyCollection<string>>(hashes => hashes.Contains(Hash)),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(
             [
@@ -818,7 +888,7 @@ public class QbittorrentDownloadClientIntegrationTests
         // Arrange
         _client.Setup(client => client.GetTorrentInfoAsync(
                 It.IsAny<QbittorrentSettings>(),
-                Hash,
+                It.Is<IReadOnlyCollection<string>>(hashes => hashes.Contains(Hash)),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync([new TorrentInfo { Hash = Hash, State = "downloading", Progress = progress }]);
 
@@ -831,7 +901,7 @@ public class QbittorrentDownloadClientIntegrationTests
 
     [TestCase(true)]
     [TestCase(false)]
-    public async Task RemoveDownloadAsync_Result_WhenClientReturns(bool expected)
+    public async Task RemoveDownloadAsync_ReturnsExpectedOutcome_WhenClientReturns(bool expected)
     {
         // Arrange
         _client.Setup(client => client.DeleteAsync(
@@ -851,7 +921,7 @@ public class QbittorrentDownloadClientIntegrationTests
 
     [TestCase(true)]
     [TestCase(false)]
-    public async Task PauseDownloadAsync_Result_WhenClientReturns(bool expected)
+    public async Task PauseDownloadAsync_ReturnsExpectedOutcome_WhenClientReturns(bool expected)
     {
         // Arrange
         _client.Setup(client => client.PauseAsync(
@@ -870,7 +940,7 @@ public class QbittorrentDownloadClientIntegrationTests
 
     [TestCase(true)]
     [TestCase(false)]
-    public async Task ResumeDownloadAsync_Result_WhenClientReturns(bool expected)
+    public async Task ResumeDownloadAsync_ReturnsExpectedOutcome_WhenClientReturns(bool expected)
     {
         // Arrange
         _client.Setup(client => client.ResumeAsync(
@@ -889,7 +959,7 @@ public class QbittorrentDownloadClientIntegrationTests
 
     [TestCase(true)]
     [TestCase(false)]
-    public async Task ForceStartDownloadAsync_Result_WhenClientReturns(bool expected)
+    public async Task ForceStartDownloadAsync_ReturnsExpectedOutcome_WhenClientReturns(bool expected)
     {
         // Arrange
         _client.Setup(client => client.SetForceStartAsync(

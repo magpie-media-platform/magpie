@@ -69,15 +69,15 @@ function validateSourceUrl(sourceUrl: string): string | undefined {
     try {
         url = new URL(sourceUrl.trim());
     } catch {
-        return 'sourceUrl must be an absolute HTTP or HTTPS URL.';
+        return 'Source URL must be an absolute HTTPS URL.';
     }
 
-    if (url.protocol !== 'http:' && url.protocol !== 'https:') {
-        return 'sourceUrl must be an absolute HTTP or HTTPS URL.';
+    if (url.protocol !== 'https:') {
+        return 'Source URL must be an absolute HTTPS URL.';
     }
 
     if (url.username || url.password) {
-        return 'sourceUrl must not include credentials.';
+        return 'Source URL must not include credentials.';
     }
 
     return undefined;

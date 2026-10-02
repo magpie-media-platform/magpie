@@ -43,8 +43,13 @@ public interface IContentHierarchyMetadataAdvancedSearcher : IContentHierarchyMe
         string defaultLanguagePreference,
         CancellationToken cancellationToken = default)
     {
-        return (await ContinueSearchAsync(contentType, query, maxResults, defaultLanguagePreference,
-            null, cancellationToken).ConfigureAwait(false)).Page;
+        return (await ContinueSearchAsync(
+            contentType,
+            query,
+            maxResults,
+            defaultLanguagePreference,
+            null,
+            cancellationToken).ConfigureAwait(false)).Page;
     }
 
     /// <summary>

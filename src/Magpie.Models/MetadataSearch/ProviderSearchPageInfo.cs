@@ -20,7 +20,7 @@ public sealed record ProviderSearchPageInfo
     public required int RequestedPage { get; set; }
 
     /// <summary>
-    /// Whether more results can exist. False only when the provider gives the end of the results.
+    /// Whether more results can exist.
     /// </summary>
     public required bool HasMore { get; set; }
 }

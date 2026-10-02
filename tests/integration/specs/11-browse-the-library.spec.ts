@@ -399,6 +399,7 @@ test.describe.serial('Journey 11: browse it like a member of the household', () 
                 await expect(page).toHaveURL(new RegExp(`/subjects/${ids.subject}$`));
                 const subjectContent = page.locator('[data-component="subject-content-tab"]');
                 await subjectContent.getByText('Journey Feature', { exact: true }).click();
+                await page.locator('[data-action="open-content"]').click();
                 await expect(page).toHaveURL(new RegExp(`/library/${ids.movie}`));
             });
 
@@ -443,7 +444,7 @@ test.describe.serial('Journey 11: browse it like a member of the household', () 
                 await expect(stats.getByRole('link', { name: 'View all content' })).toHaveAttribute('href', '/library');
                 await expect(stats.getByRole('link', { name: 'View 79 missing items' })).toHaveAttribute(
                     'href',
-                    '/library/all?fulfillment=missing',
+                    '/library/all?fulfillment=missing&levels=all',
                 );
                 await expect(stats.locator(`[data-content-id="${ids.recent}"]`)).toHaveAttribute(
                     'href',

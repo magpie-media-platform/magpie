@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Linq;
 using System.Text.Json;
@@ -15,7 +16,7 @@ internal static class EntityMappingExtensions
 {
     internal const string GregorianCalendarQid = "Q1985727";
 
-    internal static bool TryNormalizeQid(this string? value, out string? qid)
+    internal static bool TryNormalizeQid(this string? value, [NotNullWhen(true)] out string? qid)
     {
         qid = value.ToQid();
         return qid is not null;
@@ -29,7 +30,7 @@ internal static class EntityMappingExtensions
             return null;
         }
 
-        var slash = normalized!.LastIndexOf('/');
+        var slash = normalized.LastIndexOf('/');
         normalized = normalized.Substring(slash + 1);
         if (normalized.Length < 2 ||
             normalized[0] is not ('Q' or 'q') ||
@@ -59,32 +60,15 @@ internal static class EntityMappingExtensions
             return !string.IsNullOrWhiteSpace(entity.Id);
         }
 
-        IReadOnlyList<string> accepted = kind switch
-        {
-            EntityKind.Movie =>
-            [
-                Constants.MovieQid,
-                Constants.ShortFilmQid,
-                Constants.TelevisionFilmQid
-            ],
-            EntityKind.Show =>
-            [
-                Constants.TelevisionSeriesQid,
-                Constants.AnimatedSeriesQid
-            ],
-            EntityKind.Season => [Constants.SeasonQid],
-            EntityKind.Episode => [Constants.EpisodeQid],
-            EntityKind.Person => [Constants.HumanQid],
-            _ => []
-        };
-        var hasAcceptedType = EntityIds(entity, Constants.InstanceOfPropertyId)
+        var accepted = SparqlQueryBuilder.AcceptedTypes(kind);
+        var hasAcceptedType = entity.EntityClaimQids(Constants.InstanceOfPropertyId)
             .Any(value => accepted.Contains(value, StringComparer.Ordinal));
         return hasAcceptedType &&
             kind switch
             {
-                EntityKind.Season => EntityIds(entity, Constants.PartOfSeriesPropertyId).Any(),
-                EntityKind.Episode => EntityIds(entity, Constants.PartOfSeriesPropertyId).Any() &&
-                    EntityIds(entity, Constants.SeasonPropertyId).Any(),
+                EntityKind.Season => entity.EntityClaimQids(Constants.PartOfSeriesPropertyId).Any(),
+                EntityKind.Episode => entity.EntityClaimQids(Constants.PartOfSeriesPropertyId).Any() &&
+                    entity.EntityClaimQids(Constants.SeasonPropertyId).Any(),
                 _ => true
             };
     }
@@ -92,8 +76,8 @@ internal static class EntityMappingExtensions
     public static IReadOnlyList<string> RequiredSupportQids(this EntityDto entity)
     {
         var result = new List<string>();
-        result.AddRange(EntityIds(entity, Constants.OriginalLanguagePropertyId));
-        result.AddRange(EntityIds(entity, Constants.GenrePropertyId).Take(30));
+        result.AddRange(entity.EntityClaimQids(Constants.OriginalLanguagePropertyId));
+        result.AddRange(entity.EntityClaimQids(Constants.GenrePropertyId).Take(30));
         foreach (var statement in entity.TruthyStatements(Constants.AwardReceivedPropertyId).Take(30))
         {
             var awardQid = statement.Mainsnak.EntityId();
@@ -102,12 +86,13 @@ internal static class EntityMappingExtensions
                 result.Add(awardQid);
             }
 
-            result.AddRange(QualifierEntityIds(statement, Constants.ConferredByPropertyId));
+            result.AddRange(
+                RelationshipMappingExtensions.QualifierEntityIds(statement, Constants.ConferredByPropertyId));
         }
 
         foreach (var (propertyId, _) in Constants.RatingSystems)
         {
-            result.AddRange(EntityIds(entity, propertyId));
+            result.AddRange(entity.EntityClaimQids(propertyId));
         }
 
         return [.. result.Distinct(StringComparer.OrdinalIgnoreCase)];
@@ -118,11 +103,11 @@ internal static class EntityMappingExtensions
         IReadOnlyDictionary<string, EntityDto> supportEntities)
     {
         var result = new List<string>();
-        foreach (var awardQid in EntityIds(entity, Constants.AwardReceivedPropertyId).Take(30))
+        foreach (var awardQid in entity.EntityClaimQids(Constants.AwardReceivedPropertyId).Take(30))
         {
             if (supportEntities.TryGetValue(awardQid, out var award))
             {
-                result.AddRange(EntityIds(award, Constants.ConferredByPropertyId).Take(1));
+                result.AddRange(award.EntityClaimQids(Constants.ConferredByPropertyId).Take(1));
             }
         }
 
@@ -137,7 +122,7 @@ internal static class EntityMappingExtensions
         var propertyId = kind == EntityKind.Episode
             ? Constants.SeasonPropertyId
             : Constants.PartOfSeriesPropertyId;
-        return EntityIds(entity, propertyId).FirstOrDefault();
+        return entity.EntityClaimQids(propertyId).FirstOrDefault();
     }
 
     public static MetadataContribution? ToMetadataContribution(
@@ -161,7 +146,7 @@ internal static class EntityMappingExtensions
             Overview = entity.Descriptions.Resolve(language),
             DateLastRefreshed = utcNow
         };
-        AddExternalId(contribution, Constants.ProviderType, qid!, 0);
+        AddExternalId(contribution, Constants.ProviderType, qid, 0);
 
         switch (kind)
         {
@@ -245,8 +230,9 @@ internal static class EntityMappingExtensions
             entity,
             Constants.OriginalTitlePropertyId,
             originalLanguage);
-        contribution.PublishDate
-            = ContributionDate(EarliestTime(entity, Constants.PublicationDatePropertyId));
+        var published = EarliestTime(entity, Constants.PublicationDatePropertyId);
+        contribution.PublishDate = published?.PeriodStart();
+        contribution.PublishDatePrecision = published?.Precision;
         contribution.Duration = ResolveDuration(entity);
         AddGenres(contribution, entity, supportEntities, language);
         AddAwards(contribution, entity, supportEntities, language);
@@ -254,11 +240,11 @@ internal static class EntityMappingExtensions
         AddExternalId(
             contribution,
             Constants.ImdbSource,
-            FirstString(entity, Constants.ImdbPropertyId));
+            entity.StringClaimValues(Constants.ImdbPropertyId).FirstOrDefault());
         AddExternalId(
             contribution,
             Constants.TmdbSource,
-            FirstString(entity, Constants.TmdbMoviePropertyId));
+            entity.StringClaimValues(Constants.TmdbMoviePropertyId).FirstOrDefault());
         AddAliases(contribution, entity, language);
         AddContentArtwork(contribution, entity);
     }
@@ -277,9 +263,10 @@ internal static class EntityMappingExtensions
             originalLanguage);
         var start = EarliestTime(entity, Constants.SeriesStartPropertyId);
         var end = EarliestTime(entity, Constants.SeriesEndPropertyId);
-        contribution.PublishDate = ContributionDate(start);
-        contribution.Established = ContributionDate(start);
-        contribution.Dissolved = ContributionDate(end);
+        contribution.PublishDate = start?.PeriodStart();
+        contribution.PublishDatePrecision = start?.Precision;
+        contribution.Established = start?.PeriodStart();
+        contribution.Dissolved = end?.PeriodStart();
         contribution.ProductionStatus = end is null ? null : Constants.EndedProductionStatus;
         contribution.Duration = ResolveDuration(entity);
         AddGenres(contribution, entity, supportEntities, language);
@@ -288,15 +275,15 @@ internal static class EntityMappingExtensions
         AddExternalId(
             contribution,
             Constants.ImdbSource,
-            FirstString(entity, Constants.ImdbPropertyId));
+            entity.StringClaimValues(Constants.ImdbPropertyId).FirstOrDefault());
         AddExternalId(
             contribution,
             Constants.TmdbSource,
-            FirstString(entity, Constants.TmdbShowPropertyId));
+            entity.StringClaimValues(Constants.TmdbShowPropertyId).FirstOrDefault());
         AddExternalId(
             contribution,
             Constants.TvdbSource,
-            FirstString(entity, Constants.TvdbShowPropertyId));
+            entity.StringClaimValues(Constants.TvdbShowPropertyId).FirstOrDefault());
         AddAliases(contribution, entity, language);
         AddContentArtwork(contribution, entity);
     }
@@ -312,17 +299,18 @@ internal static class EntityMappingExtensions
             parentQid);
         var start = EarliestTime(entity, Constants.SeriesStartPropertyId);
         var end = EarliestTime(entity, Constants.SeriesEndPropertyId);
-        contribution.PublishDate = ContributionDate(start);
-        contribution.Established = ContributionDate(start);
-        contribution.Dissolved = ContributionDate(end);
+        contribution.PublishDate = start?.PeriodStart();
+        contribution.PublishDatePrecision = start?.Precision;
+        contribution.Established = start?.PeriodStart();
+        contribution.Dissolved = end?.PeriodStart();
         AddExternalId(
             contribution,
             Constants.TmdbSource,
-            FirstString(entity, Constants.TmdbSeasonPropertyId));
+            entity.StringClaimValues(Constants.TmdbSeasonPropertyId).FirstOrDefault());
         AddExternalId(
             contribution,
             Constants.TvdbSource,
-            FirstString(entity, Constants.TvdbSeasonPropertyId));
+            entity.StringClaimValues(Constants.TvdbSeasonPropertyId).FirstOrDefault());
         AddContentArtwork(contribution, entity);
     }
 
@@ -340,10 +328,11 @@ internal static class EntityMappingExtensions
             Constants.OriginalTitlePropertyId,
             originalLanguage ?? language);
         contribution.SequenceNumber = ResolveOrdinal(entity, Constants.SeasonPropertyId, parentQid);
-        contribution.PublishDate
-            = ContributionDate(EarliestTime(entity, Constants.PublicationDatePropertyId));
+        var published = EarliestTime(entity, Constants.PublicationDatePropertyId);
+        contribution.PublishDate = published?.PeriodStart();
+        contribution.PublishDatePrecision = published?.Precision;
         contribution.Duration = ResolveDuration(entity);
-        var productionCode = FirstString(entity, Constants.ProductionCodePropertyId);
+        var productionCode = entity.StringClaimValues(Constants.ProductionCodePropertyId).FirstOrDefault();
         if (productionCode is not null)
         {
             contribution.CustomMetadata.Add(new CustomMetadataValue { Key = "productionCode", Value = productionCode });
@@ -353,16 +342,19 @@ internal static class EntityMappingExtensions
         AddExternalId(
             contribution,
             Constants.ImdbSource,
-            FirstString(entity, Constants.ImdbPropertyId));
+            entity.StringClaimValues(Constants.ImdbPropertyId).FirstOrDefault());
         AddExternalId(
             contribution,
             Constants.TmdbSource,
-            FirstString(entity, Constants.TmdbEpisodePropertyId));
+            entity.StringClaimValues(Constants.TmdbEpisodePropertyId).FirstOrDefault());
         AddExternalId(
             contribution,
             Constants.TvdbSource,
-            FirstString(entity, Constants.TvdbEpisodePropertyId));
-        AddImage(contribution, FirstString(entity, Constants.ImagePropertyId), "still", primary: true);
+            entity.StringClaimValues(Constants.TvdbEpisodePropertyId).FirstOrDefault());
+        contribution.Images.AddImage(
+            entity.StringClaimValues(Constants.ImagePropertyId).FirstOrDefault(),
+            "still",
+            primary: true);
     }
 
     private static void MapPerson(
@@ -371,19 +363,22 @@ internal static class EntityMappingExtensions
         string language,
         IReadOnlyDictionary<string, EntityDto> supportEntities)
     {
-        contribution.BirthDate = ContributionDate(EarliestTime(entity, Constants.BirthDatePropertyId));
-        contribution.DeathDate = ContributionDate(EarliestTime(entity, Constants.DeathDatePropertyId));
+        contribution.BirthDate = EarliestTime(entity, Constants.BirthDatePropertyId)?.PeriodStart();
+        contribution.DeathDate = EarliestTime(entity, Constants.DeathDatePropertyId)?.PeriodStart();
         AddAwards(contribution, entity, supportEntities, language);
         AddExternalId(
             contribution,
             Constants.ImdbSource,
-            FirstString(entity, Constants.ImdbPropertyId));
+            entity.StringClaimValues(Constants.ImdbPropertyId).FirstOrDefault());
         AddExternalId(
             contribution,
             Constants.TmdbSource,
-            FirstString(entity, Constants.TmdbPersonPropertyId));
+            entity.StringClaimValues(Constants.TmdbPersonPropertyId).FirstOrDefault());
         AddAliases(contribution, entity, language);
-        AddImage(contribution, FirstString(entity, Constants.ImagePropertyId), "profile", primary: true);
+        contribution.Images.AddImage(
+            entity.StringClaimValues(Constants.ImagePropertyId).FirstOrDefault(),
+            "profile",
+            primary: true);
     }
 
     private static void MapStudio(
@@ -396,15 +391,21 @@ internal static class EntityMappingExtensions
             entity,
             Constants.OfficialNamePropertyId,
             language);
-        contribution.Established = ContributionDate(EarliestTime(entity, Constants.InceptionPropertyId));
-        contribution.Dissolved = ContributionDate(EarliestTime(entity, Constants.DissolutionPropertyId));
+        contribution.Established = EarliestTime(entity, Constants.InceptionPropertyId)?.PeriodStart();
+        contribution.Dissolved = EarliestTime(entity, Constants.DissolutionPropertyId)?.PeriodStart();
         AddAwards(contribution, entity, supportEntities, language);
         AddExternalId(
             contribution,
             Constants.TmdbSource,
-            FirstString(entity, Constants.TmdbCompanyPropertyId));
-        AddImage(contribution, FirstString(entity, Constants.LogoPropertyId), "logo", primary: true);
-        AddImage(contribution, FirstString(entity, Constants.ImagePropertyId), "backdrop", primary: false);
+            entity.StringClaimValues(Constants.TmdbCompanyPropertyId).FirstOrDefault());
+        contribution.Images.AddImage(
+            entity.StringClaimValues(Constants.LogoPropertyId).FirstOrDefault(),
+            "logo",
+            primary: true);
+        contribution.Images.AddImage(
+            entity.StringClaimValues(Constants.ImagePropertyId).FirstOrDefault(),
+            "backdrop",
+            primary: false);
     }
 
     private static MetadataContribution ToHierarchyContribution(HierarchyRow row, DateTime utcNow)
@@ -415,7 +416,8 @@ internal static class EntityMappingExtensions
             Source = "wikidata:" + KindSlug(row.EntityKind) + ":" + row.Qid,
             Title = row.Title,
             Overview = row.Overview,
-            PublishDate = ContributionDate(row.PublishDate),
+            PublishDate = row.PublishDate?.PeriodStart(),
+            PublishDatePrecision = row.PublishDate?.Precision,
             SequenceNumber = row.Ordinal,
             DateLastRefreshed = utcNow
         };
@@ -425,8 +427,7 @@ internal static class EntityMappingExtensions
             AddExternalId(contribution, external.Key, external.Value, ordinal++);
         }
 
-        AddImage(
-            contribution,
+        contribution.Images.AddImage(
             row.ImageFilename,
             row.EntityKind == EntityKind.Season ? "poster" : "still",
             primary: true);
@@ -440,7 +441,7 @@ internal static class EntityMappingExtensions
         string language)
     {
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var qid in EntityIds(entity, Constants.GenrePropertyId).Take(30))
+        foreach (var qid in entity.EntityClaimQids(Constants.GenrePropertyId).Take(30))
         {
             if (!supportEntities.TryGetValue(qid, out var genre))
             {
@@ -538,8 +539,8 @@ internal static class EntityMappingExtensions
         IReadOnlyDictionary<string, EntityDto> supportEntities,
         string language)
     {
-        var bodyQids = QualifierEntityIds(statement, Constants.ConferredByPropertyId)
-            .Concat(EntityIds(award, Constants.ConferredByPropertyId));
+        var bodyQids = RelationshipMappingExtensions.QualifierEntityIds(statement, Constants.ConferredByPropertyId)
+            .Concat(award.EntityClaimQids(Constants.ConferredByPropertyId));
         foreach (var bodyQid in bodyQids)
         {
             if (supportEntities.TryGetValue(bodyQid, out var body))
@@ -566,22 +567,7 @@ internal static class EntityMappingExtensions
         return (from qualifier in qualifiers
                 let value = ParseTime(qualifier?.DataValue?.Value)
                 where value is not null
-                select (int?)value!.Value.Year).FirstOrDefault();
-    }
-
-    private static IReadOnlyList<string> QualifierEntityIds(StatementDto statement, string propertyId)
-    {
-        if (statement.Qualifiers is null || !statement.Qualifiers.TryGetValue(propertyId, out var qualifiers))
-        {
-            return [];
-        }
-
-        var qids =
-            from qualifier in qualifiers
-            let value = qualifier.EntityId()
-            where value is not null
-            select value!;
-        return [.. qids.Distinct(StringComparer.OrdinalIgnoreCase)];
+                select (int?)value.Value.Year).FirstOrDefault();
     }
 
     public static IReadOnlyList<ContentRatingCandidate> ToContentRatingCandidates(this EntityDto entity)
@@ -589,7 +575,7 @@ internal static class EntityMappingExtensions
         var result = new List<ContentRatingCandidate>();
         foreach (var (propertyId, body) in Constants.RatingSystems)
         {
-            result.AddRange(EntityIds(entity, propertyId)
+            result.AddRange(entity.EntityClaimQids(propertyId)
                 .Select(qid => new ContentRatingCandidate(propertyId, body, qid)));
         }
 
@@ -691,14 +677,14 @@ internal static class EntityMappingExtensions
         EntityDto entity,
         IReadOnlyDictionary<string, EntityDto> supportEntities)
     {
-        foreach (var qid in EntityIds(entity, Constants.OriginalLanguagePropertyId))
+        foreach (var qid in entity.EntityClaimQids(Constants.OriginalLanguagePropertyId))
         {
             if (supportEntities.TryGetValue(qid, out var language))
             {
-                var code = FirstString(language, Constants.LanguageCodePropertyId);
+                var code = language.StringClaimValues(Constants.LanguageCodePropertyId).FirstOrDefault();
                 if (IsLanguageCode(code))
                 {
-                    return code!.Trim().ToLowerInvariant();
+                    return code.Trim().ToLowerInvariant();
                 }
             }
         }
@@ -708,20 +694,14 @@ internal static class EntityMappingExtensions
 
     private static void AddContentArtwork(MetadataContribution contribution, EntityDto entity)
     {
-        foreach (var image in FirstString(entity, Constants.PosterPropertyId)
+        foreach (var image in entity.StringClaimValues(Constants.PosterPropertyId).FirstOrDefault()
                      .ToContentArtwork(
-                         FirstString(entity, Constants.ImagePropertyId),
-                         FirstString(entity, Constants.LogoPropertyId)))
+                         entity.StringClaimValues(Constants.ImagePropertyId).FirstOrDefault(),
+                         entity.StringClaimValues(Constants.LogoPropertyId).FirstOrDefault()))
         {
             contribution.Images.Add(image);
         }
     }
-
-    private static void AddImage(
-        MetadataContribution contribution,
-        string? filename,
-        string type,
-        bool primary) => contribution.Images.AddImage(filename, type, primary);
 
     private static Uri? YouTubeUri(string? videoId)
     {
@@ -796,7 +776,7 @@ internal static class EntityMappingExtensions
         contribution.ExternalIds.Add(new ExternalId
         {
             Source = source,
-            Value = value!.Trim(),
+            Value = value.Trim(),
             Ordinal = ordinal ?? contribution.ExternalIds.Count
         });
     }
@@ -896,7 +876,7 @@ internal static class EntityMappingExtensions
             from statement in entity.TruthyStatements(propertyId)
             let value = ParseTime(statement.Mainsnak?.DataValue?.Value)
             where value is not null
-            orderby value!.PeriodStart()
+            orderby value.PeriodStart()
             select value;
         return values.FirstOrDefault();
     }
@@ -940,7 +920,7 @@ internal static class EntityMappingExtensions
         {
             return new TemporalValue
             {
-                Value = new DateTime(year, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+                Value = new(year, 1, 1, 0, 0, 0, DateTimeKind.Utc),
                 Precision = TemporalPrecision.Year
             };
         }
@@ -949,7 +929,7 @@ internal static class EntityMappingExtensions
         {
             return new TemporalValue
             {
-                Value = new DateTime(year, month, 1, 0, 0, 0, DateTimeKind.Utc),
+                Value = new(year, month, 1, 0, 0, 0, DateTimeKind.Utc),
                 Precision = TemporalPrecision.Month
             };
         }
@@ -958,7 +938,7 @@ internal static class EntityMappingExtensions
         {
             return new TemporalValue
             {
-                Value = new DateTime(year, month, day, 0, 0, 0, DateTimeKind.Utc),
+                Value = new(year, month, day, 0, 0, 0, DateTimeKind.Utc),
                 Precision = TemporalPrecision.Day
             };
         }
@@ -991,8 +971,6 @@ internal static class EntityMappingExtensions
         return month is >= 1 and <= 12 && day >= 1 && day <= DateTime.DaysInMonth(year, month);
     }
 
-    private static DateTime? ContributionDate(TemporalValue? value) => value?.PeriodStart();
-
     private static string? ResolveMonolingualClaim(EntityDto entity, string propertyId, string? language)
     {
         string? fallback = null;
@@ -1020,15 +998,6 @@ internal static class EntityMappingExtensions
         return fallback;
     }
 
-    private static IEnumerable<string> EntityIds(EntityDto entity, string propertyId)
-    {
-        return
-            from statement in entity.TruthyStatements(propertyId)
-            let value = statement.Mainsnak.EntityId()
-            where value is not null
-            select value!;
-    }
-
     internal static string? EntityId(this SnakDto? snak)
     {
         var value = snak is { SnakType: null or "value" } ? snak.DataValue?.Value : null;
@@ -1037,13 +1006,6 @@ internal static class EntityMappingExtensions
             id.ValueKind == JsonValueKind.String
             ? id.GetString().ToQid()
             : null;
-    }
-
-    private static string? FirstString(EntityDto entity, string propertyId)
-    {
-        return entity.TruthyStatements(propertyId)
-            .Select(statement => statement.Mainsnak.StringValue())
-            .FirstOrDefault(value => value is not null);
     }
 
     internal static string? StringValue(this SnakDto? snak)

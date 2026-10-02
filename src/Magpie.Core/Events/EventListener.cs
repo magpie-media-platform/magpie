@@ -71,7 +71,9 @@ internal sealed class EventListener : IEventListener
     }
 
     private sealed class FilteredObserver(
-        Channel<MagpieEvent> channel, string? eventName, string? localNodeId) : IObserver<MagpieEvent>
+        Channel<MagpieEvent> channel,
+        string? eventName,
+        string? localNodeId) : IObserver<MagpieEvent>
     {
         public void OnNext(MagpieEvent value)
         {

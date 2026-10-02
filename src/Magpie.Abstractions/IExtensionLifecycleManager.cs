@@ -17,14 +17,14 @@ public interface IExtensionLifecycleManager
     Task DispatchStartupHooksAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// If the extension is loaded in this process, runs its disable hook.
+    /// Runs the disable hook of an extension that is loaded in this process.
     /// </summary>
     /// <param name="extension">The extension to disable</param>
     /// <param name="cancellationToken">The token that cancels the operation</param>
     Task InvokeDisableAsync(Extension extension, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// If the extension is loaded in this process, runs its uninstall hook.
+    /// Runs the uninstall hook of an extension that is loaded in this process.
     /// </summary>
     /// <param name="extension">The extension to uninstall</param>
     /// <param name="cancellationToken">The token that cancels the operation</param>

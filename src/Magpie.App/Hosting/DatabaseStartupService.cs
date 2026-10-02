@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -12,8 +11,6 @@ using Magpie.Data;
 using Magpie.Models;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
-using Magpie.Sdk.Extensions;
-using Magpie.Sdk.Services;
 
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -34,14 +31,14 @@ internal sealed class DatabaseStartupService(
             var context = scope.ServiceProvider.GetRequiredService<MagpieDbContext>();
             await context.Database.MigrateAsync(cancellationToken).ConfigureAwait(false);
 
+            await scope.ServiceProvider.GetRequiredService<IExtensionRepository>()
+                .RegisterLoadedExtensionsAsync(loadedExtensions.Discovered, loadedExtensions.Loaded, cancellationToken)
+                .ConfigureAwait(false);
             if (loadedExtensions.Discovered.Count > 0)
             {
-                await RegisterLoadedExtensionsAsync(
-                    context,
-                    loadedExtensions.Discovered,
-                    loadedExtensions.Loaded,
-                    logger,
-                    cancellationToken).ConfigureAwait(false);
+                logger.LogInformation(
+                    "Registered {ExtensionCount} bundled extensions on first start",
+                    loadedExtensions.Discovered.Count);
             }
 
             await BackfillMediaFilePathKeysAsync(scope.ServiceProvider, context, cancellationToken)
@@ -76,70 +73,12 @@ internal sealed class DatabaseStartupService(
             return;
         }
 
-        await NormalizeMediaFilePathKeysAsync(
-            scopedServices.GetRequiredService<IMediaFileRepository>(),
-            scopedServices.GetRequiredService<IContentRepository>(),
-            scopedServices.GetRequiredService<IContentFileService>(),
-            scopedServices.GetRequiredService<IContentService>(),
-            scopedServices.GetRequiredService<ITransactionManager>(),
-            scopedServices.GetRequiredService<IAuditRecordRepository>(),
-            scopedServices.GetRequiredService<TimeProvider>(),
-            cancellationToken).ConfigureAwait(false);
+        await scopedServices.GetRequiredService<IContentFileService>()
+            .NormalizeMediaFilePathKeysAsync(cancellationToken)
+            .ConfigureAwait(false);
     }
 
-    private static string ToMediaFilePathKey(string filePath) =>
-        OperatingSystem.IsWindows() ? filePath.ToUpperInvariant() : filePath;
-
-    internal static async Task NormalizeMediaFilePathKeysAsync(
-        IMediaFileRepository repository,
-        IContentRepository contentRepository,
-        IContentFileService files,
-        IContentService content,
-        ITransactionManager transactions,
-        IAuditRecordRepository audit,
-        TimeProvider timeProvider,
-        CancellationToken cancellationToken = default)
-    {
-        await transactions.ExecuteWithTransactionAsync(async ct =>
-        {
-            var mediaFiles = await repository.ListAllAsync(ct).ConfigureAwait(false);
-            foreach (var group in mediaFiles.GroupBy(
-                file => ToMediaFilePathKey(file.FilePath), StringComparer.Ordinal))
-            {
-                var ordered = group.OrderBy(file => file.PathKey.StartsWith("legacy:", StringComparison.Ordinal))
-                    .ThenBy(file => file.CreatedAt).ThenBy(file => file.Id).ToArray();
-                var survivor = ordered[0];
-                foreach (var duplicate in ordered.Skip(1))
-                {
-                    var item = await contentRepository.GetByIdAsync(duplicate.ContentItemId, ct)
-                        .ConfigureAwait(false)
-                        ?? throw new InvalidOperationException("The media file has no content item.");
-                    await files.UnlinkAsync(item.ContentHierarchyItemId, duplicate.Id, null, ct).ConfigureAwait(false);
-                    await content.MaterializeFulfillmentStatusAsync(
-                        item.ContentHierarchyItemId, null, includeSelf: false, ct).ConfigureAwait(false);
-                }
-
-                if (survivor.PathKey == group.Key)
-                {
-                    continue;
-                }
-
-                await repository.UpdateAsync(survivor, survivor.ModifiedByUserId, ct).ConfigureAwait(false);
-                await audit.CreateAsync(new()
-                {
-                    Category = AuditCategories.Content,
-                    Operation = "FilePathNormalized",
-                    EntityType = "MediaFile",
-                    EntityId = survivor.Id.ToString(),
-                    ParentEntityId = survivor.ContentItemId.ToString(),
-                    Detail = $"Normalized the path key for {survivor.FilePath}.",
-                    Timestamp = timeProvider.GetUtcNow().UtcDateTime
-                }, ct).ConfigureAwait(false);
-            }
-        }, cancellationToken).ConfigureAwait(false);
-    }
-
-    internal static async Task ProtectStoredSettingsAsync(
+    private static async Task ProtectStoredSettingsAsync(
         MagpieDbContext context,
         IDataProtectionService protector,
         CancellationToken cancellationToken)
@@ -231,37 +170,5 @@ internal sealed class DatabaseStartupService(
                 Message = message,
             },
             cancellationToken).ConfigureAwait(false);
-    }
-
-    private static async Task RegisterLoadedExtensionsAsync(
-        MagpieDbContext context,
-        IReadOnlyList<Extension> extensions,
-        IReadOnlyList<IExtension> loaded,
-        ILogger logger,
-        CancellationToken cancellationToken)
-    {
-        foreach (var extension in extensions)
-        {
-            var match = loaded.FirstOrDefault(candidate =>
-                string.Equals(
-                    candidate.GetType().Assembly.GetName().Name,
-                    extension.AssemblyName,
-                    StringComparison.OrdinalIgnoreCase));
-
-            if (match is null)
-            {
-                continue;
-            }
-
-            extension.Name = match.Name;
-            extension.Version = match.Version.ToString();
-            extension.TargetABI = match.TargetABI;
-        }
-
-        context.Extensions.AddRange(extensions);
-        await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
-
-        logger.LogInformation("The host registered {ExtensionCount} bundled extensions on " +
-            "first start", extensions.Count);
     }
 }

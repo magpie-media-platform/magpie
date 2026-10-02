@@ -22,7 +22,7 @@ internal sealed class LocalCredentialAuthenticationProvider(
     AccountLockoutOptions lockoutOptions,
     IEventBus eventBus,
     TimeProvider timeProvider,
-    ILogger<LocalCredentialAuthenticationProvider> logger) : ICredentialManagementAuthenticationProvider
+    ILogger<LocalCredentialAuthenticationProvider> logger) : ICredentialAuthenticationProvider
 {
     private static readonly User DummyVerificationUser = new()
     {
@@ -73,14 +73,14 @@ internal sealed class LocalCredentialAuthenticationProvider(
         var user = await userService.GetAuthenticationUserAsync(username, cancellationToken).ConfigureAwait(false);
         if (user is null)
         {
-            logger.LogDebug("User {Username} does not exist, so credential authentication failed", username);
+            logger.LogDebug("User {Username} does not exist", username);
             await RunDummyVerificationAsync(password, cancellationToken).ConfigureAwait(false);
             return null;
         }
 
         if (!user.Enabled)
         {
-            logger.LogDebug("User {Username} is disabled, so credential authentication failed", username);
+            logger.LogDebug("User {Username} is disabled", username);
             await RunDummyVerificationAsync(password, cancellationToken).ConfigureAwait(false);
             return null;
         }
@@ -88,7 +88,7 @@ internal sealed class LocalCredentialAuthenticationProvider(
         if (!string.Equals(user.ProviderType, ProviderType, StringComparison.OrdinalIgnoreCase))
         {
             logger.LogDebug(
-                "User {Username} uses provider {ProviderType}, so credential authentication did not run",
+                "User {Username} uses provider {ProviderType}, skipped",
                 username,
                 user.ProviderType);
             await RunDummyVerificationAsync(password, cancellationToken).ConfigureAwait(false);
@@ -100,7 +100,7 @@ internal sealed class LocalCredentialAuthenticationProvider(
             if (lockedUntil > timeProvider.GetUtcNow().UtcDateTime)
             {
                 logger.LogWarning(
-                    "User {Username} is locked until {LockedUntil}, so the provider denied credential authentication",
+                    "User {Username} is locked until {LockedUntil}",
                     username,
                     lockedUntil);
                 return null;
@@ -136,7 +136,7 @@ internal sealed class LocalCredentialAuthenticationProvider(
     {
         if (!lockoutOptions.Enabled)
         {
-            logger.LogDebug("User {Username} gave a bad password, so credential authentication failed", username);
+            logger.LogDebug("User {Username} gave a bad password", username);
             return;
         }
 
@@ -151,7 +151,7 @@ internal sealed class LocalCredentialAuthenticationProvider(
         if (result.LockedUntil is not null)
         {
             logger.LogInformation(
-                "The provider locked user {Username} until {LockedUntil} after {Attempts} failed attempts",
+                "Locked user {Username} until {LockedUntil} after {Attempts} failed attempts",
                 username,
                 result.LockedUntil,
                 result.FailedAttempts);
@@ -159,21 +159,10 @@ internal sealed class LocalCredentialAuthenticationProvider(
         else
         {
             logger.LogDebug(
-                "User {Username} gave a bad password ({Attempts}/{Max}), so credential authentication failed",
+                "User {Username} gave a bad password, {Attempts} of {Max} failed attempts",
                 username,
                 result.FailedAttempts,
                 lockoutOptions.MaxFailedAttempts);
         }
-    }
-
-    public Task<bool> ResetPasswordAsync(
-        Guid userId,
-        string newPassword,
-        Guid requestingUserId,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentException.ThrowIfNullOrEmpty(newPassword);
-
-        return userService.SetPasswordAsync(userId, newPassword, requestingUserId, cancellationToken);
     }
 }

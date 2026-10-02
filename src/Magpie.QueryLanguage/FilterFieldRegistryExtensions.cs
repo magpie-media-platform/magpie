@@ -244,8 +244,11 @@ internal static class FilterFieldRegistryExtensions
                 new StructField<ContentTransformContext, int>(
                     (ctx, op, v, vs) => ctx.SetContentItem(ctx.ContentItem with
                     {
-                        PrimaryMediaFileCount = AddCriterion(ctx.ContentItem.PrimaryMediaFileCount,
-                            op, v ?? default, vs)
+                        PrimaryMediaFileCount = AddCriterion(
+                            ctx.ContentItem.PrimaryMediaFileCount,
+                            op,
+                            v ?? default,
+                            vs)
                     })),
             [nameof(ContentHierarchyItemCriteria.RootFolderId)] = new StructField<ContentTransformContext, Guid>(
                 (ctx, op, v, vs) => ctx.SetContentItem(ctx.ContentItem with

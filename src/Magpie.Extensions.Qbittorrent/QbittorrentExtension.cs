@@ -20,13 +20,7 @@ public sealed class QbittorrentExtension : IExtension
     public Guid Id => ExtensionId;
 
     /// <inheritdoc />
-    public Version Version => new(1, 0, 0);
-
-    /// <inheritdoc />
     public string Name => Constants.DisplayName;
-
-    /// <inheritdoc />
-    public string? TargetABI => "[1.0.0,)";
 
     /// <inheritdoc />
     public void RegisterServices(IServiceCollection services)

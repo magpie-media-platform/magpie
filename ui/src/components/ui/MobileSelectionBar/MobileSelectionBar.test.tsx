@@ -1,7 +1,6 @@
 import { act, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { AdminShellMain } from '@/components/ui/AdminShell';
 import { AppShellMain } from '@/components/ui/AppShell';
 import { Tabs, TabsContent } from '@/components/ui/Tabs';
 import type { BulkSelectionState } from '@/types/bulkSelection';
@@ -32,8 +31,6 @@ describe('MobileSelectionBar scroll clearance', () => {
     it.each([
         { shell: 'app', Main: AppShellMain, removedTab: 'deny', afterRemoval: '0px', afterSwitch: '194px' },
         { shell: 'app', Main: AppShellMain, removedTab: 'mime', afterRemoval: '84px', afterSwitch: '84px' },
-        { shell: 'admin', Main: AdminShellMain, removedTab: 'deny', afterRemoval: '0px', afterSwitch: '194px' },
-        { shell: 'admin', Main: AdminShellMain, removedTab: 'mime', afterRemoval: '84px', afterSwitch: '84px' },
     ])(
         'preserves peer clearance in the $shell shell when the $removedTab tab bar unmounts',
         ({ Main, removedTab, afterRemoval, afterSwitch }) => {
@@ -205,9 +202,9 @@ describe('MobileSelectionBar scroll clearance', () => {
                 <AppShellMain key="first" aria-label="First list">
                     <MobileSelectionBar selection={emptySelection} itemNounPlural="items" />
                 </AppShellMain>
-                <AdminShellMain key="second" aria-label="Second list">
+                <AppShellMain key="second" aria-label="Second list">
                     <MobileSelectionBar selection={emptySelection} itemNounPlural="items" />
-                </AdminShellMain>
+                </AppShellMain>
             </>,
         );
         const first = screen.getByRole('main', { name: 'First list' });
@@ -220,9 +217,9 @@ describe('MobileSelectionBar scroll clearance', () => {
         // Act
         rerender(
             <>
-                <AdminShellMain key="second" aria-label="Second list">
+                <AppShellMain key="second" aria-label="Second list">
                     <MobileSelectionBar selection={emptySelection} itemNounPlural="items" />
-                </AdminShellMain>
+                </AppShellMain>
             </>,
         );
         act(() => {
@@ -240,128 +237,128 @@ describe('MobileSelectionBar scroll clearance', () => {
         expect(second.style.getPropertyValue('--mobile-selection-bar-clearance')).toBe('');
     });
 
-    it.each([
-        ['app', AppShellMain],
-        ['admin', AdminShellMain],
-    ])('reserves the actual fixed-bar overlap in the %s shell as contents change', (_shell, Main) => {
-        // Arrange
-        let barTop = 728;
-        let barHeight = 56;
-        let notifyResize: ResizeObserverCallback = () => {};
-        const observe = vi.fn();
-        const disconnect = vi.fn();
-        vi.stubGlobal(
-            'ResizeObserver',
-            class {
-                constructor(callback: ResizeObserverCallback) {
-                    notifyResize = callback;
+    it.each([['app', AppShellMain]])(
+        'reserves the actual fixed-bar overlap in the %s shell as contents change',
+        (_shell, Main) => {
+            // Arrange
+            let barTop = 728;
+            let barHeight = 56;
+            let notifyResize: ResizeObserverCallback = () => {};
+            const observe = vi.fn();
+            const disconnect = vi.fn();
+            vi.stubGlobal(
+                'ResizeObserver',
+                class {
+                    constructor(callback: ResizeObserverCallback) {
+                        notifyResize = callback;
+                    }
+                    observe = observe;
+                    disconnect = disconnect;
+                },
+            );
+            vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+                if (this.classList.contains('mobile-selection-bar')) {
+                    return { top: barTop, bottom: barTop + barHeight, height: barHeight } as DOMRect;
                 }
-                observe = observe;
-                disconnect = disconnect;
-            },
-        );
-        vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
-            if (this.classList.contains('mobile-selection-bar')) {
-                return { top: barTop, bottom: barTop + barHeight, height: barHeight } as DOMRect;
-            }
-            if (this.tagName === 'MAIN') {
-                return { top: 60, bottom: 784, height: 724 } as DOMRect;
-            }
-            return { top: 0, bottom: 0, height: 0 } as DOMRect;
-        });
+                if (this.tagName === 'MAIN') {
+                    return { top: 60, bottom: 784, height: 724 } as DOMRect;
+                }
+                return { top: 0, bottom: 0, height: 0 } as DOMRect;
+            });
 
-        // Act
-        const { rerender } = render(
-            <Main>
-                <button type="button">Last page</button>
-                <MobileSelectionBar selection={emptySelection} itemNounPlural="items" />
-            </Main>,
-        );
-        // Assert
-        const main = screen.getByRole('main');
-        expect(main).toHaveStyle('--mobile-selection-bar-clearance: 56px');
-        expect(observe).toHaveBeenCalledWith(main);
-        expect(observe).toHaveBeenCalledWith(screen.getByRole('region', { name: 'Selection actions' }));
+            // Act
+            const { rerender } = render(
+                <Main>
+                    <button type="button">Last page</button>
+                    <MobileSelectionBar selection={emptySelection} itemNounPlural="items" />
+                </Main>,
+            );
+            // Assert
+            const main = screen.getByRole('main');
+            expect(main).toHaveStyle('--mobile-selection-bar-clearance: 56px');
+            expect(observe).toHaveBeenCalledWith(main);
+            expect(observe).toHaveBeenCalledWith(screen.getByRole('region', { name: 'Selection actions' }));
 
-        // Act
-        barTop = 660;
-        barHeight = 124;
-        rerender(
-            <Main>
-                <button type="button">Last page</button>
-                <MobileSelectionBar
-                    selection={{ ...emptySelection, hasSelection: true, selectedCount: 1 }}
-                    itemNounPlural="items"
-                >
-                    <button type="button">Wrapped action</button>
-                </MobileSelectionBar>
-            </Main>,
-        );
-        act(() => notifyResize([], {} as ResizeObserver));
+            // Act
+            barTop = 660;
+            barHeight = 124;
+            rerender(
+                <Main>
+                    <button type="button">Last page</button>
+                    <MobileSelectionBar
+                        selection={{ ...emptySelection, hasSelection: true, selectedCount: 1 }}
+                        itemNounPlural="items"
+                    >
+                        <button type="button">Wrapped action</button>
+                    </MobileSelectionBar>
+                </Main>,
+            );
+            act(() => notifyResize([], {} as ResizeObserver));
 
-        // Assert
-        expect(main).toHaveStyle('--mobile-selection-bar-clearance: 124px');
-        expect(screen.getByRole('button', { name: 'Last page' })).toBeInTheDocument();
+            // Assert
+            expect(main).toHaveStyle('--mobile-selection-bar-clearance: 124px');
+            expect(screen.getByRole('button', { name: 'Last page' })).toBeInTheDocument();
 
-        // Act
-        barTop = 590;
-        barHeight = 194;
-        rerender(
-            <Main>
-                <button type="button">Last page</button>
-                <MobileSelectionBar
-                    selection={{
-                        ...emptySelection,
-                        hasSelection: true,
-                        selectedCount: 20,
-                        pageSelectedCount: 20,
-                        showAcrossPagesPrompt: true,
-                    }}
-                    itemNounPlural="items"
-                >
-                    <button type="button">Wrapped action</button>
-                </MobileSelectionBar>
-            </Main>,
-        );
-        act(() => notifyResize([], {} as ResizeObserver));
+            // Act
+            barTop = 590;
+            barHeight = 194;
+            rerender(
+                <Main>
+                    <button type="button">Last page</button>
+                    <MobileSelectionBar
+                        selection={{
+                            ...emptySelection,
+                            hasSelection: true,
+                            selectedCount: 20,
+                            pageSelectedCount: 20,
+                            showAcrossPagesPrompt: true,
+                        }}
+                        itemNounPlural="items"
+                    >
+                        <button type="button">Wrapped action</button>
+                    </MobileSelectionBar>
+                </Main>,
+            );
+            act(() => notifyResize([], {} as ResizeObserver));
 
-        // Assert
-        expect(main).toHaveStyle('--mobile-selection-bar-clearance: 194px');
-        expect(screen.getByRole('button', { name: 'Select all 40 across all pages' })).toBeInTheDocument();
+            // Assert
+            expect(main).toHaveStyle('--mobile-selection-bar-clearance: 194px');
+            expect(screen.getByRole('button', { name: 'Select all 40 across all pages' })).toBeInTheDocument();
 
-        // Act
-        barTop = 844;
-        barHeight = 0;
-        act(() => {
-            window.dispatchEvent(new Event('resize'));
-        });
+            // Act
+            barTop = 844;
+            barHeight = 0;
+            act(() => {
+                window.dispatchEvent(new Event('resize'));
+            });
 
-        // Assert
-        expect(main).toHaveStyle('--mobile-selection-bar-clearance: 0px');
+            // Assert
+            expect(main).toHaveStyle('--mobile-selection-bar-clearance: 0px');
 
-        // Act
-        rerender(
-            <Main>
-                <button type="button">Last page</button>
-            </Main>,
-        );
+            // Act
+            rerender(
+                <Main>
+                    <button type="button">Last page</button>
+                </Main>,
+            );
 
-        // Assert
-        expect(main.style.getPropertyValue('--mobile-selection-bar-clearance')).toBe('');
-        expect(disconnect).toHaveBeenCalled();
+            // Assert
+            expect(main.style.getPropertyValue('--mobile-selection-bar-clearance')).toBe('');
+            expect(disconnect).toHaveBeenCalled();
 
-        // Act
-        barTop = 700;
-        barHeight = 84;
-        rerender(
-            <Main>
-                <button type="button">Different route's last page</button>
-                <MobileSelectionBar selection={emptySelection} itemNounPlural="items" />
-            </Main>,
-        );
+            // Act
+            barTop = 700;
+            barHeight = 84;
+            rerender(
+                <Main>
+                    <button type="button">Different route's last page</button>
+                    <MobileSelectionBar selection={emptySelection} itemNounPlural="items" />
+                </Main>,
+            );
 
-        // Assert
-        expect(main).toHaveStyle('--mobile-selection-bar-clearance: 84px');
-        expect(screen.getByRole('button', { name: "Different route's last page" })).toBeInTheDocument();
-    });
+            // Assert
+            expect(main).toHaveStyle('--mobile-selection-bar-clearance: 84px');
+            expect(screen.getByRole('button', { name: "Different route's last page" })).toBeInTheDocument();
+        },
+    );
 });

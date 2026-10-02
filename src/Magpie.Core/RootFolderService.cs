@@ -7,6 +7,7 @@ using System.Threading;
 using System.Threading.Tasks;
 
 using Magpie.Abstractions.Repositories;
+using Magpie.Models;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Storage;
@@ -22,19 +23,6 @@ internal sealed class RootFolderService(
     IContentTypeRegistry contentTypeRegistry,
     IQualityService qualityService) : IRootFolderService
 {
-    internal static StorageCapacity? ReadDestinationCapacity(IFileSystem fileSystem, string path)
-    {
-        try
-        {
-            var capacity = fileSystem.GetStorageCapacity(path);
-            return capacity is { AvailableBytes: >= 0 } ? capacity : null;
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            return null;
-        }
-    }
-
     internal static string? CapacityWaitingReason(long? required, long? available)
     {
         var requiredText = required is >= 0
@@ -50,9 +38,7 @@ internal sealed class RootFolderService(
         return required > available ? "Waiting for destination capacity: insufficient free space. " + values : null;
     }
 
-    private static DiskSpaceResult BuildDiskSpaceResult(
-        IEnumerable<RootFolder> rootFolders,
-        IFileSystem fileSystem)
+    private static DiskSpaceResult BuildDiskSpaceResult(IEnumerable<RootFolder> rootFolders, IFileSystem fileSystem)
     {
         var diskSpaceInfos = new List<DiskSpaceInfo>();
         var volumes = new List<(string Name, long TotalBytes, long FreeBytes)>();
@@ -89,7 +75,7 @@ internal sealed class RootFolderService(
         var totalBytes = volumes.Sum(volume => volume.TotalBytes);
         var freeBytes = volumes.Sum(volume => volume.FreeBytes);
 
-        return new DiskSpaceResult
+        return new()
         {
             Folders = [.. diskSpaceInfos],
             TotalBytes = totalBytes,
@@ -156,7 +142,7 @@ internal sealed class RootFolderService(
 
     private static DiskSpaceInfo CreateUnavailableDiskSpaceInfo(RootFolder folder)
     {
-        return new DiskSpaceInfo
+        return new()
         {
             Id = folder.Id,
             Name = folder.Name,
@@ -176,6 +162,52 @@ internal sealed class RootFolderService(
 
         throw new ArgumentException($"The content type {contentType} is not registered.", parameterName);
     }
+
+    private async Task<bool> AcceptsMimeTypesAsync(
+        ContentTypeDefinition definition,
+        string levelSlug,
+        IReadOnlyList<string> mimeTypes,
+        CancellationToken cancellationToken)
+    {
+        if (mimeTypes.Count == 0)
+        {
+            return true;
+        }
+
+        var branch = new HashSet<string>(StringComparer.Ordinal) { levelSlug };
+        bool grew;
+        do
+        {
+            grew = false;
+            foreach (var level in definition.LevelDefinitions)
+            {
+                if (level.ParentSlug is { } parent && branch.Contains(parent) && branch.Add(level.Slug))
+                {
+                    grew = true;
+                }
+            }
+        }
+        while (grew);
+
+        foreach (var acceptedFileType in definition.LevelDefinitions
+            .Where(level => branch.Contains(level.Slug))
+            .SelectMany(level => level.AcceptedFileTypes))
+        {
+            var mimeType = acceptedFileType.Contains('/', StringComparison.Ordinal)
+                ? acceptedFileType
+                : await fileSystem.LookupMimeTypeAsync(acceptedFileType, cancellationToken).ConfigureAwait(false);
+            if (mimeType is not null && MimePatternsIntersect([mimeType], mimeTypes))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private bool MimePatternsIntersect(IReadOnlyList<string> first, IReadOnlyList<string> second) =>
+        second.Any(mimeType => fileSystem.MatchesAnyFileType(mimeType, mimeType, first)) ||
+        first.Any(mimeType => fileSystem.MatchesAnyFileType(mimeType, mimeType, second));
 
     private async Task<Dictionary<string, RootFolderDefault>> ValidateDefaultsAsync(
         string contentType,
@@ -203,6 +235,15 @@ internal sealed class RootFolderService(
                 throw new ArgumentException(
                     $"Quality tier list {value.Value.QualityTierListId} does not exist.",
                     nameof(requested));
+            }
+
+            if (!await AcceptsMimeTypesAsync(definition, value.Key, tierList.MimeTypes, cancellationToken)
+                .ConfigureAwait(false))
+            {
+                var level = levelsBySlug[value.Key];
+                throw new ArgumentException(
+                    $"Quality tier list {tierList.Name} ({qualityTierListId}) is not compatible with level " +
+                    $"{level.DisplayName} ({level.Slug}).");
             }
 
             validated.Add(value.Key, new RootFolderDefault { QualityTierListId = qualityTierListId });

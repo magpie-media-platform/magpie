@@ -12,27 +12,26 @@ import { PreviewsTab } from './PreviewsTab';
 
 const originalTimeZone = process.env.TZ;
 
-function createMatchMedia(width: number) {
-    return vi.fn((query: string) => {
-        const minWidth = query.match(/\(min-width:\s*(\d+)px\)/);
-        const maxWidth = query.match(/\(max-width:\s*(\d+)px\)/);
-        return {
-            matches:
-                (minWidth === null || width >= Number(minWidth[1])) &&
-                (maxWidth === null || width <= Number(maxWidth[1])),
-            media: query,
-            onchange: null,
-            addListener: () => {},
-            removeListener: () => {},
-            addEventListener: () => {},
-            removeEventListener: () => {},
-            dispatchEvent: () => false,
-        };
-    });
-}
-
 beforeEach(() => {
-    vi.stubGlobal('matchMedia', createMatchMedia(1024));
+    vi.stubGlobal(
+        'matchMedia',
+        vi.fn((query: string) => {
+            const minWidth = query.match(/\(min-width:\s*(\d+)px\)/);
+            const maxWidth = query.match(/\(max-width:\s*(\d+)px\)/);
+            return {
+                matches:
+                    (minWidth === null || 1024 >= Number(minWidth[1])) &&
+                    (maxWidth === null || 1024 <= Number(maxWidth[1])),
+                media: query,
+                onchange: null,
+                addListener: () => {},
+                removeListener: () => {},
+                addEventListener: () => {},
+                removeEventListener: () => {},
+                dispatchEvent: () => false,
+            };
+        }),
+    );
 });
 
 afterEach(() => {
@@ -264,19 +263,15 @@ describe('ChildrenTab', () => {
         },
     ];
 
-    const renderWithRouter = (items: ChildItem[], props = {}) => {
-        return render(
-            <TooltipProvider>
-                <MemoryRouter>
-                    <ChildrenTab items={items} parentId="content-1" {...props} />
-                </MemoryRouter>
-            </TooltipProvider>,
-        );
-    };
-
     describe('rendering', () => {
         it('renders child items', () => {
-            renderWithRouter(mockChildren);
+            render(
+                <TooltipProvider>
+                    <MemoryRouter>
+                        <ChildrenTab items={mockChildren} parentId="content-1" />
+                    </MemoryRouter>
+                </TooltipProvider>,
+            );
             expect(screen.getAllByText('Season 1').length).toBeGreaterThan(0);
             expect(screen.getAllByText('Season 2').length).toBeGreaterThan(0);
             expect(screen.getAllByText('Season 3').length).toBeGreaterThan(0);
@@ -284,17 +279,26 @@ describe('ChildrenTab', () => {
 
         it('keeps a long unbroken child title contained with the full title available', () => {
             const longTitle = `Child${'UnbrokenTitleSegment'.repeat(8)}`;
-            renderWithRouter([
-                {
-                    id: 'long-child',
-                    title: longTitle,
-                    subtitle: `Subtitle${'UnbrokenSubtitleSegment'.repeat(6)}`,
-                    number: 1,
-                    monitoring: 'Monitored',
-                    effectiveMonitoring: 'Monitored',
-                    fulfillment: 'missing',
-                },
-            ]);
+            render(
+                <TooltipProvider>
+                    <MemoryRouter>
+                        <ChildrenTab
+                            items={[
+                                {
+                                    id: 'long-child',
+                                    title: longTitle,
+                                    subtitle: `Subtitle${'UnbrokenSubtitleSegment'.repeat(6)}`,
+                                    number: 1,
+                                    monitoring: 'Monitored',
+                                    effectiveMonitoring: 'Monitored',
+                                    fulfillment: 'missing',
+                                },
+                            ]}
+                            parentId="content-1"
+                        />
+                    </MemoryRouter>
+                </TooltipProvider>,
+            );
 
             const titles = screen.getAllByTitle(longTitle);
             expect(titles.length).toBeGreaterThan(0);
@@ -303,31 +307,61 @@ describe('ChildrenTab', () => {
         });
 
         it('renders child dates', () => {
-            renderWithRouter(mockChildren);
+            render(
+                <TooltipProvider>
+                    <MemoryRouter>
+                        <ChildrenTab items={mockChildren} parentId="content-1" />
+                    </MemoryRouter>
+                </TooltipProvider>,
+            );
             expect(screen.getAllByText(/2020/).length).toBeGreaterThan(0);
         });
 
         it('uses a generic date column header when none is provided', () => {
-            renderWithRouter(mockChildren);
+            render(
+                <TooltipProvider>
+                    <MemoryRouter>
+                        <ChildrenTab items={mockChildren} parentId="content-1" />
+                    </MemoryRouter>
+                </TooltipProvider>,
+            );
             expect(screen.getAllByText('Date').length).toBeGreaterThan(0);
             expect(screen.queryByText('Air Date')).not.toBeInTheDocument();
         });
 
         it('uses the registry-provided date column header when supplied', () => {
-            renderWithRouter(mockChildren, { dateColumnHeader: 'Air Date' });
+            render(
+                <TooltipProvider>
+                    <MemoryRouter>
+                        <ChildrenTab items={mockChildren} parentId="content-1" dateColumnHeader="Air Date" />
+                    </MemoryRouter>
+                </TooltipProvider>,
+            );
             expect(screen.getAllByText('Air Date').length).toBeGreaterThan(0);
             expect(screen.queryByText('Date')).not.toBeInTheDocument();
         });
 
         it('renders empty state when no children', () => {
-            renderWithRouter([], { emptyMessage: 'No seasons found' });
+            render(
+                <TooltipProvider>
+                    <MemoryRouter>
+                        <ChildrenTab items={[]} parentId="content-1" emptyMessage="No seasons found" />
+                    </MemoryRouter>
+                </TooltipProvider>,
+            );
             expect(screen.getAllByText('No seasons found').length).toBeGreaterThan(0);
         });
 
         it('renders fulfillment badges independently from child monitoring', () => {
             // Arrange
             // Act
-            renderWithRouter(mockChildren);
+            render(
+                <TooltipProvider>
+                    <MemoryRouter>
+                        <ChildrenTab items={mockChildren} parentId="content-1" />
+                    </MemoryRouter>
+                </TooltipProvider>,
+            );
 
             // Assert
             expect(screen.getAllByText('Fulfilled').length).toBeGreaterThan(0);
@@ -347,22 +381,58 @@ describe('ChildrenTab', () => {
                     acquisitionStatus: 'downloading',
                 },
             ];
-            renderWithRouter(items);
+            render(
+                <TooltipProvider>
+                    <MemoryRouter>
+                        <ChildrenTab items={items} parentId="content-1" />
+                    </MemoryRouter>
+                </TooltipProvider>,
+            );
             expect(document.querySelector('[data-acquisition-status="downloading"]')).toBeInTheDocument();
             expect(screen.getAllByText('Downloading').length).toBeGreaterThan(0);
             expect(screen.queryByText('Missing')).not.toBeInTheDocument();
         });
 
         it('labels monitoring cells with explanatory wording', () => {
-            renderWithRouter(mockChildren);
+            render(
+                <TooltipProvider>
+                    <MemoryRouter>
+                        <ChildrenTab items={mockChildren} parentId="content-1" />
+                    </MemoryRouter>
+                </TooltipProvider>,
+            );
             expect(screen.getAllByLabelText('Monitored').length).toBeGreaterThan(0);
             expect(screen.getAllByLabelText('Unmonitored').length).toBeGreaterThan(0);
         });
 
         it('provides accessible compact sort controls defaulting to number ascending', async () => {
-            vi.stubGlobal('matchMedia', createMatchMedia(390));
+            vi.stubGlobal(
+                'matchMedia',
+                vi.fn((query: string) => {
+                    const minWidth = query.match(/\(min-width:\s*(\d+)px\)/);
+                    const maxWidth = query.match(/\(max-width:\s*(\d+)px\)/);
+                    return {
+                        matches:
+                            (minWidth === null || 390 >= Number(minWidth[1])) &&
+                            (maxWidth === null || 390 <= Number(maxWidth[1])),
+                        media: query,
+                        onchange: null,
+                        addListener: () => {},
+                        removeListener: () => {},
+                        addEventListener: () => {},
+                        removeEventListener: () => {},
+                        dispatchEvent: () => false,
+                    };
+                }),
+            );
             const user = userEvent.setup();
-            renderWithRouter(mockChildren);
+            render(
+                <TooltipProvider>
+                    <MemoryRouter>
+                        <ChildrenTab items={mockChildren} parentId="content-1" />
+                    </MemoryRouter>
+                </TooltipProvider>,
+            );
 
             const controls = screen.getByTestId('children-tab__sort-controls');
             const field = within(controls).getByRole('combobox', { name: 'Sort by field' });
@@ -416,7 +486,13 @@ describe('ChildrenTab', () => {
                     fulfillment: 'missing',
                 },
             ];
-            renderWithRouter(children);
+            render(
+                <TooltipProvider>
+                    <MemoryRouter>
+                        <ChildrenTab items={children} parentId="content-1" />
+                    </MemoryRouter>
+                </TooltipProvider>,
+            );
 
             const order = Array.from(document.querySelectorAll('.data-table__row')).map((row) =>
                 row.getAttribute('data-row-id'),
@@ -444,7 +520,13 @@ describe('ChildrenTab', () => {
                     fulfillment: 'missing',
                 },
             ];
-            renderWithRouter(children);
+            render(
+                <TooltipProvider>
+                    <MemoryRouter>
+                        <ChildrenTab items={children} parentId="content-1" />
+                    </MemoryRouter>
+                </TooltipProvider>,
+            );
 
             const getOrder = () =>
                 Array.from(document.querySelectorAll('.data-table__row')).map((row) => row.getAttribute('data-row-id'));
@@ -456,7 +538,25 @@ describe('ChildrenTab', () => {
         });
 
         it('orders mobile cards by sequence number ascending with missing numbers last by default', () => {
-            vi.stubGlobal('matchMedia', createMatchMedia(390));
+            vi.stubGlobal(
+                'matchMedia',
+                vi.fn((query: string) => {
+                    const minWidth = query.match(/\(min-width:\s*(\d+)px\)/);
+                    const maxWidth = query.match(/\(max-width:\s*(\d+)px\)/);
+                    return {
+                        matches:
+                            (minWidth === null || 390 >= Number(minWidth[1])) &&
+                            (maxWidth === null || 390 <= Number(maxWidth[1])),
+                        media: query,
+                        onchange: null,
+                        addListener: () => {},
+                        removeListener: () => {},
+                        addEventListener: () => {},
+                        removeEventListener: () => {},
+                        dispatchEvent: () => false,
+                    };
+                }),
+            );
             const children: ChildItem[] = [
                 {
                     id: 'child-two',
@@ -482,7 +582,13 @@ describe('ChildrenTab', () => {
                     fulfillment: 'missing',
                 },
             ];
-            renderWithRouter(children);
+            render(
+                <TooltipProvider>
+                    <MemoryRouter>
+                        <ChildrenTab items={children} parentId="content-1" />
+                    </MemoryRouter>
+                </TooltipProvider>,
+            );
 
             const order = Array.from(document.querySelectorAll('.children-tab__mobile-card')).map((card) =>
                 card.getAttribute('data-child-id'),
@@ -491,7 +597,25 @@ describe('ChildrenTab', () => {
         });
 
         it('renders only sorted manual child cards on mobile', async () => {
-            vi.stubGlobal('matchMedia', createMatchMedia(390));
+            vi.stubGlobal(
+                'matchMedia',
+                vi.fn((query: string) => {
+                    const minWidth = query.match(/\(min-width:\s*(\d+)px\)/);
+                    const maxWidth = query.match(/\(max-width:\s*(\d+)px\)/);
+                    return {
+                        matches:
+                            (minWidth === null || 390 >= Number(minWidth[1])) &&
+                            (maxWidth === null || 390 <= Number(maxWidth[1])),
+                        media: query,
+                        onchange: null,
+                        addListener: () => {},
+                        removeListener: () => {},
+                        addEventListener: () => {},
+                        removeEventListener: () => {},
+                        dispatchEvent: () => false,
+                    };
+                }),
+            );
             const user = userEvent.setup();
             const children: ChildItem[] = [
                 {
@@ -519,7 +643,13 @@ describe('ChildrenTab', () => {
                     date: '2024-01-01',
                 },
             ];
-            renderWithRouter(children);
+            render(
+                <TooltipProvider>
+                    <MemoryRouter>
+                        <ChildrenTab items={children} parentId="content-1" />
+                    </MemoryRouter>
+                </TooltipProvider>,
+            );
 
             expect(document.querySelector('[data-component="children-tab"] .data-table')).not.toBeInTheDocument();
             expect(screen.queryByRole('columnheader', { name: 'Title' })).not.toBeInTheDocument();
@@ -529,18 +659,20 @@ describe('ChildrenTab', () => {
                 Array.from(document.querySelectorAll('.children-tab__mobile-card')).map((card) =>
                     card.getAttribute('data-child-id'),
                 );
-            const expectedAscendingOrder: Record<string, string[]> = {
-                Title: ['child-alpha', 'child-beta', 'child-zulu'],
-                Date: ['child-beta', 'child-zulu', 'child-alpha'],
-                Status: ['child-beta', 'child-alpha', 'child-zulu'],
-            };
+            await user.click(field);
+            await user.click(screen.getByRole('option', { name: 'Title' }));
 
-            for (const [label, expected] of Object.entries(expectedAscendingOrder)) {
-                await user.click(field);
-                await user.click(screen.getByRole('option', { name: label }));
+            expect(getMobileOrder()).toEqual(['child-alpha', 'child-beta', 'child-zulu']);
 
-                expect(getMobileOrder()).toEqual(expected);
-            }
+            await user.click(field);
+            await user.click(screen.getByRole('option', { name: 'Date' }));
+
+            expect(getMobileOrder()).toEqual(['child-beta', 'child-zulu', 'child-alpha']);
+
+            await user.click(field);
+            await user.click(screen.getByRole('option', { name: 'Status' }));
+
+            expect(getMobileOrder()).toEqual(['child-beta', 'child-alpha', 'child-zulu']);
 
             await user.click(screen.getByRole('button', { name: 'Sort descending' }));
 
@@ -548,8 +680,32 @@ describe('ChildrenTab', () => {
         });
 
         it('renders purpose-built child cards at the tablet breakpoint', () => {
-            vi.stubGlobal('matchMedia', createMatchMedia(768));
-            renderWithRouter([mockChildren[0]]);
+            vi.stubGlobal(
+                'matchMedia',
+                vi.fn((query: string) => {
+                    const minWidth = query.match(/\(min-width:\s*(\d+)px\)/);
+                    const maxWidth = query.match(/\(max-width:\s*(\d+)px\)/);
+                    return {
+                        matches:
+                            (minWidth === null || 768 >= Number(minWidth[1])) &&
+                            (maxWidth === null || 768 <= Number(maxWidth[1])),
+                        media: query,
+                        onchange: null,
+                        addListener: () => {},
+                        removeListener: () => {},
+                        addEventListener: () => {},
+                        removeEventListener: () => {},
+                        dispatchEvent: () => false,
+                    };
+                }),
+            );
+            render(
+                <TooltipProvider>
+                    <MemoryRouter>
+                        <ChildrenTab items={[mockChildren[0]]} parentId="content-1" />
+                    </MemoryRouter>
+                </TooltipProvider>,
+            );
 
             expect(document.querySelector('[data-component="children-tab"] .data-table')).not.toBeInTheDocument();
             expect(screen.queryByRole('columnheader', { name: 'Title' })).not.toBeInTheDocument();
@@ -569,7 +725,13 @@ describe('ChildrenTab', () => {
                     fulfillment: 'missing',
                 },
             ];
-            renderWithRouter(items);
+            render(
+                <TooltipProvider>
+                    <MemoryRouter>
+                        <ChildrenTab items={items} parentId="content-1" />
+                    </MemoryRouter>
+                </TooltipProvider>,
+            );
             expect(screen.getAllByLabelText('Monitored (inherited)').length).toBeGreaterThan(0);
             expect(document.querySelectorAll('.children-tab__monitoring--active').length).toBeGreaterThan(0);
         });
@@ -585,7 +747,13 @@ describe('ChildrenTab', () => {
                     fulfillment: 'missing',
                 },
             ];
-            renderWithRouter(items);
+            render(
+                <TooltipProvider>
+                    <MemoryRouter>
+                        <ChildrenTab items={items} parentId="content-1" />
+                    </MemoryRouter>
+                </TooltipProvider>,
+            );
             expect(screen.getAllByLabelText('Unmonitored').length).toBeGreaterThan(0);
             expect(document.querySelectorAll('.children-tab__monitoring--inherited').length).toBe(0);
         });
@@ -601,7 +769,13 @@ describe('ChildrenTab', () => {
                     fulfillment: 'missing',
                 },
             ];
-            renderWithRouter(items);
+            render(
+                <TooltipProvider>
+                    <MemoryRouter>
+                        <ChildrenTab items={items} parentId="content-1" />
+                    </MemoryRouter>
+                </TooltipProvider>,
+            );
             expect(screen.getAllByLabelText('Monitored').length).toBeGreaterThan(0);
             expect(document.querySelectorAll('.children-tab__monitoring--inherited').length).toBe(0);
         });
@@ -617,7 +791,13 @@ describe('ChildrenTab', () => {
                     fulfillment: 'missing',
                 },
             ];
-            renderWithRouter(items);
+            render(
+                <TooltipProvider>
+                    <MemoryRouter>
+                        <ChildrenTab items={items} parentId="content-1" />
+                    </MemoryRouter>
+                </TooltipProvider>,
+            );
             expect(screen.getAllByLabelText('Unmonitored (inherited)').length).toBeGreaterThan(0);
         });
 
@@ -632,7 +812,13 @@ describe('ChildrenTab', () => {
                     fulfillment: 'missing',
                 },
             ];
-            renderWithRouter(items);
+            render(
+                <TooltipProvider>
+                    <MemoryRouter>
+                        <ChildrenTab items={items} parentId="content-1" />
+                    </MemoryRouter>
+                </TooltipProvider>,
+            );
             expect(screen.getAllByLabelText(/^Monitored \(inherited\)/).length).toBeGreaterThan(0);
         });
     });
@@ -640,7 +826,13 @@ describe('ChildrenTab', () => {
     describe('click handling', () => {
         it('calls onChildClick when row is clicked', async () => {
             const onChildClick = vi.fn();
-            renderWithRouter(mockChildren, { onChildClick });
+            render(
+                <TooltipProvider>
+                    <MemoryRouter>
+                        <ChildrenTab items={mockChildren} parentId="content-1" onChildClick={onChildClick} />
+                    </MemoryRouter>
+                </TooltipProvider>,
+            );
 
             expect(document.querySelector('[data-component="children-tab"]')).toBeInTheDocument();
         });
@@ -648,7 +840,13 @@ describe('ChildrenTab', () => {
 
     describe('accessibility', () => {
         it('has correct component data attribute', () => {
-            renderWithRouter(mockChildren);
+            render(
+                <TooltipProvider>
+                    <MemoryRouter>
+                        <ChildrenTab items={mockChildren} parentId="content-1" />
+                    </MemoryRouter>
+                </TooltipProvider>,
+            );
             expect(document.querySelector('[data-component="children-tab"]')).toBeInTheDocument();
         });
     });
@@ -700,6 +898,23 @@ describe('FilesTab', () => {
             fileName: 'Episode.02.mkv',
             size: 2 * 1024 * 1024 * 1024,
             dateAdded: '2023-01-02T00:00:00Z',
+        },
+    ];
+    const sharedFiles: MediaFile[] = [
+        {
+            id: 'owned',
+            relativePath: 'Show/Season 01/Show.S01E01-E03.mkv',
+            fileName: 'Show.S01E01-E03.mkv',
+            size: 1024,
+            coveredItemCount: 3,
+        },
+        {
+            id: 'covering',
+            relativePath: 'Show/Season 01/Show.S01E04-E05.mkv',
+            fileName: 'Show.S01E04-E05.mkv',
+            size: 1024,
+            coveredItemCount: 2,
+            covering: true,
         },
     ];
 
@@ -805,6 +1020,13 @@ describe('FilesTab', () => {
             expect(onImportFile).toHaveBeenCalledTimes(1);
         });
 
+        it('shows how many items each shared file covers', () => {
+            render(<FilesTab files={sharedFiles} />);
+            const panels = document.querySelectorAll('.files-tab__panel');
+            expect(panels[0]).toHaveTextContent('Covers 3 items');
+            expect(panels[1]).toHaveTextContent('Covers 2 items');
+        });
+
         it('renders one cohesive panel per file with filename, size, and mediainfo', () => {
             render(<FilesTab files={mockFiles} />);
             const panels = document.querySelectorAll('.files-tab__panel');
@@ -851,6 +1073,27 @@ describe('FilesTab', () => {
             render(<FilesTab files={mockFiles} onUnlinkFile={onUnlinkFile} />);
             fireEvent.click(screen.getAllByLabelText('Unlink Episode.01.mkv')[0]);
             expect(onUnlinkFile).toHaveBeenCalledWith(expect.objectContaining({ id: 'file-1' }));
+        });
+
+        it('offers no rename for a file that another item owns', () => {
+            render(
+                <FilesTab
+                    files={sharedFiles}
+                    onRenameFile={vi.fn()}
+                    onRenameFiles={vi.fn()}
+                    onUnlinkFile={vi.fn()}
+                    onDeleteFile={vi.fn()}
+                />,
+            );
+            const [owned, covering] = document.querySelectorAll<HTMLElement>('.files-tab__panel');
+            expect(within(owned).getByRole('button', { name: 'Apply rename mask' })).toBeInTheDocument();
+            expect(
+                within(owned).getByRole('checkbox', { name: 'Select Show.S01E01-E03.mkv for rename' }),
+            ).toBeInTheDocument();
+            expect(within(covering).queryByRole('button', { name: 'Apply rename mask' })).not.toBeInTheDocument();
+            expect(within(covering).queryByRole('checkbox')).not.toBeInTheDocument();
+            expect(within(covering).getByRole('button', { name: 'Unlink Show.S01E04-E05.mkv' })).toBeInTheDocument();
+            expect(within(covering).getByRole('button', { name: 'Delete Show.S01E04-E05.mkv' })).toBeInTheDocument();
         });
 
         it('shows a busy state on the file being deleted', () => {

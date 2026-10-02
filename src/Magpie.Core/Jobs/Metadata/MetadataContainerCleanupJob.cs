@@ -40,6 +40,7 @@ internal sealed class MetadataContainerCleanupJob(
         }
 
         progressReporter.Report(
-            1, $"The metadata container cleanup completed. Deleted containers: {orphanedContainerIds.Count}.");
+            1,
+            $"The metadata container cleanup completed. Deleted containers: {orphanedContainerIds.Count}.");
     }
 }

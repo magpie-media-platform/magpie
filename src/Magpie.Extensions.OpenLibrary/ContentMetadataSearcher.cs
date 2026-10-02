@@ -95,8 +95,13 @@ internal sealed class ContentMetadataSearcher(
 
         var progress = (continuation as SearchCheckpoint)?.Progress.Copy() ?? new QueryProgress();
         progress.ValidateOnly = maxResults == 0;
-        var page = await SearchPageAsync(contentType, query, maxResults, defaultLanguagePreference,
-            progress, cancellationToken).ConfigureAwait(false);
+        var page = await SearchPageAsync(
+            contentType,
+            query,
+            maxResults,
+            defaultLanguagePreference,
+            progress,
+            cancellationToken).ConfigureAwait(false);
         cancellationToken.ThrowIfCancellationRequested();
         return new MetadataSearchBatch
         {
@@ -203,7 +208,7 @@ internal sealed class ContentMetadataSearcher(
         var hierarchy = _hierarchies.FindBookHierarchy(levelDefinition.Slug);
         if (hierarchy is null)
         {
-            logger.LogDebug("Open Library searcher did not find a compatible book hierarchy");
+            logger.LogInformation("Open Library found no book hierarchy for level {Slug}", levelDefinition.Slug);
             return null;
         }
 

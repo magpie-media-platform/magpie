@@ -60,8 +60,6 @@ export interface ContentStatsWidgetProps extends HTMLAttributes<HTMLDivElement> 
     viewAllUrl?: string;
 
     getItemUrl?: (item: RecentContentItem) => string;
-
-    headingLevel?: 2 | 3;
 }
 
 interface StatusRowProps {
@@ -155,7 +153,6 @@ const ContentStatsWidgetBase = forwardRef<HTMLDivElement, ContentStatsWidgetProp
             getStatusUrl,
             viewAllUrl,
             getItemUrl,
-            headingLevel = 2,
             className,
             ...props
         },
@@ -165,7 +162,6 @@ const ContentStatsWidgetBase = forwardRef<HTMLDivElement, ContentStatsWidgetProp
         const total = counts.total;
         const displayedItems = recentItems.slice(0, maxItems);
         const hasMore = recentItems.length > maxItems || total > 0;
-        const HeadingTag = `h${headingLevel}` as const;
 
         return (
             <div ref={ref} className={classes} data-component="content-stats-widget" {...props}>
@@ -175,7 +171,7 @@ const ContentStatsWidgetBase = forwardRef<HTMLDivElement, ContentStatsWidgetProp
                             {icon}
                         </span>
                     )}
-                    <HeadingTag className="content-stats-widget__title">{heading}</HeadingTag>
+                    <h2 className="content-stats-widget__title">{heading}</h2>
                     <span className="content-stats-widget__total">{loading ? '-' : total}</span>
                 </div>
 

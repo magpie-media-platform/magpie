@@ -120,6 +120,7 @@
         font-weight: var(--weight-semibold);
         line-height: var(--leading-tight);
         color: var(--text-primary);
+        overflow-wrap: anywhere;
         margin: 0;
     }
 
@@ -129,6 +130,7 @@
         font-size: var(--text-sm);
         line-height: var(--leading-normal);
         color: var(--text-secondary);
+        overflow-wrap: anywhere;
         margin: 0;
         margin-top: var(--space-xs);
     }
@@ -357,8 +359,10 @@
         }
     }
 
-    @media (max-width: 640px) {
+    @media (max-width: 767px) {
         .toast-viewport {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr);
             max-width: 100%;
             padding: var(--space-sm);
         }
@@ -380,29 +384,52 @@
             display: none;
         }
 
-        .toast[data-stack-peek='true'] {
-            position: relative;
-            isolation: isolate;
+        .toast {
+            grid-area: 1 / 1 / 2 / 2;
         }
 
-        .toast[data-stack-peek='true']::before,
-        .toast[data-stack-peek='true']::after {
-            content: '';
+        /* An absolutely positioned grid item takes its grid area, which the front toast sizes, as its containing block. */
+        .toast:not([data-stack-depth='0']) {
             position: absolute;
             inset: 0;
+            overflow: hidden;
+            transform-origin: bottom center;
+
+            & > * {
+                visibility: hidden;
+                transition: visibility 0s var(--duration-normal);
+            }
+        }
+
+        .toast[data-stack-depth='1'] {
             z-index: -1;
-            background-color: var(--bg-secondary);
-            border: 1px solid var(--border-default);
-            border-radius: var(--radius-md);
+            translate: 0 var(--space-xs);
+            scale: 0.96;
         }
 
-        .toast[data-stack-peek='true']::before {
-            transform: translate(var(--space-xs), var(--space-xs));
-        }
-
-        .toast[data-stack-peek='true']::after {
-            transform: translate(var(--space-sm), var(--space-sm));
+        .toast[data-stack-depth='2'] {
             z-index: -2;
+            translate: 0 var(--space-sm);
+            scale: 0.92;
+        }
+
+        .toast-tray {
+            grid-row: 2;
+            margin-top: var(--space-sm);
+        }
+    }
+
+    @media (max-width: 640px) {
+        .toast:has(.toast-action) {
+            grid-template-areas:
+                'title close'
+                'description close'
+                'action action';
+            grid-template-columns: 1fr auto;
+        }
+
+        .toast-action {
+            margin-top: var(--space-sm);
         }
     }
 }

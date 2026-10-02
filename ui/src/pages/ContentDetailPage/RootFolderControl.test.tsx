@@ -34,7 +34,7 @@ function makeRoot(overrides: Partial<ApiRootFolder> = {}): ApiRootFolder {
         path: '/media/movies',
         contentType: 'movie',
         isDefault: false,
-        defaultMonitoring: true,
+        defaultMonitoring: 'Monitored',
         renameTemplate: null,
         upgradeFileHandling: 'Replace',
         autoImport: false,

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Data;
+using System.Globalization;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Channels;
@@ -75,7 +76,9 @@ internal sealed class SqlServerClusterBackplane(
             var command = new SqlCommand("SELECT ISNULL(MAX(Seq), 0) FROM " + TableName, connection);
             await using var commandHandle = command.ConfigureAwait(false);
 
-            return (long)(await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false))!;
+            return Convert.ToInt64(
+                await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false),
+                CultureInfo.InvariantCulture);
         }
 
         private async Task DeleteExpiredEventsAsync(
@@ -158,8 +161,7 @@ internal sealed class SqlServerClusterBackplane(
                 catch (Exception ex)
                 {
                     delay = TimeSpan.FromTicks(Math.Min(delay.Ticks * 2, MaxRetryDelay.Ticks));
-                    _logger.LogWarning(ex, "The SQL Server cluster backplane poll failed, so the " +
-                        "listener retries in {Delay}.", delay);
+                    _logger.LogWarning(ex, "Cluster backplane poll failed; retrying in {Delay}.", delay);
                 }
 
                 try
@@ -206,7 +208,7 @@ internal sealed class SqlServerClusterBackplane(
                 {
                     _logger.LogWarning(
                         ex,
-                        "The listener discarded an unreadable cluster backplane relay payload at sequence {Sequence}.",
+                        "Discarded unreadable cluster backplane relay payload at sequence {Sequence}.",
                         sequence);
                 }
             }

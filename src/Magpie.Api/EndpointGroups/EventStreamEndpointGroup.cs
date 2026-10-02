@@ -280,26 +280,12 @@ internal sealed class EventStreamEndpointGroup : IApiEndpointGroup
         MagpieEvent evt,
         CancellationToken cancellationToken)
     {
-        var context = new Dictionary<string, string>();
-        foreach (var (key, value) in evt.Context)
-        {
-            if (SignalContextKeys.Contains(key))
-            {
-                context[key] = value;
-            }
-        }
+        var context = evt.Context.Where(p => SignalContextKeys.Contains(p.Key)).ToDictionary();
 
-        var payload = new
-        {
-            name = evt.Name,
-            context,
-        };
+        var payload = new { name = evt.Name, context };
         var json = JsonSerializer.Serialize(payload, JsonOptions);
 
-        var sb = new StringBuilder();
-        sb.Append("data: ").Append(json).Append("\n\n");
-
-        await WriteRawAsync(response, sb.ToString(), cancellationToken).ConfigureAwait(false);
+        await WriteRawAsync(response, $"data: {json}\n\n", cancellationToken).ConfigureAwait(false);
     }
 
     internal async Task StreamEventsAsync(
@@ -328,7 +314,7 @@ internal sealed class EventStreamEndpointGroup : IApiEndpointGroup
         {
             await response.StartAsync(streamCts.Token).ConfigureAwait(false);
 
-            var listener = eventBus.CreateListener();
+            var listener = eventBus.CreateListener(eventName: null, localOnly: false, callSite: "event-stream");
             await using var _ = listener.ConfigureAwait(false);
 
             await WriteRawAsync(response, ": connected\n\n", streamCts.Token).ConfigureAwait(false);
@@ -360,12 +346,12 @@ internal sealed class EventStreamEndpointGroup : IApiEndpointGroup
         }
         catch (IOException ex)
         {
-            logger.LogDebug(ex, "The event stream connection closed during a write.");
+            logger.LogDebug(ex, "Event stream connection closed during write");
         }
         catch (Exception ex)
         {
             disconnectReason = "error";
-            logger.LogWarning(ex, "The event stream writer failed, so the handler closed the connection.");
+            logger.LogWarning(ex, "Event stream writer failed");
         }
         finally
         {

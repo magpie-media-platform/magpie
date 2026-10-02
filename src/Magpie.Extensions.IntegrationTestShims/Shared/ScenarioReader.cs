@@ -96,7 +96,7 @@ internal sealed class ScenarioReader(string pluginSlug)
     private string PluginRoot()
     {
         var overrideRoot = Environment.GetEnvironmentVariable(RootEnvironmentVariable);
-        var root = string.IsNullOrWhiteSpace(overrideRoot) ? DefaultRoot : overrideRoot!;
+        var root = string.IsNullOrWhiteSpace(overrideRoot) ? DefaultRoot : overrideRoot;
         return Path.Combine(root, _pluginSlug);
     }
 }

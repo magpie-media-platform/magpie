@@ -197,21 +197,7 @@ describe('useQualityTierLists', () => {
             expect(mockApiGet).toHaveBeenCalledWith('/quality-tier-lists?tag=movies');
         });
 
-        it('should request MIME-compatible lists for a content hierarchy level', async () => {
-            mockApiGet.mockResolvedValue([mockApiTierLists[0], mockApiTierLists[2]]);
-
-            const { result } = renderHook(() => useQualityTierLists({ contentType: 'movies', level: 'movie' }), {
-                wrapper: createWrapper(),
-            });
-
-            await waitFor(() => {
-                expect(result.current.isLoading).toBe(false);
-            });
-
-            expect(mockApiGet).toHaveBeenCalledWith('/quality-tier-lists?contentType=movies&level=movie');
-        });
-
-        it('should not request unscoped lists while the target content type is unknown', () => {
+        it('should not request lists while the query is disabled', () => {
             const { result } = renderHook(() => useQualityTierLists({ enabled: false }), {
                 wrapper: createWrapper(),
             });

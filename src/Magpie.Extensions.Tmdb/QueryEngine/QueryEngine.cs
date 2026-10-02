@@ -60,14 +60,14 @@ internal sealed class QueryEngine(
             var signature = plan.SerializePlan();
             if (progress.PlanSignature is not null && progress.PlanSignature != signature)
             {
-                throw new MetadataSearchContinuationException("The TMDb query plan changed. Start a new search.");
+                throw new MetadataSearchContinuationException("The TMDb query plan changed.");
             }
 
             progress.PlanSignature = signature;
             var configuration = context.ApiKey + ":" + context.Language;
             if (progress.Configuration is not null && progress.Configuration != configuration)
             {
-                throw new MetadataSearchContinuationException("TMDb configuration changed. Start a new search.");
+                throw new MetadataSearchContinuationException("TMDb configuration changed.");
             }
 
             progress.Configuration = configuration;
@@ -152,19 +152,16 @@ internal sealed class QueryEngine(
                 continue;
             }
 
-            imageBase ??= await ResolveImageBaseAsync(
+            imageBase ??= await cache.GetImageBaseUrlAsync(
                 context with { PlanNodeId = hit.SourcePlanNodeId ?? context.PlanNodeId },
+                client,
+                logger,
                 cancellationToken).ConfigureAwait(false);
             yield return hit with
             {
                 ImageUrl = hit.PosterPath.ResolveImageUrl(imageBase, "w92")
             };
         }
-    }
-
-    private async Task<string> ResolveImageBaseAsync(RequestContext context, CancellationToken cancellationToken)
-    {
-        return await cache.GetImageBaseUrlAsync(context, client, logger, cancellationToken).ConfigureAwait(false);
     }
 
     private async IAsyncEnumerable<SearchHit> GuardAsync(

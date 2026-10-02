@@ -18,7 +18,8 @@ public sealed record LibraryImportCompletionResult
     public string? Message { get; init; }
 
     /// <summary>
-    /// The id of the content hierarchy item that the import created.
+    /// The id of the content hierarchy item that the import created, or that a waiting import needs a child level
+    /// below.
     /// </summary>
     public Guid? ContentHierarchyItemId { get; init; }
 }

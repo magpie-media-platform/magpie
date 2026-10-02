@@ -41,7 +41,7 @@ internal sealed class SettingsResolver(ISettingsService settingsService) : ISett
         var envContact = Environment.GetEnvironmentVariable(EnvContactVariable);
         if (!string.IsNullOrWhiteSpace(envContact))
         {
-            resolved[ProviderSettings.ContactKey] = envContact!;
+            resolved[ProviderSettings.ContactKey] = envContact;
         }
 
         var detail = await settingsService

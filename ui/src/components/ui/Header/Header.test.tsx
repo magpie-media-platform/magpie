@@ -85,18 +85,6 @@ describe('Header', () => {
         expect(end).toContainElement(screen.getByRole('button', { name: 'Action' }));
     });
 
-    it('renders slot content', () => {
-        render(<Header slotContent={<div data-testid="slot">Extension</div>} />);
-        expect(screen.getByTestId('slot')).toBeInTheDocument();
-    });
-
-    it('slot has header__slot class', () => {
-        render(<Header slotContent="Slot" data-testid="header" />);
-        const header = screen.getByTestId('header');
-        const slot = header.querySelector('.header__slot');
-        expect(slot).toBeInTheDocument();
-    });
-
     it('renders sidebar toggle button when onSidebarToggle provided', () => {
         render(<Header onSidebarToggle={() => {}} />);
         expect(screen.getByRole('button', { name: /sidebar/i })).toBeInTheDocument();
@@ -155,7 +143,6 @@ describe('Header', () => {
                 brand="Magpie"
                 status={<span>Healthy</span>}
                 actions={<button>Profile</button>}
-                slotContent={<div>Extension</div>}
                 onSidebarToggle={() => {}}
                 data-testid="header"
             />,
@@ -164,7 +151,6 @@ describe('Header', () => {
         expect(screen.getByText('Magpie')).toBeInTheDocument();
         expect(screen.getByText('Healthy')).toBeInTheDocument();
         expect(screen.getByRole('button', { name: 'Profile' })).toBeInTheDocument();
-        expect(screen.getByText('Extension')).toBeInTheDocument();
         expect(screen.getByRole('button', { name: /sidebar/i })).toBeInTheDocument();
     });
 
@@ -172,12 +158,6 @@ describe('Header', () => {
         render(<Header brand="App" data-testid="header" />);
         const header = screen.getByTestId('header');
         expect(header.querySelector('.header__status')).not.toBeInTheDocument();
-    });
-
-    it('does not render slot section when no slotContent provided', () => {
-        render(<Header brand="App" data-testid="header" />);
-        const header = screen.getByTestId('header');
-        expect(header.querySelector('.header__slot')).not.toBeInTheDocument();
     });
 
     it('does not render actions section when no actions provided', () => {

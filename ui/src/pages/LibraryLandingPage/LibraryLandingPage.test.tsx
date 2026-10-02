@@ -452,7 +452,10 @@ describe('LibraryLandingPage', () => {
             renderLibraryLanding(Role.Admin);
 
             expect(screen.getByRole('link', { name: /add content/i })).toHaveAttribute('href', '/library/add');
-            expect(screen.getByRole('button', { name: /connect a media server/i })).toBeInTheDocument();
+            expect(screen.getByRole('link', { name: /connect a media server/i })).toHaveAttribute(
+                'href',
+                '/admin/media-servers',
+            );
         });
 
         it('shows only the Add content link for Manager role', () => {

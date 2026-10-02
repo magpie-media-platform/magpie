@@ -413,7 +413,8 @@ test.describe.serial('Journey 8: pick the right release by hand', () => {
                         response.request().method() === 'POST',
                 );
                 await page.locator('[data-action="interactive-search"]').first().click();
-                movieCandidates = (await (await searchResponse).json()) as InteractiveCandidate[];
+                movieCandidates = ((await (await searchResponse).json()) as { candidates: InteractiveCandidate[] })
+                    .candidates;
 
                 await expect(page).toHaveURL(`/interactive-search/${content.movie.id}`);
                 const table = page.locator('[data-page="interactive-search"] [data-component="data-table"]');
@@ -599,7 +600,7 @@ test.describe.serial('Journey 8: pick the right release by hand', () => {
                         candidate.request().method() === 'POST',
                 );
                 await page.locator('[data-action="search-again"]').click();
-                const candidates = (await (await response).json()) as InteractiveCandidate[];
+                const { candidates } = (await (await response).json()) as { candidates: InteractiveCandidate[] };
                 expect(candidates).toHaveLength(1);
                 expect(candidates[0]?.score).toMatchObject({
                     qualityTierListId: quality.bookList.id,

@@ -11,7 +11,5 @@ internal sealed class MimeMappingConfiguration : IEntityTypeConfiguration<MimeMa
     {
         builder.ToTable("system_mimeMapping");
         builder.HasKey(e => e.Extension);
-        builder.Property(e => e.Extension).IsRequired();
-        builder.Property(e => e.MimeType).IsRequired();
     }
 }

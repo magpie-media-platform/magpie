@@ -194,6 +194,188 @@ public sealed class LibraryImportServiceTests
     }
 
     [Test]
+    public async Task PreviewRenamesAsync_PreviewsTheMaskWithTheCoveredEpisodes_WhenTheFileNamesSeveralEpisodes()
+    {
+        // Arrange
+        var show = new ContentHierarchyItem
+        {
+            Id = new Guid("00000000-0000-0000-0000-00000000a001"),
+            ContentType = "tv",
+            Level = "show",
+            Name = "Bluey",
+            Slug = "bluey"
+        };
+        var season = new ContentHierarchyItem
+        {
+            Id = new Guid("00000000-0000-0000-0000-00000000b001"),
+            ParentId = show.Id,
+            ContentType = "tv",
+            Level = "season",
+            Name = "Season 1",
+            Slug = "season-1",
+            Ordinal = 1
+        };
+        ContentHierarchyItem[] episodes =
+        [
+            new()
+            {
+                Id = new Guid("00000000-0000-0000-0000-000000000001"),
+                ParentId = season.Id,
+                ContentType = "tv",
+                Level = "episode",
+                Name = "E1",
+                Slug = "s01e01",
+                Ordinal = 1
+            },
+            new()
+            {
+                Id = new Guid("00000000-0000-0000-0000-000000000002"),
+                ParentId = season.Id,
+                ContentType = "tv",
+                Level = "episode",
+                Name = "E2",
+                Slug = "s01e02",
+                Ordinal = 2
+            },
+            new()
+            {
+                Id = new Guid("00000000-0000-0000-0000-000000000003"),
+                ParentId = season.Id,
+                ContentType = "tv",
+                Level = "episode",
+                Name = "E3",
+                Slug = "s01e03",
+                Ordinal = 3
+            }
+        ];
+        var candidate = new LibraryImportCandidate
+        {
+            Id = Guid.NewGuid(),
+            RootFolderId = Guid.NewGuid(),
+            ScanRunId = Guid.NewGuid(),
+            FilePath = "/media/tv/Bluey/Season 01/Bluey.S01E01-E03.mkv",
+            ContentType = "tv",
+            Status = LibraryImportCandidateStatus.Pending,
+            Matches =
+            [
+                new LibraryImportMatch
+                {
+                    Confidence = 1,
+                    ProviderType = "provider-a",
+                    ExternalIdKey = "provider-a",
+                    ExternalId = "44796",
+                    Title = "Bluey",
+                    LevelSlug = "show"
+                }
+            ]
+        };
+
+        var candidateRepository = new Mock<ILibraryImportCandidateRepository> { CallBase = true };
+        candidateRepository.Setup(repository => repository.GetByIdAsync(candidate.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(candidate);
+
+        var contentService = new Mock<IContentService>();
+        contentService
+            .Setup(service => service.PreviewImportHierarchyAsync(
+                It.IsAny<PreviewByExternalIdRequest>(),
+                candidate.RootFolderId,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync([show, season, .. episodes]);
+
+        var fileRouter = new Mock<IFileRoutingContentTypeDefinitionProvider>();
+        fileRouter
+            .Setup(router => router.ResolveFileChildren(
+                It.Is<ContentHierarchyItem>(parent => parent.Id == show.Id),
+                It.IsAny<IReadOnlyList<ContentHierarchyItem>>(),
+                It.IsAny<IReadOnlyDictionary<string, List<string>>>()))
+            .Returns([season.Id]);
+        fileRouter
+            .Setup(router => router.ResolveFileChildren(
+                It.Is<ContentHierarchyItem>(parent => parent.Id == season.Id),
+                It.IsAny<IReadOnlyList<ContentHierarchyItem>>(),
+                It.IsAny<IReadOnlyDictionary<string, List<string>>>()))
+            .Returns([.. episodes.Select(episode => episode.Id)]);
+
+        var contentTypeRegistry = new Mock<IContentTypeRegistry>();
+        contentTypeRegistry.Setup(registry => registry.FindProviderFor("tv")).Returns(fileRouter.Object);
+        contentTypeRegistry
+            .Setup(registry => registry.GetChildLevels(It.IsAny<string>(), It.IsAny<string>()))
+            .Returns([]);
+
+        var contentFileService = new Mock<IContentFileService>();
+        IReadOnlyList<ContentHierarchyItem> previewedLineage = [];
+        IReadOnlyList<ContentHierarchyItem> previewedCovered = [];
+        contentFileService
+            .Setup(service => service.HasRenameMaskAsync(candidate.RootFolderId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        contentFileService
+            .Setup(service => service.PreviewImportRenameMaskAsync(
+                It.IsAny<IReadOnlyList<ContentHierarchyItem>>(),
+                It.IsAny<IReadOnlyList<ContentHierarchyItem>>(),
+                candidate.FilePath,
+                It.IsAny<CancellationToken>(),
+                null))
+            .Callback<IReadOnlyList<ContentHierarchyItem>, IReadOnlyList<ContentHierarchyItem>, string,
+                CancellationToken, IReadOnlyList<FileRenameEntry>?>((lineage, covered, _, _, _) =>
+            {
+                previewedLineage = lineage;
+                previewedCovered = covered;
+            })
+            .ReturnsAsync(new FileRenamePreview
+            {
+                HasMask = true,
+                Files =
+                [
+                    new FileRenameEntry
+                    {
+                        OriginalPath = candidate.FilePath,
+                        ContentHierarchyItemId = episodes[0].Id,
+                        DestinationPath = "/media/tv/Bluey/S01E01-03.mkv"
+                    }
+                ]
+            });
+
+        var subject = new LibraryImportService(
+            candidateRepository.Object,
+            contentService.Object,
+            contentFileService.Object,
+            contentTypeRegistry.Object,
+            Mock.Of<IContentHierarchyItemRepository>(),
+            Mock.Of<IFileSystem>(),
+            Mock.Of<ITransactionManager>(),
+            Mock.Of<IAuditRecordRepository>(),
+            Mock.Of<IJobManager>(),
+            Mock.Of<IEventBus>(),
+            Mock.Of<IReleaseEvaluationService>(),
+            [],
+            TimeProvider.System,
+            Mock.Of<IRootFolderRepository>(),
+            NullLogger<LibraryImportService>.Instance);
+
+        // Act
+        var preview = await subject
+            .PreviewRenamesAsync(new LibraryImportRenameSelection { Ids = [candidate.Id] })
+            .ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(preview.Files.Single().DestinationPath, Is.EqualTo("/media/tv/Bluey/S01E01-03.mkv"));
+            Assert.That(previewedLineage.Select(item => item.Id), Is.EqualTo(
+                [
+                    new Guid("00000000-0000-0000-0000-000000000001"),
+                    new Guid("00000000-0000-0000-0000-00000000b001"),
+                    new Guid("00000000-0000-0000-0000-00000000a001")
+                ]));
+            Assert.That(previewedCovered.Select(item => item.Id), Is.EqualTo(
+                [
+                    new Guid("00000000-0000-0000-0000-000000000002"),
+                    new Guid("00000000-0000-0000-0000-000000000003")
+                ]));
+        }
+    }
+
+    [Test]
     public async Task QueryCandidateGroupsAsync_ReturnsLayoutGroup_WhenCandidatesShareALayout()
     {
         // Arrange
@@ -792,19 +974,17 @@ public sealed class LibraryImportServiceTests
         }
     }
 
-    [TestCase("tv", "show", "season", "2026-03-01T11:31:00Z", LibraryImportCompletionStatus.Waiting, 0,
+    [TestCase("tv", "show", "season", "2026-03-01T11:31:00Z",
         "The import is waiting until the season level below show 'Root' exists.")]
-    [TestCase("music", "artist", "album", "2026-03-01T11:31:00Z", LibraryImportCompletionStatus.Waiting, 0,
+    [TestCase("music", "artist", "album", "2026-03-01T11:31:00Z",
         "The import is waiting until the album level below artist 'Root' exists.")]
-    [TestCase("tv", "show", "season", "2026-03-01T11:30:00Z", LibraryImportCompletionStatus.Failed, 1,
-        "Import failed: The target season level does not exist yet below show.")]
+    [TestCase("tv", "show", "season", "2026-01-29T12:00:00Z",
+        "The import is waiting until the season level below show 'Root' exists.")]
     public async Task ImportCandidateAsync_WaitsWithoutFailing_WhenPendingTargetHasNoChildLevelYet(
         string contentType,
         string level,
         string childLevel,
         string createdAt,
-        LibraryImportCompletionStatus expectedStatus,
-        int expectedFailedMarks,
         string expectedMessage)
     {
         // Arrange
@@ -890,15 +1070,219 @@ public sealed class LibraryImportServiceTests
         // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(result.Status, Is.EqualTo(expectedStatus));
+            Assert.That(result.Status, Is.EqualTo(LibraryImportCompletionStatus.Waiting));
             Assert.That(result.Message, Is.EqualTo(expectedMessage));
+            Assert.That(result.ContentHierarchyItemId, Is.EqualTo(rootId));
             candidateRepository.Verify(repository => repository.MarkImportFailedAsync(
                 candidate.Id, It.IsAny<string>(), null, It.IsAny<CancellationToken>()),
-                Times.Exactly(expectedFailedMarks));
+                Times.Never);
             candidateRepository.Verify(repository => repository.DeleteAsync(
                 It.IsAny<Guid>(), It.IsAny<Guid?>(), It.IsAny<CancellationToken>()), Times.Never);
             contentFileService.Verify(service => service.AttachImportedAsync(
                 It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<Guid?>(), It.IsAny<CancellationToken>()), Times.Never);
+        }
+    }
+
+    [Test]
+    public async Task ImportCandidateAsync_WaitsOnTheSeason_WhenTheSeasonBelowTheShowHasNoEpisodeLevelYet()
+    {
+        // Arrange
+        var rootId = Guid.NewGuid();
+        var seasonId = Guid.NewGuid();
+        var root = new ContentHierarchyItem
+        {
+            Id = rootId,
+            MetadataContainerId = Guid.NewGuid(),
+            ContentType = "tv",
+            Level = "show",
+            Name = "Bluey",
+            Slug = "provider-a-44796"
+        };
+        var season = new ContentHierarchyItem
+        {
+            Id = seasonId,
+            MetadataContainerId = Guid.NewGuid(),
+            ParentId = rootId,
+            ContentType = "tv",
+            Level = "season",
+            Name = "Season 1",
+            Slug = "season-1",
+            PendingMetadataRefresh = true
+        };
+        var candidate = new LibraryImportCandidate
+        {
+            Id = Guid.NewGuid(),
+            RootFolderId = Guid.NewGuid(),
+            ScanRunId = Guid.NewGuid(),
+            FilePath = "/media/tv/Bluey/Season 01/Bluey.S01E01.mkv",
+            ContentType = "tv",
+            Status = LibraryImportCandidateStatus.Importing,
+            Matches =
+            [
+                new LibraryImportMatch
+                {
+                    Confidence = 1,
+                    ProviderType = "provider-a",
+                    ExternalIdKey = "provider-a",
+                    ExternalId = "44796",
+                    Title = "Bluey",
+                    LevelSlug = "show"
+                }
+            ]
+        };
+        var candidateRepository = new Mock<ILibraryImportCandidateRepository> { CallBase = true };
+        candidateRepository.Setup(repository => repository.GetByIdAsync(candidate.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(candidate);
+        var contentService = new Mock<IContentService>();
+        contentService
+            .Setup(service => service.HydrateWithDescendantsFromExternalIdAsync(
+                "provider-a", "provider-a", "44796", "tv", "show", candidate.RootFolderId, null, null, null,
+                null, null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((root, (IReadOnlyCollection<Guid>)[]));
+        var hierarchyItems = new Mock<IContentHierarchyItemRepository> { CallBase = true };
+        hierarchyItems
+            .Setup(repository => repository.QueryAsync(
+                It.Is<ContentHierarchyItemCriteria>(criteria => criteria.ParentId.And.Any(c => c.Value == rootId)),
+                It.IsAny<PagingParameter>(),
+                null,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<ContentHierarchyItem> { Items = [season], TotalItems = 1 });
+        hierarchyItems
+            .Setup(repository => repository.QueryAsync(
+                It.Is<ContentHierarchyItemCriteria>(criteria => criteria.ParentId.And.Any(c => c.Value == seasonId)),
+                It.IsAny<PagingParameter>(),
+                null,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<ContentHierarchyItem>());
+        var releaseEvaluationService = new Mock<IReleaseEvaluationService>();
+        releaseEvaluationService
+            .Setup(service => service.AssignFilesToLeavesAsync(
+                It.IsAny<Release>(),
+                It.Is<ContentHierarchyItem>(parent => parent.Id == rootId),
+                It.IsAny<IReadOnlyList<ContentHierarchyItem>>(),
+                It.IsAny<IReadOnlyList<ReleaseFileRef>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync((Release _, ContentHierarchyItem _, IReadOnlyList<ContentHierarchyItem> _,
+                    IReadOnlyList<ReleaseFileRef> files, CancellationToken _) =>
+                new List<ReleaseFileAssignment>
+                    { new() { FileKey = files[0].Key, LeafContentHierarchyItemId = seasonId } });
+        var contentTypeRegistry = new Mock<IContentTypeRegistry>();
+        contentTypeRegistry
+            .Setup(registry => registry.GetChildLevels("tv", "show"))
+            .Returns(
+                [new() { Slug = "season", ParentSlug = "show", DisplayName = "Season", CustomMetadataFields = [] }]);
+        contentTypeRegistry
+            .Setup(registry => registry.GetChildLevels("tv", "season"))
+            .Returns(
+                [
+                    new()
+                    {
+                        Slug = "episode", ParentSlug = "season", DisplayName = "Episode", CustomMetadataFields = []
+                    }
+                ]);
+        var subject = new LibraryImportService(
+            candidateRepository.Object,
+            contentService.Object,
+            Mock.Of<IContentFileService>(),
+            contentTypeRegistry.Object,
+            hierarchyItems.Object,
+            Mock.Of<IFileSystem>(),
+            Mock.Of<ITransactionManager>(),
+            Mock.Of<IAuditRecordRepository>(),
+            Mock.Of<IJobManager>(),
+            Mock.Of<IEventBus>(),
+            releaseEvaluationService.Object,
+            [],
+            TimeProvider.System,
+            Mock.Of<IRootFolderRepository>(),
+            NullLogger<LibraryImportService>.Instance);
+
+        // Act
+        var result = await subject.ImportCandidateAsync(
+            candidate.Id,
+            0,
+            LibraryImportMonitoringMode.Inherit,
+            null,
+            null).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.Status, Is.EqualTo(LibraryImportCompletionStatus.Waiting));
+            Assert.That(
+                result.Message,
+                Is.EqualTo("The import is waiting until the episode level below season 'Season 1' exists."));
+            Assert.That(result.ContentHierarchyItemId, Is.EqualTo(seasonId));
+        }
+    }
+
+    [Test]
+    public void ImportCandidateAsync_ThrowsWithoutFailingTheCandidate_WhenTheUpstreamIsThrottled()
+    {
+        // Arrange
+        var retryAt = new DateTimeOffset(2026, 3, 1, 12, 30, 0, TimeSpan.Zero);
+        var candidate = new LibraryImportCandidate
+        {
+            Id = Guid.NewGuid(),
+            RootFolderId = Guid.NewGuid(),
+            ScanRunId = Guid.NewGuid(),
+            FilePath = "/media/music/Refused/09 - Inclination.flac",
+            ContentType = "music",
+            Status = LibraryImportCandidateStatus.Importing,
+            Matches =
+            [
+                new LibraryImportMatch
+                {
+                    Confidence = 1,
+                    ProviderType = "provider-a",
+                    ExternalIdKey = "provider-a",
+                    ExternalId = "44796",
+                    Title = "Refused",
+                    LevelSlug = "artist"
+                }
+            ]
+        };
+        var candidateRepository = new Mock<ILibraryImportCandidateRepository> { CallBase = true };
+        candidateRepository.Setup(repository => repository.GetByIdAsync(candidate.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(candidate);
+        var contentService = new Mock<IContentService>();
+        contentService
+            .Setup(service => service.HydrateWithDescendantsFromExternalIdAsync(
+                "provider-a", "provider-a", "44796", "music", "artist", candidate.RootFolderId, null, null, null,
+                null, null, It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new UpstreamThrottledException(retryAt));
+        var subject = new LibraryImportService(
+            candidateRepository.Object,
+            contentService.Object,
+            Mock.Of<IContentFileService>(),
+            Mock.Of<IContentTypeRegistry>(),
+            Mock.Of<IContentHierarchyItemRepository>(),
+            Mock.Of<IFileSystem>(),
+            Mock.Of<ITransactionManager>(),
+            Mock.Of<IAuditRecordRepository>(),
+            Mock.Of<IJobManager>(),
+            Mock.Of<IEventBus>(),
+            Mock.Of<IReleaseEvaluationService>(),
+            [],
+            new FakeTimeProvider(new DateTimeOffset(2026, 3, 1, 12, 0, 0, TimeSpan.Zero)),
+            Mock.Of<IRootFolderRepository>(),
+            NullLogger<LibraryImportService>.Instance);
+
+        // Act
+        var exception = Assert.ThrowsAsync<UpstreamThrottledException>(() => subject.ImportCandidateAsync(
+            candidate.Id,
+            0,
+            LibraryImportMonitoringMode.Inherit,
+            null,
+            null));
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(exception!.RetryAt, Is.EqualTo(retryAt));
+            candidateRepository.Verify(repository => repository.MarkImportFailedAsync(
+                It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<Guid?>(), It.IsAny<CancellationToken>()),
+                Times.Never);
         }
     }
 
@@ -2153,7 +2537,10 @@ public sealed class LibraryImportServiceTests
                 It.IsAny<IReadOnlyList<ContentHierarchyItem>>(),
                 It.IsAny<IReadOnlyList<ReleaseFileRef>>(),
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync([]);
+            .ReturnsAsync((Release _, ContentHierarchyItem _, IReadOnlyList<ContentHierarchyItem> _,
+                    IReadOnlyList<ReleaseFileRef> files, CancellationToken _) =>
+                new List<ReleaseFileAssignment>
+                    { new() { FileKey = files[0].Key, LeafContentHierarchyItemId = createdEpisode.Id } });
         var importTransactionManager = new Mock<ITransactionManager>();
         importTransactionManager
             .Setup(manager => manager.ExecuteWithTransactionAsync(
@@ -2207,6 +2594,504 @@ public sealed class LibraryImportServiceTests
             Assert.That(
                 stored.Single(item => item.Id == createdEpisode.Id).Monitoring,
                 Is.EqualTo(MonitoringMode.Unmonitored));
+        }
+    }
+
+    [TestCase("Choking Victim", "No Gods / No Managers", "Crack Rock Steady", "Money Brain",
+        "Choking Victim/No Gods + No Managers/02 - Money Brain.flac", "No Gods + No Managers", false, "album")]
+    [TestCase("NOFX", "Self/Entitled", "72 Hookers", "Ronnie & Mags",
+        "NOFX/Self+Entitled/NOFX - 02 - Ronnie & Mags.flac", "Self+Entitled", true, "second track")]
+    [TestCase("Jeff Rosenstock", "NO DREAM", "Life Admin", "NO DREAM",
+        "Jeff Rosenstock/NO DREAM/Jeff Rosenstock - NO DREAM - 14 - -BNB.flac", "NO DREAM", false, "album")]
+    [TestCase("Jeff Rosenstock", "NO DREAM", "Life Admin", "NO DREAM",
+        "Jeff Rosenstock/NO DREAM/05 - Leave It in the Sun.flac", "NO DREAM", false, "album")]
+    public async Task ImportCandidateAsync_BindsATrackOnlyByTheProviderMatch_WhenTheAlbumIsFoundByItsFolder(
+        string artistName,
+        string albumName,
+        string firstTrackName,
+        string secondTrackName,
+        string relativePath,
+        string titleSignal,
+        bool providerMatchesTheSecondTrack,
+        string expectedItem)
+    {
+        // Arrange
+        var rootId = Guid.NewGuid();
+        var albumId = Guid.NewGuid();
+        var firstTrackId = Guid.NewGuid();
+        var secondTrackId = Guid.NewGuid();
+        var root = new ContentHierarchyItem
+        {
+            Id = rootId,
+            MetadataContainerId = Guid.NewGuid(),
+            ContentType = "music",
+            Level = "artist",
+            Name = artistName,
+            Slug = "provider-a-44796"
+        };
+        var album = new ContentHierarchyItem
+        {
+            Id = albumId,
+            MetadataContainerId = Guid.NewGuid(),
+            ParentId = rootId,
+            ContentType = "music",
+            Level = "album",
+            Name = albumName,
+            Slug = "album"
+        };
+        var firstTrack = new ContentHierarchyItem
+        {
+            Id = firstTrackId,
+            MetadataContainerId = Guid.NewGuid(),
+            ParentId = albumId,
+            ContentType = "music",
+            Level = "track",
+            Name = firstTrackName,
+            Slug = "first-track",
+            Ordinal = 1
+        };
+        var secondTrack = new ContentHierarchyItem
+        {
+            Id = secondTrackId,
+            MetadataContainerId = Guid.NewGuid(),
+            ParentId = albumId,
+            ContentType = "music",
+            Level = "track",
+            Name = secondTrackName,
+            Slug = "second-track",
+            Ordinal = 2
+        };
+        var candidate = new LibraryImportCandidate
+        {
+            Id = Guid.NewGuid(),
+            RootFolderId = Guid.NewGuid(),
+            ScanRunId = Guid.NewGuid(),
+            FilePath = "/media/music/" + relativePath,
+            ContentType = "music",
+            Status = LibraryImportCandidateStatus.Importing,
+            Matches =
+            [
+                new LibraryImportMatch
+                {
+                    Confidence = 1,
+                    ProviderType = "provider-a",
+                    ExternalIdKey = "provider-a",
+                    ExternalId = "44796",
+                    Title = artistName,
+                    LevelSlug = "artist"
+                }
+            ],
+            ParsedSignals = new Dictionary<string, List<string>> { [ParsedFileSignalKeys.Title] = [titleSignal] }
+        };
+
+        var candidateRepository = new Mock<ILibraryImportCandidateRepository> { CallBase = true };
+        candidateRepository.Setup(repository => repository.GetByIdAsync(candidate.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(candidate);
+
+        var contentService = new Mock<IContentService>();
+        contentService
+            .Setup(service => service.HydrateWithDescendantsFromExternalIdAsync(
+                "provider-a", "provider-a", "44796", "music", "artist", candidate.RootFolderId, null, null, null,
+                null, null,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync((root, (IReadOnlyCollection<Guid>)[]));
+
+        var hierarchyItems = new Mock<IContentHierarchyItemRepository> { CallBase = true };
+        hierarchyItems
+            .Setup(repository => repository.QueryAsync(
+                It.Is<ContentHierarchyItemCriteria>(criteria => criteria.ParentId.And.Any(c => c.Value == rootId)),
+                It.IsAny<PagingParameter>(),
+                null,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<ContentHierarchyItem> { Items = [album], TotalItems = 1 });
+        hierarchyItems
+            .Setup(repository => repository.QueryAsync(
+                It.Is<ContentHierarchyItemCriteria>(criteria => criteria.ParentId.And.Any(c => c.Value == albumId)),
+                It.IsAny<PagingParameter>(),
+                null,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<ContentHierarchyItem> { Items = [firstTrack, secondTrack], TotalItems = 2 });
+        hierarchyItems
+            .Setup(repository => repository.QueryAsync(
+                It.Is<ContentHierarchyItemCriteria>(criteria =>
+                    criteria.ParentId.And.Any(c => c.Value == secondTrackId)),
+                It.IsAny<PagingParameter>(),
+                null,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<ContentHierarchyItem>());
+        hierarchyItems
+            .Setup(repository => repository.GetLineageAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
+
+        var releaseEvaluationService = new Mock<IReleaseEvaluationService>();
+        releaseEvaluationService
+            .Setup(service => service.AssignFilesToLeavesAsync(
+                It.IsAny<Release>(),
+                It.Is<ContentHierarchyItem>(parent => parent.Id == rootId),
+                It.IsAny<IReadOnlyList<ContentHierarchyItem>>(),
+                It.IsAny<IReadOnlyList<ReleaseFileRef>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync((Release _, ContentHierarchyItem _, IReadOnlyList<ContentHierarchyItem> _,
+                    IReadOnlyList<ReleaseFileRef> files, CancellationToken _) =>
+                new List<ReleaseFileAssignment>
+                    { new() { FileKey = files[0].Key, LeafContentHierarchyItemId = null } });
+        releaseEvaluationService
+            .Setup(service => service.AssignFilesToLeavesAsync(
+                It.IsAny<Release>(),
+                It.Is<ContentHierarchyItem>(parent => parent.Id == albumId),
+                It.IsAny<IReadOnlyList<ContentHierarchyItem>>(),
+                It.IsAny<IReadOnlyList<ReleaseFileRef>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync((Release _, ContentHierarchyItem _, IReadOnlyList<ContentHierarchyItem> _,
+                    IReadOnlyList<ReleaseFileRef> files, CancellationToken _) =>
+                new List<ReleaseFileAssignment>
+                    {
+                        new()
+                        {
+                            FileKey = files[0].Key,
+                            LeafContentHierarchyItemId = providerMatchesTheSecondTrack ? secondTrackId : null
+                        }
+                    });
+
+        var contentFileService = new Mock<IContentFileService>();
+        var attachedHierarchyItemIds = new List<Guid>();
+        contentFileService
+            .Setup(service => service.AttachImportedAsync(
+                It.IsAny<Guid>(), candidate.FilePath, It.IsAny<Guid?>(), It.IsAny<CancellationToken>()))
+            .Callback<Guid, string, Guid?, CancellationToken>((id, _, _, _) => attachedHierarchyItemIds.Add(id))
+            .ReturnsAsync(new AttachContentFileResult
+            {
+                Result = new ContentFileAttachmentResult
+                {
+                    MediaFile = new MediaFile
+                    {
+                        Id = Guid.NewGuid(),
+                        ContentItemId = Guid.NewGuid(),
+                        FileKind = "audio",
+                        FilePath = candidate.FilePath
+                    }
+                },
+                FulfillmentChanged = false
+            });
+
+        var transactionManager = new Mock<ITransactionManager>();
+        transactionManager
+            .Setup(manager => manager.ExecuteWithTransactionAsync(
+                It.IsAny<Func<CancellationToken, Task<(Guid, MediaFile?)>>>(), It.IsAny<CancellationToken>()))
+            .Returns((Func<CancellationToken, Task<(Guid, MediaFile?)>> operation, CancellationToken token) =>
+                operation(token));
+
+        var fileSystem = new Mock<IFileSystem>();
+        fileSystem.Setup(system => system.GetFullPath(It.IsAny<string>())).Returns<string>(path => path);
+        fileSystem
+            .Setup(system => system.MatchesAnyFileTypeAsync(
+                candidate.FilePath,
+                It.Is<IReadOnlyList<string>>(types => types.SequenceEqual(new[] { "audio/*" })),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        var contentTypeRegistry = new Mock<IContentTypeRegistry>();
+        contentTypeRegistry.Setup(registry => registry.GetChildLevels("music", "artist")).Returns(
+            [new() { Slug = "album", ParentSlug = "artist", DisplayName = "Album", CustomMetadataFields = [] }]);
+        contentTypeRegistry.Setup(registry => registry.GetChildLevels("music", "album")).Returns(
+            [new() { Slug = "track", ParentSlug = "album", DisplayName = "Track", CustomMetadataFields = [] }]);
+        contentTypeRegistry.Setup(registry => registry.GetChildLevels("music", "track")).Returns([]);
+        contentTypeRegistry.Setup(registry => registry.GetDefinitionFor("music")).Returns(new ContentTypeDefinition
+        {
+            Slug = "music",
+            DisplayName = "Music",
+            LevelDefinitions =
+            [
+                new() { Slug = "artist", DisplayName = "Artist", CustomMetadataFields = [] },
+                new()
+                {
+                    Slug = "album",
+                    ParentSlug = "artist",
+                    DisplayName = "Album",
+                    CustomMetadataFields = [],
+                    AcceptedFileTypes = ["audio/*"]
+                },
+                new()
+                {
+                    Slug = "track",
+                    ParentSlug = "album",
+                    DisplayName = "Track",
+                    CustomMetadataFields = [],
+                    AcceptedFileTypes = ["audio/*"]
+                }
+            ]
+        });
+
+        var auditRecordRepository = new Mock<IAuditRecordRepository> { CallBase = true };
+        var auditRecords = new List<AuditRecord>();
+        auditRecordRepository
+            .Setup(repository => repository.CreateAsync(It.IsAny<AuditRecord>(), It.IsAny<CancellationToken>()))
+            .Callback<AuditRecord, CancellationToken>((record, _) => auditRecords.Add(record))
+            .ReturnsAsync((AuditRecord record, CancellationToken _) => record);
+
+        var subject = new LibraryImportService(
+            candidateRepository.Object,
+            contentService.Object,
+            contentFileService.Object,
+            contentTypeRegistry.Object,
+            hierarchyItems.Object,
+            fileSystem.Object,
+            transactionManager.Object,
+            auditRecordRepository.Object,
+            Mock.Of<IJobManager>(),
+            Mock.Of<IEventBus>(),
+            releaseEvaluationService.Object,
+            [],
+            TimeProvider.System,
+            Mock.Of<IRootFolderRepository>(),
+            NullLogger<LibraryImportService>.Instance);
+
+        // Act
+        var result = await subject.ImportCandidateAsync(
+            candidate.Id,
+            0,
+            LibraryImportMonitoringMode.Inherit,
+            null,
+            null).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.Status, Is.EqualTo(LibraryImportCompletionStatus.Completed));
+            Assert.That(
+                attachedHierarchyItemIds,
+                Is.EqualTo([expectedItem == "album" ? albumId : secondTrackId]));
+        }
+    }
+
+    [TestCase(true)]
+    [TestCase(false)]
+    public async Task ImportCandidateAsync_AttachesTheFileToTheAlbum_WhenTheAlbumAcceptsItAndNoTrackMatches(
+        bool albumAcceptsTheFile)
+    {
+        // Arrange
+        var rootId = Guid.NewGuid();
+        var albumId = Guid.NewGuid();
+        var trackId = Guid.NewGuid();
+        var root = new ContentHierarchyItem
+        {
+            Id = rootId,
+            MetadataContainerId = Guid.NewGuid(),
+            ContentType = "music",
+            Level = "artist",
+            Name = "Jeff Rosenstock",
+            Slug = "provider-a-44796"
+        };
+        var album = new ContentHierarchyItem
+        {
+            Id = albumId,
+            MetadataContainerId = Guid.NewGuid(),
+            ParentId = rootId,
+            ContentType = "music",
+            Level = "album",
+            Name = "SKA DREAM",
+            Slug = "ska-dream"
+        };
+        var track = new ContentHierarchyItem
+        {
+            Id = trackId,
+            MetadataContainerId = Guid.NewGuid(),
+            ParentId = albumId,
+            ContentType = "music",
+            Level = "track",
+            Name = "Life Admin",
+            Slug = "life-admin",
+            Ordinal = 1
+        };
+        var candidate = new LibraryImportCandidate
+        {
+            Id = Guid.NewGuid(),
+            RootFolderId = Guid.NewGuid(),
+            ScanRunId = Guid.NewGuid(),
+            FilePath = "/media/music/Jeff Rosenstock/SKA DREAM/Jeff Rosenstock - SKA DREAM - 10 - -SKA.flac",
+            ContentType = "music",
+            Status = LibraryImportCandidateStatus.Importing,
+            Matches =
+            [
+                new LibraryImportMatch
+                {
+                    Confidence = 1,
+                    ProviderType = "provider-a",
+                    ExternalIdKey = "provider-a",
+                    ExternalId = "44796",
+                    Title = "Jeff Rosenstock",
+                    LevelSlug = "artist"
+                }
+            ],
+            ParsedSignals = new Dictionary<string, List<string>> { [ParsedFileSignalKeys.Title] = ["SKA DREAM"] }
+        };
+
+        var candidateRepository = new Mock<ILibraryImportCandidateRepository> { CallBase = true };
+        candidateRepository.Setup(repository => repository.GetByIdAsync(candidate.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(candidate);
+
+        var contentService = new Mock<IContentService>();
+        contentService
+            .Setup(service => service.HydrateWithDescendantsFromExternalIdAsync(
+                "provider-a", "provider-a", "44796", "music", "artist", candidate.RootFolderId, null, null, null,
+                null, null,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync((root, (IReadOnlyCollection<Guid>)[]));
+
+        var hierarchyItems = new Mock<IContentHierarchyItemRepository> { CallBase = true };
+        hierarchyItems
+            .Setup(repository => repository.QueryAsync(
+                It.Is<ContentHierarchyItemCriteria>(criteria => criteria.ParentId.And.Any(c => c.Value == rootId)),
+                It.IsAny<PagingParameter>(),
+                null,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<ContentHierarchyItem> { Items = [album], TotalItems = 1 });
+        hierarchyItems
+            .Setup(repository => repository.QueryAsync(
+                It.Is<ContentHierarchyItemCriteria>(criteria => criteria.ParentId.And.Any(c => c.Value == albumId)),
+                It.IsAny<PagingParameter>(),
+                null,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<ContentHierarchyItem> { Items = [track], TotalItems = 1 });
+        hierarchyItems
+            .Setup(repository => repository.GetLineageAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
+
+        var releaseEvaluationService = new Mock<IReleaseEvaluationService>();
+        releaseEvaluationService
+            .Setup(service => service.AssignFilesToLeavesAsync(
+                It.IsAny<Release>(),
+                It.Is<ContentHierarchyItem>(parent => parent.Id == rootId),
+                It.IsAny<IReadOnlyList<ContentHierarchyItem>>(),
+                It.IsAny<IReadOnlyList<ReleaseFileRef>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync((Release _, ContentHierarchyItem _, IReadOnlyList<ContentHierarchyItem> _,
+                    IReadOnlyList<ReleaseFileRef> files, CancellationToken _) =>
+                new List<ReleaseFileAssignment>
+                    { new() { FileKey = files[0].Key, LeafContentHierarchyItemId = albumId } });
+        releaseEvaluationService
+            .Setup(service => service.AssignFilesToLeavesAsync(
+                It.IsAny<Release>(),
+                It.Is<ContentHierarchyItem>(parent => parent.Id == albumId),
+                It.IsAny<IReadOnlyList<ContentHierarchyItem>>(),
+                It.IsAny<IReadOnlyList<ReleaseFileRef>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync((Release _, ContentHierarchyItem _, IReadOnlyList<ContentHierarchyItem> _,
+                    IReadOnlyList<ReleaseFileRef> files, CancellationToken _) =>
+                new List<ReleaseFileAssignment>
+                    { new() { FileKey = files[0].Key, LeafContentHierarchyItemId = null } });
+
+        var contentFileService = new Mock<IContentFileService>();
+        var attachedHierarchyItemIds = new List<Guid>();
+        contentFileService
+            .Setup(service => service.AttachImportedAsync(
+                It.IsAny<Guid>(), candidate.FilePath, It.IsAny<Guid?>(), It.IsAny<CancellationToken>()))
+            .Callback<Guid, string, Guid?, CancellationToken>((id, _, _, _) => attachedHierarchyItemIds.Add(id))
+            .ReturnsAsync(new AttachContentFileResult
+            {
+                Result = new ContentFileAttachmentResult
+                {
+                    MediaFile = new MediaFile
+                    {
+                        Id = Guid.NewGuid(),
+                        ContentItemId = Guid.NewGuid(),
+                        FileKind = "audio",
+                        FilePath = candidate.FilePath
+                    }
+                },
+                FulfillmentChanged = false
+            });
+
+        var transactionManager = new Mock<ITransactionManager>();
+        transactionManager
+            .Setup(manager => manager.ExecuteWithTransactionAsync(
+                It.IsAny<Func<CancellationToken, Task<(Guid, MediaFile?)>>>(), It.IsAny<CancellationToken>()))
+            .Returns((Func<CancellationToken, Task<(Guid, MediaFile?)>> operation, CancellationToken token) =>
+                operation(token));
+
+        var fileSystem = new Mock<IFileSystem>();
+        fileSystem.Setup(system => system.GetFullPath(It.IsAny<string>())).Returns<string>(path => path);
+        fileSystem
+            .Setup(system => system.MatchesAnyFileTypeAsync(
+                candidate.FilePath,
+                It.Is<IReadOnlyList<string>>(types => types.SequenceEqual(new[] { "audio/*" })),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(albumAcceptsTheFile);
+        var contentTypeRegistry = new Mock<IContentTypeRegistry>();
+        contentTypeRegistry.Setup(registry => registry.GetChildLevels("music", "artist")).Returns(
+            [new() { Slug = "album", ParentSlug = "artist", DisplayName = "Album", CustomMetadataFields = [] }]);
+        contentTypeRegistry.Setup(registry => registry.GetChildLevels("music", "album")).Returns(
+            [new() { Slug = "track", ParentSlug = "album", DisplayName = "Track", CustomMetadataFields = [] }]);
+        contentTypeRegistry.Setup(registry => registry.GetChildLevels("music", "track")).Returns([]);
+        contentTypeRegistry.Setup(registry => registry.GetDefinitionFor("music")).Returns(new ContentTypeDefinition
+        {
+            Slug = "music",
+            DisplayName = "Music",
+            LevelDefinitions =
+            [
+                new() { Slug = "artist", DisplayName = "Artist", CustomMetadataFields = [] },
+                new()
+                {
+                    Slug = "album",
+                    ParentSlug = "artist",
+                    DisplayName = "Album",
+                    CustomMetadataFields = [],
+                    AcceptedFileTypes = ["audio/*"]
+                },
+                new()
+                {
+                    Slug = "track",
+                    ParentSlug = "album",
+                    DisplayName = "Track",
+                    CustomMetadataFields = [],
+                    AcceptedFileTypes = ["audio/*"]
+                }
+            ]
+        });
+
+        var auditRecordRepository = new Mock<IAuditRecordRepository> { CallBase = true };
+        var auditRecords = new List<AuditRecord>();
+        auditRecordRepository
+            .Setup(repository => repository.CreateAsync(It.IsAny<AuditRecord>(), It.IsAny<CancellationToken>()))
+            .Callback<AuditRecord, CancellationToken>((record, _) => auditRecords.Add(record))
+            .ReturnsAsync((AuditRecord record, CancellationToken _) => record);
+
+        var subject = new LibraryImportService(
+            candidateRepository.Object,
+            contentService.Object,
+            contentFileService.Object,
+            contentTypeRegistry.Object,
+            hierarchyItems.Object,
+            fileSystem.Object,
+            transactionManager.Object,
+            auditRecordRepository.Object,
+            Mock.Of<IJobManager>(),
+            Mock.Of<IEventBus>(),
+            releaseEvaluationService.Object,
+            [],
+            TimeProvider.System,
+            Mock.Of<IRootFolderRepository>(),
+            NullLogger<LibraryImportService>.Instance);
+
+        // Act
+        var result = await subject.ImportCandidateAsync(
+            candidate.Id,
+            0,
+            LibraryImportMonitoringMode.Inherit,
+            null,
+            null).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(
+                result.Status,
+                Is.EqualTo(albumAcceptsTheFile
+                    ? LibraryImportCompletionStatus.Completed
+                    : LibraryImportCompletionStatus.Failed));
+            Assert.That(attachedHierarchyItemIds, Is.EqualTo(albumAcceptsTheFile ? new[] { albumId } : []));
+            candidateRepository.Verify(repository => repository.MarkImportFailedAsync(
+                candidate.Id, It.Is<string>(message => message.Contains("unresolved below album 'SKA DREAM'")), null,
+                It.IsAny<CancellationToken>()), albumAcceptsTheFile ? Times.Never() : Times.Once());
         }
     }
 
@@ -2365,7 +3250,9 @@ public sealed class LibraryImportServiceTests
             candidateRepository.Object,
             contentService.Object,
             contentFileService.Object,
-            Mock.Of<IContentTypeRegistry>(),
+            Mock.Of<IContentTypeRegistry>(registry =>
+                registry.GetChildLevels(It.IsAny<string>(), It.IsAny<string>()) ==
+                    Array.Empty<ContentHierarchyLevelDefinition>()),
             hierarchyItems.Object,
             fileSystem.Object,
             transactionManager.Object,
@@ -2399,6 +3286,300 @@ public sealed class LibraryImportServiceTests
                 It.IsAny<CancellationToken>()), Times.Once);
             candidateRepository.Verify(repository => repository.DeleteAsync(
                 candidate.Id, null, It.IsAny<CancellationToken>()), Times.Never);
+        }
+    }
+
+    [TestCase(
+        new[]
+        {
+            "00000000-0000-0000-0000-000000000034",
+            "00000000-0000-0000-0000-000000000035",
+            "00000000-0000-0000-0000-000000000036"
+        },
+        "/media/tv/Bluey/Season 01/Bluey.S01E35.en.srt",
+        LibraryImportCompletionStatus.Completed,
+        new[] { "00000000-0000-0000-0000-000000000034" },
+        new[] { "00000000-0000-0000-0000-000000000035", "00000000-0000-0000-0000-000000000036" })]
+    [TestCase(
+        new[]
+        {
+            "00000000-0000-0000-0000-000000000034",
+            "00000000-0000-0000-0000-000000000035",
+            "00000000-0000-0000-0000-000000000036"
+        },
+        "/media/tv/Bluey/Season 01/Bluey.S01E35.mkv",
+        LibraryImportCompletionStatus.Completed,
+        new[] { "00000000-0000-0000-0000-000000000034" },
+        new[] { "00000000-0000-0000-0000-000000000036" })]
+    [TestCase(
+        new[] { "00000000-0000-0000-0000-000000000034" },
+        "/media/tv/Bluey/Season 01/Bluey.S01E35.en.srt",
+        LibraryImportCompletionStatus.Completed,
+        new[] { "00000000-0000-0000-0000-000000000034" },
+        new string[0])]
+    [TestCase(
+        new string[0],
+        "/media/tv/Bluey/Season 01/Bluey.S01E35.en.srt",
+        LibraryImportCompletionStatus.Failed,
+        new string[0],
+        new string[0])]
+    public async Task ImportCandidateAsync_AttachesTheFileToRoutedEpisodesWithoutAPrimaryFile_WhenTheFileNamesEpisodes(
+        string[] routed,
+        string episode35File,
+        LibraryImportCompletionStatus expectedStatus,
+        string[] expectedImported,
+        string[] expectedAttached)
+    {
+        // Arrange
+        var rootId = Guid.NewGuid();
+        var seasonId = Guid.NewGuid();
+        var root = new ContentHierarchyItem
+        {
+            Id = rootId,
+            MetadataContainerId = Guid.NewGuid(),
+            ContentType = "tv",
+            Level = "show",
+            Name = "Bluey",
+            Slug = "provider-a-44796"
+        };
+        var season = new ContentHierarchyItem
+        {
+            Id = seasonId,
+            MetadataContainerId = Guid.NewGuid(),
+            ParentId = rootId,
+            ContentType = "tv",
+            Level = "season",
+            Name = "Season 1",
+            Slug = "season-1",
+            Ordinal = 1
+        };
+        ContentHierarchyItem[] episodes =
+        [
+            new()
+            {
+                Id = new Guid("00000000-0000-0000-0000-000000000034"),
+                ParentId = seasonId,
+                ContentType = "tv",
+                Level = "episode",
+                Name = "E34",
+                Slug = "s01e34",
+                Ordinal = 34,
+                ContentItem = new() { Id = new Guid("00000000-0000-0000-0000-00000000c034") }
+            },
+            new()
+            {
+                Id = new Guid("00000000-0000-0000-0000-000000000035"),
+                ParentId = seasonId,
+                ContentType = "tv",
+                Level = "episode",
+                Name = "E35",
+                Slug = "s01e35",
+                Ordinal = 35,
+                ContentItem = new()
+                {
+                    Id = new Guid("00000000-0000-0000-0000-00000000c035"),
+                    MediaFiles =
+                    {
+                        new MediaFile
+                        {
+                            ContentItemId = new Guid("00000000-0000-0000-0000-00000000c035"),
+                            FileKind = "video",
+                            FilePath = episode35File
+                        }
+                    }
+                }
+            },
+            new()
+            {
+                Id = new Guid("00000000-0000-0000-0000-000000000036"),
+                ParentId = seasonId,
+                ContentType = "tv",
+                Level = "episode",
+                Name = "E36",
+                Slug = "s01e36",
+                Ordinal = 36,
+                ContentItem = new() { Id = new Guid("00000000-0000-0000-0000-00000000c036") }
+            }
+        ];
+        var candidate = new LibraryImportCandidate
+        {
+            Id = Guid.NewGuid(),
+            RootFolderId = Guid.NewGuid(),
+            ScanRunId = Guid.NewGuid(),
+            FilePath = "/media/tv/Bluey/Season 01/Bluey.S01E34-E36.mkv",
+            ContentType = "tv",
+            Status = LibraryImportCandidateStatus.Importing,
+            Matches =
+            [
+                new LibraryImportMatch
+                {
+                    Confidence = 1,
+                    ProviderType = "provider-a",
+                    ExternalIdKey = "provider-a",
+                    ExternalId = "44796",
+                    Title = "Bluey",
+                    LevelSlug = "show"
+                }
+            ],
+            ParsedSignals = new Dictionary<string, List<string>> { [ParsedFileSignalKeys.Title] = ["Bluey"] }
+        };
+
+        var candidateRepository = new Mock<ILibraryImportCandidateRepository> { CallBase = true };
+        candidateRepository.Setup(repository => repository.GetByIdAsync(candidate.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(candidate);
+
+        var contentService = new Mock<IContentService>();
+        contentService
+            .Setup(service => service.HydrateWithDescendantsFromExternalIdAsync(
+                "provider-a", "provider-a", "44796", "tv", "show", candidate.RootFolderId, null, null, null, null, null,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync((root, (IReadOnlyCollection<Guid>)[]));
+
+        var hierarchyItems = new Mock<IContentHierarchyItemRepository> { CallBase = true };
+        hierarchyItems
+            .Setup(repository => repository.QueryAsync(
+                It.IsAny<ContentHierarchyItemCriteria>(),
+                It.IsAny<PagingParameter>(),
+                null,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<ContentHierarchyItem>());
+        hierarchyItems
+            .Setup(repository => repository.QueryAsync(
+                It.Is<ContentHierarchyItemCriteria>(criteria => criteria.ParentId.And.Any(c => c.Value == rootId)),
+                It.IsAny<PagingParameter>(),
+                null,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<ContentHierarchyItem> { Items = [season], TotalItems = 1 });
+        hierarchyItems
+            .Setup(repository => repository.QueryAsync(
+                It.Is<ContentHierarchyItemCriteria>(criteria => criteria.ParentId.And.Any(c => c.Value == seasonId)),
+                It.IsAny<PagingParameter>(),
+                null,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<ContentHierarchyItem> { Items = episodes, TotalItems = 3 });
+        hierarchyItems
+            .Setup(repository => repository.GetLineageAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
+        hierarchyItems
+            .Setup(repository => repository.GetByIdAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((Guid id, CancellationToken _) => Array.Find(episodes, episode => episode.Id == id));
+
+        var fileRouter = new Mock<IFileRoutingContentTypeDefinitionProvider>();
+        fileRouter
+            .Setup(router => router.ResolveFileChildren(
+                It.Is<ContentHierarchyItem>(parent => parent.Id == rootId),
+                It.IsAny<IReadOnlyList<ContentHierarchyItem>>(),
+                It.IsAny<IReadOnlyDictionary<string, List<string>>>()))
+            .Returns([seasonId]);
+        fileRouter
+            .Setup(router => router.ResolveFileChildren(
+                It.Is<ContentHierarchyItem>(parent => parent.Id == seasonId),
+                It.IsAny<IReadOnlyList<ContentHierarchyItem>>(),
+                It.IsAny<IReadOnlyDictionary<string, List<string>>>()))
+            .Returns([.. routed.Select(Guid.Parse)]);
+
+        var attached = new MediaFile
+        {
+            Id = Guid.NewGuid(),
+            ContentItemId = new Guid("00000000-0000-0000-0000-00000000c034"),
+            FileKind = "video",
+            FilePath = candidate.FilePath
+        };
+
+        var contentFileService = new Mock<IContentFileService>();
+        var importedHierarchyItemIds = new List<Guid>();
+        var attachedHierarchyItemIds = new List<Guid>();
+        contentFileService
+            .Setup(service => service.AttachImportedAsync(
+                It.IsAny<Guid>(), candidate.FilePath, It.IsAny<Guid?>(), It.IsAny<CancellationToken>()))
+            .Callback<Guid, string, Guid?, CancellationToken>((id, _, _, _) => importedHierarchyItemIds.Add(id))
+            .ReturnsAsync(new AttachContentFileResult
+            {
+                Result = new ContentFileAttachmentResult { MediaFile = attached },
+                FulfillmentChanged = false
+            });
+        contentFileService
+            .Setup(service => service.AttachAsync(
+                It.IsAny<Guid>(), candidate.FilePath, It.IsAny<Guid?>(), It.IsAny<CancellationToken>()))
+            .Callback<Guid, string, Guid?, CancellationToken>((id, _, _, _) => attachedHierarchyItemIds.Add(id))
+            .ReturnsAsync(new AttachContentFileResult());
+
+        var transactionManager = new Mock<ITransactionManager>();
+        transactionManager
+            .Setup(manager => manager.ExecuteWithTransactionAsync(
+                It.IsAny<Func<CancellationToken, Task<(Guid, MediaFile?)>>>(), It.IsAny<CancellationToken>()))
+            .Returns((Func<CancellationToken, Task<(Guid, MediaFile?)>> operation, CancellationToken token) =>
+                operation(token));
+
+        var fileSystem = new Mock<IFileSystem>();
+        fileSystem.Setup(system => system.GetFullPath(It.IsAny<string>())).Returns<string>(path => path);
+        fileSystem
+            .Setup(system => system.MatchesAnyFileType(
+                It.Is<string>(path => path.EndsWith(".mkv", StringComparison.Ordinal)),
+                It.IsAny<string?>(),
+                It.IsAny<IReadOnlyList<string>?>()))
+            .Returns(true);
+
+        var contentTypeRegistry = new Mock<IContentTypeRegistry>();
+        contentTypeRegistry.Setup(registry => registry.FindProviderFor("tv")).Returns(fileRouter.Object);
+        contentTypeRegistry
+            .Setup(registry => registry.GetChildLevels(It.IsAny<string>(), It.IsAny<string>()))
+            .Returns([]);
+        contentTypeRegistry
+            .Setup(registry => registry.GetDefinitionFor("tv"))
+            .Returns(new ContentTypeDefinition
+            {
+                Slug = "tv",
+                DisplayName = "TV",
+                LevelDefinitions =
+                [
+                    new() { Slug = "show", DisplayName = "Show", CustomMetadataFields = [] },
+                    new()
+                    {
+                        Slug = "season", ParentSlug = "show", DisplayName = "Season", CustomMetadataFields = []
+                    },
+                    new()
+                    {
+                        Slug = "episode",
+                        ParentSlug = "season",
+                        DisplayName = "Episode",
+                        CustomMetadataFields = [],
+                        AcceptedFileTypes = ["video/*"]
+                    }
+                ]
+            });
+
+        var subject = new LibraryImportService(
+            candidateRepository.Object,
+            contentService.Object,
+            contentFileService.Object,
+            contentTypeRegistry.Object,
+            hierarchyItems.Object,
+            fileSystem.Object,
+            transactionManager.Object,
+            Mock.Of<IAuditRecordRepository>(),
+            Mock.Of<IJobManager>(),
+            Mock.Of<IEventBus>(),
+            Mock.Of<IReleaseEvaluationService>(),
+            [],
+            TimeProvider.System,
+            Mock.Of<IRootFolderRepository>(),
+            NullLogger<LibraryImportService>.Instance);
+
+        // Act
+        var result = await subject.ImportCandidateAsync(
+            candidate.Id,
+            0,
+            LibraryImportMonitoringMode.Inherit,
+            null,
+            null).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.Status, Is.EqualTo(expectedStatus));
+            Assert.That(importedHierarchyItemIds, Is.EqualTo(expectedImported.Select(Guid.Parse)));
+            Assert.That(attachedHierarchyItemIds, Is.EqualTo(expectedAttached.Select(Guid.Parse)));
         }
     }
 
@@ -2740,10 +3921,13 @@ public sealed class LibraryImportServiceTests
             null,
             null,
             cancelled.Token));
-        _candidateRepository.Verify(
-            repository => repository.TryClaimForImportAsync(
-                It.IsAny<Guid>(), It.IsAny<Guid?>(), It.IsAny<CancellationToken>()),
-            Times.Never);
+        using (Assert.EnterMultipleScope())
+        {
+            _candidateRepository.Verify(
+                repository => repository.TryClaimForImportAsync(
+                    It.IsAny<Guid>(), It.IsAny<Guid?>(), It.IsAny<CancellationToken>()),
+                Times.Never);
+        }
     }
 
     [Test]
@@ -3951,7 +5135,7 @@ public sealed class LibraryImportServiceTests
 
     [TestCase(true, 1)]
     [TestCase(false, 0)]
-    public async Task RestoreAsync_AuditsInTheWriteTransactionAndQueuesMatching_OnlyWhenACandidateIsRestored(
+    public async Task RestoreAsync_AuditsInTheWriteTransactionAndQueuesMatching_WhenACandidateIsRestored(
         bool restored, int expected)
     {
         // Arrange
@@ -4026,7 +5210,7 @@ public sealed class LibraryImportServiceTests
 
     [TestCase(true, 1)]
     [TestCase(false, 0)]
-    public async Task RejectAsync_AuditsInTheWriteTransaction_OnlyWhenACandidateIsRejected(bool rejected, int expected)
+    public async Task RejectAsync_AuditsInTheWriteTransaction_WhenACandidateIsRejected(bool rejected, int expected)
     {
         // Arrange
         var candidate = new LibraryImportCandidate
@@ -4152,12 +5336,13 @@ public sealed class LibraryImportServiceTests
         }
     }
 
-    [TestCase(null, false, new[] { "/media/movies/Inception/a.mkv" })]
-    [TestCase("/media/movies/Inception/Inception.en.srt", false, new[] { "/media/movies/Inception/a.mkv" })]
-    [TestCase("/media/movies/Inception/Inception.mkv", false, new string[0])]
-    [TestCase(null, true, new string[0])]
-    public async Task AssociateMissingFilesAsync_QueuesOneFileForEachItem_OnlyWhenTheItemHasNoPrimaryFile(
-        string? existingFile, bool associationInFlight, string[] expectedQueuedFiles)
+    [TestCase(null, null, false, new[] { "/media/movies/Inception/a.mkv" })]
+    [TestCase("/media/movies/Inception/Inception.en.srt", null, false, new[] { "/media/movies/Inception/a.mkv" })]
+    [TestCase("/media/movies/Inception/Inception.mkv", null, false, new string[0])]
+    [TestCase(null, "/media/movies/Inception/Inception.mkv", false, new string[0])]
+    [TestCase(null, null, true, new string[0])]
+    public async Task AssociateMissingFilesAsync_QueuesOneFileForEachItem_WhenTheItemHasNoPrimaryFile(
+        string? existingFile, string? coveringFile, bool associationInFlight, string[] expectedQueuedFiles)
     {
         // Arrange
         var targetId = Guid.NewGuid();
@@ -4215,6 +5400,15 @@ public sealed class LibraryImportServiceTests
             {
                 FileKind = "video",
                 FilePath = existingFile
+            });
+        }
+
+        if (coveringFile is not null)
+        {
+            item.ContentItem.CoveringMediaFiles.Add(new MediaFile
+            {
+                FileKind = "video",
+                FilePath = coveringFile
             });
         }
 
@@ -4280,7 +5474,7 @@ public sealed class LibraryImportServiceTests
 
     [TestCase(true, 1)]
     [TestCase(false, 0)]
-    public async Task RefreshLibraryTargetsAsync_SavesTheItem_OnlyWhenTheResolvedItemChanged(
+    public async Task RefreshLibraryTargetsAsync_SavesTheItem_WhenTheResolvedItemChanged(
         bool itemAdded, int expectedSaves)
     {
         // Arrange

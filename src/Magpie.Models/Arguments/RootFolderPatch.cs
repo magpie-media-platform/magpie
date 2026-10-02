@@ -38,9 +38,9 @@ public sealed record RootFolderPatch
     public ScalarPatch<bool>? IsDefault { get; init; }
 
     /// <summary>
-    /// The patch for the default monitoring state for new items in the folder.
+    /// The patch for the default monitoring mode for new items in the folder.
     /// </summary>
-    public ScalarPatch<bool?>? DefaultMonitoring { get; init; }
+    public ScalarPatch<MonitoringMode?>? DefaultMonitoring { get; init; }
 
     /// <summary>
     /// The patch for the template for renamed files.

@@ -50,17 +50,15 @@ public sealed class WebhookNotificationProviderTests
             ConfigRoot: "/magpie/config",
             DataRoot: "/magpie/data",
             StartedAt: DateTime.UtcNow);
-        var loggerFactory = NullLoggerFactory.Instance;
         _subject = new WebhookNotificationProvider(
             _httpClientFactory.Object,
             hostEnvironment,
-            loggerFactory.CreateLogger<WebhookNotificationProvider>());
+            NullLogger<WebhookNotificationProvider>.Instance);
     }
 
     [TearDown]
     public void TearDown()
     {
-        ((IDisposable)_subject).Dispose();
         _http.Dispose();
     }
 
@@ -467,7 +465,7 @@ public sealed class WebhookNotificationProviderTests
     public void SendAsync_RethrowsCancellation_WhenCallerCancels()
     {
         // Arrange
-        var request = _http.Fallback.Respond(HttpStatusCode.OK);
+        _http.Fallback.Respond(HttpStatusCode.OK);
         var rule = new NotificationRule
         {
             Id = Guid.NewGuid(),
@@ -499,7 +497,6 @@ public sealed class WebhookNotificationProviderTests
         {
             Assert.That(ex, Is.InstanceOf<OperationCanceledException>());
             Assert.That(ex, Is.Not.InstanceOf<HttpRequestException>());
-            Assert.That(_http.GetMatchCount(request), Is.Zero);
         }
     }
 

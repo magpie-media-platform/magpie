@@ -129,7 +129,9 @@ internal sealed class DownloadScopeRepository(
                     await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
                     await WriteAuditAsync("Create", model, createdByUserId, cancellationToken).ConfigureAwait(false);
                     await RecomputeAcquisitionStatusAsync(
-                        [model.ContentHierarchyItemId], createdByUserId, cancellationToken)
+                        [model.ContentHierarchyItemId],
+                        createdByUserId,
+                        cancellationToken)
                         .ConfigureAwait(false);
                     return model;
                 },
@@ -190,10 +192,7 @@ internal sealed class DownloadScopeRepository(
         }
     }
 
-    public async Task<bool> DeleteAsync(
-        Guid id,
-        Guid? deletedByUserId,
-        CancellationToken cancellationToken = default)
+    public async Task<bool> DeleteAsync(Guid id, Guid? deletedByUserId, CancellationToken cancellationToken = default)
     {
         try
         {
@@ -212,7 +211,9 @@ internal sealed class DownloadScopeRepository(
                         .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
                     await WriteAuditAsync("Delete", model, deletedByUserId, cancellationToken).ConfigureAwait(false);
                     await RecomputeAcquisitionStatusAsync(
-                        [model.ContentHierarchyItemId], deletedByUserId, cancellationToken)
+                        [model.ContentHierarchyItemId],
+                        deletedByUserId,
+                        cancellationToken)
                         .ConfigureAwait(false);
                     return true;
                 },
@@ -235,7 +236,10 @@ internal sealed class DownloadScopeRepository(
             .Select(item => item.Id)
             .ToListAsync(cancellationToken).ConfigureAwait(false);
         await RecomputeActiveAcquisitionStatusAsync(
-            contentItemIds, _time.GetUtcNow().UtcDateTime, userId, cancellationToken).ConfigureAwait(false);
+            contentItemIds,
+            _time.GetUtcNow().UtcDateTime,
+            userId,
+            cancellationToken).ConfigureAwait(false);
     }
 
     private async Task RecomputeActiveAcquisitionStatusAsync(

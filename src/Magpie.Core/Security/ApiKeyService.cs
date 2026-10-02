@@ -168,7 +168,7 @@ internal sealed class ApiKeyService(
 
         var created = await apiKeys.CreateAsync(apiKey, callerUserId, cancellationToken).ConfigureAwait(false);
 
-        return new ApiKeyWithPlaintextKey(created, plaintextKey);
+        return new(created, plaintextKey);
     }
 
     public async Task<bool> PatchAsync(

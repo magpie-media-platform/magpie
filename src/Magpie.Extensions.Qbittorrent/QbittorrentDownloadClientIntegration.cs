@@ -121,7 +121,7 @@ internal sealed class QbittorrentDownloadClientIntegration(
         string hash,
         CancellationToken cancellationToken)
     {
-        var torrents = await client.GetTorrentInfoAsync(settings, hash, cancellationToken)
+        var torrents = await client.GetTorrentInfoAsync(settings, [hash], cancellationToken)
             .ConfigureAwait(false);
         foreach (var torrent in torrents)
         {
@@ -154,7 +154,10 @@ internal sealed class QbittorrentDownloadClientIntegration(
             OutputPath = ResolveOutputPath(torrent),
             ProgressPercent = (decimal)torrent.Progress * 100m,
             HeldByPolicy = mapping.IsHeldByPolicy(
-                torrent.Ratio, torrent.MaxRatio, torrent.SeedingTime, torrent.MaxSeedingTime)
+                torrent.Ratio,
+                torrent.MaxRatio,
+                torrent.SeedingTime,
+                torrent.MaxSeedingTime)
         };
     }
 
@@ -293,7 +296,7 @@ internal sealed class QbittorrentDownloadClientIntegration(
         }
         catch (Exception ex) when (ex is InvalidDataException or ArgumentException)
         {
-            throw RejectInvalidTorrent(torrentBytes, contentType);
+            throw RejectInvalidTorrent(torrentBytes, contentType, 200);
         }
 
         await _client.AddTorrentFileAsync(parsed, torrentBytes, fileName, tags, cancellationToken)
@@ -311,8 +314,7 @@ internal sealed class QbittorrentDownloadClientIntegration(
 
         if (resolvedHash is null)
         {
-            throw new InvalidOperationException(
-                $"Failed to determine the info-hash of release {release.Title}.");
+            throw new InvalidOperationException($"Failed to determine the info-hash of release {release.Title}.");
         }
 
         return new DownloadInfo
@@ -322,20 +324,32 @@ internal sealed class QbittorrentDownloadClientIntegration(
         };
     }
 
-    private static ReleasePayloadRejectedException RejectInvalidTorrent(byte[] bytes, string? contentType)
+    private static ReleasePayloadRejectedException RejectInvalidTorrent(
+        byte[] bytes,
+        string? contentType,
+        int statusCode)
     {
-        var details = $"(HTTP 200, {contentType ?? "no content type"})";
+        var details = $"(HTTP {statusCode}, {contentType ?? "no content type"})";
         var start = Encoding.UTF8.GetString(bytes, 0, Math.Min(bytes.Length, 512))
             .TrimStart('\uFEFF', ' ', '\t', '\r', '\n');
+        var transientStatus = statusCode is 429 or >= 500;
+        if (bytes.Length > 0 && !transientStatus &&
+            (contentType?.Contains("html", StringComparison.OrdinalIgnoreCase) == true || start.StartsWith('<')))
+        {
+            return new($"The indexer returned an HTML page instead of a .torrent file {details}.");
+        }
+
+        if (statusCode is < 200 or > 299)
+        {
+            return new(
+                $"The indexer returned HTTP {statusCode} instead of a .torrent file " +
+                $"({contentType ?? "no content type"}).",
+                transientStatus);
+        }
+
         if (bytes.Length == 0)
         {
             return new($"The indexer returned an empty response instead of a .torrent file {details}.");
-        }
-
-        if (contentType?.Contains("html", StringComparison.OrdinalIgnoreCase) == true ||
-            start.StartsWith('<'))
-        {
-            return new($"The indexer returned an HTML page instead of a .torrent file {details}.", true);
         }
 
         if (start.StartsWith('d'))
@@ -350,24 +364,20 @@ internal sealed class QbittorrentDownloadClientIntegration(
     }
 
     private async Task<(byte[] Bytes, string? ContentType)> DefaultDownloadTorrentBytesAsync(
-        Uri torrentUrl, CancellationToken cancellationToken)
+        Uri torrentUrl,
+        CancellationToken cancellationToken)
     {
         using var client = httpClientFactory.CreateClient(TorrentFileHttpClientName);
         using var response = await client.GetAsync(torrentUrl, cancellationToken)
             .ConfigureAwait(false);
         var contentType = response.Content.Headers.ContentType?.MediaType;
+        var bytes = await response.Content.ReadAsByteArrayAsync().ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)
         {
-            var statusCode = (int)response.StatusCode;
-            throw new ReleasePayloadRejectedException(
-                $"The indexer returned HTTP {statusCode} instead of a .torrent file " +
-                $"({contentType ?? "no content type"}).",
-                statusCode is 429 or >= 500 ||
-                    statusCode is 401 or 403 &&
-                    contentType?.Contains("html", StringComparison.OrdinalIgnoreCase) == true);
+            throw RejectInvalidTorrent(bytes, contentType, (int)response.StatusCode);
         }
 
-        return (await response.Content.ReadAsByteArrayAsync().ConfigureAwait(false), contentType);
+        return (bytes, contentType);
     }
 
     public async Task<DownloadInfo> GetDownloadAsync(
@@ -381,7 +391,7 @@ internal sealed class QbittorrentDownloadClientIntegration(
         }
 
         var parsed = QbittorrentSettings.Parse(settings);
-        var torrents = await _client.GetTorrentInfoAsync(parsed, externalId, cancellationToken)
+        var torrents = await _client.GetTorrentInfoAsync(parsed, [externalId], cancellationToken)
             .ConfigureAwait(false);
 
         if (torrents.Count == 0)
@@ -621,7 +631,7 @@ internal sealed class QbittorrentDownloadClientIntegration(
     {
         if (MagnetLink.TryParse(magnetUri, out var magnetLink))
         {
-            return magnetLink!;
+            return magnetLink;
         }
 
         try

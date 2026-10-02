@@ -299,12 +299,13 @@ test.describe.serial('Journey 4: make it ours', () => {
 
             let row = section.getByRole('row').filter({ hasText: '.journey04' });
             const pager = section.locator('[data-component="mime-pagination"]');
-            const pageCountText = (await pager.count()) === 0 ? 'Page 1 of 1' : await pager.textContent();
+            const pageIndicator = pager.getByText(/^Page \d+ of \d+$/);
+            const pageCountText = (await pager.count()) === 0 ? 'Page 1 of 1' : await pageIndicator.textContent();
             const pageCount = Number(pageCountText?.match(/of (\d+)$/)?.[1]);
             expect(pageCount).toBeGreaterThan(0);
             for (let pageNumber = 1; pageNumber < pageCount && (await row.count()) === 0; pageNumber++) {
                 await pager.locator('[data-action="next-page"]').click();
-                await expect(pager).toContainText(`Page ${pageNumber + 1} of ${pageCount}`);
+                await expect(pageIndicator).toHaveText(`Page ${pageNumber + 1} of ${pageCount}`);
             }
             await expect(row).toBeVisible();
             await row.locator('[data-action="edit"]').click();

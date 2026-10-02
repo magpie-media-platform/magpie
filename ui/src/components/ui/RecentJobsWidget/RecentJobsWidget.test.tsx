@@ -303,11 +303,6 @@ describe('RecentJobsWidget accessibility', () => {
         expect(screen.getByRole('heading', { level: 2, name: 'Recent Jobs' })).toBeInTheDocument();
     });
 
-    it('supports custom heading level', () => {
-        renderWithRouter(<RecentJobsWidget jobs={mockJobs} headingLevel={3} />);
-        expect(screen.getByRole('heading', { level: 3, name: 'Recent Jobs' })).toBeInTheDocument();
-    });
-
     it('clickable items have aria-label', () => {
         const getJobUrl = (job: JobExecution) => `/jobs/${job.id}`;
         renderWithRouter(<RecentJobsWidget jobs={mockJobs} getJobUrl={getJobUrl} />);

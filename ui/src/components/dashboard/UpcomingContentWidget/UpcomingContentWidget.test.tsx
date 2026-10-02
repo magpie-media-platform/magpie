@@ -492,11 +492,6 @@ describe('UpcomingContentWidget accessibility', () => {
         expect(screen.getByRole('heading', { level: 2, name: 'Upcoming' })).toBeInTheDocument();
     });
 
-    it('supports custom heading level', () => {
-        renderWithRouter(<UpcomingContentWidget items={mockItems} headingLevel={3} />);
-        expect(screen.getByRole('heading', { level: 3, name: 'Upcoming' })).toBeInTheDocument();
-    });
-
     it('clickable items expose the content title in their accessible name', () => {
         const getItemUrl = (item: UpcomingContentItem) => `/library/${item.contentId}`;
         renderWithRouter(<UpcomingContentWidget items={mockItems} getItemUrl={getItemUrl} />);

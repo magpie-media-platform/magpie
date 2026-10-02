@@ -203,6 +203,16 @@ internal sealed class DefaultJobScheduleDiagnostic(
             MissingDefaultJobRepair.Id);
     }
 
+    private static DiagnosticFinding UnboundEventTriggerFinding(EventTrigger trigger, EventTrigger entry)
+    {
+        return Warning(
+            $"Event trigger {trigger.Name} has no parameters",
+            $"The built-in {trigger.JobType} event trigger has no parameters, and the built-in trigger binds " +
+            $"{string.Join(", ", entry.Parameters.Keys)}.",
+            JobDiagnosticAffectedEntityPrefixes.EventTrigger + trigger.Id,
+            MissingDefaultJobRepair.Id);
+    }
+
     private static DiagnosticFinding DisabledEventTriggerFinding(EventTrigger trigger)
     {
         return Warning(
@@ -233,7 +243,7 @@ internal sealed class DefaultJobScheduleDiagnostic(
         string affectedEntity,
         string? repairId = null)
     {
-        return new DiagnosticFinding
+        return new()
         {
             DiagnosticCheckId = Id,
             Severity = DiagnosticFindingSeverity.Warning,
@@ -246,7 +256,7 @@ internal sealed class DefaultJobScheduleDiagnostic(
 
     private static DiagnosticFinding Error(string title, string detail, string affectedEntity)
     {
-        return new DiagnosticFinding
+        return new()
         {
             DiagnosticCheckId = Id,
             Severity = DiagnosticFindingSeverity.Error,
@@ -311,12 +321,7 @@ internal sealed class DefaultJobScheduleDiagnostic(
         }
 
         AddMoreOftenFindingIfNeeded(trigger, measured, TimeSpan.FromMinutes(15), findings);
-        AddLessOftenFindingIfNeeded(
-            trigger,
-            measured,
-            minimumSearchAge,
-            "Search:MinimumSearchAge",
-            findings);
+        AddLessOftenFindingIfNeeded(trigger, measured, minimumSearchAge, "Search:MinimumSearchAge", findings);
     }
 
     private void ValidateReleaseAutoGrabScan(
@@ -326,7 +331,11 @@ internal sealed class DefaultJobScheduleDiagnostic(
         List<DiagnosticFinding> findings)
     {
         _ = ReadIntegerParameter(
-            trigger, spec, MagpieJobs.Parameters.RetryCooldownHours, ParameterFloor.NonNegative, findings);
+            trigger,
+            spec,
+            MagpieJobs.Parameters.RetryCooldownHours,
+            ParameterFloor.NonNegative,
+            findings);
 
         if (cadence is not { } measured)
         {
@@ -418,14 +427,26 @@ internal sealed class DefaultJobScheduleDiagnostic(
         List<DiagnosticFinding> findings)
     {
         var fetchingMinutes = ReadIntegerParameter(
-            trigger, spec, MagpieJobs.Parameters.FetchingMinutes, ParameterFloor.Positive, findings);
+            trigger,
+            spec,
+            MagpieJobs.Parameters.FetchingMinutes,
+            ParameterFloor.Positive,
+            findings);
         _ = ReadIntegerParameter(
-            trigger, spec, MagpieJobs.Parameters.StalledMinutes, ParameterFloor.Positive, findings);
+            trigger,
+            spec,
+            MagpieJobs.Parameters.StalledMinutes,
+            ParameterFloor.Positive,
+            findings);
 
         if (cadence is not { } measured ||
             fetchingMinutes is not { } minutes ||
             TryCreateDuration(
-                minutes / 2d, DurationUnit.Minutes, trigger, MagpieJobs.Parameters.FetchingMinutes, findings)
+                minutes / 2d,
+                DurationUnit.Minutes,
+                trigger,
+                MagpieJobs.Parameters.FetchingMinutes,
+                findings)
                 is not { } maximumCadence)
         {
             return;
@@ -441,12 +462,20 @@ internal sealed class DefaultJobScheduleDiagnostic(
         List<DiagnosticFinding> findings)
     {
         var settleMinutes = ReadIntegerParameter(
-            trigger, spec, MagpieJobs.Parameters.SettleMinutes, ParameterFloor.Positive, findings);
+            trigger,
+            spec,
+            MagpieJobs.Parameters.SettleMinutes,
+            ParameterFloor.Positive,
+            findings);
 
         if (cadence is not { } measured ||
             settleMinutes is not { } minutes ||
             TryCreateDuration(
-                minutes * 6d, DurationUnit.Minutes, trigger, MagpieJobs.Parameters.SettleMinutes, findings)
+                minutes * 6d,
+                DurationUnit.Minutes,
+                trigger,
+                MagpieJobs.Parameters.SettleMinutes,
+                findings)
                 is not { } maximumCadence)
         {
             return;
@@ -455,10 +484,7 @@ internal sealed class DefaultJobScheduleDiagnostic(
         AddLessOftenFindingIfNeeded(trigger, measured, maximumCadence, "six times settleMinutes", findings);
     }
 
-    private void ValidateDatabaseMaintenance(
-        ScheduleTrigger trigger,
-        JobSpec spec,
-        List<DiagnosticFinding> findings)
+    private void ValidateDatabaseMaintenance(ScheduleTrigger trigger, JobSpec spec, List<DiagnosticFinding> findings)
     {
         var backupEnabled = ReadBooleanParameter(trigger, spec, MagpieJobs.Parameters.BackupEnabled, findings);
         var optimizeEnabled = ReadBooleanParameter(trigger, spec, MagpieJobs.Parameters.OptimizeEnabled, findings);
@@ -466,15 +492,27 @@ internal sealed class DefaultJobScheduleDiagnostic(
         if (backupEnabled == true)
         {
             _ = ReadIntegerParameter(
-                trigger, spec, MagpieJobs.Parameters.BackupIntervalDays, ParameterFloor.Positive, findings);
+                trigger,
+                spec,
+                MagpieJobs.Parameters.BackupIntervalDays,
+                ParameterFloor.Positive,
+                findings);
             _ = ReadIntegerParameter(
-                trigger, spec, MagpieJobs.Parameters.BackupRetentionCount, ParameterFloor.Positive, findings);
+                trigger,
+                spec,
+                MagpieJobs.Parameters.BackupRetentionCount,
+                ParameterFloor.Positive,
+                findings);
         }
 
         if (optimizeEnabled == true)
         {
             _ = ReadIntegerParameter(
-                trigger, spec, MagpieJobs.Parameters.OptimizeIntervalDays, ParameterFloor.Positive, findings);
+                trigger,
+                spec,
+                MagpieJobs.Parameters.OptimizeIntervalDays,
+                ParameterFloor.Positive,
+                findings);
         }
     }
 
@@ -538,7 +576,11 @@ internal sealed class DefaultJobScheduleDiagnostic(
         List<DiagnosticFinding> findings)
     {
         var maxAgeHours = ReadIntegerParameter(
-            trigger, spec, MagpieJobs.Parameters.MaxAgeHours, ParameterFloor.Positive, findings);
+            trigger,
+            spec,
+            MagpieJobs.Parameters.MaxAgeHours,
+            ParameterFloor.Positive,
+            findings);
 
         if (cadence is not { } measured ||
             maxAgeHours is not { } hours ||
@@ -699,6 +741,10 @@ internal sealed class DefaultJobScheduleDiagnostic(
             {
                 findings.Add(DisabledEventTriggerFinding(triggers[0]));
             }
+
+            findings.AddRange(triggers
+                .Where(trigger => MissingDefaultJobRepair.IsUnboundDefaultEventTrigger(trigger, entry))
+                .Select(trigger => UnboundEventTriggerFinding(trigger, entry)));
         }
 
         var referencedJobTypes = triggersByJobType.Values

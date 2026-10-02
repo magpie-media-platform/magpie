@@ -75,6 +75,8 @@ internal static class MagpieJobs
 
         internal const string RootFolderContentImportItem = "RootFolderContentImportItem";
 
+        internal const string RootFolderContentImportResume = "RootFolderContentImportResume";
+
         internal const string SendNotification = "SendNotification";
 
         internal const string SubjectMetadataRefreshItem = "SubjectMetadataRefreshItem";
@@ -136,11 +138,17 @@ internal static class MagpieJobs
 
         internal const string JobExecutionRetentionDays = "jobExecutionRetentionDays";
 
+        internal const string LeadTimeDays = "leadTimeDays";
+
         internal const string MatchIndex = "matchIndex";
 
         internal const string MaxAgeHours = "maxAgeHours";
 
+        internal const string MediaInfoPolicy = "mediaInfoPolicy";
+
         internal const string MediaFileId = "mediaFileId";
+
+        internal const string MetadataRefreshEndedItemId = "metadataRefreshEndedItemId";
 
         internal const string MonitoringMode = "monitoringMode";
 
@@ -185,6 +193,17 @@ internal static class MagpieJobs
 
         internal const string LeafSearchKind = "leaf";
 
+        internal const string MissingMediaInfoPolicy = "Missing";
+
+        internal const string MissingOrStaleMediaInfoPolicy = "MissingOrStale";
+
+        internal const string AllMediaInfoPolicy = "All";
+
         internal const string NodeSearchKind = "node";
+    }
+
+    internal static class StatusMessages
+    {
+        internal const string UpstreamThrottled = "The work is incomplete while its upstream is throttled.";
     }
 }

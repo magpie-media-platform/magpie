@@ -20,9 +20,6 @@ internal sealed record RecordingDto
     [JsonPropertyName("first-release-date")]
     public string? FirstReleaseDate { get; init; }
 
-    [JsonPropertyName("score")]
-    public int? Score { get; init; }
-
     [JsonPropertyName("isrcs")]
     public IReadOnlyList<string>? Isrcs { get; init; }
 

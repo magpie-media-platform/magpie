@@ -29,7 +29,7 @@ public interface ISubjectRepository :
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Lists subjects with contribution fields and external IDs for identity resolution, without other metadata collections.
+    /// Lists the identity details of subjects.
     /// </summary>
     /// <param name="ids">The subject IDs to read</param>
     /// <param name="cancellationToken">The token that cancels the operation</param>

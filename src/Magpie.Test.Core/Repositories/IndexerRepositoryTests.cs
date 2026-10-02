@@ -73,12 +73,10 @@ public sealed class IndexerRepositoryTests
 
         _userId = user.Id;
 
-        var loggerFactory = NullLoggerFactory.Instance;
-
         var auditRecordRepository = new AuditRecordRepository(
             _context,
             Mock.Of<IEventBus>(),
-            loggerFactory.CreateLogger<AuditRecordRepository>(),
+            NullLogger<AuditRecordRepository>.Instance,
             new TransactionManager(_context, NullLogger<TransactionManager>.Instance),
             Mock.Of<IJobExecutionScopeFactory>(),
             timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
@@ -90,14 +88,13 @@ public sealed class IndexerRepositoryTests
             auditRecordRepository,
             transactionManager,
             Mock.Of<IEventBus>(),
-            loggerFactory.CreateLogger<IndexerRepository>(),
+            NullLogger<IndexerRepository>.Instance,
             timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
     }
 
     [TearDown]
     public void TearDown()
     {
-        _context.Database.CloseConnection();
         _context.Dispose();
     }
 

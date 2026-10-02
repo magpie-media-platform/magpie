@@ -15,68 +15,22 @@ vi.mock('../UserMenu', () => ({
     UserMenu: () => <div data-testid="user-menu">UserMenu</div>,
 }));
 
-import {
-    AdminShell,
-    AdminShellHeader,
-    AdminShellSidebar,
-    AdminShellMain,
-    AdminShellBottomNav,
-    AdminHeader,
-    AdminSidebar,
-} from './AdminShell';
+import { AppShell, AppShellHeader, AppShellSidebar } from '../AppShell';
+import { AdminHeader, AdminSidebar } from './AdminShell';
 
 function renderWithRouter(ui: React.ReactElement) {
     return render(<MemoryRouter initialEntries={['/admin']}>{ui}</MemoryRouter>);
 }
 
-describe('AdminShell', () => {
-    it('renders with classPrefix admin-shell', () => {
-        const { container } = render(
-            <AdminShell>
-                <div>content</div>
-            </AdminShell>,
-        );
-
-        expect(container.querySelector('[class*="admin-shell"]')).toBeInTheDocument();
-    });
-
-    it('sets displayName on all sub-components', () => {
-        expect(AdminShell.displayName).toBe('AdminShell');
-        expect(AdminShellHeader.displayName).toBe('AdminShellHeader');
-        expect(AdminShellSidebar.displayName).toBe('AdminShellSidebar');
-        expect(AdminShellMain.displayName).toBe('AdminShellMain');
-        expect(AdminShellBottomNav.displayName).toBe('AdminShellBottomNav');
-    });
-
-    it('renders AdminShellMain with main landmark', () => {
-        render(
-            <AdminShell>
-                <AdminShellMain>Main content</AdminShellMain>
-            </AdminShell>,
-        );
-
-        expect(screen.getByRole('main')).toHaveTextContent('Main content');
-    });
-
-    it('renders AdminShellSidebar with default aria label', () => {
-        render(
-            <AdminShell>
-                <AdminShellSidebar>Nav</AdminShellSidebar>
-            </AdminShell>,
-            { wrapper: MemoryRouter },
-        );
-
-        expect(screen.getByRole('navigation', { name: 'Admin navigation' })).toBeInTheDocument();
-    });
-
+describe('AdminHeader', () => {
     it('announces the initially expanded desktop sidebar correctly', () => {
         renderWithRouter(
-            <AdminShell>
-                <AdminShellHeader>
+            <AppShell>
+                <AppShellHeader>
                     <AdminHeader />
-                </AdminShellHeader>
-                <AdminShellSidebar>Navigation</AdminShellSidebar>
-            </AdminShell>,
+                </AppShellHeader>
+                <AppShellSidebar ariaLabel="Admin navigation">Navigation</AppShellSidebar>
+            </AppShell>,
         );
 
         expect(screen.getByRole('button', { name: 'Collapse sidebar' })).toHaveAttribute('aria-expanded', 'true');
@@ -84,11 +38,11 @@ describe('AdminShell', () => {
 
     it('offers library search on administration pages', () => {
         renderWithRouter(
-            <AdminShell>
-                <AdminShellHeader>
+            <AppShell>
+                <AppShellHeader>
                     <AdminHeader />
-                </AdminShellHeader>
-            </AdminShell>,
+                </AppShellHeader>
+            </AppShell>,
         );
 
         expect(screen.getByRole('button', { name: 'Search library' })).toBeInTheDocument();
@@ -98,11 +52,11 @@ describe('AdminShell', () => {
 describe('AdminSidebar', () => {
     it('renders admin navigation links', () => {
         renderWithRouter(
-            <AdminShell>
-                <AdminShellSidebar>
+            <AppShell>
+                <AppShellSidebar ariaLabel="Admin navigation">
                     <AdminSidebar />
-                </AdminShellSidebar>
-            </AdminShell>,
+                </AppShellSidebar>
+            </AppShell>,
         );
 
         expect(screen.getByRole('link', { name: 'Advanced' })).toBeInTheDocument();
@@ -123,14 +77,14 @@ describe('AdminSidebar', () => {
 
     it('leaves the way out of admin to the header, not the sidebar', () => {
         renderWithRouter(
-            <AdminShell>
-                <AdminShellHeader>
+            <AppShell>
+                <AppShellHeader>
                     <AdminHeader />
-                </AdminShellHeader>
-                <AdminShellSidebar>
+                </AppShellHeader>
+                <AppShellSidebar ariaLabel="Admin navigation">
                     <AdminSidebar />
-                </AdminShellSidebar>
-            </AdminShell>,
+                </AppShellSidebar>
+            </AppShell>,
         );
 
         const sidebar = screen.getByRole('navigation', { name: 'Admin navigation' });
@@ -140,11 +94,11 @@ describe('AdminSidebar', () => {
 
     it('places Advanced as the last item of the System group, not its own section', () => {
         const { container } = renderWithRouter(
-            <AdminShell>
-                <AdminShellSidebar>
+            <AppShell>
+                <AppShellSidebar ariaLabel="Admin navigation">
                     <AdminSidebar />
-                </AdminShellSidebar>
-            </AdminShell>,
+                </AppShellSidebar>
+            </AppShell>,
         );
 
         const groupLabels = Array.from(container.querySelectorAll('.sidebar-group-label')).map((el) => el.textContent);
@@ -159,11 +113,11 @@ describe('AdminSidebar', () => {
 
     it('places Extensions as the top item of the Extensions section', () => {
         renderWithRouter(
-            <AdminShell>
-                <AdminShellSidebar>
+            <AppShell>
+                <AppShellSidebar ariaLabel="Admin navigation">
                     <AdminSidebar />
-                </AdminShellSidebar>
-            </AdminShell>,
+                </AppShellSidebar>
+            </AppShell>,
         );
 
         const extensionsLink = screen.getByRole('link', { name: 'Extensions' });

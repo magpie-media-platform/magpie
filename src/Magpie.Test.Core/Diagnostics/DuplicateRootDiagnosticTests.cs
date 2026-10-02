@@ -64,12 +64,17 @@ public sealed class DuplicateRootDiagnosticTests
         var findings = await _subject.RunAsync(DiagnosticContext.Empty).ConfigureAwait(false);
 
         // Assert
-        var tvmaze = findings.Single(finding => finding.AffectedEntity == $"ContentHierarchyItem:{TvmazeShowId}");
+        var tvmaze = findings.Single(finding =>
+            finding.AffectedEntity == "ContentHierarchyItem:00000000-0000-0000-0000-00000000000a");
         using (Assert.EnterMultipleScope())
         {
             Assert.That(
                 findings.Select(finding => finding.AffectedEntity),
-                Is.EquivalentTo([$"ContentHierarchyItem:{TvmazeShowId}", $"ContentHierarchyItem:{WikidataShowId}"]));
+                Is.EquivalentTo(
+                [
+                    "ContentHierarchyItem:00000000-0000-0000-0000-00000000000a",
+                    "ContentHierarchyItem:00000000-0000-0000-0000-00000000000b"
+                ]));
             Assert.That(findings, Has.All.Matches<DiagnosticFinding>(finding =>
                 finding.Severity == DiagnosticFindingSeverity.Warning && finding.RepairId == null));
             Assert.That(tvmaze.Title, Is.EqualTo("Breaking Bad is a duplicate"));

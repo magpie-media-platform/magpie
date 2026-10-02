@@ -1,5 +1,4 @@
 using System;
-using System.Globalization;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -772,9 +771,8 @@ public sealed class ApiKeyServiceTests
         }
     }
 
-    [TestCase(false, null)]
-    [TestCase(true, "2026-08-19T11:00:00")]
-    public async Task TryValidateAsync_WritesNothing_WhenTheKeyIsRejected(bool enabled, string? expiresAt)
+    [Test]
+    public async Task TryValidateAsync_WritesNothing_WhenTheKeyIsDisabled()
     {
         // Arrange
         _apiKeys
@@ -792,8 +790,48 @@ public sealed class ApiKeyServiceTests
                 Name = "OwnedKey",
                 KeyPrefix = "mgp_own",
                 KeyHash = "hashed-key",
-                Enabled = enabled,
-                ExpiresAt = expiresAt is null ? null : DateTime.Parse(expiresAt, CultureInfo.InvariantCulture)
+                Enabled = false,
+            }],
+                TotalItems = 1
+            });
+
+        // Act
+        var result = await _subject.TryValidateAsync("mgp_rejected").ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result, Is.Null);
+            _apiKeys.Verify(
+                repository => repository.UpdateLastUsedAsync(
+                    It.IsAny<Guid>(),
+                    It.IsAny<DateTime>(),
+                    It.IsAny<CancellationToken>()),
+                Times.Never);
+        }
+    }
+
+    [Test]
+    public async Task TryValidateAsync_WritesNothing_WhenTheKeyIsExpired()
+    {
+        // Arrange
+        _apiKeys
+            .Setup(repository => repository.QueryAsync(
+                It.Is<ApiKeyQuery>(query => query.KeyHash == "hashed-key"),
+                It.IsAny<PagingParameter>(),
+                null,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<ApiKey>
+            {
+                Items = [new ApiKey
+            {
+                Id = ApiKeyId,
+                UserId = OwnerUserId,
+                Name = "OwnedKey",
+                KeyPrefix = "mgp_own",
+                KeyHash = "hashed-key",
+                Enabled = true,
+                ExpiresAt = new DateTime(2026, 8, 19, 11, 0, 0)
             }],
                 TotalItems = 1
             });

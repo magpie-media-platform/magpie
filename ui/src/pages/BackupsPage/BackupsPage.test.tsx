@@ -125,16 +125,12 @@ function createWrapper() {
     };
 }
 
-function resetApiMocks() {
+beforeEach(() => {
     vi.clearAllMocks();
     mockApiBackups = createMockBackups();
     vi.mocked(apiGet).mockImplementation(defaultApiGet);
     vi.mocked(apiPost).mockImplementation(defaultApiPost);
     vi.mocked(apiDelete).mockImplementation(defaultApiDelete);
-}
-
-beforeEach(() => {
-    resetApiMocks();
 });
 
 describe('BackupsPage', () => {

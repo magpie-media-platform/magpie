@@ -25,6 +25,11 @@ internal interface IMusicBrainzClient
         Settings settings,
         CancellationToken cancellationToken);
 
+    Task<FetchResult<ReleaseSearchResponseDto>> BrowseTrackReleasesAsync(
+        string trackMbid,
+        Settings settings,
+        CancellationToken cancellationToken);
+
     Task<FetchResult<ArtistResolutionResponse>> ResolveArtistCompositionAsync(
         ArtistResolutionRequest request,
         Settings settings,

@@ -280,53 +280,52 @@ internal sealed class ReleaseAutoGrabScanJob(
             cancellationToken).ConfigureAwait(false);
     }
 
-    private async Task<IReadOnlyList<ContentItem>> GetAcquisitionCandidatesAsync(
-        CancellationToken cancellationToken)
+    private async Task<IReadOnlyList<ContentItem>> GetAcquisitionCandidatesAsync(CancellationToken cancellationToken)
     {
         var candidates = new List<ContentItem>();
-        foreach (var status in new[] { FulfillmentStatus.Missing, FulfillmentStatus.Upgradable })
+        var seen = new HashSet<Guid>();
+        Guid? afterId = null;
+        while (true)
         {
-            var pageNumber = 1;
-            while (true)
-            {
-                var page = await contentHierarchyItemRepository.QueryAsync(
-                    new ContentHierarchyItemCriteria
+            var page = await contentHierarchyItemRepository.QueryAsync(
+                new ContentHierarchyItemCriteria
+                {
+                    LeafOnly = true,
+                    EffectiveMonitoring = true,
+                    HasSearchableTitle = true,
+                    ImportPending = false,
+                    Fulfillment = new CriteriaSet<PropertyCriterion<FulfillmentStatus>>
                     {
-                        LeafOnly = true,
-                        EffectiveMonitoring = true,
-                        HasSearchableTitle = true,
-                        ImportPending = false,
-                        Fulfillment = new CriteriaSet<PropertyCriterion<FulfillmentStatus>>
+                        And = [new PropertyCriterion<FulfillmentStatus>
                         {
-                            And = [new PropertyCriterion<FulfillmentStatus>
-                            {
-                                Operator = CriteriaValueOperator.Equals,
-                                Value = status,
-                            }],
-                        },
+                            Operator = CriteriaValueOperator.In,
+                            Values = [FulfillmentStatus.Missing, FulfillmentStatus.Upgradable],
+                        }],
                     },
-                    new PagingParameter { PageNumber = pageNumber, PageSize = PageSize },
-                    sort: null,
-                    cancellationToken).ConfigureAwait(false);
+                    AfterId = afterId,
+                },
+                new PagingParameter { PageNumber = 1, PageSize = PageSize },
+                new() { PropertyName = nameof(ContentHierarchyItem.Id), Direction = SortDirection.Ascending },
+                cancellationToken).ConfigureAwait(false);
 
-                foreach (var item in page.Items)
-                {
-                    if (item.ContentItem is { } contentItem)
-                    {
-                        candidates.Add(contentItem with { ContentHierarchyItemId = item.Id });
-                    }
-                }
-
-                if (pageNumber * PageSize >= page.TotalItems || !page.Items.Any())
-                {
-                    break;
-                }
-
-                pageNumber++;
+            var items = page.Items.ToList();
+            if (items.Count == 0)
+            {
+                break;
             }
+
+            foreach (var item in items)
+            {
+                if (item.ContentItem is { } contentItem && seen.Add(contentItem.Id))
+                {
+                    candidates.Add(contentItem with { ContentHierarchyItemId = item.Id });
+                }
+            }
+
+            afterId = items[^1].Id;
         }
 
-        return candidates;
+        return [.. candidates.OrderBy(candidate => candidate.Fulfillment)];
     }
 
     private int ReadIntParameter(

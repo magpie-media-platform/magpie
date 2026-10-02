@@ -364,8 +364,7 @@ public class ContentMetadataSearcherTests
         };
 
         // Act
-        var result = await _subject.AdvancedSearchAsync("music", query, 25, "en", default)
-            .ConfigureAwait(false);
+        var result = await _subject.AdvancedSearchAsync("music", query, 25, "en", default).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -392,8 +391,7 @@ public class ContentMetadataSearcherTests
         };
 
         // Act
-        var result = await _subject.AdvancedSearchAsync("music", query, 25, "en", default)
-            .ConfigureAwait(false);
+        var result = await _subject.AdvancedSearchAsync("music", query, 25, "en", default).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -634,8 +632,7 @@ public class ContentMetadataSearcherTests
         };
 
         // Act
-        var hydrated = await _subject.HydrateAsync(candidate, "en", default)
-            .ConfigureAwait(false);
+        var hydrated = await _subject.HydrateAsync(candidate, "en", default).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -672,8 +669,7 @@ public class ContentMetadataSearcherTests
         };
 
         // Act
-        var hydrated = await _subject.HydrateAsync(candidate, "en", default)
-            .ConfigureAwait(false);
+        var hydrated = await _subject.HydrateAsync(candidate, "en", default).ConfigureAwait(false);
 
         // Assert
         Assert.That(hydrated, Is.Null);
@@ -793,8 +789,7 @@ public class ContentMetadataSearcherTests
         };
 
         // Act
-        var hydrated = await _subject.HydrateAsync(candidate, "en", default)
-            .ConfigureAwait(false);
+        var hydrated = await _subject.HydrateAsync(candidate, "en", default).ConfigureAwait(false);
 
         // Assert
         Assert.That(hydrated, Is.Null);

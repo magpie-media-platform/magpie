@@ -59,53 +59,14 @@ import { testEffectivePermissions } from '@/test/permissions';
 
 let sessionRole: Role = Role.Admin;
 
-function fakeJwt(claims: Record<string, string | number>): string {
-    const claimsWithExp: Record<string, string | number> = {
-        exp: Math.floor(Date.now() / 1000) + 3600,
-        ...claims,
-    };
-    const header = btoa(JSON.stringify({ alg: 'none' }));
-    const payload = btoa(JSON.stringify(claimsWithExp));
-    return `${header}.${payload}.sig`;
-}
-
-function seedAuthenticatedSession() {
-    const jwt = fakeJwt({
-        sub: 'user-1',
-        name: 'admin',
-        role: 3,
-    });
-    tokenStorage.set(jwt);
-    tokenExpirationStorage.set(new Date(Date.now() + 300_000));
-}
-
-function createMatchMedia(width: number) {
-    return vi.fn((query: string) => {
-        const matches =
-            query === '(min-width: 768px)'
-                ? width >= 768
-                : query === '(max-width: 767px)'
-                  ? width <= 767
-                  : query === '(min-width: 768px) and (max-width: 1023px)'
-                    ? width >= 768 && width <= 1023
-                    : false;
-
-        return {
-            matches,
-            media: query,
-            onchange: null,
-            addListener: () => {},
-            removeListener: () => {},
-            addEventListener: () => {},
-            removeEventListener: () => {},
-            dispatchEvent: () => false,
-        };
-    });
-}
-
 beforeEach(() => {
     sessionRole = Role.Admin;
-    seedAuthenticatedSession();
+    tokenStorage.set(
+        `${btoa(JSON.stringify({ alg: 'none' }))}.${btoa(
+            JSON.stringify({ exp: Math.floor(Date.now() / 1000) + 3600, sub: 'user-1', name: 'admin', role: 3 }),
+        )}.sig`,
+    );
+    tokenExpirationStorage.set(new Date(Date.now() + 300_000));
     vi.stubGlobal(
         'fetch',
         vi.fn(async (input: RequestInfo | URL) => {
@@ -209,7 +170,19 @@ describe('App', () => {
     });
 
     it('defaults the Library navigation group to expanded and keeps it manually collapsible', async () => {
-        vi.stubGlobal('matchMedia', createMatchMedia(1440));
+        vi.stubGlobal(
+            'matchMedia',
+            vi.fn((query: string) => ({
+                matches: query === '(min-width: 768px)',
+                media: query,
+                onchange: null,
+                addListener: () => {},
+                removeListener: () => {},
+                addEventListener: () => {},
+                removeEventListener: () => {},
+                dispatchEvent: () => false,
+            })),
+        );
         const user = userEvent.setup();
         render(<App />);
 
@@ -249,7 +222,19 @@ describe('App', () => {
     });
 
     it('announces the mobile sidebar toggle as closed after closing it', async () => {
-        vi.stubGlobal('matchMedia', createMatchMedia(390));
+        vi.stubGlobal(
+            'matchMedia',
+            vi.fn((query: string) => ({
+                matches: query === '(max-width: 767px)',
+                media: query,
+                onchange: null,
+                addListener: () => {},
+                removeListener: () => {},
+                addEventListener: () => {},
+                removeEventListener: () => {},
+                dispatchEvent: () => false,
+            })),
+        );
         window.history.replaceState({}, '', '/library/add');
 
         const user = userEvent.setup();
@@ -274,7 +259,19 @@ describe('App', () => {
     });
 
     it('keeps the open mobile sidebar a navigation landmark and closes it with Escape', async () => {
-        vi.stubGlobal('matchMedia', createMatchMedia(390));
+        vi.stubGlobal(
+            'matchMedia',
+            vi.fn((query: string) => ({
+                matches: query === '(max-width: 767px)',
+                media: query,
+                onchange: null,
+                addListener: () => {},
+                removeListener: () => {},
+                addEventListener: () => {},
+                removeEventListener: () => {},
+                dispatchEvent: () => false,
+            })),
+        );
         const user = userEvent.setup();
         render(<App />);
 
@@ -296,7 +293,19 @@ describe('App', () => {
     });
 
     it('closes the mobile sidebar when a header control navigates away', async () => {
-        vi.stubGlobal('matchMedia', createMatchMedia(390));
+        vi.stubGlobal(
+            'matchMedia',
+            vi.fn((query: string) => ({
+                matches: query === '(max-width: 767px)',
+                media: query,
+                onchange: null,
+                addListener: () => {},
+                removeListener: () => {},
+                addEventListener: () => {},
+                removeEventListener: () => {},
+                dispatchEvent: () => false,
+            })),
+        );
         window.history.replaceState({}, '', '/library/add');
 
         const user = userEvent.setup();
@@ -316,7 +325,19 @@ describe('App', () => {
     });
 
     it('marks only Library import current on the import route', async () => {
-        vi.stubGlobal('matchMedia', createMatchMedia(1440));
+        vi.stubGlobal(
+            'matchMedia',
+            vi.fn((query: string) => ({
+                matches: query === '(min-width: 768px)',
+                media: query,
+                onchange: null,
+                addListener: () => {},
+                removeListener: () => {},
+                addEventListener: () => {},
+                removeEventListener: () => {},
+                dispatchEvent: () => false,
+            })),
+        );
         window.history.replaceState({}, '', '/library/import');
         render(<App />);
 
@@ -336,7 +357,19 @@ describe('App', () => {
         ['/library/content-1/child-1/grandchild-1', 'a nested grandchild detail'],
         ['/subjects/subject-1', 'a subject detail'],
     ])('keeps Library active for %s (%s)', async (pathname) => {
-        vi.stubGlobal('matchMedia', createMatchMedia(1440));
+        vi.stubGlobal(
+            'matchMedia',
+            vi.fn((query: string) => ({
+                matches: query === '(min-width: 768px)',
+                media: query,
+                onchange: null,
+                addListener: () => {},
+                removeListener: () => {},
+                addEventListener: () => {},
+                removeEventListener: () => {},
+                dispatchEvent: () => false,
+            })),
+        );
         window.history.replaceState({}, '', pathname);
         render(<App />);
 
@@ -344,7 +377,19 @@ describe('App', () => {
     });
 
     it.each(['/library/add', '/library/import'])('does not mark Library active for peer route %s', async (pathname) => {
-        vi.stubGlobal('matchMedia', createMatchMedia(1440));
+        vi.stubGlobal(
+            'matchMedia',
+            vi.fn((query: string) => ({
+                matches: query === '(min-width: 768px)',
+                media: query,
+                onchange: null,
+                addListener: () => {},
+                removeListener: () => {},
+                addEventListener: () => {},
+                removeEventListener: () => {},
+                dispatchEvent: () => false,
+            })),
+        );
         window.history.replaceState({}, '', pathname);
         render(<App />);
 
@@ -352,7 +397,19 @@ describe('App', () => {
     });
 
     it.each(['/library/additional', '/library/imported'])('uses route-segment boundaries for %s', async (pathname) => {
-        vi.stubGlobal('matchMedia', createMatchMedia(1440));
+        vi.stubGlobal(
+            'matchMedia',
+            vi.fn((query: string) => ({
+                matches: query === '(min-width: 768px)',
+                media: query,
+                onchange: null,
+                addListener: () => {},
+                removeListener: () => {},
+                addEventListener: () => {},
+                removeEventListener: () => {},
+                dispatchEvent: () => false,
+            })),
+        );
         window.history.replaceState({}, '', pathname);
         render(<App />);
 
@@ -371,7 +428,9 @@ describe('App with different roles', () => {
         ['Manager', Role.Manager, 'Library add'],
     ])('gates the Add content route on content.add for %s', async (_name, role, page) => {
         sessionRole = role;
-        tokenStorage.set(fakeJwt({ sub: 'user-1', name: 'user', role }));
+        tokenStorage.set(
+            `${btoa(JSON.stringify({ alg: 'none' }))}.${btoa(JSON.stringify({ exp: Math.floor(Date.now() / 1000) + 3600, sub: 'user-1', name: 'user', role }))}.sig`,
+        );
         window.history.replaceState({}, '', '/library/add');
         render(<App />);
 
@@ -385,7 +444,9 @@ describe('App with different roles', () => {
         ['Admin', Role.Admin, 1],
     ])('gates the sidebar and mobile nav Add content on content.add for %s', async (_name, role, expected) => {
         sessionRole = role;
-        tokenStorage.set(fakeJwt({ sub: 'user-1', name: 'user', role }));
+        tokenStorage.set(
+            `${btoa(JSON.stringify({ alg: 'none' }))}.${btoa(JSON.stringify({ exp: Math.floor(Date.now() / 1000) + 3600, sub: 'user-1', name: 'user', role }))}.sig`,
+        );
         render(<App />);
 
         const bottomNav = await screen.findByRole('navigation', { name: 'Primary navigation' });

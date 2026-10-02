@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.CommandLine;
 using System.IO;
 using System.Linq;
+using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -24,16 +25,16 @@ internal sealed class ApiGeneratedCommand : Command
     private readonly Option<string>? _fileOption;
     private readonly Option<string>? _blobOutputOption;
     private readonly CommandTransportOptionSet _transportOptions;
-    private readonly Func<CancellationToken, Task<WebApplication>>? _localAppFactory;
+    private readonly Func<CancellationToken, Task<WebApplication>> _localAppFactory;
 
     public ApiGeneratedCommand(
         MagpieCommandManifestEntry entry,
-        Func<CancellationToken, Task<WebApplication>>? localAppFactory)
+        Func<CancellationToken, Task<WebApplication>> localAppFactory)
         : base(entry.Command, entry.Description ?? $"Run {entry.Group} {entry.Command}")
     {
         _entry = entry;
         _localAppFactory = localAppFactory;
-        _transportOptions = new CommandTransportOptionSet();
+        _transportOptions = new();
         _pathArguments = AddPathArguments(entry.PathParameters);
         _queryOptions = AddQueryOptions(entry.QueryParameters.Where(parameter => !parameter.IsCollection));
         _queryCollectionOptions = AddQueryCollectionOptions(
@@ -41,30 +42,20 @@ internal sealed class ApiGeneratedCommand : Command
 
         if (entry.BodyKind is MagpieCommandBodyKind.OptionalJson or MagpieCommandBodyKind.RequiredJson)
         {
-            _jsonOption = new Option<string>("--json")
-            {
-                Description = "Inline JSON request body."
-            };
-            _dataOption = new Option<string>("--data")
-            {
-                Description = "Read the JSON request body from a file."
-            };
+            _jsonOption = new("--json") { Description = "Inline JSON request body." };
+            _dataOption = new("--data") { Description = "Read the JSON request body from a file." };
             Options.Add(_jsonOption);
             Options.Add(_dataOption);
         }
         else if (entry.BodyKind == MagpieCommandBodyKind.File)
         {
-            _fileOption = new Option<string>("--file")
-            {
-                Description = "File to upload.",
-                Required = true
-            };
+            _fileOption = new("--file") { Description = "File to upload.", Required = true };
             Options.Add(_fileOption);
         }
 
         if (entry.BlobResult)
         {
-            _blobOutputOption = new Option<string>("--output", "-o")
+            _blobOutputOption = new("--output", "-o")
             {
                 Description = "File path to write the result to; defaults to the server-suggested file name."
             };
@@ -79,7 +70,7 @@ internal sealed class ApiGeneratedCommand : Command
     {
         var output = parseResult.InvocationConfiguration.Output;
         var error = parseResult.InvocationConfiguration.Error;
-        CommandHttpRequest httpRequest;
+        HttpRequestMessage httpRequest;
         try
         {
             var request = new ApiCommandRequest(
@@ -90,7 +81,7 @@ internal sealed class ApiGeneratedCommand : Command
                 await BuildJsonBodyAsync(parseResult, cancellationToken).ConfigureAwait(false),
                 BuildFilePath(parseResult),
                 _entry.FileFieldName);
-            httpRequest = request.ToHttpRequest();
+            httpRequest = request.ToHttpRequestMessage();
         }
         catch (Exception ex) when (ex is IOException or InvalidOperationException or ArgumentException)
         {
@@ -98,23 +89,17 @@ internal sealed class ApiGeneratedCommand : Command
             return 1;
         }
 
-        if (_blobOutputOption is not null)
+        using (httpRequest)
         {
-            return await httpRequest.ExecuteBlobAsync(
+            return await httpRequest.ExecuteAsync(
                 _transportOptions.Bind(parseResult),
                 _localAppFactory,
-                parseResult.GetValue(_blobOutputOption),
+                _blobOutputOption is not null,
+                _blobOutputOption is null ? null : parseResult.GetValue(_blobOutputOption),
                 output,
                 error,
                 cancellationToken).ConfigureAwait(false);
         }
-
-        return await httpRequest.ExecuteAsync(
-            _transportOptions.Bind(parseResult),
-            _localAppFactory,
-            output,
-            error,
-            cancellationToken).ConfigureAwait(false);
     }
 
     private async Task<string?> BuildJsonBodyAsync(ParseResult parseResult, CancellationToken cancellationToken)
@@ -141,7 +126,7 @@ internal sealed class ApiGeneratedCommand : Command
             var path = data.StartsWith('@') ? data[1..] : data;
             if (string.IsNullOrWhiteSpace(path))
             {
-                throw new InvalidOperationException("--data must reference a JSON file.");
+                throw new InvalidOperationException("The --data value does not reference a JSON file.");
             }
 
             return await File.ReadAllTextAsync(path, cancellationToken).ConfigureAwait(false);
@@ -149,7 +134,7 @@ internal sealed class ApiGeneratedCommand : Command
 
         if (_entry.BodyKind == MagpieCommandBodyKind.RequiredJson)
         {
-            throw new InvalidOperationException("Provide --json or --data for this request body.");
+            throw new InvalidOperationException("The request body requires --json or --data.");
         }
 
         return null;

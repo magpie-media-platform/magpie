@@ -32,7 +32,7 @@ internal sealed class DatabaseStartupBackgroundService(
         }
         catch (Exception ex)
         {
-            logger.LogCritical(ex, "The database startup work failed, so the host stops");
+            logger.LogCritical(ex, "Database startup failed");
 
             migrationState.Fail();
             hostStatus.ShutdownExitCode = MagpieExitCodes.StartupFailed;

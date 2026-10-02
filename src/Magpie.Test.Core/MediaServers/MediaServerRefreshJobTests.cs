@@ -388,12 +388,12 @@ public sealed class MediaServerRefreshJobTests
         cts.Cancel();
 
         // Act
-        async Task Act() => await _subject.ExecuteAsync(_jobContext, cts.Token).ConfigureAwait(false);
-
         // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(Act, Throws.InstanceOf<OperationCanceledException>());
+            Assert.That(
+                async () => await _subject.ExecuteAsync(_jobContext, cts.Token).ConfigureAwait(false),
+                Throws.InstanceOf<OperationCanceledException>());
             refreshable.Verify(
                 i => i.RefreshForContentAsync(
                     It.IsAny<MediaServer>(),
@@ -846,77 +846,6 @@ public sealed class MediaServerRefreshJobTests
         var integration = new Mock<IMediaServerIntegration>();
         integration.SetupGet(i => i.ProviderType).Returns("fake");
         integration.SetupGet(i => i.SupportedContentTypes).Returns(["type-a"]);
-        var refreshable = integration.As<IRefreshableMediaServerIntegration>();
-        refreshable
-            .Setup(i => i.RefreshForContentAsync(
-                It.IsAny<MediaServer>(),
-                It.IsAny<IReadOnlyDictionary<string, string>>(),
-                It.IsAny<string>(),
-                It.IsAny<string>(),
-                It.IsAny<CancellationToken>()))
-            .ReturnsAsync(true);
-        _integrations.Add(integration.Object);
-
-        var context = _jobContext with
-        {
-            Parameters = new Dictionary<string, string>(StringComparer.Ordinal)
-            {
-                ["contentHierarchyItemId"] = item.Id.ToString("D")
-            }
-        };
-
-        // Act
-        await _subject.ExecuteAsync(context).ConfigureAwait(false);
-
-        // Assert
-        refreshable.Verify(
-            i => i.RefreshForContentAsync(
-                It.IsAny<MediaServer>(),
-                It.IsAny<IReadOnlyDictionary<string, string>>(),
-                It.IsAny<string>(),
-                It.IsAny<string>(),
-                It.IsAny<CancellationToken>()),
-            Times.Once);
-    }
-
-    [Test]
-    public async Task ExecuteAsync_RefreshesServer_WhenIntegrationSupportsAllContentTypes()
-    {
-        // Arrange
-        _mediaServers
-            .Setup(r => r.ListAllAsync(It.IsAny<CancellationToken>()))
-            .ReturnsAsync([
-                new MediaServer
-                {
-                    Id = Guid.NewGuid(),
-                    Name = "Server",
-                    ProviderType = "fake",
-                    Enabled = true,
-                    Status = IntegrationHealthStatus.Healthy,
-                    ContentTypes = [],
-                    Settings = [],
-                    CreatedAt = DateTime.UtcNow
-                }
-            ]);
-
-        var item = new ContentHierarchyItem
-        {
-            Id = Guid.NewGuid(),
-            MetadataContainerId = Guid.NewGuid(),
-            ContentType = "anything",
-            Level = "level",
-            Slug = "item",
-            Name = "Item",
-            Monitoring = MonitoringMode.Monitored,
-            CreatedAt = DateTime.UtcNow
-        };
-        _contentHierarchyItems
-            .Setup(r => r.GetLineageAsync(item.Id, It.IsAny<CancellationToken>()))
-            .ReturnsAsync([item]);
-
-        var integration = new Mock<IMediaServerIntegration>();
-        integration.SetupGet(i => i.ProviderType).Returns("fake");
-        integration.SetupGet(i => i.SupportedContentTypes).Returns([]);
         var refreshable = integration.As<IRefreshableMediaServerIntegration>();
         refreshable
             .Setup(i => i.RefreshForContentAsync(

@@ -5,7 +5,7 @@ import { Alert } from '@/components/ui/Alert';
 import { Button } from '@/components/ui/Button';
 import { FilterBar } from '@/components/filters/FilterBar';
 
-import type { SavedFilterReference } from './useLibraryPage';
+import type { SavedFilterReference } from './libraryPageConstants';
 
 interface LibraryFiltersProps {
     filterQuery: string;

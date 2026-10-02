@@ -107,7 +107,6 @@ public sealed class ContentHierarchyItemRepositoryTests
     [TearDown]
     public void TearDown()
     {
-        _context.Database.CloseConnection();
         _context.Dispose();
     }
 

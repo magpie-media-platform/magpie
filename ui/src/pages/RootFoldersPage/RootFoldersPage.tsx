@@ -35,6 +35,7 @@ import { useRootFolders, type ApiRootFolder } from '@/hooks/useRootFolders';
 import { useDiskSpace } from '@/hooks/useSystemStatus';
 import { useToggle } from '@/hooks/useToggle';
 import { useUrlTableState } from '@/hooks/useUrlTableState';
+import type { MonitoringMode } from '@/types';
 
 import { MonitoringDefaultPanel } from './MonitoringDefaultPanel';
 import { RootFolderForm, type RootFolderFormValues } from '@/components/configuration/RootFolderForm';
@@ -50,12 +51,12 @@ function getContentTypeName(id: string, contentTypes: LibraryTypeDefinition[]): 
     return contentType?.name ?? 'Unknown';
 }
 
-function getMonitoringLabel(value: boolean | null): string {
-    return value === null ? 'Inherit' : value ? 'Active' : 'Excluded';
+function getMonitoringLabel(value: MonitoringMode | null): string {
+    return value ?? 'System default';
 }
 
-function getMonitoringVariant(value: boolean | null): Parameters<typeof Badge>[0]['variant'] {
-    return value === null ? 'info' : value ? 'healthy' : 'unknown';
+function getMonitoringVariant(value: MonitoringMode | null): Parameters<typeof Badge>[0]['variant'] {
+    return value === null ? 'info' : value === 'Unmonitored' ? 'unknown' : value === 'Shotgun' ? 'primary' : 'healthy';
 }
 
 function toRootFolderFormValues(folder: ApiRootFolder): RootFolderFormValues {

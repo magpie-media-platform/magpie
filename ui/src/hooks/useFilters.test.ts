@@ -543,8 +543,6 @@ describe('useContentFilters formatted-query race', () => {
             await promiseA;
         });
 
-        await new Promise((r) => setTimeout(r, 0));
-
         const f = result.current.filters.find((x) => x.id === 'race-1');
         expect(f?.query).toBe('fresh-B');
     });

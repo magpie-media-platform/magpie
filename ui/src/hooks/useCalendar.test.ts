@@ -175,7 +175,6 @@ describe('useCalendar', () => {
                 debounceMs: 300,
                 exact: true,
                 maxWaitMs: 1200,
-                owner: 'calendar-page',
                 unprovableMembership: false,
             }),
         );
@@ -194,7 +193,6 @@ describe('useCalendar', () => {
         );
         const options = vi.mocked(useInvalidateQueriesOnEvents).mock.calls[0]?.[2];
 
-        expect(options?.owner).toBe('calendar-page');
         expect(options?.failOpenEventNames).toEqual(['content.hierarchyItem.created']);
         expect(options?.unprovableMembership).toBe(true);
         expect(

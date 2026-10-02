@@ -10,8 +10,6 @@ internal sealed class ReleaseSourceConfiguration : IEntityTypeConfiguration<Rele
     public void Configure(EntityTypeBuilder<ReleaseSource> builder)
     {
         builder.ToTable("indexer_releaseSource");
-        builder.HasKey(e => e.Id);
-        builder.Property(e => e.Id).ValueGeneratedOnAdd();
         builder.Property(e => e.Key).HasMaxLength(64).IsRequired();
         builder.HasOne(e => e.Release)
             .WithMany(e => e.Sources)
@@ -21,7 +19,6 @@ internal sealed class ReleaseSourceConfiguration : IEntityTypeConfiguration<Rele
             .WithMany()
             .HasForeignKey(e => e.IndexerId)
             .OnDelete(DeleteBehavior.SetNull);
-        builder.HasIndex(e => e.IndexerId);
         builder.HasIndex(e => e.ReleaseId);
         builder.HasIndex(e => new { e.ReleaseId, e.Key }).IsUnique();
     }

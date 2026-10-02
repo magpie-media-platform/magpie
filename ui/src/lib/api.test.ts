@@ -583,14 +583,6 @@ describe('apiFetch 401 refresh behavior', () => {
         } as unknown as Response;
     }
 
-    function emptyResponse(status: number): Response {
-        return {
-            ok: status < 400,
-            status,
-            headers: new Headers(),
-        } as unknown as Response;
-    }
-
     beforeEach(() => {
         vi.stubGlobal('fetch', mockFetch);
         clearAuthStorage();
@@ -698,10 +690,11 @@ describe('apiFetch 401 refresh behavior', () => {
         expect(r3.url).toContain('/c');
 
         expect(refreshCalls).toBe(1);
-        expect(retriedTokens).toHaveLength(3);
-        for (const t of retriedTokens) {
-            expect(t).toBe(`Bearer ${newAccessToken}`);
-        }
+        expect(retriedTokens).toEqual([
+            `Bearer ${newAccessToken}`,
+            `Bearer ${newAccessToken}`,
+            `Bearer ${newAccessToken}`,
+        ]);
     });
 
     it('does not recurse when 401 comes from /auth/refresh itself', async () => {
@@ -762,7 +755,11 @@ describe('apiFetch 401 refresh behavior', () => {
                     accessTokenExpiresAt: new Date(Date.now() + 3600_000).toISOString(),
                 }),
             )
-            .mockResolvedValueOnce(emptyResponse(204));
+            .mockResolvedValueOnce({
+                ok: true,
+                status: 204,
+                headers: new Headers(),
+            } as unknown as Response);
 
         const result = await apiFetch('/items/1', { method: 'DELETE' });
         expect(result).toBeUndefined();

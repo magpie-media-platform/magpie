@@ -174,20 +174,14 @@ interface QualityTierPatch {
 export const qualityTierListQueryKeys = {
     all: ['quality-tier-lists'] as const,
     list: (options?: QualityTierListQueryOptions) =>
-        options?.tag || options?.contentType || options?.level
-            ? ([
-                  'quality-tier-lists',
-                  'list',
-                  { tag: options.tag, contentType: options.contentType, level: options.level },
-              ] as const)
+        options?.tag
+            ? (['quality-tier-lists', 'list', { tag: options.tag }] as const)
             : (['quality-tier-lists', 'list'] as const),
     detail: (id: string) => ['quality-tier-lists', 'detail', id] as const,
 };
 
 interface QualityTierListQueryOptions {
     tag?: string;
-    contentType?: string;
-    level?: string;
     enabled?: boolean;
 }
 
@@ -195,8 +189,6 @@ export async function fetchQualityTierLists(options?: QualityTierListQueryOption
     return apiGet<ApiQualityTierList[]>(
         buildUrl('/quality-tier-lists', {
             tag: options?.tag,
-            contentType: options?.contentType,
-            level: options?.level,
         }),
     );
 }
@@ -233,7 +225,7 @@ export function useQualityTierLists(options?: QualityTierListQueryOptions) {
     useInvalidateQueriesOnEvents(
         ['qualityTierList.created', 'qualityTierList.updated', 'qualityTierList.deleted'],
         [qualityTierListQueryKeys.list(options)],
-        { exact: true, owner: 'quality-tier-lists' },
+        { exact: true },
     );
     const queryClient = useQueryClient();
     const tierListsQuery = useQuery({
@@ -294,7 +286,7 @@ export function useQualityTierList(id: string | undefined) {
     useInvalidateQueriesOnEvents(
         ['qualityTierList.created', 'qualityTierList.updated', 'qualityTierList.deleted'],
         [qualityTierListQueryKeys.detail(id ?? '')],
-        { entityIds: id ? [id] : [], exact: true, owner: 'quality-tier-list-detail' },
+        { entityIds: id ? [id] : [], exact: true },
     );
     return useQuery({
         queryKey: qualityTierListQueryKeys.detail(id ?? ''),

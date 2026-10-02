@@ -155,12 +155,15 @@ internal sealed class ApiKeyRepository(
             await context.ApiKeys
                 .Where(key => key.Id == id && (key.LastUsedAt == null || key.LastUsedAt < lastUsedAt))
                 .ExecuteUpdateAsync(
-                    setters => setters.SetProperty(key => key.LastUsedAt, lastUsedAt), cancellationToken)
+                    setters => setters.SetProperty(key => key.LastUsedAt, lastUsedAt),
+                    cancellationToken)
                 .ConfigureAwait(false);
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "The API key repository failed to update the last use time for API key {ApiKeyId}.",
+            logger.LogError(
+                ex,
+                "The API key repository failed to update the last use time for API key {ApiKeyId}.",
                 id);
             throw;
         }
@@ -226,7 +229,8 @@ internal sealed class ApiKeyRepository(
             {
                 await transactionManager.OnCommittedAsync(
                     token => eventBus.PublishAsync(
-                        SecurityEventBuilder.BuildApiKeyUpdatedEvent(model.Id, ownerUserId, changedFields), token),
+                        SecurityEventBuilder.BuildApiKeyUpdatedEvent(model.Id, ownerUserId, changedFields),
+                        token),
                     cancellationToken).ConfigureAwait(false);
             }
 
@@ -296,7 +300,8 @@ internal sealed class ApiKeyRepository(
                         SecurityEventBuilder.BuildApiKeyUpdatedEvent(
                             patch.Id,
                             ownerUserId,
-                            ChangedFields(patch)), token),
+                            ChangedFields(patch)),
+                        token),
                     cancellationToken).ConfigureAwait(false);
             }
 

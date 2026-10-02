@@ -5,11 +5,6 @@
         gap: var(--space-md);
     }
 
-    .available-catalog__toolbar {
-        display: flex;
-        justify-content: flex-end;
-    }
-
     .available-catalog__table {
         display: flex;
         flex-direction: column;

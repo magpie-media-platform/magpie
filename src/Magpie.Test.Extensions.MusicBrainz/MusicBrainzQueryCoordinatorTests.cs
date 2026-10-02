@@ -625,6 +625,43 @@ public class MusicBrainzQueryCoordinatorTests
     }
 
     [Test]
+    public async Task GetTrackReleasesAsync_ServesTheCachedBrowse_WhenTheTrackRepeats()
+    {
+        // Arrange
+        var cache = new QueryCoordinator(_scopeFactory);
+        var calls = 0;
+
+        // Act
+        var first = await cache.GetTrackReleasesAsync(
+            "63a9abaa-7b6c-4290-83e7-828de5802e7e",
+            _ =>
+            {
+                calls++;
+                return Task.FromResult(new FetchResult<ReleaseSearchResponseDto>
+                {
+                    Outcome = FetchOutcome.Success,
+                    Value = new ReleaseSearchResponseDto
+                    {
+                        Releases = [new ReleaseDto { Id = "86ecd18e-f1fb-4ac7-b77a-5d0fd4bd830e" }]
+                    }
+                });
+            },
+            default).ConfigureAwait(false);
+        var cached = await cache.GetTrackReleasesAsync(
+            "63a9abaa-7b6c-4290-83e7-828de5802e7e",
+            _ => throw new AssertionException("warm cache invoked loader"),
+            default).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(first.Outcome, Is.EqualTo(FetchOutcome.Success));
+            Assert.That(cached.Value!.Releases![0].Id, Is.EqualTo("86ecd18e-f1fb-4ac7-b77a-5d0fd4bd830e"));
+            Assert.That(calls, Is.EqualTo(1));
+        }
+    }
+
+    [Test]
     public async Task GetCoverAsync_Result_WhenMissingCoverLookupRepeats()
     {
         // Arrange

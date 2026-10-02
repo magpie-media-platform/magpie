@@ -25,7 +25,7 @@ internal sealed class JellyfinLibrariesEndpointGroup : IApiEndpointGroup
     }
 
     internal async Task<IResult> ListLibrariesAsync(
-        [FromServices] IJellyfinLibraryService libraryService,
+        [FromServices] JellyfinLibraryService libraryService,
         [FromBody] JellyfinLibrariesRequest request,
         CancellationToken cancellationToken)
     {

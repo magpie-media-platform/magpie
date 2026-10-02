@@ -184,6 +184,30 @@ const rawContentData: Record<string, RawDetailItem> = {
         fulfillment: 'missing',
         publishDate: '1970-01-01T00:00:00Z',
     },
+    'content-open-library-year': {
+        id: 'content-open-library-year',
+        title: 'Shogun',
+        level: 'book',
+        levelLabel: 'Book',
+        contentType: 'books',
+        monitoring: 'Monitored',
+        effectiveMonitoring: 'Monitored',
+        fulfillment: 'missing',
+        publishDate: '1975-01-01T00:00:00Z',
+        publishDatePrecision: 'Year',
+    },
+    'content-day-precision': {
+        id: 'content-day-precision',
+        title: 'Jaws',
+        level: 'movie',
+        levelLabel: 'Movie',
+        contentType: 'movie',
+        monitoring: 'Monitored',
+        effectiveMonitoring: 'Monitored',
+        fulfillment: 'missing',
+        publishDate: '1975-01-01T00:00:00Z',
+        publishDatePrecision: 'Day',
+    },
     'content-cycle': {
         id: 'content-cycle',
         title: 'Cyclic Content',
@@ -332,6 +356,106 @@ const rawContentData: Record<string, RawDetailItem> = {
                 filePath: '/media/library/Example Show/Season 1/example.s01e01.mkv',
                 fileSize: 2048,
                 createdAt: '2026-09-01T00:00:00Z',
+            },
+        ],
+    },
+    'tv-covered-episode-files': {
+        id: 'tv-covered-episode-files',
+        title: 'Episode 2',
+        level: 'episode',
+        levelLabel: 'Episode',
+        monitoring: 'Monitored',
+        effectiveMonitoring: 'Monitored',
+        fulfillment: 'fulfilled',
+        parentId: 'tv-season-files',
+        coveringMediaFiles: [
+            {
+                id: 'shared-file',
+                contentItemId: 'episode-1-content-item',
+                fileKind: 'Video',
+                filePath: '/media/library/Example Show/Season 1/example.s01e01-e03.mkv',
+                fileSize: 2048,
+                createdAt: '2026-09-01T00:00:00Z',
+                coverage: [
+                    { mediaFileId: 'shared-file', contentItemId: 'episode-2-content-item' },
+                    { mediaFileId: 'shared-file', contentItemId: 'episode-3-content-item' },
+                ],
+            },
+        ],
+    },
+    'tv-owner-episode-files': {
+        id: 'tv-owner-episode-files',
+        title: 'Episode 1',
+        level: 'episode',
+        levelLabel: 'Episode',
+        monitoring: 'Monitored',
+        effectiveMonitoring: 'Monitored',
+        fulfillment: 'fulfilled',
+        parentId: 'tv-season-files',
+        mediaFiles: [
+            {
+                id: 'owned-shared-file',
+                contentItemId: 'episode-1-content-item',
+                fileKind: 'Video',
+                filePath: '/media/library/Example Show/Season 1/example.s01e01-e03.mkv',
+                fileSize: 2048,
+                createdAt: '2026-09-01T00:00:00Z',
+                coverage: [
+                    { mediaFileId: 'owned-shared-file', contentItemId: 'episode-2-content-item' },
+                    { mediaFileId: 'owned-shared-file', contentItemId: 'episode-3-content-item' },
+                ],
+            },
+        ],
+    },
+    'tv-mixed-episode-files': {
+        id: 'tv-mixed-episode-files',
+        title: 'Episode 2',
+        level: 'episode',
+        levelLabel: 'Episode',
+        monitoring: 'Monitored',
+        effectiveMonitoring: 'Monitored',
+        fulfillment: 'fulfilled',
+        parentId: 'tv-season-files',
+        mediaFiles: [
+            {
+                id: 'mixed-owned-file',
+                contentItemId: 'episode-2-content-item',
+                fileKind: 'Subtitle',
+                filePath: '/media/library/Example Show/Season 1/example.s01e02.en.srt',
+                fileSize: 64,
+                createdAt: '2026-09-01T00:00:00Z',
+            },
+        ],
+        coveringMediaFiles: [
+            {
+                id: 'mixed-shared-file',
+                contentItemId: 'episode-1-content-item',
+                fileKind: 'Video',
+                filePath: '/media/library/Example Show/Season 1/example.s01e01-e02.mkv',
+                fileSize: 2048,
+                createdAt: '2026-09-01T00:00:00Z',
+                coverage: [{ mediaFileId: 'mixed-shared-file', contentItemId: 'episode-2-content-item' }],
+            },
+        ],
+    },
+    'tv-paired-episode-files': {
+        id: 'tv-paired-episode-files',
+        title: 'Episode 2',
+        level: 'episode',
+        levelLabel: 'Episode',
+        monitoring: 'Monitored',
+        effectiveMonitoring: 'Monitored',
+        fulfillment: 'fulfilled',
+        parentId: 'tv-season-files',
+        coveringMediaFiles: [
+            {
+                id: 'paired-file',
+                contentItemId: 'episode-1-content-item',
+                fileKind: 'Video',
+                filePath: '/media/library/Example Show/Season 1/example.s01e01-e02.mkv',
+                fileSize: 2048,
+                createdAt: '2026-09-01T00:00:00Z',
+                coverage: [{ mediaFileId: 'paired-file', contentItemId: 'episode-2-content-item' }],
             },
         ],
     },
@@ -608,17 +732,6 @@ vi.mock('@/hooks/useRemoveContent', () => ({
     }),
 }));
 
-function createTestQueryClient() {
-    return new QueryClient({
-        defaultOptions: {
-            queries: {
-                retry: false,
-                gcTime: 0,
-            },
-        },
-    });
-}
-
 function ContentDetailRoute() {
     const location = useLocation();
 
@@ -648,7 +761,14 @@ function renderWithRouter(
     search?: string,
     origin?: { pathname: string; search: string; hash: string; state?: unknown },
 ) {
-    const queryClient = createTestQueryClient();
+    const queryClient = new QueryClient({
+        defaultOptions: {
+            queries: {
+                retry: false,
+                gcTime: 0,
+            },
+        },
+    });
     const basePath = grandchildId
         ? `/library/${contentId}/${childId}/${grandchildId}`
         : childId
@@ -791,6 +911,7 @@ describe('ContentDetailPage', () => {
                                   title: item.title,
                                   overview: item.overview,
                                   publishDate: item.publishDate,
+                                  publishDatePrecision: item.publishDatePrecision,
                                   productionStatus: item.factValues?.status as string | undefined,
                                   originalTitle: item.id === 'content-1' ? 'BrBa' : undefined,
                                   sortTitle: item.id === 'content-1' ? 'Breaking Bad, The' : undefined,
@@ -1006,49 +1127,68 @@ describe('ContentDetailPage', () => {
             });
         });
 
-        it.each([false, true])(
-            'returns to the originating list after successful removal with deleteFiles=%s',
-            async (deleteFiles) => {
-                mockRemoveContentMutate.mockImplementation((_vars, opts) => {
-                    opts?.onSuccess?.();
-                });
-                const user = userEvent.setup();
-                renderWithRouter('content-files', undefined, undefined, undefined, {
-                    pathname: '/wanted',
-                    search: '?page=3&sort=title',
-                    hash: '#results',
-                    state: { view: 'gallery' },
-                });
-                await waitFor(() => {
-                    expect(document.querySelector('[data-page="content-detail"]')).toBeInTheDocument();
-                });
-                await user.click(await screen.findByRole('button', { name: /^remove$/i }));
-                const dialog = await screen.findByRole('dialog');
-                if (deleteFiles) {
-                    await user.click(within(dialog).getByRole('switch', { name: /also delete files from disk/i }));
-                }
-                await user.click(within(dialog).getByRole('button', { name: /^delete$/i }));
+        it('returns to the originating list after successful removal with deleteFiles=false', async () => {
+            mockRemoveContentMutate.mockImplementation((_vars, opts) => {
+                opts?.onSuccess?.();
+            });
+            const user = userEvent.setup();
+            renderWithRouter('content-files', undefined, undefined, undefined, {
+                pathname: '/wanted',
+                search: '?page=3&sort=title',
+                hash: '#results',
+                state: { view: 'gallery' },
+            });
+            await waitFor(() => {
+                expect(document.querySelector('[data-page="content-detail"]')).toBeInTheDocument();
+            });
+            await user.click(await screen.findByRole('button', { name: /^remove$/i }));
+            const dialog = await screen.findByRole('dialog');
+            await user.click(within(dialog).getByRole('button', { name: /^delete$/i }));
 
-                expect(await screen.findByTestId('origin-route')).toHaveTextContent(
-                    '/wanted?page=3&sort=title#results',
-                );
-                expect(screen.getByTestId('origin-route-state')).toHaveTextContent('{"view":"gallery"}');
-                expect(mockRemoveContentMutate.mock.calls[0][0]).toEqual({
-                    contentHierarchyItemId: 'content-files',
-                    deleteFiles,
-                });
-                await waitFor(() => {
-                    expect(screen.getAllByText(/Removed from library/i).length).toBeGreaterThan(0);
-                });
-                expect(
-                    screen.getAllByText(
-                        deleteFiles
-                            ? 'Magpie removed the item and its library files.'
-                            : 'Magpie removed the item from the library. The files remain on disk.',
-                    ).length,
-                ).toBeGreaterThan(0);
-            },
-        );
+            expect(await screen.findByTestId('origin-route')).toHaveTextContent('/wanted?page=3&sort=title#results');
+            expect(screen.getByTestId('origin-route-state')).toHaveTextContent('{"view":"gallery"}');
+            expect(mockRemoveContentMutate.mock.calls[0][0]).toEqual({
+                contentHierarchyItemId: 'content-files',
+                deleteFiles: false,
+            });
+            await waitFor(() => {
+                expect(screen.getAllByText(/Removed from library/i).length).toBeGreaterThan(0);
+            });
+            expect(
+                screen.getAllByText('Magpie removed the item from the library. The files remain on disk.').length,
+            ).toBeGreaterThan(0);
+        });
+
+        it('returns to the originating list after successful removal with deleteFiles=true', async () => {
+            mockRemoveContentMutate.mockImplementation((_vars, opts) => {
+                opts?.onSuccess?.();
+            });
+            const user = userEvent.setup();
+            renderWithRouter('content-files', undefined, undefined, undefined, {
+                pathname: '/wanted',
+                search: '?page=3&sort=title',
+                hash: '#results',
+                state: { view: 'gallery' },
+            });
+            await waitFor(() => {
+                expect(document.querySelector('[data-page="content-detail"]')).toBeInTheDocument();
+            });
+            await user.click(await screen.findByRole('button', { name: /^remove$/i }));
+            const dialog = await screen.findByRole('dialog');
+            await user.click(within(dialog).getByRole('switch', { name: /also delete files from disk/i }));
+            await user.click(within(dialog).getByRole('button', { name: /^delete$/i }));
+
+            expect(await screen.findByTestId('origin-route')).toHaveTextContent('/wanted?page=3&sort=title#results');
+            expect(screen.getByTestId('origin-route-state')).toHaveTextContent('{"view":"gallery"}');
+            expect(mockRemoveContentMutate.mock.calls[0][0]).toEqual({
+                contentHierarchyItemId: 'content-files',
+                deleteFiles: true,
+            });
+            await waitFor(() => {
+                expect(screen.getAllByText(/Removed from library/i).length).toBeGreaterThan(0);
+            });
+            expect(screen.getAllByText('Magpie removed the item and its library files.').length).toBeGreaterThan(0);
+        });
 
         it('returns a direct-entry removal to the library when there is no origin', async () => {
             mockRemoveContentMutate.mockImplementation((_vars, opts) => {
@@ -1170,6 +1310,22 @@ describe('ContentDetailPage', () => {
 
             await waitFor(() => {
                 expect(screen.getByTestId('content-publish-date-row')).toHaveTextContent('Publish Date1970');
+            });
+        });
+
+        it('shows only the year when the provider gave a year-only publish date', async () => {
+            renderWithRouter('content-open-library-year');
+
+            await waitFor(() => {
+                expect(screen.getByTestId('content-publish-date-row')).toHaveTextContent('Publish Date1975');
+            });
+        });
+
+        it('shows the full date when the provider gave a day-precision publish date', async () => {
+            renderWithRouter('content-day-precision');
+
+            await waitFor(() => {
+                expect(screen.getByTestId('content-publish-date-row')).toHaveTextContent('Publish DateJan 1, 1975');
             });
         });
 
@@ -1813,9 +1969,15 @@ describe('ContentDetailPage', () => {
             await waitFor(() => {
                 expect(screen.getByRole('tab', { name: /activity/i })).toBeInTheDocument();
             });
-            for (const tab of screen.getAllByRole('tab')) {
-                expect(tab).toHaveAttribute('aria-label', expect.stringMatching(/\S/));
-            }
+            expect(screen.getAllByRole('tab').map((tab) => tab.getAttribute('aria-label'))).toEqual([
+                'Seasons (0)',
+                'Related',
+                'Details',
+                'Releases',
+                'Files',
+                'Metadata',
+                'Activity',
+            ]);
         });
 
         it('selects the Related tab by default for a leaf item (no ?tab= param)', async () => {
@@ -2137,6 +2299,54 @@ describe('ContentDetailPage', () => {
                 expect(screen.queryByRole('button', { name: 'Delete the-matrix.mkv' })).not.toBeInTheDocument();
             });
 
+            it.each([
+                [
+                    'tv-covered-episode-files',
+                    'example.s01e01-e03.mkv',
+                    'Covers 3 items',
+                    'This file also covers 2 other items.',
+                ],
+                [
+                    'tv-paired-episode-files',
+                    'example.s01e01-e02.mkv',
+                    'Covers 2 items',
+                    'This file also covers 1 other item.',
+                ],
+            ])(
+                'offers no rename for a file that another item owns and warns that delete removes it from all (%s)',
+                async (contentId, fileName, coverage, warning) => {
+                    const user = userEvent.setup();
+                    renderWithRouter(contentId, undefined, undefined, '?tab=files');
+
+                    await screen.findByText(fileName);
+                    expect(screen.getByText(coverage)).toBeInTheDocument();
+                    expect(screen.queryByRole('button', { name: 'Apply rename mask' })).not.toBeInTheDocument();
+                    expect(
+                        screen.queryByRole('button', { name: 'Apply rename mask to descendant files' }),
+                    ).not.toBeInTheDocument();
+                    await user.click(screen.getByRole('button', { name: `Delete ${fileName}` }));
+                    expect(within(screen.getByRole('dialog')).getByText(warning, { exact: false })).toBeInTheDocument();
+                },
+            );
+
+            it('shows the coverage and the delete warning on the file of the owner, with rename kept', async () => {
+                const user = userEvent.setup();
+                renderWithRouter('tv-owner-episode-files', undefined, undefined, '?tab=files');
+
+                await screen.findByText('example.s01e01-e03.mkv');
+                expect(screen.getByText('Covers 3 items')).toBeInTheDocument();
+                expect(screen.getByRole('button', { name: 'Apply rename mask' })).toBeInTheDocument();
+                expect(
+                    screen.getByRole('button', { name: 'Apply rename mask to descendant files' }),
+                ).toBeInTheDocument();
+                await user.click(screen.getByRole('button', { name: 'Delete example.s01e01-e03.mkv' }));
+                expect(
+                    within(screen.getByRole('dialog')).getByText('This file also covers 2 other items.', {
+                        exact: false,
+                    }),
+                ).toBeInTheDocument();
+            });
+
             it('does not claim a disk outcome the 204 response cannot confirm after a file delete', async () => {
                 mockDeleteFileMutate.mockImplementation((_vars, opts) => {
                     opts?.onSuccess?.();
@@ -2186,6 +2396,33 @@ describe('ContentDetailPage', () => {
                 await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
                 await waitFor(() => expect(trigger).toHaveFocus());
             });
+
+            it.each([
+                ['a covered item that also owns a file', 'tv-mixed-episode-files', 'example.s01e02.en.srt', 1],
+                ['an item with no files', 'content-1', 'No files attached to this content', 1],
+                [
+                    'an item whose files all cover it from another item',
+                    'tv-covered-episode-files',
+                    'example.s01e01-e03.mkv',
+                    0,
+                ],
+            ])(
+                'offers rename-all in the toolbar and the content actions to %s',
+                async (_name, contentId, loadedText, expectedCount) => {
+                    const user = userEvent.setup();
+                    renderWithRouter(contentId, undefined, undefined, '?tab=files');
+                    await screen.findByText(loadedText);
+
+                    expect(
+                        screen.queryAllByRole('button', { name: 'Apply rename mask to descendant files' }),
+                    ).toHaveLength(expectedCount);
+                    await user.click(screen.getByRole('button', { name: 'Content Actions' }));
+                    const sheet = await screen.findByRole('dialog', { name: 'Content Actions' });
+                    expect(
+                        within(sheet).queryAllByRole('button', { name: 'Apply rename mask to descendant files' }),
+                    ).toHaveLength(expectedCount);
+                },
+            );
 
             it('shows no content actions trigger on the Files tab to a user with no content actions', async () => {
                 mockHasRole.current = () => false;

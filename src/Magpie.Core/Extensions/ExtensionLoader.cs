@@ -15,8 +15,10 @@ namespace Magpie.Core.Extensions;
 
 internal sealed class ExtensionLoader(ILogger<ExtensionLoader> logger)
 {
-    private static readonly Version CurrentAbiVersion =
+    internal static readonly Version CurrentAbiVersion =
         typeof(IExtension).Assembly.GetName().Version!.Normalize();
+
+    internal static readonly string SdkAssemblyName = typeof(IExtension).Assembly.GetName().Name!;
 
     private static Type ResolveExtensionType(Assembly assembly)
     {
@@ -75,7 +77,7 @@ internal sealed class ExtensionLoader(ILogger<ExtensionLoader> logger)
             try
             {
                 var assembly = instance.GetType().Assembly;
-                loaded.Add(ActivateExtension(instance, assembly.Location, services, skipAbiCheck: true));
+                loaded.Add(ActivateExtension(instance, assembly.Location, services));
             }
             catch (Exception ex)
             {
@@ -100,25 +102,32 @@ internal sealed class ExtensionLoader(ILogger<ExtensionLoader> logger)
         var context = new ExtensionAssemblyLoadContext(assemblyPath);
         var assembly = context.LoadWithoutLockingFile(assemblyPath);
 
+        var builtAgainst = assembly.GetReferencedAssemblies()
+            .FirstOrDefault(reference => reference.Name == SdkAssemblyName)?.Version
+            ?? throw new InvalidOperationException(
+                $"Assembly {assembly.FullName} does not reference {SdkAssemblyName}.");
+        if (!CurrentAbiVersion.IsCompatibleWith(builtAgainst, targetAbi: null))
+        {
+            throw new InvalidOperationException(
+                $"Extension {extension.PackageId} is built against ABI {builtAgainst.Format()}, which is not " +
+                $"compatible with host ABI {CurrentAbiVersion.Format()}.");
+        }
+
         var extensionType = ResolveExtensionType(assembly);
         var instance = (IExtension?)Activator.CreateInstance(extensionType)
             ?? throw new InvalidOperationException($"Activator returned null for {extensionType.FullName}.");
+        if (!CurrentAbiVersion.IsCompatibleWith(builtAgainst, instance.TargetABI))
+        {
+            throw new InvalidOperationException(
+                $"Extension {instance.Name} targets ABI {instance.TargetABI}, which is not compatible with host ABI " +
+                $"{CurrentAbiVersion.Format()}.");
+        }
 
         return ActivateExtension(instance, assemblyPath, services);
     }
 
-    private IExtension ActivateExtension(
-        IExtension instance,
-        string source,
-        IServiceCollection services,
-        bool skipAbiCheck = false)
+    private IExtension ActivateExtension(IExtension instance, string source, IServiceCollection services)
     {
-        if (!skipAbiCheck && !CurrentAbiVersion.IsCompatibleWith(instance.TargetABI))
-        {
-            throw new InvalidOperationException(
-                $"Extension {instance.Name} is not compatible with host ABI {CurrentAbiVersion.Format()}.");
-        }
-
         instance.RegisterServices(services);
 
         logger.LogInformation(

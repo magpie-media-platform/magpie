@@ -1646,6 +1646,21 @@ namespace Magpie.Data.SqlServer.Migrations
                     b.ToTable("content_mediaFile", (string)null);
                 });
 
+            modelBuilder.Entity("Magpie.Models.Data.MediaFileCoverage", b =>
+                {
+                    b.Property<Guid>("MediaFileId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("ContentItemId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.HasKey("MediaFileId", "ContentItemId");
+
+                    b.HasIndex("ContentItemId");
+
+                    b.ToTable("content_mediaFileCoverage", (string)null);
+                });
+
             modelBuilder.Entity("Magpie.Models.Data.MediaServer", b =>
                 {
                     b.Property<Guid>("Id")
@@ -1786,6 +1801,9 @@ namespace Magpie.Data.SqlServer.Migrations
 
                     b.Property<DateTime?>("PublishDate")
                         .HasColumnType("datetime2");
+
+                    b.Property<int?>("PublishDatePrecision")
+                        .HasColumnType("int");
 
                     b.Property<int?>("SequenceNumber")
                         .HasColumnType("int");
@@ -2416,8 +2434,8 @@ namespace Magpie.Data.SqlServer.Migrations
                     b.Property<int>("DefaultImportCollisionMode")
                         .HasColumnType("int");
 
-                    b.Property<bool?>("DefaultMonitoring")
-                        .HasColumnType("bit");
+                    b.Property<int?>("DefaultMonitoring")
+                        .HasColumnType("int");
 
                     b.Property<string>("Defaults")
                         .IsRequired()
@@ -3186,6 +3204,21 @@ namespace Magpie.Data.SqlServer.Migrations
                         .OnDelete(DeleteBehavior.SetNull);
                 });
 
+            modelBuilder.Entity("Magpie.Models.Data.MediaFileCoverage", b =>
+                {
+                    b.HasOne("Magpie.Models.Data.ContentItem", null)
+                        .WithMany()
+                        .HasForeignKey("ContentItemId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("Magpie.Models.Data.MediaFile", null)
+                        .WithMany("Coverage")
+                        .HasForeignKey("MediaFileId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
             modelBuilder.Entity("Magpie.Models.Data.MetadataContribution", b =>
                 {
                     b.HasOne("Magpie.Models.Data.MetadataContainer", "MetadataContainer")
@@ -3489,6 +3522,11 @@ namespace Magpie.Data.SqlServer.Migrations
             modelBuilder.Entity("Magpie.Models.Data.Indexer", b =>
                 {
                     b.Navigation("Connections");
+                });
+
+            modelBuilder.Entity("Magpie.Models.Data.MediaFile", b =>
+                {
+                    b.Navigation("Coverage");
                 });
 
             modelBuilder.Entity("Magpie.Models.Data.MetadataContainer", b =>

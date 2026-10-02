@@ -29,7 +29,7 @@ import { PageHeader } from '@/components/ui/PageHeader';
 import { PullToRefresh } from '@/components/ui/PullToRefresh';
 import { useToast } from '@/components/ui/Toast';
 import { Tooltip } from '@/components/ui/Tooltip';
-import { AdminBackupsSlot } from '@/components/ui/Slot';
+import { Slot } from '@/components/ui/Slot';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { useBackups, type BackupItem, type BackupType } from '@/hooks/useBackups';
@@ -245,7 +245,7 @@ export function BackupsPage() {
 
     return (
         <div className="backups-page" data-page="backups">
-            <AdminBackupsSlot>
+            <Slot slot="admin.backups">
                 <PullToRefresh onRefresh={handleRefresh} className="backups-page__pull-to-refresh">
                     <PageHeader
                         className="backups-page__header"
@@ -461,7 +461,7 @@ export function BackupsPage() {
                         </DialogFooter>
                     </DialogContent>
                 </Dialog>
-            </AdminBackupsSlot>
+            </Slot>
         </div>
     );
 }

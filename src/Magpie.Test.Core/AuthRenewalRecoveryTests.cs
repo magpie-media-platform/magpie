@@ -116,17 +116,37 @@ public sealed class AuthRenewalRecoveryTests
         await _context.DisposeAsync().ConfigureAwait(false);
     }
 
-    [TestCase(false)]
-    [TestCase(true)]
-    public async Task RefreshAsync_ReturnsTheExactCommittedTokens_WhenTheResponseIsRetried(bool cookieWasDelivered)
+    [Test]
+    public async Task RefreshAsync_ReturnsTheExactCommittedTokens_WhenTheResponseIsRetriedWithTheDeliveredCookie()
     {
         // Arrange
         var committed = await _auth.RefreshAsync(_refresh.Token, _access.Token).ConfigureAwait(false);
         _time.Advance(TimeSpan.FromMinutes(2));
 
         // Act
-        var recovered = await _auth.RefreshAsync(
-            cookieWasDelivered ? committed!.RefreshToken : _refresh.Token, _access.Token).ConfigureAwait(false);
+        var recovered = await _auth.RefreshAsync(committed!.RefreshToken, _access.Token).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(recovered, Is.EqualTo(committed));
+            Assert.That(await _context.RefreshTokens.CountAsync().ConfigureAwait(false), Is.EqualTo(1));
+            Assert.That(recovered!.AccessTokenExpiresAt,
+                Is.EqualTo(new DateTime(2026, 9, 21, 12, 15, 0, DateTimeKind.Utc)));
+            Assert.That(recovered.RefreshTokenExpiresAt,
+                Is.EqualTo(new DateTime(2026, 9, 28, 12, 0, 0, DateTimeKind.Utc)));
+        }
+    }
+
+    [Test]
+    public async Task RefreshAsync_ReturnsTheExactCommittedTokens_WhenTheResponseIsRetriedWithTheOriginalCookie()
+    {
+        // Arrange
+        var committed = await _auth.RefreshAsync(_refresh.Token, _access.Token).ConfigureAwait(false);
+        _time.Advance(TimeSpan.FromMinutes(2));
+
+        // Act
+        var recovered = await _auth.RefreshAsync(_refresh.Token, _access.Token).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -191,11 +211,13 @@ public sealed class AuthRenewalRecoveryTests
         var revoked = await _auth.LogoutAsync(otherRefresh.Token, _access.Token).ConfigureAwait(false);
 
         // Assert
+        var otherHash = Convert.ToBase64String(SHA256.HashData(Encoding.UTF8.GetBytes(otherRefresh.Token)));
         using (Assert.EnterMultipleScope())
         {
             Assert.That(revoked, Is.False);
-            Assert.That(await tokens.TryValidateRefreshTokenAsync(otherRefresh.Token).ConfigureAwait(false),
-                Is.EqualTo(_user.Id));
+            Assert.That(
+                await _context.RefreshTokens.AnyAsync(token => token.TokenHash == otherHash).ConfigureAwait(false),
+                Is.True);
             Assert.That(await _context.RefreshTokens.CountAsync().ConfigureAwait(false), Is.EqualTo(2));
         }
     }
@@ -214,14 +236,27 @@ public sealed class AuthRenewalRecoveryTests
         Assert.That(result, Is.Null);
     }
 
-    [TestCase(false, false)]
-    [TestCase(true, true)]
-    public async Task RefreshAsync_RejectsRecovery_WhenTheAccountIsRestricted(bool enabled, bool locked)
+    [Test]
+    public async Task RefreshAsync_RejectsRecovery_WhenTheAccountIsDisabled()
     {
         // Arrange
         await _auth.RefreshAsync(_refresh.Token, _access.Token).ConfigureAwait(false);
-        _user.Enabled = enabled;
-        _user.LockedUntil = locked ? _time.GetUtcNow().UtcDateTime.AddDays(1) : null;
+        _user.Enabled = false;
+
+        // Act
+        var result = await _auth.RefreshAsync(_refresh.Token, _access.Token).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(result, Is.Null);
+    }
+
+    [Test]
+    public async Task RefreshAsync_RejectsRecovery_WhenTheAccountIsLocked()
+    {
+        // Arrange
+        await _auth.RefreshAsync(_refresh.Token, _access.Token).ConfigureAwait(false);
+        _user.Enabled = true;
+        _user.LockedUntil = new DateTime(2026, 9, 22, 12, 0, 0, DateTimeKind.Utc);
 
         // Act
         var result = await _auth.RefreshAsync(_refresh.Token, _access.Token).ConfigureAwait(false);
@@ -279,11 +314,12 @@ public sealed class AuthRenewalRecoveryTests
             await _auth.RefreshAsync(_refresh.Token, _access.Token).ConfigureAwait(false));
 
         // Assert
-        var tokens = _services.GetRequiredService<ITokenService>();
+        var refreshHash = Convert.ToBase64String(SHA256.HashData(Encoding.UTF8.GetBytes(_refresh.Token)));
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(await tokens.TryValidateRefreshTokenAsync(_refresh.Token).ConfigureAwait(false),
-                Is.EqualTo(_user.Id));
+            Assert.That(
+                await _context.RefreshTokens.AnyAsync(token => token.TokenHash == refreshHash).ConfigureAwait(false),
+                Is.True);
             Assert.That(await _context.RefreshTokens.CountAsync().ConfigureAwait(false), Is.EqualTo(1));
         }
     }

@@ -133,7 +133,16 @@ public sealed class NotificationServiceSettingsValidationTests
     public void PatchAsync_RejectsThePatch_WhenItRemovesARequiredProviderSetting()
     {
         // Arrange
-        ArrangeStoredRule(new Dictionary<string, string> { ["url"] = "https://example.com/hook" });
+        _rules
+            .Setup(repository => repository.GetByIdAsync(RuleId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new NotificationRule
+            {
+                Id = RuleId,
+                Name = "QA rule",
+                ProviderType = "webhook",
+                Settings = new Dictionary<string, string> { ["url"] = "https://example.com/hook" },
+                Enabled = false
+            });
         var patch = new NotificationRulePatch
         {
             Settings = new DictionaryPatch<string, string?, string?> { Remove = ["url"] }
@@ -159,7 +168,16 @@ public sealed class NotificationServiceSettingsValidationTests
     public void PatchAsync_RejectsEnablingTheRule_WhenTheStoredRuleLacksARequiredSetting()
     {
         // Arrange
-        ArrangeStoredRule([]);
+        _rules
+            .Setup(repository => repository.GetByIdAsync(RuleId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new NotificationRule
+            {
+                Id = RuleId,
+                Name = "QA rule",
+                ProviderType = "webhook",
+                Settings = [],
+                Enabled = false
+            });
         var patch = new NotificationRulePatch { Enabled = new() { Value = true } };
 
         // Act
@@ -173,7 +191,16 @@ public sealed class NotificationServiceSettingsValidationTests
     public async Task PatchAsync_AppliesThePatch_WhenItSuppliesTheMissingRequiredSetting()
     {
         // Arrange
-        ArrangeStoredRule([]);
+        _rules
+            .Setup(repository => repository.GetByIdAsync(RuleId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new NotificationRule
+            {
+                Id = RuleId,
+                Name = "QA rule",
+                ProviderType = "webhook",
+                Settings = [],
+                Enabled = false
+            });
         var patch = new NotificationRulePatch
         {
             Settings = new DictionaryPatch<string, string?, string?>
@@ -187,19 +214,5 @@ public sealed class NotificationServiceSettingsValidationTests
 
         // Assert
         Assert.That(patched, Is.True);
-    }
-
-    private void ArrangeStoredRule(Dictionary<string, string> settings)
-    {
-        _rules
-            .Setup(repository => repository.GetByIdAsync(RuleId, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new NotificationRule
-            {
-                Id = RuleId,
-                Name = "QA rule",
-                ProviderType = "webhook",
-                Settings = settings,
-                Enabled = false
-            });
     }
 }

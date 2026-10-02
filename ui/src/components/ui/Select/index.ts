@@ -5,7 +5,6 @@ export {
     SelectItem,
     SelectGroup,
     SelectLabel,
-    SelectSeparator,
     SelectValue,
     type SelectProps,
     type SelectTriggerProps,
@@ -13,6 +12,5 @@ export {
     type SelectItemProps,
     type SelectGroupProps,
     type SelectLabelProps,
-    type SelectSeparatorProps,
     type SelectSize,
 } from './Select';

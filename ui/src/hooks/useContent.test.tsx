@@ -10,6 +10,7 @@ import {
     usePendingRefresh,
     useContentTags,
     useRefreshContent,
+    useRescanContentMediaInfo,
     useSearchContentReleases,
     useUpdateContent,
     useBulkDeleteContent,
@@ -47,18 +48,6 @@ vi.mock('./useEventStream', () => ({
 
 const mockedUseEventStream = vi.mocked(useEventStream);
 
-function createTestQueryClient() {
-    return new QueryClient({
-        defaultOptions: {
-            queries: {
-                retry: false,
-                gcTime: 0,
-                staleTime: 0,
-            },
-        },
-    });
-}
-
 function createWrapper(queryClient: QueryClient) {
     return function Wrapper({ children }: { children: ReactNode }) {
         return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
@@ -69,11 +58,20 @@ describe('useContent hooks', () => {
     let queryClient: QueryClient;
 
     beforeEach(() => {
-        queryClient = createTestQueryClient();
+        queryClient = new QueryClient({
+            defaultOptions: {
+                queries: {
+                    retry: false,
+                    gcTime: 0,
+                    staleTime: 0,
+                },
+            },
+        });
         vi.clearAllMocks();
     });
 
     afterEach(() => {
+        vi.useRealTimers();
         queryClient.clear();
     });
 
@@ -461,6 +459,7 @@ describe('useContent hooks', () => {
                 }
                 return Promise.reject(new Error(`Unexpected path: ${path}`));
             });
+            vi.useFakeTimers({ shouldAdvanceTime: true });
             const event = {
                 name: 'content.hierarchyItem.updated',
                 context: { 'content.hierarchyItemId': mockContentItem.id },
@@ -474,7 +473,7 @@ describe('useContent hooks', () => {
                     }
                 }
             });
-            await act(() => new Promise((resolve) => setTimeout(resolve, 250)));
+            await act(() => vi.advanceTimersByTimeAsync(250));
 
             expect(
                 vi.mocked(api.apiGet).mock.calls.filter(([path]) => path === `/content/${mockContentItem.id}`),
@@ -671,6 +670,28 @@ describe('useContent hooks', () => {
                     contentQueryKeys.list(),
                 ]),
             );
+        });
+    });
+
+    describe('useRescanContentMediaInfo', () => {
+        it('starts a media info scan of every file of the item', async () => {
+            vi.mocked(api.apiPost).mockResolvedValue('22222222-2222-2222-2222-222222222222');
+
+            const { result } = renderHook(() => useRescanContentMediaInfo(), {
+                wrapper: createWrapper(queryClient),
+            });
+
+            result.current.mutate('11111111-1111-1111-1111-111111111111');
+
+            await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+            expect(api.apiPost).toHaveBeenCalledWith('/jobs/execute-immediate', {
+                jobType: 'MediaInfoExtractScan',
+                parameters: {
+                    contentHierarchyItemId: '11111111-1111-1111-1111-111111111111',
+                    mediaInfoPolicy: 'All',
+                },
+            });
         });
     });
 

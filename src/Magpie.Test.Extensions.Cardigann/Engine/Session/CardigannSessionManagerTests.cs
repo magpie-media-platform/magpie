@@ -1,10 +1,12 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Text;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -96,6 +98,7 @@ public sealed class CardigannSessionManagerTests
     private ServiceProvider _cooldownServices = null!;
     private ICardigannSessionManager _sessions = null!;
     private MockHttpMessageHandler _http = null!;
+    private MockedRequest _sessionDestroy = null!;
     private Mock<IResultParser> _resultParser = null!;
     private IHttpClientFactory _clientFactory = null!;
     private ISettingsService _settingsService = null!;
@@ -110,11 +113,21 @@ public sealed class CardigannSessionManagerTests
         _cooldownServices = new ServiceCollection().AddHttpClient("test-cooldown")
             .AddUpstreamCooldown().Services.BuildServiceProvider();
         _http = new MockHttpMessageHandler();
+        _sessionDestroy = _http.When(HttpMethod.Post, "http://solver.test:8191/v1")
+            .WithContent("""{"cmd":"sessions.destroy","session":"magpie-0b0e7a5c2f4e4c1a9d5e6a7b8c9d0e1f-node-a"}""")
+            .Respond(
+                HttpStatusCode.InternalServerError,
+                "application/json",
+                """{"status":"error","message":"Error: The session doesn't exist."}""");
         var clientFactory = new Mock<IHttpClientFactory>();
         clientFactory.Setup(f => f.CreateClient(It.IsAny<string>())).Returns(() => _http.ToHttpClient());
         _clientFactory = clientFactory.Object;
 
-        _solverGroup = new SettingsGroup { Name = "magpie.cardigann" };
+        _solverGroup = new SettingsGroup
+        {
+            Id = Guid.Parse("0b0e7a5c-2f4e-4c1a-9d5e-6a7b8c9d0e1f"),
+            Name = "magpie.cardigann",
+        };
         _solverGroup.Settings.Add(new Setting { Key = "flareSolverrUrl", Value = "http://solver.test:8191" });
         var settingsService = new Mock<ISettingsService>();
         settingsService
@@ -160,7 +173,9 @@ public sealed class CardigannSessionManagerTests
                 _settingsService,
                 _memoFactory,
                 NullLogger<FlareSolverrClient>.Instance, _cooldownServices.GetRequiredService<IUpstreamCooldown>(),
-                new SolverQueue(), TimeProvider.System),
+                new SolverQueue(),
+                Mock.Of<IMagpieSystem>(system => system.NodeId == "node-a"),
+                TimeProvider.System),
             new CardigannSessionState(),
             TimeProvider.System,
             NullLogger<CardigannSessionManager>.Instance);
@@ -695,7 +710,14 @@ public sealed class CardigannSessionManagerTests
             Assert.That(retryUserAgent, Is.EqualTo("SolverAgent/1.0"));
             Assert.That(
                 solverCommand,
-                Is.EqualTo("""{"cmd":"request.get","url":"https://tracker.test/","maxTimeout":60000}"""));
+                Is.EqualTo(JsonSerializer.Serialize(new
+                {
+                    cmd = "request.get",
+                    session = "magpie-0b0e7a5c2f4e4c1a9d5e6a7b8c9d0e1f-node-a",
+                    url = "https://tracker.test/",
+                    maxTimeout = 60000,
+                    session_ttl_minutes = 60,
+                })));
         }
     }
 
@@ -1488,7 +1510,9 @@ public sealed class CardigannSessionManagerTests
                 _settingsService,
                 _memoFactory,
                 NullLogger<FlareSolverrClient>.Instance, _cooldownServices.GetRequiredService<IUpstreamCooldown>(),
-                new SolverQueue(), TimeProvider.System),
+                new SolverQueue(),
+                Mock.Of<IMagpieSystem>(system => system.NodeId == "node-a"),
+                TimeProvider.System),
             new CardigannSessionState(),
             clock,
             NullLogger<CardigannSessionManager>.Instance);
@@ -1552,6 +1576,248 @@ public sealed class CardigannSessionManagerTests
         }
     }
 
+    [TestCase(
+        "1c2d3e4f-5a6b-4c7d-8e9f-a0b1c2d3e4f5",
+        "node-a",
+        "magpie-1c2d3e4f5a6b4c7d8e9fa0b1c2d3e4f5-node-a")]
+    [TestCase(
+        "0b0e7a5c-2f4e-4c1a-9d5e-6a7b8c9d0e1f",
+        "node-b",
+        "magpie-0b0e7a5c2f4e4c1a9d5e6a7b8c9d0e1f-node-b")]
+    public async Task SolveAsync_SendsTheSessionOfItsOwnInstall_WhenAnotherInstallSharesTheSolver(
+        string otherGroupId,
+        string otherNodeId,
+        string otherSession)
+    {
+        // Arrange
+        var ownTracker = _http.When(HttpMethod.Post, "http://solver.test:8191/v1")
+            .WithJsonContent(new
+            {
+                cmd = "request.get",
+                session = "magpie-0b0e7a5c2f4e4c1a9d5e6a7b8c9d0e1f-node-a",
+                url = "https://tracker.test/",
+                maxTimeout = 60000,
+                session_ttl_minutes = 60,
+            })
+            .Respond("application/json", SolvedResponse);
+        var ownOther = _http.When(HttpMethod.Post, "http://solver.test:8191/v1")
+            .WithJsonContent(new
+            {
+                cmd = "request.get",
+                session = "magpie-0b0e7a5c2f4e4c1a9d5e6a7b8c9d0e1f-node-a",
+                url = "https://other.test/",
+                maxTimeout = 60000,
+                session_ttl_minutes = 60,
+            })
+            .Respond("application/json", SolvedResponse);
+        var otherTracker = _http.When(HttpMethod.Post, "http://solver.test:8191/v1")
+            .WithJsonContent(new
+            {
+                cmd = "request.get",
+                session = otherSession,
+                url = "https://tracker.test/",
+                maxTimeout = 60000,
+                session_ttl_minutes = 60,
+            })
+            .Respond("application/json", SolvedResponse);
+        var otherGroup = new SettingsGroup { Id = Guid.Parse(otherGroupId), Name = "magpie.cardigann" };
+        otherGroup.Settings.Add(new Setting { Key = "flareSolverrUrl", Value = "http://solver.test:8191" });
+        var otherSettings = new Mock<ISettingsService>();
+        otherSettings
+            .Setup(service => service.GetExtensionGroupAsync(
+                It.IsAny<Guid>(),
+                It.IsAny<string>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new SettingsGroupDetail { Group = otherGroup });
+        var own = new FlareSolverrClient(
+            _clientFactory,
+            _settingsService,
+            _memoFactory,
+            NullLogger<FlareSolverrClient>.Instance,
+            _cooldownServices.GetRequiredService<IUpstreamCooldown>(),
+            new SolverQueue(),
+            Mock.Of<IMagpieSystem>(system => system.NodeId == "node-a"),
+            TimeProvider.System);
+        var other = new FlareSolverrClient(
+            _clientFactory,
+            otherSettings.Object,
+            _memoFactory,
+            NullLogger<FlareSolverrClient>.Instance,
+            _cooldownServices.GetRequiredService<IUpstreamCooldown>(),
+            new SolverQueue(),
+            Mock.Of<IMagpieSystem>(system => system.NodeId == otherNodeId),
+            TimeProvider.System);
+
+        // Act
+        var ownTrackerClearance = await own.SolveAsync(new Uri("https://tracker.test/"), reuse: false, default)
+            .ConfigureAwait(false);
+        var ownOtherClearance = await own.SolveAsync(new Uri("https://other.test/"), reuse: false, default)
+            .ConfigureAwait(false);
+        var otherTrackerClearance = await other.SolveAsync(new Uri("https://tracker.test/"), reuse: false, default)
+            .ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(ownTrackerClearance, Is.Not.Null);
+            Assert.That(ownOtherClearance, Is.Not.Null);
+            Assert.That(otherTrackerClearance, Is.Not.Null);
+            Assert.That(_http.GetMatchCount(ownTracker), Is.EqualTo(1));
+            Assert.That(_http.GetMatchCount(ownOther), Is.EqualTo(1));
+            Assert.That(_http.GetMatchCount(otherTracker), Is.EqualTo(1));
+        }
+    }
+
+    [Test]
+    public async Task SolveAsync_DestroysTheSessionOnceAndReusesItsId_WhenTheSolverAnswersWithAnError()
+    {
+        // Arrange
+        var failed = _http.When(HttpMethod.Post, "http://solver.test:8191/v1")
+            .WithJsonContent(new
+            {
+                cmd = "request.get",
+                session = "magpie-0b0e7a5c2f4e4c1a9d5e6a7b8c9d0e1f-node-a",
+                url = "https://tracker.test/search?q=one",
+                maxTimeout = 60000,
+                session_ttl_minutes = 60,
+            })
+            .Respond(
+                HttpStatusCode.InternalServerError,
+                "application/json",
+                """{"status":"error","message":"Error: Unable to process browser request."}""");
+        var reused = _http.When(HttpMethod.Post, "http://solver.test:8191/v1")
+            .WithJsonContent(new
+            {
+                cmd = "request.get",
+                session = "magpie-0b0e7a5c2f4e4c1a9d5e6a7b8c9d0e1f-node-a",
+                url = "https://tracker.test/search?q=two",
+                maxTimeout = 60000,
+                session_ttl_minutes = 60,
+            })
+            .Respond("application/json", SolvedPageResponse);
+        var solver = new FlareSolverrClient(
+            _clientFactory,
+            _settingsService,
+            _memoFactory,
+            NullLogger<FlareSolverrClient>.Instance,
+            _cooldownServices.GetRequiredService<IUpstreamCooldown>(),
+            new SolverQueue(),
+            Mock.Of<IMagpieSystem>(system => system.NodeId == "node-a"),
+            TimeProvider.System);
+
+        // Act
+        var first = await solver.SolveAsync(new Uri("https://tracker.test/search?q=one"), reuse: false, default)
+            .ConfigureAwait(false);
+        var second = await solver.SolveAsync(new Uri("https://tracker.test/search?q=two"), reuse: false, default)
+            .ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(first, Is.Null);
+            Assert.That(second, Is.Not.Null);
+            Assert.That(_http.GetMatchCount(failed), Is.EqualTo(1));
+            Assert.That(_http.GetMatchCount(_sessionDestroy), Is.EqualTo(1));
+            Assert.That(_http.GetMatchCount(reused), Is.EqualTo(1));
+        }
+    }
+
+    [Test]
+    public async Task SolveAsync_DestroysTheSessionOnce_WhenTheSolverRequestTimesOut()
+    {
+        // Arrange
+        var timedOut = _http.When(HttpMethod.Post, "http://solver.test:8191/v1")
+            .WithJsonContent(new
+            {
+                cmd = "request.get",
+                session = "magpie-0b0e7a5c2f4e4c1a9d5e6a7b8c9d0e1f-node-a",
+                url = "https://tracker.test/search?q=one",
+                maxTimeout = 60000,
+                session_ttl_minutes = 60,
+            })
+            .Throw(new TaskCanceledException("The solver request timed out."));
+        var solver = new FlareSolverrClient(
+            _clientFactory,
+            _settingsService,
+            _memoFactory,
+            NullLogger<FlareSolverrClient>.Instance,
+            _cooldownServices.GetRequiredService<IUpstreamCooldown>(),
+            new SolverQueue(),
+            Mock.Of<IMagpieSystem>(system => system.NodeId == "node-a"),
+            TimeProvider.System);
+
+        // Act
+        var result = await solver.SolveAsync(new Uri("https://tracker.test/search?q=one"), reuse: false, default)
+            .ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result, Is.Null);
+            Assert.That(_http.GetMatchCount(timedOut), Is.EqualTo(1));
+            Assert.That(_http.GetMatchCount(_sessionDestroy), Is.EqualTo(1));
+        }
+    }
+
+    [Test]
+    public async Task SolveAsync_KeepsTheRejectedOutcome_WhenTheSessionDestroyCannotReachTheSolver()
+    {
+        // Arrange
+        var outcomes = new List<object?>();
+        using var trace = new Activity("test").Start();
+        using var listener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == "magpie.extensions.cardigann",
+            Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllData,
+            ActivityStopped = activity =>
+            {
+                if (activity.TraceId == trace.TraceId && activity.OperationName == "cardigann.cloudflare.solve")
+                {
+                    outcomes.Add(activity.GetTagItem("magpie.request.outcome"));
+                }
+            },
+        };
+        ActivitySource.AddActivityListener(listener);
+        var failed = _http.When(HttpMethod.Post, "http://solver.test:8191/v1")
+            .WithJsonContent(new
+            {
+                cmd = "request.get",
+                session = "magpie-0b0e7a5c2f4e4c1a9d5e6a7b8c9d0e1f-node-z",
+                url = "https://tracker.test/search?q=one",
+                maxTimeout = 60000,
+                session_ttl_minutes = 60,
+            })
+            .Respond(
+                HttpStatusCode.InternalServerError,
+                "application/json",
+                """{"status":"error","message":"Error: Unable to process browser request."}""");
+        var destroy = _http.When(HttpMethod.Post, "http://solver.test:8191/v1")
+            .WithContent("""{"cmd":"sessions.destroy","session":"magpie-0b0e7a5c2f4e4c1a9d5e6a7b8c9d0e1f-node-z"}""")
+            .Throw(new HttpRequestException("The solver connection was refused."));
+        var solver = new FlareSolverrClient(
+            _clientFactory,
+            _settingsService,
+            _memoFactory,
+            NullLogger<FlareSolverrClient>.Instance,
+            _cooldownServices.GetRequiredService<IUpstreamCooldown>(),
+            new SolverQueue(),
+            Mock.Of<IMagpieSystem>(system => system.NodeId == "node-z"),
+            TimeProvider.System);
+
+        // Act
+        var result = await solver.SolveAsync(new Uri("https://tracker.test/search?q=one"), reuse: false, default)
+            .ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result, Is.Null);
+            Assert.That(_http.GetMatchCount(failed), Is.EqualTo(1));
+            Assert.That(_http.GetMatchCount(destroy), Is.EqualTo(1));
+            Assert.That(outcomes, Is.EqualTo(new object?[] { "rejected" }));
+        }
+    }
+
     [Test]
     public async Task SolveAsync_ReturnsNull_WhenNoSolverEndpointIsConfigured()
     {
@@ -1559,7 +1825,9 @@ public sealed class CardigannSessionManagerTests
         var solver = new FlareSolverrClient(
             _clientFactory, Mock.Of<ISettingsService>(), _memoFactory, NullLogger<FlareSolverrClient>.Instance,
             _cooldownServices.GetRequiredService<IUpstreamCooldown>(),
-            new SolverQueue(), TimeProvider.System);
+            new SolverQueue(),
+            Mock.Of<IMagpieSystem>(system => system.NodeId == "node-a"),
+            TimeProvider.System);
 
         // Act
         var result = await solver.SolveAsync(new Uri("https://tracker.test/"), reuse: true, default)
@@ -1582,7 +1850,9 @@ public sealed class CardigannSessionManagerTests
             ? SolverRequestKind.Interactive : SolverRequestKind.Background);
         await queue.EnterAsync(default).ConfigureAwait(false);
         var solver = new FlareSolverrClient(_clientFactory, _settingsService, _memoFactory,
-            NullLogger<FlareSolverrClient>.Instance, cooldown, queue, TimeProvider.System);
+            NullLogger<FlareSolverrClient>.Instance, cooldown, queue,
+            Mock.Of<IMagpieSystem>(system => system.NodeId == "node-a"),
+            TimeProvider.System);
         var waiting = solver.SolveAsync(BaseUri, reuse: false, default, "account-a");
         using var upstream = new HttpRequestMessage(HttpMethod.Get, BaseUri);
         using var response = new HttpResponseMessage(HttpStatusCode.TooManyRequests);
@@ -1674,7 +1944,9 @@ public sealed class CardigannSessionManagerTests
             Mock.Of<ICacheFactory>(factory =>
                 factory.GetOrCreate(It.IsAny<string>(), It.IsAny<Func<CachePolicy>>()) == memo.Object),
             NullLogger<FlareSolverrClient>.Instance, _cooldownServices.GetRequiredService<IUpstreamCooldown>(),
-            new SolverQueue(), TimeProvider.System);
+            new SolverQueue(),
+            Mock.Of<IMagpieSystem>(system => system.NodeId == "node-a"),
+            TimeProvider.System);
 
         // Act
         await solver.SolveAsync(new Uri("https://tracker.test/one"), reuse: true, default).ConfigureAwait(false);
@@ -1696,7 +1968,9 @@ public sealed class CardigannSessionManagerTests
         var solver = new FlareSolverrClient(
             _clientFactory, settings.Object, _memoFactory, NullLogger<FlareSolverrClient>.Instance,
             _cooldownServices.GetRequiredService<IUpstreamCooldown>(),
-            new SolverQueue(), TimeProvider.System);
+            new SolverQueue(),
+            Mock.Of<IMagpieSystem>(system => system.NodeId == "node-a"),
+            TimeProvider.System);
 
         // Act
         var action = async () => await solver.SolveAsync(new Uri("https://tracker.test/"), reuse: true, default)
@@ -1904,7 +2178,9 @@ public sealed class CardigannSessionManagerTests
         factory.Setup(client => client.CreateClient(It.IsAny<string>())).Returns(http);
         var solver = new FlareSolverrClient(factory.Object, _settingsService, _memoFactory,
             NullLogger<FlareSolverrClient>.Instance, _cooldownServices.GetRequiredService<IUpstreamCooldown>(),
-            new SolverQueue { Wait = TimeSpan.FromSeconds(1) }, TimeProvider.System);
+            new SolverQueue { Wait = TimeSpan.FromSeconds(1) },
+            Mock.Of<IMagpieSystem>(system => system.NodeId == "node-a"),
+            TimeProvider.System);
         await solver.SolveAsync(BaseUri, reuse: true, default).ConfigureAwait(false);
 
         // Act
@@ -1932,7 +2208,9 @@ public sealed class CardigannSessionManagerTests
             Mock.Of<ICacheFactory>(factory =>
                 factory.GetOrCreate(It.IsAny<string>(), It.IsAny<Func<CachePolicy>>()) == memo.Object),
             NullLogger<FlareSolverrClient>.Instance, _cooldownServices.GetRequiredService<IUpstreamCooldown>(),
-            new SolverQueue { Wait = TimeSpan.FromSeconds(1) }, TimeProvider.System);
+            new SolverQueue { Wait = TimeSpan.FromSeconds(1) },
+            Mock.Of<IMagpieSystem>(system => system.NodeId == "node-a"),
+            TimeProvider.System);
         _http.When(HttpMethod.Post, "http://solver.test:8191/v1").Respond("application/json", SolvedResponse);
 
         // Act
@@ -1968,7 +2246,9 @@ public sealed class CardigannSessionManagerTests
         factory.Setup(value => value.CreateClient(It.IsAny<string>())).Returns(http);
         var solver = new FlareSolverrClient(factory.Object, _settingsService, _memoFactory,
             NullLogger<FlareSolverrClient>.Instance, _cooldownServices.GetRequiredService<IUpstreamCooldown>(),
-            new SolverQueue { Wait = TimeSpan.Zero }, TimeProvider.System);
+            new SolverQueue { Wait = TimeSpan.Zero },
+            Mock.Of<IMagpieSystem>(system => system.NodeId == "node-a"),
+            TimeProvider.System);
         using var cancellation = new CancellationTokenSource();
 
         // Act
@@ -2009,7 +2289,14 @@ public sealed class CardigannSessionManagerTests
     {
         // Arrange
         var rootSolve = _http.When(HttpMethod.Post, "http://solver.test:8191/v1")
-            .WithContent("""{"cmd":"request.get","url":"https://tracker.test/","maxTimeout":60000}""")
+            .WithJsonContent(new
+            {
+                cmd = "request.get",
+                session = "magpie-0b0e7a5c2f4e4c1a9d5e6a7b8c9d0e1f-node-a",
+                url = "https://tracker.test/",
+                maxTimeout = 60000,
+                session_ttl_minutes = 60,
+            })
             .Respond("application/json", SolvedPageWithoutCookiesResponse);
         _http.When(HttpMethod.Post, "http://solver.test:8191/v1")
             .Respond("application/json", SolvedPageWithoutCookiesResponse);
@@ -2026,7 +2313,9 @@ public sealed class CardigannSessionManagerTests
             new FlareSolverrClient(_clientFactory, _settingsService, Mock.Of<ICacheFactory>(factory =>
                     factory.GetOrCreate(It.IsAny<string>(), It.IsAny<Func<CachePolicy>>()) == Mock.Of<ICache>()),
                 NullLogger<FlareSolverrClient>.Instance, _cooldownServices.GetRequiredService<IUpstreamCooldown>(),
-                new SolverQueue(), TimeProvider.System),
+                new SolverQueue(),
+                Mock.Of<IMagpieSystem>(system => system.NodeId == "node-a"),
+                TimeProvider.System),
             new CardigannSessionState(), TimeProvider.System, NullLogger<CardigannSessionManager>.Instance);
 
         // Act
@@ -2054,17 +2343,40 @@ public sealed class CardigannSessionManagerTests
     {
         // Arrange
         var failed = _http.When(HttpMethod.Post, "http://solver.test:8191/v1")
-            .WithContent("""{"cmd":"request.get","url":"https://tracker.test/search?q=one","maxTimeout":60000}""")
+            .WithJsonContent(new
+            {
+                cmd = "request.get",
+                session = "magpie-0b0e7a5c2f4e4c1a9d5e6a7b8c9d0e1f-node-a",
+                url = "https://tracker.test/search?q=one",
+                maxTimeout = 60000,
+                session_ttl_minutes = 60,
+            })
             .Respond(status, "application/json", body);
         var skipped = _http.When(HttpMethod.Post, "http://solver.test:8191/v1")
-            .WithContent("""{"cmd":"request.get","url":"https://tracker.test/search?q=two","maxTimeout":60000}""")
+            .WithJsonContent(new
+            {
+                cmd = "request.get",
+                session = "magpie-0b0e7a5c2f4e4c1a9d5e6a7b8c9d0e1f-node-a",
+                url = "https://tracker.test/search?q=two",
+                maxTimeout = 60000,
+                session_ttl_minutes = 60,
+            })
             .Respond("application/json", SolvedPageResponse);
         var other = _http.When(HttpMethod.Post, "http://solver.test:8191/v1")
-            .WithContent("""{"cmd":"request.get","url":"https://other.test/search","maxTimeout":60000}""")
+            .WithJsonContent(new
+            {
+                cmd = "request.get",
+                session = "magpie-0b0e7a5c2f4e4c1a9d5e6a7b8c9d0e1f-node-a",
+                url = "https://other.test/search",
+                maxTimeout = 60000,
+                session_ttl_minutes = 60,
+            })
             .Respond("application/json", SolvedPageResponse);
         var solver = new FlareSolverrClient(_clientFactory, _settingsService, _memoFactory,
             NullLogger<FlareSolverrClient>.Instance, _cooldownServices.GetRequiredService<IUpstreamCooldown>(),
-            new SolverQueue(), TimeProvider.System);
+            new SolverQueue(),
+            Mock.Of<IMagpieSystem>(system => system.NodeId == "node-a"),
+            TimeProvider.System);
 
         // Act
         var first = await solver.SolveAsync(new Uri("https://tracker.test/search?q=one"), reuse: false, default)
@@ -2092,15 +2404,31 @@ public sealed class CardigannSessionManagerTests
     {
         // Arrange
         _http.When(HttpMethod.Post, "http://solver.test:8191/v1")
-            .WithContent("""{"cmd":"request.get","url":"https://tracker.test/search?q=one","maxTimeout":60000}""")
+            .WithJsonContent(new
+            {
+                cmd = "request.get",
+                session = "magpie-0b0e7a5c2f4e4c1a9d5e6a7b8c9d0e1f-node-a",
+                url = "https://tracker.test/search?q=one",
+                maxTimeout = 60000,
+                session_ttl_minutes = 60,
+            })
             .Respond(HttpStatusCode.InternalServerError, "application/json",
                 """{"status":"error","message":"Error: Error solving the challenge. Timeout after 60.0 seconds."}""");
         var bypassed = _http.When(HttpMethod.Post, "http://solver.test:8191/v1")
-            .WithContent("""{"cmd":"request.get","url":"https://tracker.test/search?q=two","maxTimeout":60000}""")
+            .WithJsonContent(new
+            {
+                cmd = "request.get",
+                session = "magpie-0b0e7a5c2f4e4c1a9d5e6a7b8c9d0e1f-node-a",
+                url = "https://tracker.test/search?q=two",
+                maxTimeout = 60000,
+                session_ttl_minutes = 60,
+            })
             .Respond("application/json", SolvedPageResponse);
         var solver = new FlareSolverrClient(_clientFactory, _settingsService, _memoFactory,
             NullLogger<FlareSolverrClient>.Instance, _cooldownServices.GetRequiredService<IUpstreamCooldown>(),
-            new SolverQueue(), TimeProvider.System);
+            new SolverQueue(),
+            Mock.Of<IMagpieSystem>(system => system.NodeId == "node-a"),
+            TimeProvider.System);
         await solver.SolveAsync(new Uri("https://tracker.test/search?q=one"), reuse: false, default)
             .ConfigureAwait(false);
 
@@ -2137,7 +2465,9 @@ public sealed class CardigannSessionManagerTests
             .Respond(HttpStatusCode.InternalServerError, "application/json", body);
         var solver = new FlareSolverrClient(_clientFactory, _settingsService, _memoFactory,
             NullLogger<FlareSolverrClient>.Instance, _cooldownServices.GetRequiredService<IUpstreamCooldown>(),
-            new SolverQueue(), TimeProvider.System);
+            new SolverQueue(),
+            Mock.Of<IMagpieSystem>(system => system.NodeId == "node-a"),
+            TimeProvider.System);
 
         // Act
         var first = await solver.SolveAsync(new Uri("https://tracker.test/search?q=one"), reuse: false, default)
@@ -2248,6 +2578,42 @@ public sealed class CardigannSessionManagerTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(releases.Select(release => release.Title), Is.EqualTo(["Row B"]));
+            Assert.That(_http.GetMatchCount(solve), Is.EqualTo(1));
+        }
+    }
+
+    [Test]
+    public void SearchAsync_ThrowsAfterOneSolverCall_WhenTheSearchPageMeetsTheBackoff()
+    {
+        // Arrange
+        var definition = new CardigannDefinition { Id = "search", Name = "Search" };
+        definition.Links.Add("https://tracker.test/");
+        definition.Search.Paths.Add(new SearchPath { Path = "/search" });
+        var integration = new CardigannIndexerIntegration(Guid.Empty, definition, _resultParser.Object, _sessions,
+            NullLogger<CardigannIndexerIntegration>.Instance);
+        _http.When(HttpMethod.Get, "https://tracker.test/search").Respond(_ =>
+        {
+            var response = new HttpResponseMessage(HttpStatusCode.Forbidden)
+            {
+                Content = new StringContent("<html>Just a moment...</html>")
+            };
+            response.Headers.TryAddWithoutValidation("CF-RAY", "challenge");
+            return response;
+        });
+        var solve = _http.When(HttpMethod.Post, "http://solver.test:8191/v1")
+            .Respond(HttpStatusCode.InternalServerError, "application/json",
+                """{"status":"error","message":"Error: Error solving the challenge. Timeout after 60.0 seconds."}""");
+
+        // Act
+        var exception = Assert.ThrowsAsync<HttpRequestException>(() => integration.SearchAsync(
+            new ReleaseSearchRequest { Title = "query" },
+            new Dictionary<string, string>(),
+            default));
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(exception!.Message, Does.Contain("could not be solved"));
             Assert.That(_http.GetMatchCount(solve), Is.EqualTo(1));
         }
     }

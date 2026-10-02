@@ -312,7 +312,7 @@ internal sealed class ContentMetadataProvider(
         if (skipped > 0)
         {
             logger.LogDebug(
-                "Open Library skipped {SkippedCount} legacy contribution strings that the parser cannot read",
+                "Open Library skipped {SkippedCount} unparsable legacy contribution strings",
                 skipped);
         }
     }

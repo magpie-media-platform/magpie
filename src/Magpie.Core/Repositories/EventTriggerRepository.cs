@@ -56,9 +56,7 @@ internal sealed class EventTriggerRepository(
                 string.Equals(pair.Value, value, StringComparison.Ordinal));
     }
 
-    private static void ApplyPatch(
-        IDictionary<string, string> values,
-        DictionaryPatch<string, string, string> patch)
+    private static void ApplyPatch(IDictionary<string, string> values, DictionaryPatch<string, string, string> patch)
     {
         if (patch.Add is not null)
         {
@@ -266,8 +264,10 @@ internal sealed class EventTriggerRepository(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "The event trigger repository failed to create event trigger " +
-                "{EventTriggerName}.", model.Name);
+            logger.LogError(
+                ex,
+                "The event trigger repository failed to create event trigger {EventTriggerName}.",
+                model.Name);
             throw;
         }
     }
@@ -341,7 +341,8 @@ internal sealed class EventTriggerRepository(
             {
                 await transactionManager.OnCommittedAsync(
                     token => eventBus.PublishAsync(
-                        TriggerEventBuilder.BuildEventTriggerUpdatedEvent(model.Id, changedFields), token),
+                        TriggerEventBuilder.BuildEventTriggerUpdatedEvent(model.Id, changedFields),
+                        token),
                     cancellationToken).ConfigureAwait(false);
             }
 
@@ -349,8 +350,10 @@ internal sealed class EventTriggerRepository(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "The event trigger repository failed to update event trigger " +
-                "{EventTriggerId}.", model.Id);
+            logger.LogError(
+                ex,
+                "The event trigger repository failed to update event trigger {EventTriggerId}.",
+                model.Id);
             throw;
         }
     }
@@ -503,8 +506,10 @@ internal sealed class EventTriggerRepository(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "The event trigger repository failed to patch event trigger " +
-                "{EventTriggerId}.", patch.Id);
+            logger.LogError(
+                ex,
+                "The event trigger repository failed to patch event trigger {EventTriggerId}.",
+                patch.Id);
             throw;
         }
     }

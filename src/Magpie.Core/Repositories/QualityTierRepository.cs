@@ -93,8 +93,10 @@ internal sealed class QualityTierRepository(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "The quality tier repository failed to create quality tier " +
-                "{QualityTierName}.", model.Name);
+            logger.LogError(
+                ex,
+                "The quality tier repository failed to create quality tier {QualityTierName}.",
+                model.Name);
             throw;
         }
     }

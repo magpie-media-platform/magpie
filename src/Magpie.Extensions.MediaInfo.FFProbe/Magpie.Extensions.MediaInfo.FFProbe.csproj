@@ -17,4 +17,8 @@
     <ProjectReference Include="..\Magpie.Sdk\Magpie.Sdk.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="Magpie.Test.Extensions.MediaInfo.FFProbe" />
+  </ItemGroup>
+
 </Project>

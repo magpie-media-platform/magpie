@@ -25,8 +25,6 @@ export interface HealthCardProps extends HTMLAttributes<HTMLDivElement> {
     loading?: boolean;
 
     getStatusUrl?: (status: HealthStatus) => string;
-
-    headingLevel?: 2 | 3;
 }
 
 const statusLabelMap: Record<HealthStatus, string> = {
@@ -48,11 +46,10 @@ const StatusRow = ({ status, count, url }: StatusRowProps) =>
     count === 0 ? null : <SharedStatusRow status={status} label={statusLabelMap[status]} count={count} url={url} />;
 
 export const HealthCard = forwardRef<HTMLDivElement, HealthCardProps>(
-    ({ heading, icon, counts, loading = false, getStatusUrl, headingLevel = 2, className, ...props }, ref) => {
+    ({ heading, icon, counts, loading = false, getStatusUrl, className, ...props }, ref) => {
         const classes = ['health-card', className].filter(Boolean).join(' ');
         const total =
             counts.healthy + counts.unhealthy + counts.degraded + counts.stabilizing + counts.unknown + counts.stale;
-        const HeadingTag = `h${headingLevel}` as const;
 
         return (
             <div ref={ref} className={classes} data-component="health-card" {...props}>
@@ -62,7 +59,7 @@ export const HealthCard = forwardRef<HTMLDivElement, HealthCardProps>(
                             {icon}
                         </span>
                     )}
-                    <HeadingTag className="health-card__title">{heading}</HeadingTag>
+                    <h2 className="health-card__title">{heading}</h2>
                     <span className="health-card__total">{loading ? '-' : total}</span>
                 </div>
                 <div className="health-card__body">

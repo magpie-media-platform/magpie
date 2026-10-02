@@ -165,15 +165,20 @@ public sealed class DownloadStuckDetectionJobTests
         }
     }
 
-    [Test]
-    public async Task ExecuteAsync_UsesFetchingThreshold_WhenParameterIsSpecified()
+    [TestCase("fetchingMinutes", "5", 5, 90)]
+    [TestCase("stalledMinutes", "30", 20, 30)]
+    public async Task ExecuteAsync_UsesThreshold_WhenParameterIsSpecified(
+        string key,
+        string value,
+        int fetching,
+        int stalled)
     {
         // Arrange
         var context = _jobContext with
         {
             Parameters = new Dictionary<string, string>(StringComparer.Ordinal)
             {
-                ["fetchingMinutes"] = "5"
+                [key] = value
             }
         };
 
@@ -183,29 +188,9 @@ public sealed class DownloadStuckDetectionJobTests
         // Assert
         _downloadRepository.Verify(
             r => r.ListStuckCandidatesAsync(
-                _now - TimeSpan.FromMinutes(5), _now - TimeSpan.FromMinutes(90), It.IsAny<CancellationToken>()),
-            Times.Once);
-    }
-
-    [Test]
-    public async Task ExecuteAsync_UsesStalledThreshold_WhenParameterIsSpecified()
-    {
-        // Arrange
-        var context = _jobContext with
-        {
-            Parameters = new Dictionary<string, string>(StringComparer.Ordinal)
-            {
-                ["stalledMinutes"] = "30"
-            }
-        };
-
-        // Act
-        await _subject.ExecuteAsync(context).ConfigureAwait(false);
-
-        // Assert
-        _downloadRepository.Verify(
-            r => r.ListStuckCandidatesAsync(
-                _now - TimeSpan.FromMinutes(20), _now - TimeSpan.FromMinutes(30), It.IsAny<CancellationToken>()),
+                _now - TimeSpan.FromMinutes(fetching),
+                _now - TimeSpan.FromMinutes(stalled),
+                It.IsAny<CancellationToken>()),
             Times.Once);
     }
 

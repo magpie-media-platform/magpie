@@ -7,11 +7,11 @@ using System.Threading.Tasks;
 using Magpie.Abstractions;
 using Magpie.Abstractions.Repositories;
 using Magpie.Core.Events;
-using Magpie.Core.Repositories;
 using Magpie.Models;
 using Magpie.Models.Api;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
+using Magpie.Models.Patch;
 using Magpie.Sdk.Notifications;
 using Magpie.Sdk.Services;
 
@@ -97,7 +97,7 @@ internal sealed class NotificationService(
         var settings = new Dictionary<string, string>(rule.Settings);
         if (patch.Settings is not null)
         {
-            NotificationRuleRepository.ApplyPatch(settings, patch.Settings);
+            ApplyPatch(settings, patch.Settings);
         }
 
         if (FindProvider(rule.ProviderType) is { } provider &&
@@ -157,6 +157,36 @@ internal sealed class NotificationService(
         return await DispatchTestAsync(rule, cancellationToken).ConfigureAwait(false);
     }
 
+    private static void ApplyPatch(IDictionary<string, string> values, DictionaryPatch<string, string?, string?> patch)
+    {
+        if (patch.Add is not null)
+        {
+            foreach (var (key, value) in patch.Add)
+            {
+                values[key] = value ?? string.Empty;
+            }
+        }
+
+        if (patch.Update is not null)
+        {
+            foreach (var (key, value) in patch.Update)
+            {
+                if (values.ContainsKey(key))
+                {
+                    values[key] = value ?? string.Empty;
+                }
+            }
+        }
+
+        if (patch.Remove is not null)
+        {
+            foreach (var key in patch.Remove)
+            {
+                values.Remove(key);
+            }
+        }
+    }
+
     private async Task<ConfigurationTestResult> DispatchTestAsync(
         NotificationRule rule,
         CancellationToken cancellationToken)
@@ -170,7 +200,7 @@ internal sealed class NotificationService(
                 rule.Id,
                 rule.ProviderType);
 
-            return new ConfigurationTestResult
+            return new()
             {
                 Success = false,
                 Message = $"No notification integration is available for provider type {rule.ProviderType}.",
@@ -180,7 +210,7 @@ internal sealed class NotificationService(
 
         if (await ValidateSettingsAsync(provider, rule.Settings, cancellationToken).ConfigureAwait(false) is { } issues)
         {
-            return new ConfigurationTestResult
+            return new()
             {
                 Success = false,
                 Message = "The test was not sent: " + issues,
@@ -205,7 +235,7 @@ internal sealed class NotificationService(
                 "The notification service failed to send the test message for rule {NotificationRuleId}",
                 rule.Id);
 
-            return new ConfigurationTestResult
+            return new()
             {
                 Success = false,
                 Message = ex.Message,
@@ -213,7 +243,7 @@ internal sealed class NotificationService(
             };
         }
 
-        return new ConfigurationTestResult
+        return new()
         {
             Success = true,
             Message = "Test notification sent to the provider.",

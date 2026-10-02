@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 
 using Magpie.Models;
 
@@ -16,24 +17,8 @@ internal static class SettingsExtensions
             return [];
         }
 
-        var secretKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var definition in schema)
-        {
-            if (definition.Secret)
-            {
-                secretKeys.Add(definition.Key);
-            }
-        }
+        var secretKeys = schema.Where(d => d.Secret).Select(d => d.Key).ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-        var redacted = new Dictionary<string, string>();
-        foreach (var entry in settings)
-        {
-            if (!secretKeys.Contains(entry.Key))
-            {
-                redacted[entry.Key] = entry.Value;
-            }
-        }
-
-        return redacted;
+        return settings.Where(entry => !secretKeys.Contains(entry.Key)).ToDictionary();
     }
 }

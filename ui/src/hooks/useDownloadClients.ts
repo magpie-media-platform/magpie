@@ -1,13 +1,9 @@
 import type { ScalarPatch, DictionaryPatch } from '@/types/patch';
 import { buildQueryKeys, useCrudResource } from './useCrudResource';
 import { useInvalidateQueriesOnEvents } from './useInvalidateQueriesOnEvents';
-import { healthStatusLabels, healthStatusVariants } from '@/types/healthStatus';
 import type { HealthStatusValue } from '@/types/healthStatus';
 
 export type DownloadClientStatusValue = HealthStatusValue;
-
-export const downloadClientStatusLabels = healthStatusLabels;
-export const downloadClientStatusVariants = healthStatusVariants;
 
 export interface ApiDownloadClient {
     id: string;
@@ -76,7 +72,6 @@ export function useDownloadClients() {
             debounceMs: 150,
             exact: true,
             maxWaitMs: 600,
-            owner: 'download-client-settings',
         },
     );
     const resource = useCrudResource<ApiDownloadClient, DownloadClientCreate, DownloadClientPatch>(

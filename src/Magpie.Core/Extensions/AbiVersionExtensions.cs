@@ -4,14 +4,28 @@ namespace Magpie.Core.Extensions;
 
 internal static class AbiVersionExtensions
 {
-    public static bool IsCompatibleWith(this Version currentAbi, string? targetAbi)
+    /// <summary>
+    /// Determines whether the host ABI can load an extension.
+    /// </summary>
+    /// <param name="currentAbi">The host ABI</param>
+    /// <param name="builtAgainst">The Magpie.Sdk version that the extension is built against</param>
+    /// <param name="targetAbi">The target ABI of the extension, as a version or an interval</param>
+    /// <returns>True when the host ABI can load the extension.</returns>
+    public static bool IsCompatibleWith(this Version currentAbi, Version builtAgainst, string? targetAbi)
     {
+        var normalizedCurrent = currentAbi.Normalize();
+        var normalizedBuiltAgainst = builtAgainst.Normalize();
+        if (normalizedCurrent.Major != normalizedBuiltAgainst.Major ||
+            normalizedCurrent.CompareTo(normalizedBuiltAgainst) < 0)
+        {
+            return false;
+        }
+
         if (string.IsNullOrWhiteSpace(targetAbi))
         {
             return true;
         }
 
-        var normalizedCurrent = currentAbi.Normalize();
         var value = targetAbi.Trim();
 
         return IsRangeExpression(value)
@@ -108,7 +122,7 @@ internal static class AbiVersionExtensions
         var normalized = metadataStart < 0 ? value : value[..metadataStart];
         if (!Version.TryParse(normalized.Trim(), out var parsed))
         {
-            version = new Version(0, 0);
+            version = new(0, 0);
             return false;
         }
 

@@ -84,11 +84,10 @@ public sealed class NotificationRuleRepositoryTests
 
         _operatorId = op.Id;
 
-        var loggerFactory = NullLoggerFactory.Instance;
         var auditRecordRepository = new AuditRecordRepository(
             _context,
             Mock.Of<IEventBus>(),
-            loggerFactory.CreateLogger<AuditRecordRepository>(),
+            NullLogger<AuditRecordRepository>.Instance,
             new TransactionManager(_context, NullLogger<TransactionManager>.Instance),
             Mock.Of<IJobExecutionScopeFactory>(),
             timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
@@ -114,7 +113,7 @@ public sealed class NotificationRuleRepositoryTests
             auditRecordRepository,
             transactionManager,
             Mock.Of<IEventBus>(),
-            loggerFactory.CreateLogger<NotificationRuleRepository>(),
+            NullLogger<NotificationRuleRepository>.Instance,
             protector,
             timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
     }
@@ -122,7 +121,6 @@ public sealed class NotificationRuleRepositoryTests
     [TearDown]
     public void TearDown()
     {
-        _context.Database.CloseConnection();
         _context.Dispose();
     }
 

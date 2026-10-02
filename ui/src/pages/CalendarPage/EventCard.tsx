@@ -7,7 +7,7 @@ import { CdnPhosphorIcon } from '@/components/ui/CdnPhosphorIcon';
 import { useTypeIconName } from '@/hooks/useLibraryTypes';
 import type { CalendarEvent } from '@/types/calendar';
 
-import { getFulfillmentClass, formatTime, parseCalendarDate, parseCalendarDateParts } from './calendarUtils';
+import { formatTime, parseCalendarDate, parseCalendarDateParts } from './calendarUtils';
 
 interface EventCardProps {
     event: CalendarEvent;
@@ -25,7 +25,7 @@ export function EventCard({ event, onClick, compact = false, showDate = false }:
     return (
         <button
             type="button"
-            className={`calendar-page__event-card ${getFulfillmentClass(event.fulfillment)} ${compact ? 'calendar-page__event-card--compact' : ''}`}
+            className={`calendar-page__event-card ${compact ? 'calendar-page__event-card--compact' : ''}`}
             onClick={(clickEvent) => {
                 clickEvent.stopPropagation();
                 onClick(event);

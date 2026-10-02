@@ -10,8 +10,6 @@ internal sealed class IndexerFeedConfiguration : IEntityTypeConfiguration<Indexe
     public void Configure(EntityTypeBuilder<IndexerFeed> builder)
     {
         builder.ToTable("indexer_feed");
-        builder.HasKey(e => e.Id);
-        builder.Property(e => e.Id).ValueGeneratedOnAdd();
         builder.Property(e => e.Settings).UseStringDictionaryConversion();
     }
 }

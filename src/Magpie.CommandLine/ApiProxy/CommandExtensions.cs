@@ -20,7 +20,7 @@ public static class CommandExtensions
     /// <param name="hostFactory">The factory that creates the in-process web application</param>
     public static void AddApiProxyCommands(
         this Command rootCommand,
-        Func<CancellationToken, Task<WebApplication>>? hostFactory = null)
+        Func<CancellationToken, Task<WebApplication>> hostFactory)
     {
         foreach (var groupEntries in MagpieGeneratedCommandManifest.Entries
             .GroupBy(entry => entry.Group, StringComparer.OrdinalIgnoreCase)
@@ -33,7 +33,7 @@ public static class CommandExtensions
                     .Select(entry => entry.GroupDescription)
                     .FirstOrDefault(value => !string.IsNullOrWhiteSpace(value))
                     ?? $"Work with {groupEntries.Key}";
-                groupCommand = new Command(groupEntries.Key, description);
+                groupCommand = new(groupEntries.Key, description);
                 rootCommand.Subcommands.Add(groupCommand);
             }
 

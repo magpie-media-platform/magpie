@@ -42,11 +42,7 @@ internal sealed class AuditHistoryEndpointGroup : IApiEndpointGroup
     {
         var query = new AuditHistoryQuery
         {
-            Paging = new PagingParameter
-            {
-                PageNumber = pageNumber ?? 1,
-                PageSize = pageSize ?? 25
-            },
+            Paging = new() { PageNumber = pageNumber ?? 1, PageSize = pageSize ?? 25 },
             ContentId = contentId,
             JobExecutionId = jobExecutionId,
             Kind = kind,

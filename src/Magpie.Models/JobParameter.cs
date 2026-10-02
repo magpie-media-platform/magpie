@@ -22,13 +22,13 @@ public sealed record JobParameter(
     string? DefaultValue)
 {
     /// <summary>
-    /// Checks a supplied or default schedule value without external access and returns an error or null.
+    /// The validator of a parameter value.
     /// </summary>
     [JsonIgnore]
     public Func<string?, string?>? ValidateValue { get; set; }
 
     /// <summary>
-    /// Uses parameters and UTC time to check a schedule value, replacing its type check, and returns an error or null.
+    /// The validator of a schedule value.
     /// </summary>
     [JsonIgnore]
     public Func<string?, IReadOnlyDictionary<string, string>, DateTime, string?>? ValidateScheduleValue { get; set; }

@@ -849,10 +849,10 @@ describe('ScheduleTriggerForm parameters', () => {
             name: 'Parameterized Job',
             onDemand: true,
             parameters: [
-                { name: 'Tag', description: 'A tag', type: 0, required: true, defaultValue: null },
-                { name: 'Limit', description: 'Item count', type: 1, required: false, defaultValue: '10' },
-                { name: 'DryRun', description: 'Preview only', type: 2, required: false, defaultValue: null },
-                { name: 'Note', description: 'Optional note', type: 0, required: false, defaultValue: null },
+                { name: 'Tag', description: 'A tag', type: 'String', required: true, defaultValue: null },
+                { name: 'Limit', description: 'Item count', type: 'Number', required: false, defaultValue: '10' },
+                { name: 'DryRun', description: 'Preview only', type: 'Boolean', required: false, defaultValue: null },
+                { name: 'Note', description: 'Optional note', type: 'String', required: false, defaultValue: null },
             ],
         },
     ];

@@ -80,7 +80,7 @@ internal sealed class CoverArtArchiveClient(
 
     private static string BuildUserAgent(Settings settings)
     {
-        var contact = string.IsNullOrWhiteSpace(settings.Contact) ? DefaultContact : settings.Contact!.Trim();
+        var contact = string.IsNullOrWhiteSpace(settings.Contact) ? DefaultContact : settings.Contact.Trim();
         var version = typeof(CoverArtArchiveClient).Assembly.GetName().Version ?? new Version(1, 0, 0);
         return string.Format(
             CultureInfo.InvariantCulture,

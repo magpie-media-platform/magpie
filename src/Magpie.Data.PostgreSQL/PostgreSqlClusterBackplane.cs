@@ -71,7 +71,9 @@ internal sealed class PostgreSqlClusterBackplane(string connectionString, ILogge
         await using var commandHandle = command.ConfigureAwait(false);
         command.Parameters.AddWithValue("payload", payload);
 
-        return (long)(await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false))!;
+        return Convert.ToInt64(
+            await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false),
+            CultureInfo.InvariantCulture);
     }
 
     private sealed class NotificationListener : IEventListener
@@ -153,7 +155,7 @@ internal sealed class PostgreSqlClusterBackplane(string connectionString, ILogge
                 {
                     _logger.LogWarning(
                         ex,
-                        "The PostgreSQL cluster backplane listener disconnected, so it retries in {Delay}.",
+                        "Cluster backplane listener disconnected; retrying in {Delay}.",
                         reconnectDelay);
 
                     try
@@ -209,7 +211,7 @@ internal sealed class PostgreSqlClusterBackplane(string connectionString, ILogge
                     {
                         _logger.LogWarning(
                             ex,
-                            "The listener discarded an unreadable cluster backplane notification payload.");
+                            "Discarded unreadable cluster backplane notification payload.");
                     }
                 }
             }
@@ -225,7 +227,7 @@ internal sealed class PostgreSqlClusterBackplane(string connectionString, ILogge
             var reference = notified[RelayReferencePrefix.Length..];
             if (!long.TryParse(reference, CultureInfo.InvariantCulture, out var sequence))
             {
-                _logger.LogWarning("The listener discarded an unreadable relay reference {Reference}.", reference);
+                _logger.LogWarning("Discarded unreadable relay reference {Reference}.", reference);
                 return null;
             }
 
@@ -243,14 +245,14 @@ internal sealed class PostgreSqlClusterBackplane(string connectionString, ILogge
                 var payload = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) as string;
                 if (payload == null)
                 {
-                    _logger.LogWarning("The listener found no relayed cluster event {Sequence}.", sequence);
+                    _logger.LogWarning("No relayed cluster event {Sequence}.", sequence);
                 }
 
                 return payload;
             }
             catch (NpgsqlException ex)
             {
-                _logger.LogWarning(ex, "The listener could not read the relayed cluster event {Sequence}.", sequence);
+                _logger.LogWarning(ex, "Reading relayed cluster event {Sequence} failed.", sequence);
                 return null;
             }
         }

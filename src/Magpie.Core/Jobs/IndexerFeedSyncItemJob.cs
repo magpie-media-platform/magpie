@@ -44,12 +44,7 @@ internal sealed class IndexerFeedSyncItemJob(
         LockPartitionFields = [MagpieJobs.Parameters.FeedId],
         Parameters =
         [
-            new(
-                MagpieJobs.Parameters.FeedId,
-                "The indexer feed id to sync.",
-                DataType.String,
-                true,
-                null)
+            new(MagpieJobs.Parameters.FeedId, "The indexer feed id to sync.", DataType.String, true, null)
             {
                 ValidateValue = value => string.IsNullOrWhiteSpace(value) || Guid.TryParse(value, out _)
                     ? null : "must be a valid GUID."

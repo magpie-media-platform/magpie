@@ -243,7 +243,7 @@ public sealed class JobRuntimeBackgroundServiceTests
     [Test]
     public void JobRuntimeOptions_UsesSeparateReapIntervals_WhenConstructed()
     {
-        // Arrange
+        // Act
         var options = new JobRuntimeOptions();
 
         // Assert

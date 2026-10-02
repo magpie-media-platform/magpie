@@ -47,7 +47,7 @@ function createWrapper(queryClient: QueryClient) {
     };
 }
 
-function renderBulkActions(contentType?: string, level?: string, bulkFilter: string = SCOPE_FILTER) {
+function renderBulkActions(bulkFilter: string = SCOPE_FILTER) {
     const queryClient = new QueryClient({
         defaultOptions: { queries: { retry: false, gcTime: 0, staleTime: 0 } },
     });
@@ -55,7 +55,7 @@ function renderBulkActions(contentType?: string, level?: string, bulkFilter: str
     return renderHook(
         () => {
             const selection = useBulkSelection({ pageRowIds: ['content-1', 'content-2'], totalCount: 250 });
-            const actions = useLibraryBulkActions({ selection, bulkFilter, contentType, level });
+            const actions = useLibraryBulkActions({ selection, bulkFilter });
             return { selection, actions };
         },
         { wrapper: createWrapper(queryClient) },
@@ -71,24 +71,7 @@ describe('useLibraryBulkActions', () => {
         mockUseQualityTierLists.mockReturnValue({ tierLists: [] });
     });
 
-    it('requests compatible tier lists for the active content level', () => {
-        mockUseQualityTierLists.mockReturnValue({
-            tierLists: [
-                { id: 'video', name: 'Video', mimeTypes: ['video/*'] },
-                { id: 'universal', name: 'Universal', mimeTypes: [] },
-            ],
-        });
-
-        const { result } = renderBulkActions('movies', 'movie');
-
-        expect(mockUseQualityTierLists).toHaveBeenCalledWith({ contentType: 'movies', level: 'movie' });
-        expect(result.current.actions.qualityTierListOptions).toEqual([
-            { id: 'video', label: 'Video - video/*' },
-            { id: 'universal', label: 'Universal - Any MIME type' },
-        ]);
-    });
-
-    it('offers every tier list with its MIME scope in the label when the route has no content type', () => {
+    it('offers every tier list with its MIME scope in the label', () => {
         mockUseQualityTierLists.mockReturnValue({
             tierLists: [
                 { id: 'video', name: 'Video', mimeTypes: ['video/*'] },

@@ -14,12 +14,6 @@ export interface DownloadClientOption {
     name: string;
 }
 
-export interface StateFilterOption {
-    value: DownloadStatusValue | 'all';
-
-    label: string;
-}
-
 export interface DownloadFilterState {
     client: string;
 

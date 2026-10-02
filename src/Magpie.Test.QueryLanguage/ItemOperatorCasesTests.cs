@@ -42,6 +42,8 @@ public sealed class ItemOperatorCasesTests
     [TestCaseSource(nameof(Queries))]
     public void ParseContentFilter_Succeeds_WhenTheEditorItemOperatorCaseIsParsed(string query)
     {
+        // Arrange
+
         // Act
         var parsed = query.ParseContentFilter();
 

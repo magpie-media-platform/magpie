@@ -7,7 +7,6 @@ import {
     formatDateKey,
     getDayOfMonth,
     getFirstDayOfWeek,
-    getFulfillmentClass,
     getMonthDays,
     isToday,
     WEEKDAY_NAMES,
@@ -55,7 +54,7 @@ export function MonthView({ currentDate, getEventsForDate, onDayClick }: MonthVi
                                     {dayEvents.slice(0, 3).map((evt) => (
                                         <div
                                             key={evt.id}
-                                            className={`calendar-page__day-event ${getFulfillmentClass(evt.fulfillment)}`}
+                                            className={`calendar-page__day-event`}
                                             data-testid="calendar-page__day-event"
                                             data-fulfillment={evt.fulfillment}
                                         >

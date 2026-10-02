@@ -76,7 +76,7 @@ internal static class ValueNormalizationExtensions
             return null;
         }
 
-        var normalized = new string([.. value!.Where(character => character is not ' ' and not '-')])
+        var normalized = new string([.. value.Where(character => character is not ' ' and not '-')])
             .ToUpperInvariant();
         if (normalized.Length == 10)
         {
@@ -112,7 +112,7 @@ internal static class ValueNormalizationExtensions
 
     internal static string? NormalizeOlid(this string? value, char suffix)
     {
-        var normalized = string.IsNullOrWhiteSpace(value) ? null : value!.Trim();
+        var normalized = string.IsNullOrWhiteSpace(value) ? null : value.Trim();
         if (normalized is null)
         {
             return null;
@@ -137,13 +137,10 @@ internal static class ValueNormalizationExtensions
     /// <summary>
     /// Builds the subject key that Open Library stores for a subject name.
     /// </summary>
-    /// <remarks>
-    /// A literal port of Open Library's <c>normalize_subject_name</c> (formerly <c>str_to_key</c>), which builds the
-    /// search <c>*_key</c> fields, so it must not normalize further than Open Library does.
-    /// </remarks>
     /// <param name="name">The subject name</param>
     internal static string ToOpenLibrarySubjectKey(this string name)
     {
+        // Literal port of Open Library normalize_subject_name (formerly str_to_key). Do not normalize further.
         var builder = new StringBuilder(name.Length);
         foreach (var character in name.Trim().ToLowerInvariant())
         {
@@ -239,7 +236,7 @@ internal static class ValueNormalizationExtensions
         var normalized = value?.Trim();
         return string.IsNullOrWhiteSpace(normalized)
             ? null
-            : LanguageNames.TryGetValue(normalized!, out var code)
+            : LanguageNames.TryGetValue(normalized, out var code)
                 ? code
                 : null;
     }

@@ -1605,6 +1605,21 @@ namespace Magpie.Data.SQLite.Migrations
                     b.ToTable("content_mediaFile", (string)null);
                 });
 
+            modelBuilder.Entity("Magpie.Models.Data.MediaFileCoverage", b =>
+                {
+                    b.Property<Guid>("MediaFileId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("ContentItemId")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("MediaFileId", "ContentItemId");
+
+                    b.HasIndex("ContentItemId");
+
+                    b.ToTable("content_mediaFileCoverage", (string)null);
+                });
+
             modelBuilder.Entity("Magpie.Models.Data.MediaServer", b =>
                 {
                     b.Property<Guid>("Id")
@@ -1745,6 +1760,9 @@ namespace Magpie.Data.SQLite.Migrations
 
                     b.Property<DateTime?>("PublishDate")
                         .HasColumnType("TEXT");
+
+                    b.Property<int?>("PublishDatePrecision")
+                        .HasColumnType("INTEGER");
 
                     b.Property<int?>("SequenceNumber")
                         .HasColumnType("INTEGER");
@@ -2374,7 +2392,7 @@ namespace Magpie.Data.SQLite.Migrations
                     b.Property<int>("DefaultImportCollisionMode")
                         .HasColumnType("INTEGER");
 
-                    b.Property<bool?>("DefaultMonitoring")
+                    b.Property<int?>("DefaultMonitoring")
                         .HasColumnType("INTEGER");
 
                     b.Property<string>("Defaults")
@@ -3143,6 +3161,21 @@ namespace Magpie.Data.SQLite.Migrations
                         .OnDelete(DeleteBehavior.SetNull);
                 });
 
+            modelBuilder.Entity("Magpie.Models.Data.MediaFileCoverage", b =>
+                {
+                    b.HasOne("Magpie.Models.Data.ContentItem", null)
+                        .WithMany()
+                        .HasForeignKey("ContentItemId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("Magpie.Models.Data.MediaFile", null)
+                        .WithMany("Coverage")
+                        .HasForeignKey("MediaFileId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
             modelBuilder.Entity("Magpie.Models.Data.MetadataContribution", b =>
                 {
                     b.HasOne("Magpie.Models.Data.MetadataContainer", "MetadataContainer")
@@ -3446,6 +3479,11 @@ namespace Magpie.Data.SQLite.Migrations
             modelBuilder.Entity("Magpie.Models.Data.Indexer", b =>
                 {
                     b.Navigation("Connections");
+                });
+
+            modelBuilder.Entity("Magpie.Models.Data.MediaFile", b =>
+                {
+                    b.Navigation("Coverage");
                 });
 
             modelBuilder.Entity("Magpie.Models.Data.MetadataContainer", b =>

@@ -6,7 +6,6 @@ internal enum QueryStrategy
     TvSearch,
     MovieDiscover,
     TvDiscover,
-    MoviePersonCredits,
     TvPersonCredits,
     ContentIds,
     Empty

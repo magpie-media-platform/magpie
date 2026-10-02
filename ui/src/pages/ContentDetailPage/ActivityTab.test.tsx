@@ -78,7 +78,8 @@ const mockTree = {
     totalCount: 1,
 };
 
-function setupApi() {
+beforeEach(() => {
+    vi.clearAllMocks();
     vi.mocked(apiGet).mockImplementation((url: string) => {
         if (url.startsWith('/audit-history')) {
             return Promise.resolve(mockActivity);
@@ -94,11 +95,6 @@ function setupApi() {
         }
         return Promise.resolve(null);
     });
-}
-
-beforeEach(() => {
-    vi.clearAllMocks();
-    setupApi();
 });
 
 afterEach(() => {

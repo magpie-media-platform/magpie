@@ -96,12 +96,20 @@ public record Release
     /// <summary>
     /// The ids at external providers.
     /// </summary>
-    public ICollection<ExternalId> ExternalIds { get; } = [];
+    public ICollection<ExternalId> ExternalIds
+    {
+        get;
+        set => field = value ?? [];
+    } = [];
 
     /// <summary>
     /// The keys that identify the release across providers.
     /// </summary>
-    public ICollection<ReleaseIdentityKey> IdentityKeys { get; } = [];
+    public ICollection<ReleaseIdentityKey> IdentityKeys
+    {
+        get;
+        set => field = value ?? [];
+    } = [];
 
     /// <summary>
     /// The indexer observations that can supply the release.

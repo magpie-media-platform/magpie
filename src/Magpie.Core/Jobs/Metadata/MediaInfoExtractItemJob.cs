@@ -38,18 +38,8 @@ internal sealed class MediaInfoExtractItemJob(
         LockPartitionFields = [MagpieJobs.Parameters.MediaFileId],
         Parameters =
         [
-            new(
-                MagpieJobs.Parameters.MediaFileId,
-                "The media file id to refresh.",
-                DataType.String,
-                true,
-                null),
-            new(
-                MagpieJobs.Parameters.FilePath,
-                "The media file path to probe.",
-                DataType.String,
-                true,
-                null),
+            new(MagpieJobs.Parameters.MediaFileId, "The media file id to refresh.", DataType.String, true, null),
+            new(MagpieJobs.Parameters.FilePath, "The media file path to probe.", DataType.String, true, null),
             new(
                 MagpieJobs.Parameters.RequireMissingMediaInfo,
                 "Whether to only update rows that still have no media info.",

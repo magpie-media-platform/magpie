@@ -2,7 +2,7 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
-import { Card, CardBody, CardFooter, CardHeader } from './Card';
+import { Card, CardBody, CardHeader } from './Card';
 
 describe('Card', () => {
     it('renders with children', () => {
@@ -127,51 +127,17 @@ describe('CardBody', () => {
     });
 });
 
-describe('CardFooter', () => {
-    it('renders with children', () => {
-        render(<CardFooter>Footer content</CardFooter>);
-        expect(screen.getByText('Footer content')).toBeInTheDocument();
-    });
-
-    it('applies card-footer class', () => {
-        render(<CardFooter data-testid="footer">Footer</CardFooter>);
-        expect(screen.getByTestId('footer')).toHaveClass('card-footer');
-    });
-
-    it('applies custom className', () => {
-        render(
-            <CardFooter className="custom-footer" data-testid="footer">
-                Custom
-            </CardFooter>,
-        );
-        expect(screen.getByTestId('footer')).toHaveClass('custom-footer');
-    });
-
-    it('forwards ref', () => {
-        const ref = vi.fn();
-        render(<CardFooter ref={ref}>Ref</CardFooter>);
-        expect(ref).toHaveBeenCalledWith(expect.any(HTMLDivElement));
-    });
-
-    it('passes through additional props', () => {
-        render(<CardFooter data-testid="my-footer">Props</CardFooter>);
-        expect(screen.getByTestId('my-footer')).toBeInTheDocument();
-    });
-});
-
 describe('Card composition', () => {
-    it('renders card with header, body, and footer', () => {
+    it('renders card with header and body', () => {
         render(
             <Card>
                 <CardHeader>Header</CardHeader>
                 <CardBody>Body</CardBody>
-                <CardFooter>Footer</CardFooter>
             </Card>,
         );
 
         expect(screen.getByText('Header')).toBeInTheDocument();
         expect(screen.getByText('Body')).toBeInTheDocument();
-        expect(screen.getByText('Footer')).toBeInTheDocument();
     });
 
     it('renders card with only body', () => {

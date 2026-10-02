@@ -369,8 +369,9 @@ public sealed class ReleaseAutoGrabItemJobTests
             Times.Never);
     }
 
-    [Test]
-    public async Task ExecuteAsync_DoesNotEnqueue_WhenContentItemAlreadyFulfilled()
+    [TestCase(MonitoringMode.Monitored)]
+    [TestCase(MonitoringMode.Shotgun)]
+    public async Task ExecuteAsync_DoesNotEnqueue_WhenContentItemAlreadyFulfilled(MonitoringMode monitoring)
     {
         // Arrange
         var contentItemId = Guid.NewGuid();
@@ -392,7 +393,7 @@ public sealed class ReleaseAutoGrabItemJobTests
                         Level = "movie",
                         Slug = "done",
                         Name = "Done",
-                        EffectiveMonitoring = MonitoringMode.Monitored,
+                        EffectiveMonitoring = monitoring,
                         ContentItem = new ContentItem { Id = contentItemId, Fulfillment = FulfillmentStatus.Fulfilled }
                     }
                 ]

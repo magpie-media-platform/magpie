@@ -183,7 +183,6 @@ function useSubjectEvents(
         {
             entityIds,
             exact: true,
-            owner: 'subjects-query',
             predicate,
         },
     );
@@ -264,7 +263,6 @@ export function useSubjects(params?: SubjectQueryParams) {
     useInvalidateQueriesOnEvents(SUBJECT_METADATA_JOB_EVENTS, [subjectQueryKeys.list(params)], {
         debounceMs: 150,
         exact: true,
-        owner: 'subjects:list',
         predicate: (event) => isSubjectMetadataRefresh(event) && subjectMatchesList(event),
     });
 
@@ -337,7 +335,6 @@ export function useSubject(id: string, enabled = true) {
         debounceMs: 150,
         entityIds: id ? [id] : [],
         exact: true,
-        owner: 'subjects:detail',
         predicate: isSubjectMetadataRefresh,
     });
     const subjectQuery = useQuery({

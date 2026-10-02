@@ -2,8 +2,6 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
-using Magpie.Models.MetadataSearch;
-
 namespace Magpie.Extensions.Wikidata.QueryEngine;
 
 internal sealed class SearchEngine(IQueryPlanner planner, IQueryExecutor executor) : ISearchEngine
@@ -22,7 +20,7 @@ internal sealed class SearchEngine(IQueryPlanner planner, IQueryExecutor executo
             {
                 Supported = true,
                 Warnings = [],
-                PageInfo = new ProviderSearchPageInfo
+                PageInfo = new()
                 {
                     RequestedPage = request.Page,
                     HasMore = false

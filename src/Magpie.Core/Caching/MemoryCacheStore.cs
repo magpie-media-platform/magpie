@@ -28,7 +28,7 @@ internal sealed class MemoryCacheStore(TimeProvider timeProvider) : IDisposable
     internal Cache CreateScoped(string name, CachePolicy policy)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
-        return new Cache(name, "private", policy, timeProvider);
+        return new(name, "private", policy, timeProvider);
     }
 
     public void Dispose()
@@ -59,11 +59,9 @@ internal sealed class MemoryCacheStore(TimeProvider timeProvider) : IDisposable
         internal Cache(string name, string lifetime, CachePolicy policy, TimeProvider timeProvider)
         {
             ArgumentNullException.ThrowIfNull(policy);
-            if (policy.MaximumLevel < CacheLevel.Memory ||
-                !ValidLifetime(policy.Freshness) ||
+            if (!ValidLifetime(policy.Freshness) ||
                 !ValidLifetime(policy.Retention) ||
                 policy.MaximumEntries <= 0 ||
-                !Enum.IsDefined(policy.EvictionBehavior) ||
                 !Enum.IsDefined(policy.ConcurrencyMode))
             {
                 throw new ArgumentOutOfRangeException(nameof(policy));

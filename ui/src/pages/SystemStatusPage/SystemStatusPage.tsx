@@ -6,7 +6,7 @@ import { Card } from '@/components/ui/Card';
 import { DiskSpaceWidget, type DiskSpaceInfo } from '@/components/ui/DiskSpaceWidget';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Skeleton } from '@/components/ui/Skeleton';
-import { SystemStatusSlot } from '@/components/ui/Slot/SystemSlots';
+import { Slot } from '@/components/ui/Slot';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { useSystemStatus } from '@/hooks/useSystemStatus';
 import { formatUptime } from '@/lib/formatTime';
@@ -61,7 +61,7 @@ export function SystemStatusPage() {
 
     return (
         <div className="system-status-page" data-page="system-status">
-            <SystemStatusSlot>
+            <Slot slot="system.status">
                 <PageHeader
                     className="system-status-page__header"
                     title="System Status"
@@ -154,7 +154,7 @@ export function SystemStatusPage() {
                         <DiagnosticsSection />
                     </section>
                 </div>
-            </SystemStatusSlot>
+            </Slot>
         </div>
     );
 }

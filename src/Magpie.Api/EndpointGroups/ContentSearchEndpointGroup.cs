@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
@@ -40,15 +41,12 @@ internal sealed class ContentSearchEndpointGroup : IApiEndpointGroup
     {
         if (string.IsNullOrWhiteSpace(query))
         {
-            return Results.Problem(
-                detail: "A query is required.",
-                statusCode: StatusCodes.Status400BadRequest);
+            return Results.Problem(detail: "A query is required.", statusCode: StatusCodes.Status400BadRequest);
         }
 
         var parseResult = filterService.ParseContentCriteria(query);
-        if (!parseResult.IsSuccess)
+        if (parseResult.Error is { } error)
         {
-            var error = parseResult.Error!;
             return Results.Problem(
                 detail: error.Message,
                 statusCode: StatusCodes.Status400BadRequest,
@@ -59,16 +57,21 @@ internal sealed class ContentSearchEndpointGroup : IApiEndpointGroup
                 });
         }
 
+        var criteria = parseResult.Value
+            ?? throw new InvalidOperationException("The parsed query has no criteria.");
+
         try
         {
             var result = await metadataSearchService
-                .SearchCandidatesAsync(parseResult.Value!, contentType, page ?? 1, continuation, cancellationToken)
+                .SearchCandidatesAsync(criteria, contentType, page ?? 1, continuation, cancellationToken)
                 .ConfigureAwait(false);
             return Results.Ok(result);
         }
         catch (MetadataSearchContinuationException exception)
         {
-            return Results.Problem(detail: exception.Message, statusCode: StatusCodes.Status400BadRequest,
+            return Results.Problem(
+                detail: exception.Message,
+                statusCode: StatusCodes.Status400BadRequest,
                 extensions: new Dictionary<string, object?> { ["code"] = "invalid_search_continuation" });
         }
     }

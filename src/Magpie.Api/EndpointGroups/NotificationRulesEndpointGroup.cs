@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 
-using Magpie.Models;
 using Magpie.Models.Api;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
@@ -76,7 +75,11 @@ internal sealed class NotificationRulesEndpointGroup : IApiEndpointGroup
             .ListAsync(user.Id, user.IsInRole(Role.Admin), cancellationToken)
             .ConfigureAwait(false);
 
-        var redacted = await RedactSecretsAsync(notificationService, rules, cancellationToken).ConfigureAwait(false);
+        var redacted = new List<NotificationRule>(rules.Count);
+        foreach (var rule in rules)
+        {
+            redacted.Add(await RedactSecretsAsync(notificationService, rule, cancellationToken).ConfigureAwait(false));
+        }
 
         return Results.Ok(redacted);
     }
@@ -165,29 +168,6 @@ internal sealed class NotificationRulesEndpointGroup : IApiEndpointGroup
             .ConfigureAwait(false);
 
         return result is null ? Results.NotFound() : Results.Ok(result);
-    }
-
-    private static async Task<IReadOnlyList<NotificationRule>> RedactSecretsAsync(
-        INotificationService notificationService,
-        IReadOnlyList<NotificationRule> rules,
-        CancellationToken cancellationToken)
-    {
-        var schemasByProviderType =
-            new Dictionary<string, IReadOnlyList<SettingSchemaDefinition>>(StringComparer.OrdinalIgnoreCase);
-        var redacted = new List<NotificationRule>(rules.Count);
-        foreach (var rule in rules)
-        {
-            if (!schemasByProviderType.TryGetValue(rule.ProviderType, out var schema))
-            {
-                schema = await notificationService.GetSettingsSchemaAsync(rule.ProviderType, cancellationToken)
-                    .ConfigureAwait(false);
-                schemasByProviderType[rule.ProviderType] = schema;
-            }
-
-            redacted.Add(rule with { Settings = rule.Settings.RedactSecrets(schema) });
-        }
-
-        return redacted;
     }
 
     private static async Task<NotificationRule> RedactSecretsAsync(

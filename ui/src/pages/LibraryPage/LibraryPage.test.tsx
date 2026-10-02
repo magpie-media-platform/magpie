@@ -603,6 +603,17 @@ describe('LibraryPage', () => {
             expect(screen.getByText('Includes matching child items, not only top-level items.')).toBeInTheDocument();
         });
 
+        it('lists items of the linked fulfillment at every level', async () => {
+            renderLibraryPage(Role.Admin, ['/library/all?fulfillment=missing&levels=all']);
+
+            await waitFor(() =>
+                expect(mockUseContentList).toHaveBeenLastCalledWith(
+                    expect.objectContaining({ filter: 'fulfillment = Missing' }),
+                ),
+            );
+            expect(mockUseContentList.mock.lastCall?.[0]).not.toHaveProperty('topLevelOnly');
+        });
+
         it('keeps the top-level scope when the all-levels scope has no filter', () => {
             renderLibraryPage(Role.Admin, ['/library/all?levels=all']);
 
@@ -656,9 +667,9 @@ describe('LibraryPage', () => {
             await waitFor(() => {
                 expect(mockNavigate).toHaveBeenCalledWith('/library/all', { replace: true });
             });
-            for (const [params] of mockUseContentList.mock.calls) {
-                expect(params).not.toMatchObject({ contentType: 'not-a-type' });
-            }
+            expect(mockUseContentList.mock.calls.map(([params]) => params)).not.toContainEqual(
+                expect.objectContaining({ contentType: 'not-a-type' }),
+            );
             expect(mockUseContentList).toHaveBeenLastCalledWith(
                 expect.not.objectContaining({ contentType: 'not-a-type' }),
                 { enabled: false },
@@ -1414,21 +1425,24 @@ describe('LibraryPage', () => {
             await user.click(within(mobileList).getByRole('button', { name: /select breaking bad card/i }));
 
             const bar = await screen.findByRole('region', { name: 'Selection actions' });
-            const actions = [
-                ['bulk-tags', 'Assign Tags'],
-                ['bulk-monitor', 'Monitor'],
-                ['bulk-unmonitor', 'Unmonitor'],
-                ['bulk-root-folder', 'Root Folder'],
-                ['bulk-quality-profile', 'Quality'],
-                ['bulk-delete', 'Delete'],
-            ] as const;
-
-            for (const [action, name] of actions) {
-                const button = within(bar).getByRole('button', { name });
-
-                expect(button).toHaveAttribute('data-action', action);
-                expect(button).toHaveAttribute('aria-label', name);
-            }
+            expect(within(bar).getByRole('button', { name: 'Assign Tags' })).toHaveAttribute(
+                'data-action',
+                'bulk-tags',
+            );
+            expect(within(bar).getByRole('button', { name: 'Monitor' })).toHaveAttribute('data-action', 'bulk-monitor');
+            expect(within(bar).getByRole('button', { name: 'Unmonitor' })).toHaveAttribute(
+                'data-action',
+                'bulk-unmonitor',
+            );
+            expect(within(bar).getByRole('button', { name: 'Root Folder' })).toHaveAttribute(
+                'data-action',
+                'bulk-root-folder',
+            );
+            expect(within(bar).getByRole('button', { name: 'Quality' })).toHaveAttribute(
+                'data-action',
+                'bulk-quality-profile',
+            );
+            expect(within(bar).getByRole('button', { name: 'Delete' })).toHaveAttribute('data-action', 'bulk-delete');
         });
 
         it('hides bulk actions but remains in selection mode when the final card is deselected', async () => {
@@ -2770,20 +2784,14 @@ describe('LibraryPage', () => {
 
             const ascending = within(gallery).getByLabelText('Sort ascending');
             const descending = within(gallery).getByLabelText('Sort descending');
-            const startedAscending = ascending.getAttribute('aria-pressed') === 'true';
-            expect(descending).toHaveAttribute('aria-pressed', String(!startedAscending));
+            expect(ascending).toHaveAttribute('aria-pressed', 'false');
+            expect(descending).toHaveAttribute('aria-pressed', 'true');
 
-            await user.click(startedAscending ? descending : ascending);
+            await user.click(ascending);
 
             await waitFor(() => {
-                expect(within(gallery).getByLabelText('Sort ascending')).toHaveAttribute(
-                    'aria-pressed',
-                    String(!startedAscending),
-                );
-                expect(within(gallery).getByLabelText('Sort descending')).toHaveAttribute(
-                    'aria-pressed',
-                    String(startedAscending),
-                );
+                expect(within(gallery).getByLabelText('Sort ascending')).toHaveAttribute('aria-pressed', 'true');
+                expect(within(gallery).getByLabelText('Sort descending')).toHaveAttribute('aria-pressed', 'false');
             });
         });
 

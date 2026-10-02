@@ -41,18 +41,6 @@ vi.mock('@/auth', async (importOriginal) => {
     };
 });
 
-function createTestQueryClient() {
-    return new QueryClient({
-        defaultOptions: {
-            queries: {
-                retry: false,
-                gcTime: 0,
-                staleTime: 0,
-            },
-        },
-    });
-}
-
 function createWrapper(queryClient: QueryClient) {
     return function Wrapper({ children }: { children: ReactNode }) {
         return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
@@ -73,7 +61,15 @@ describe('useLibraryTypes', () => {
     let queryClient: QueryClient;
 
     beforeEach(() => {
-        queryClient = createTestQueryClient();
+        queryClient = new QueryClient({
+            defaultOptions: {
+                queries: {
+                    retry: false,
+                    gcTime: 0,
+                    staleTime: 0,
+                },
+            },
+        });
         vi.clearAllMocks();
     });
 
@@ -670,10 +666,10 @@ describe('useLibraryTypes', () => {
                 expect(result.current.counts.shows).toBe(3);
             });
 
-            expect(seen.length).toBeGreaterThan(0);
-            for (const url of seen) {
-                expect(url).toContain('topLevelOnly=true');
-            }
+            expect(seen).toEqual([
+                '/content?contentType=movies&topLevelOnly=true&pageSize=1',
+                '/content?contentType=shows&topLevelOnly=true&pageSize=1',
+            ]);
         });
 
         it('fetches subject type counts in the same batched query', async () => {

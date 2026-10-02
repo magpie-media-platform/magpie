@@ -10,6 +10,7 @@ using Magpie.Abstractions.Repositories;
 using Magpie.Core.Events;
 using Magpie.Core.Jobs;
 using Magpie.Data;
+using Magpie.Data.Configuration;
 using Magpie.Models;
 using Magpie.Models.Arguments;
 using Magpie.Models.Bulk;
@@ -53,8 +54,12 @@ internal sealed class LibraryImportCandidateRepository(
                         (candidate.Status == LibraryImportCandidateStatus.Queued ||
                             candidate.Status == LibraryImportCandidateStatus.Importing) &&
                         (candidate.ModifiedAt ?? candidate.CreatedAt) <= inactivityCutoff)
-                    .ExecuteUpdateAsync(setters => setters.SetProperty(candidate => candidate.ModifiedAt,
-                        candidate => candidate.ModifiedAt), ct).ConfigureAwait(false);
+                    .ExecuteUpdateAsync(
+                        setters => setters.SetProperty(
+                            candidate => candidate.ModifiedAt,
+                            candidate => candidate.ModifiedAt),
+                        ct)
+                    .ConfigureAwait(false);
                 if (locked == 0)
                 {
                     return false;
@@ -73,14 +78,35 @@ internal sealed class LibraryImportCandidateRepository(
                     return false;
                 }
 
-                return await MarkImportFailedAsync(candidateId,
+                var target = await context.LibraryImportCandidates.AsNoTracking()
+                    .Where(candidate => candidate.Id == candidateId)
+                    .Select(candidate => candidate.ContentHierarchyItemId)
+                    .FirstOrDefaultAsync(ct).ConfigureAwait(false);
+                if (target is { } itemId && await context.JobExecutions.AsNoTracking()
+                    .AnyAsync(execution => (execution.JobType == MagpieJobs.Types.ContentMetadataRefreshItem ||
+                            execution.JobType == MagpieJobs.Types.RootFolderContentImportResume) &&
+                        (execution.Status == JobExecutionStatus.Queued ||
+                            execution.Status == JobExecutionStatus.Running ||
+                            execution.Status == JobExecutionStatus.CancellationRequested) &&
+                        EF.Property<string>(execution, JobExecutionReferenceColumns.ParameterContentHierarchyItemId) ==
+                            itemId.ToString("D"),
+                            ct).ConfigureAwait(false))
+                {
+                    return false;
+                }
+
+                return await MarkImportFailedAsync(
+                    candidateId,
                     "The inactive import has no queued or active execution. The file can be rescanned.",
-                    userId, ct).ConfigureAwait(false);
+                    userId,
+                    ct).ConfigureAwait(false);
             }, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "The library import repository failed to recover candidate {CandidateId}.",
+            logger.LogError(
+                ex,
+                "The library import repository failed to recover candidate {CandidateId}.",
                 candidateId);
             throw;
         }
@@ -140,8 +166,10 @@ internal sealed class LibraryImportCandidateRepository(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "The library import repository failed to read library import candidate " +
-                "{LibraryImportCandidateId}.", id);
+            logger.LogError(
+                ex,
+                "The library import repository failed to read library import candidate {LibraryImportCandidateId}.",
+                id);
             throw;
         }
     }
@@ -273,9 +301,7 @@ internal sealed class LibraryImportCandidateRepository(
                     .First())
                 .ToListAsync(cancellationToken)
                 .ConfigureAwait(false);
-            var representativeByGroupKey = representatives.ToDictionary(
-                m => m.GroupKey!,
-                StringComparer.Ordinal);
+            var representativeByGroupKey = representatives.ToDictionary(m => m.GroupKey!, StringComparer.Ordinal);
 
             var items = new List<LibraryImportCandidateGroupSummary>(pageKeys.Count);
             foreach (var groupKey in pageKeys)
@@ -475,8 +501,10 @@ internal sealed class LibraryImportCandidateRepository(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "The library import repository failed to reject library import candidate " +
-                "{LibraryImportCandidateId}.", candidateId);
+            logger.LogError(
+                ex,
+                "The library import repository failed to reject library import candidate {LibraryImportCandidateId}.",
+                candidateId);
             throw;
         }
     }
@@ -492,9 +520,11 @@ internal sealed class LibraryImportCandidateRepository(
         {
             var now = _time.GetUtcNow().UtcDateTime;
             var affected = await context.LibraryImportCandidates
-                .Where(m => m.Id == candidateId && m.MatchCount == 1 &&
-                    (m.Status == LibraryImportCandidateStatus.Pending ||
-                        m.Status == LibraryImportCandidateStatus.Failed))
+                .Where(m => m.Id == candidateId &&
+                    ((m.Status == LibraryImportCandidateStatus.Importing && contentHierarchyItemId != null) ||
+                        (m.MatchCount == 1 &&
+                            (m.Status == LibraryImportCandidateStatus.Pending ||
+                                m.Status == LibraryImportCandidateStatus.Failed))))
                 .ExecuteUpdateAsync(
                     s => s
                         .SetProperty(m => m.ContentHierarchyItemId, contentHierarchyItemId)
@@ -516,8 +546,11 @@ internal sealed class LibraryImportCandidateRepository(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "The library import repository failed to save the target of library import " +
-                "candidate {LibraryImportCandidateId}.", candidateId);
+            logger.LogError(
+                ex,
+                "The library import repository failed to save the target of library import " +
+                "candidate {LibraryImportCandidateId}.",
+                candidateId);
             throw;
         }
     }
@@ -633,8 +666,10 @@ internal sealed class LibraryImportCandidateRepository(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "The library import repository failed to delete library import matches for root " +
-                "folder {RootFolderId}.", rootFolderId);
+            logger.LogError(
+                ex,
+                "The library import repository failed to delete library import matches for root folder {RootFolderId}.",
+                rootFolderId);
             throw;
         }
     }
@@ -678,8 +713,10 @@ internal sealed class LibraryImportCandidateRepository(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "The library import repository failed to create library import candidate for " +
-                "{FilePath}.", model.FilePath);
+            logger.LogError(
+                ex,
+                "The library import repository failed to create library import candidate for {FilePath}.",
+                model.FilePath);
             throw;
         }
     }
@@ -766,8 +803,10 @@ internal sealed class LibraryImportCandidateRepository(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "The library import repository failed to update library import candidate " +
-                "{LibraryImportCandidateId}.", model.Id);
+            logger.LogError(
+                ex,
+                "The library import repository failed to update library import candidate {LibraryImportCandidateId}.",
+                model.Id);
             throw;
         }
     }
@@ -955,8 +994,10 @@ internal sealed class LibraryImportCandidateRepository(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "The library import repository failed to delete library import candidate " +
-                "{LibraryImportCandidateId}.", id);
+            logger.LogError(
+                ex,
+                "The library import repository failed to delete library import candidate {LibraryImportCandidateId}.",
+                id);
             throw;
         }
     }

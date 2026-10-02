@@ -93,8 +93,10 @@ export async function acquireContent(api: ApiClient, fixture: AcquisitionFixture
     const candidates = await until(
         `${fixture.searchTitle} release search`,
         async () => {
-            const found = await api.post<InteractiveCandidate[]>(`/api/interactive-search/${fixture.contentId}`);
-            return found.length > 0 ? found : undefined;
+            const found = await api.post<{ candidates: InteractiveCandidate[] }>(
+                `/api/interactive-search/${fixture.contentId}`,
+            );
+            return found.candidates.length > 0 ? found.candidates : undefined;
         },
         60_000,
         500,
@@ -132,7 +134,7 @@ export async function acquireContent(api: ApiClient, fixture: AcquisitionFixture
         30_000,
         250,
     );
-    const failureStatuses = new Set(['Failed', 'Cancelled']);
+    const failureStatuses = new Set(['Failed', 'Faulted', 'Cancelled']);
     if (failureStatuses.has(queued.status)) {
         throw new Error(
             `Download ${queued.id} ended as ${queued.status}: ${queued.statusReason ?? 'No status reason'}.`,

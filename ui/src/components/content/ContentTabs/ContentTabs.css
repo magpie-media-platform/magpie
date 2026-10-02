@@ -299,10 +299,6 @@
         }
     }
 
-    .files-tab__empty-cell {
-        color: var(--text-muted);
-    }
-
     .files-tab__panels {
         display: flex;
         flex-direction: column;

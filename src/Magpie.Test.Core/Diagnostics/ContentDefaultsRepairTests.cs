@@ -23,13 +23,13 @@ public sealed class ContentDefaultsRepairTests
     public async Task RunAsync_RecreatesAndAssignsAny_WhenNoTierListExists()
     {
         // Arrange
-        var rootFolderId = Guid.NewGuid();
+        var rootFolderId = new Guid("00000000-0000-0000-0000-0000000000b1");
         var finding = new DiagnosticFinding
         {
             DiagnosticCheckId = ContentDefaultsDiagnostic.Id,
             Title = "Missing default",
             Detail = "Missing default",
-            AffectedEntity = $"RootFolder:{rootFolderId}"
+            AffectedEntity = "RootFolder:00000000-0000-0000-0000-0000000000b1"
         };
         var rootFolders = new Mock<IRootFolderService>(MockBehavior.Strict);
         rootFolders.Setup(service => service.GetAsync(rootFolderId, It.IsAny<CancellationToken>()))
@@ -90,7 +90,7 @@ public sealed class ContentDefaultsRepairTests
         // Arrange
         var root = new RootFolder
         {
-            Id = Guid.NewGuid(),
+            Id = new Guid("00000000-0000-0000-0000-0000000000b2"),
             Name = "Catalog",
             Path = "/catalog",
             ContentType = "catalog",
@@ -141,7 +141,7 @@ public sealed class ContentDefaultsRepairTests
             DiagnosticCheckId = ContentDefaultsDiagnostic.Id,
             Title = "Default",
             Detail = "Default",
-            AffectedEntity = $"RootFolder:{root.Id}",
+            AffectedEntity = "RootFolder:00000000-0000-0000-0000-0000000000b2",
         };
 
         // Act

@@ -176,10 +176,7 @@ internal sealed class ReleaseScopeRepository(
         }
     }
 
-    public async Task<bool> DeleteAsync(
-        Guid id,
-        Guid? deletedByUserId,
-        CancellationToken cancellationToken = default)
+    public async Task<bool> DeleteAsync(Guid id, Guid? deletedByUserId, CancellationToken cancellationToken = default)
     {
         try
         {

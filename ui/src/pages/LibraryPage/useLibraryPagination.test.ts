@@ -16,19 +16,15 @@ describe('useLibraryPagination', () => {
 
         expect(result.current.pageNumber).toBe(3);
         expect(result.current.pagination).toEqual({ pageIndex: 2, pageSize: PAGE_SIZE });
-        expect(result.current.currentPage).toBe(3);
     });
 
-    it('falls back to page one for non-positive or non-integer page params', () => {
-        const invalid = ['0', '-2', 'abc', '1.5'];
+    it.each(['0', '-2', 'abc', '1.5'])('falls back to page one for the invalid page param %s', (page) => {
+        const { result } = renderHook(() =>
+            useLibraryPagination({ params: paramsWith({ page }), updateParams: vi.fn() }),
+        );
 
-        for (const page of invalid) {
-            const { result } = renderHook(() =>
-                useLibraryPagination({ params: paramsWith({ page }), updateParams: vi.fn() }),
-            );
-            expect(result.current.pageNumber).toBe(1);
-            expect(result.current.pagination.pageIndex).toBe(0);
-        }
+        expect(result.current.pageNumber).toBe(1);
+        expect(result.current.pagination.pageIndex).toBe(0);
     });
 
     it('writes the one-based page back through updateParams on a pagination change', () => {

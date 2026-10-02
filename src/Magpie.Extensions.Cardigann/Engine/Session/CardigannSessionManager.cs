@@ -138,7 +138,7 @@ internal sealed class CardigannSessionManager(
         }
 
         using var document = _htmlParser.ParseDocument(body);
-        return document.QuerySelector(login.Test.Selector!) is null &&
+        return document.QuerySelector(login.Test.Selector) is null &&
             document.QuerySelector("input[type=password]") is not null;
     }
 
@@ -262,7 +262,7 @@ internal sealed class CardigannSessionManager(
     {
         var method = string.IsNullOrWhiteSpace(login.Method)
             ? MethodForm
-            : login.Method!.Trim().ToLowerInvariant();
+            : login.Method.Trim().ToLowerInvariant();
 
         return method switch
         {
@@ -475,8 +475,8 @@ internal sealed class CardigannSessionManager(
             .ConfigureAwait(false);
         var landingBody = await landingResponse.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
 
-        using var document = await _htmlParser.ParseDocumentAsync(landingBody).ConfigureAwait(false);
-        var formElement = document.QuerySelector(string.IsNullOrWhiteSpace(login.Form) ? "form" : login.Form!);
+        using var document = await _htmlParser.ParseDocumentAsync(landingBody, cancellationToken).ConfigureAwait(false);
+        var formElement = document.QuerySelector(string.IsNullOrWhiteSpace(login.Form) ? "form" : login.Form);
 
         var formData = new Dictionary<string, string>();
         if (formElement is not null)
@@ -584,8 +584,8 @@ internal sealed class CardigannSessionManager(
         var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
         if (!string.IsNullOrWhiteSpace(login.Test.Selector))
         {
-            using var document = await _htmlParser.ParseDocumentAsync(body).ConfigureAwait(false);
-            if (document.QuerySelector(login.Test.Selector!) is null)
+            using var document = await _htmlParser.ParseDocumentAsync(body, cancellationToken).ConfigureAwait(false);
+            if (document.QuerySelector(login.Test.Selector) is null)
             {
                 return FailedOutcome(
                     "Login verification selector did not match; credentials may be incorrect.",
@@ -615,7 +615,7 @@ internal sealed class CardigannSessionManager(
                 continue;
             }
 
-            var matched = document.QuerySelector(error.Selector!);
+            var matched = document.QuerySelector(error.Selector);
             if (matched is null)
             {
                 continue;
@@ -626,7 +626,7 @@ internal sealed class CardigannSessionManager(
                 : null;
             message ??= matched.TextContent?.Trim();
             return FailedOutcome(
-                string.IsNullOrWhiteSpace(message) ? "Login rejected by the tracker." : message!,
+                string.IsNullOrWhiteSpace(message) ? "Login rejected by the tracker." : message,
                 ConfigurationFailureKind.Auth);
         }
 
@@ -772,9 +772,7 @@ internal sealed class CardigannSessionManager(
                         if (clearanceApplied && !clearanceReused)
                         {
                             session.BindClearanceToTls(timeProvider.GetUtcNow() + TlsBindingLifetime);
-                            logger.LogDebug(
-                                "The tracker of {SessionKey} rejected the clearance cookie.",
-                                sessionKey);
+                            logger.LogDebug("The tracker of {SessionKey} rejected the clearance cookie.", sessionKey);
                         }
 
                         if (await FetchThroughSolverAsync(currentUri,
@@ -875,8 +873,7 @@ internal sealed class CardigannSessionManager(
                 }
                 catch (CookieException exception)
                 {
-                    logger.LogWarning(
-                        exception, "The solver returned an invalid cookie for {Host}.", scopeUri.Host);
+                    logger.LogWarning(exception, "The solver returned an invalid cookie for {Host}.", scopeUri.Host);
                 }
             }
 

@@ -4,27 +4,26 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ReleasesTab, type ReleaseRow } from './ReleasesTab';
 
-function createMatchMedia(width: number) {
-    return vi.fn((query: string) => {
-        const minWidth = query.match(/\(min-width:\s*(\d+)px\)/);
-        const maxWidth = query.match(/\(max-width:\s*(\d+)px\)/);
-        return {
-            matches:
-                (minWidth === null || width >= Number(minWidth[1])) &&
-                (maxWidth === null || width <= Number(maxWidth[1])),
-            media: query,
-            onchange: null,
-            addListener: () => {},
-            removeListener: () => {},
-            addEventListener: () => {},
-            removeEventListener: () => {},
-            dispatchEvent: () => false,
-        };
-    });
-}
-
 beforeEach(() => {
-    vi.stubGlobal('matchMedia', createMatchMedia(1024));
+    vi.stubGlobal(
+        'matchMedia',
+        vi.fn((query: string) => {
+            const minWidth = query.match(/\(min-width:\s*(\d+)px\)/);
+            const maxWidth = query.match(/\(max-width:\s*(\d+)px\)/);
+            return {
+                matches:
+                    (minWidth === null || 1024 >= Number(minWidth[1])) &&
+                    (maxWidth === null || 1024 <= Number(maxWidth[1])),
+                media: query,
+                onchange: null,
+                addListener: () => {},
+                removeListener: () => {},
+                addEventListener: () => {},
+                removeEventListener: () => {},
+                dispatchEvent: () => false,
+            };
+        }),
+    );
 });
 
 afterEach(() => {
@@ -46,7 +45,25 @@ const releaseRow = (overrides: Partial<ReleaseRow> = {}): ReleaseRow => ({
 describe('ReleasesTab', () => {
     it.each([1024, 390])('shows a persisted capacity reason and clears it after recovery at %i px', (width) => {
         // Arrange
-        vi.stubGlobal('matchMedia', createMatchMedia(width));
+        vi.stubGlobal(
+            'matchMedia',
+            vi.fn((query: string) => {
+                const minWidth = query.match(/\(min-width:\s*(\d+)px\)/);
+                const maxWidth = query.match(/\(max-width:\s*(\d+)px\)/);
+                return {
+                    matches:
+                        (minWidth === null || width >= Number(minWidth[1])) &&
+                        (maxWidth === null || width <= Number(maxWidth[1])),
+                    media: query,
+                    onchange: null,
+                    addListener: () => {},
+                    removeListener: () => {},
+                    addEventListener: () => {},
+                    removeEventListener: () => {},
+                    dispatchEvent: () => false,
+                };
+            }),
+        );
         const reason =
             'Waiting for destination capacity: insufficient free space. Required: 100 bytes. Available: 99 bytes.';
         const waiting = {
@@ -139,7 +156,25 @@ describe('ReleasesTab', () => {
     });
 
     it('provides accessible compact sort controls with every release sort field', async () => {
-        vi.stubGlobal('matchMedia', createMatchMedia(390));
+        vi.stubGlobal(
+            'matchMedia',
+            vi.fn((query: string) => {
+                const minWidth = query.match(/\(min-width:\s*(\d+)px\)/);
+                const maxWidth = query.match(/\(max-width:\s*(\d+)px\)/);
+                return {
+                    matches:
+                        (minWidth === null || 390 >= Number(minWidth[1])) &&
+                        (maxWidth === null || 390 <= Number(maxWidth[1])),
+                    media: query,
+                    onchange: null,
+                    addListener: () => {},
+                    removeListener: () => {},
+                    addEventListener: () => {},
+                    removeEventListener: () => {},
+                    dispatchEvent: () => false,
+                };
+            }),
+        );
         const user = userEvent.setup();
         render(<ReleasesTab releases={[releaseRow()]} onGrab={vi.fn()} />);
 
@@ -167,7 +202,25 @@ describe('ReleasesTab', () => {
     });
 
     it('renders only sorted manual release cards on mobile', async () => {
-        vi.stubGlobal('matchMedia', createMatchMedia(390));
+        vi.stubGlobal(
+            'matchMedia',
+            vi.fn((query: string) => {
+                const minWidth = query.match(/\(min-width:\s*(\d+)px\)/);
+                const maxWidth = query.match(/\(max-width:\s*(\d+)px\)/);
+                return {
+                    matches:
+                        (minWidth === null || 390 >= Number(minWidth[1])) &&
+                        (maxWidth === null || 390 <= Number(maxWidth[1])),
+                    media: query,
+                    onchange: null,
+                    addListener: () => {},
+                    removeListener: () => {},
+                    addEventListener: () => {},
+                    removeEventListener: () => {},
+                    dispatchEvent: () => false,
+                };
+            }),
+        );
         const user = userEvent.setup();
         const releases = [
             releaseRow({
@@ -203,19 +256,25 @@ describe('ReleasesTab', () => {
                 card.getAttribute('data-release-id'),
             );
 
-        const expectedAscendingOrder: Record<string, string[]> = {
-            Title: ['release-alpha', 'release-beta', 'release-zulu'],
-            Size: ['release-alpha', 'release-zulu', 'release-beta'],
-            Status: ['release-beta', 'release-alpha', 'release-zulu'],
-            'Publish date': ['release-beta', 'release-zulu', 'release-alpha'],
-        };
+        await user.click(field);
+        await user.click(screen.getByRole('option', { name: 'Title' }));
 
-        for (const [label, expected] of Object.entries(expectedAscendingOrder)) {
-            await user.click(field);
-            await user.click(screen.getByRole('option', { name: label }));
+        expect(getMobileOrder()).toEqual(['release-alpha', 'release-beta', 'release-zulu']);
 
-            expect(getMobileOrder()).toEqual(expected);
-        }
+        await user.click(field);
+        await user.click(screen.getByRole('option', { name: 'Size' }));
+
+        expect(getMobileOrder()).toEqual(['release-alpha', 'release-zulu', 'release-beta']);
+
+        await user.click(field);
+        await user.click(screen.getByRole('option', { name: 'Status' }));
+
+        expect(getMobileOrder()).toEqual(['release-beta', 'release-alpha', 'release-zulu']);
+
+        await user.click(field);
+        await user.click(screen.getByRole('option', { name: 'Publish date' }));
+
+        expect(getMobileOrder()).toEqual(['release-beta', 'release-zulu', 'release-alpha']);
 
         await user.click(screen.getByRole('button', { name: 'Sort descending' }));
 
@@ -223,7 +282,25 @@ describe('ReleasesTab', () => {
     });
 
     it('renders purpose-built release cards at the tablet breakpoint', () => {
-        vi.stubGlobal('matchMedia', createMatchMedia(768));
+        vi.stubGlobal(
+            'matchMedia',
+            vi.fn((query: string) => {
+                const minWidth = query.match(/\(min-width:\s*(\d+)px\)/);
+                const maxWidth = query.match(/\(max-width:\s*(\d+)px\)/);
+                return {
+                    matches:
+                        (minWidth === null || 768 >= Number(minWidth[1])) &&
+                        (maxWidth === null || 768 <= Number(maxWidth[1])),
+                    media: query,
+                    onchange: null,
+                    addListener: () => {},
+                    removeListener: () => {},
+                    addEventListener: () => {},
+                    removeEventListener: () => {},
+                    dispatchEvent: () => false,
+                };
+            }),
+        );
         render(<ReleasesTab releases={[releaseRow()]} onGrab={vi.fn()} />);
 
         expect(document.querySelector('.releases-tab__data-table')).not.toBeInTheDocument();
@@ -250,11 +327,8 @@ describe('ReleasesTab', () => {
     it('shows the download status in the Status column for a grabbed release', () => {
         render(<ReleasesTab releases={[releaseRow({ acquisitionStatus: 'Downloading' })]} onGrab={vi.fn()} />);
 
-        const badges = screen.getAllByText('Downloading');
-        expect(badges.length).toBeGreaterThan(0);
-        for (const badge of badges) {
-            expect(badge.closest('[data-acquisition-status="Downloading"]')).not.toBeNull();
-        }
+        const badge = screen.getByText('Downloading');
+        expect(badge.closest('[data-acquisition-status="Downloading"]')).not.toBeNull();
     });
 
     it('renders the longest status label in full without truncating the badge text', () => {
@@ -262,13 +336,10 @@ describe('ReleasesTab', () => {
             <ReleasesTab releases={[releaseRow({ acquisitionStatus: 'Downloading' })]} onGrab={vi.fn()} />,
         );
 
-        const badges = container.querySelectorAll('[data-acquisition-status="Downloading"]');
-        expect(badges.length).toBeGreaterThan(0);
-        for (const badge of badges) {
-            expect(badge).toHaveClass('badge--sm');
-            expect(badge.querySelector('.badge__dot')).not.toBeNull();
-            expect(badge.textContent).toBe('Downloading');
-        }
+        const badge = container.querySelector('[data-acquisition-status="Downloading"]');
+        expect(badge).toHaveClass('badge--sm');
+        expect(badge?.querySelector('.badge__dot')).not.toBeNull();
+        expect(badge?.textContent).toBe('Downloading');
     });
 
     it('renders a dash in the Status column for a never-grabbed release', () => {
@@ -328,13 +399,10 @@ describe('ReleasesTab', () => {
         const release = releaseRow();
         render(<ReleasesTab releases={[release]} grabbingReleaseIds={new Set([release.id])} onGrab={vi.fn()} />);
 
-        const grabButtons = screen.getAllByRole('button', { name: /grab/i });
-        expect(grabButtons.length).toBeGreaterThan(0);
-        for (const button of grabButtons) {
-            expect(button).toBeDisabled();
-            expect(button).toHaveAttribute('aria-busy', 'true');
-            expect(button).toHaveTextContent('Grabbing...');
-        }
+        const grabButton = screen.getByRole('button', { name: /grab/i });
+        expect(grabButton).toBeDisabled();
+        expect(grabButton).toHaveAttribute('aria-busy', 'true');
+        expect(grabButton).toHaveTextContent('Grabbing...');
     });
 
     it('does not disable other grab buttons while one release is being grabbed', () => {
@@ -349,21 +417,33 @@ describe('ReleasesTab', () => {
         );
 
         const buttons = screen.getAllByRole('button', { name: /grab/i });
-        const release1Buttons = buttons.filter((button) => button.getAttribute('data-release-id') === 'release-1');
-        const release2Buttons = buttons.filter((button) => button.getAttribute('data-release-id') === 'release-2');
+        const release1Button = buttons.find((button) => button.getAttribute('data-release-id') === 'release-1');
+        const release2Button = buttons.find((button) => button.getAttribute('data-release-id') === 'release-2');
 
-        expect(release1Buttons.length).toBeGreaterThan(0);
-        expect(release2Buttons.length).toBeGreaterThan(0);
-        for (const button of release1Buttons) {
-            expect(button).toBeDisabled();
-        }
-        for (const button of release2Buttons) {
-            expect(button).not.toBeDisabled();
-        }
+        expect(release1Button).toBeDisabled();
+        expect(release2Button).not.toBeDisabled();
     });
 
     it('shows the same accessible pending action in the mobile card layout', () => {
-        vi.stubGlobal('matchMedia', createMatchMedia(390));
+        vi.stubGlobal(
+            'matchMedia',
+            vi.fn((query: string) => {
+                const minWidth = query.match(/\(min-width:\s*(\d+)px\)/);
+                const maxWidth = query.match(/\(max-width:\s*(\d+)px\)/);
+                return {
+                    matches:
+                        (minWidth === null || 390 >= Number(minWidth[1])) &&
+                        (maxWidth === null || 390 <= Number(maxWidth[1])),
+                    media: query,
+                    onchange: null,
+                    addListener: () => {},
+                    removeListener: () => {},
+                    addEventListener: () => {},
+                    removeEventListener: () => {},
+                    dispatchEvent: () => false,
+                };
+            }),
+        );
         const release = releaseRow();
 
         render(<ReleasesTab releases={[release]} grabbingReleaseIds={new Set([release.id])} onGrab={vi.fn()} />);
@@ -396,11 +476,7 @@ describe('ReleasesTab', () => {
             />,
         );
 
-        const failed = screen.getAllByText('Failed');
-        expect(failed.length).toBeGreaterThan(0);
-        for (const badge of failed) {
-            expect(badge).toHaveAttribute('title', 'Download Stuck');
-        }
+        expect(screen.getByText('Failed')).toHaveAttribute('title', 'Download Stuck');
         expect(screen.getAllByRole('button', { name: /grab/i }).length).toBeGreaterThan(0);
     });
 
@@ -412,12 +488,9 @@ describe('ReleasesTab', () => {
             />,
         );
 
-        const faulted = screen.getAllByText('Faulted');
-        expect(faulted.length).toBeGreaterThan(0);
-        for (const badge of faulted) {
-            expect(badge).toHaveAttribute('title', 'Download Stuck');
-            expect(badge.closest('[data-acquisition-status]')).toHaveAttribute('data-variant', 'stalled');
-        }
+        const faulted = screen.getByText('Faulted');
+        expect(faulted).toHaveAttribute('title', 'Download Stuck');
+        expect(faulted.closest('[data-acquisition-status]')).toHaveAttribute('data-variant', 'stalled');
         expect(screen.getAllByRole('button', { name: /grab/i }).length).toBeGreaterThan(0);
     });
 

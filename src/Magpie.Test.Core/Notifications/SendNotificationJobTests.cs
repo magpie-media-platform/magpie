@@ -57,7 +57,7 @@ public sealed class SendNotificationJobTests
     }
 
     [Test]
-    public void Describe_ReturnsBoundedRetryPolicy_WhenRead()
+    public void Spec_ReturnsBoundedRetryPolicy_WhenRead()
     {
         // Act
         var spec = SendNotificationJob.Spec;

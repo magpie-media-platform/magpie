@@ -10,7 +10,7 @@ namespace Magpie.Sdk.Caching;
 public interface ICache
 {
     /// <summary>
-    /// A cached value.
+    /// Gets a fresh cached value.
     /// </summary>
     /// <typeparam name="T">The type of the cached value</typeparam>
     /// <param name="key">The stable cache key</param>

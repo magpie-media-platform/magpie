@@ -36,10 +36,6 @@ export interface DownloadQueueWidgetProps extends HTMLAttributes<HTMLDivElement>
     getStateUrl?: (state: keyof DownloadStateCounts) => string;
 
     viewAllUrl?: string;
-
-    getDownloadUrl?: (download: ActiveDownloadItem) => string;
-
-    headingLevel?: 2 | 3;
 }
 
 const stateLabelMap: Record<keyof DownloadStateCounts, string> = {
@@ -67,11 +63,9 @@ const StatusRow = ({ state, count, url }: StatusRowProps) => (
 
 interface DownloadItemProps {
     download: ActiveDownloadItem;
-    url?: string;
 }
 
-const DownloadItem = ({ download, url }: DownloadItemProps) => {
-    const isClickable = url !== undefined;
+const DownloadItem = ({ download }: DownloadItemProps) => {
     const progressPercent = Math.min(100, Math.max(0, download.progress));
     const displayPercent = Number.isInteger(progressPercent) ? progressPercent : Math.round(progressPercent);
     const stateVariant =
@@ -119,22 +113,6 @@ const DownloadItem = ({ download, url }: DownloadItemProps) => {
         </>
     );
 
-    if (isClickable && url) {
-        return (
-            <Link
-                to={url}
-                className={`download-queue-widget__item download-queue-widget__item--${stateVariant} download-queue-widget__item--clickable`}
-                data-download-id={download.id}
-                data-status={download.state}
-                data-progress={progressPercent}
-                data-variant={stateVariant}
-                data-clickable
-            >
-                {content}
-            </Link>
-        );
-    }
-
     return (
         <div
             className={`download-queue-widget__item download-queue-widget__item--${stateVariant}`}
@@ -160,8 +138,6 @@ const DownloadQueueWidgetBase = forwardRef<HTMLDivElement, DownloadQueueWidgetPr
             onRetry,
             getStateUrl,
             viewAllUrl,
-            getDownloadUrl,
-            headingLevel = 2,
             className,
             ...props
         },
@@ -170,7 +146,6 @@ const DownloadQueueWidgetBase = forwardRef<HTMLDivElement, DownloadQueueWidgetPr
         const classes = ['download-queue-widget', className].filter(Boolean).join(' ');
         const total = counts.downloading + counts.queued + counts.paused + counts.stalled;
         const displayedDownloads = activeDownloads.slice(0, maxItems);
-        const HeadingTag = `h${headingLevel}` as const;
         const showEmptyState = total === 0 && displayedDownloads.length === 0 && !loading && !error;
 
         return (
@@ -181,7 +156,7 @@ const DownloadQueueWidgetBase = forwardRef<HTMLDivElement, DownloadQueueWidgetPr
                             {icon}
                         </span>
                     )}
-                    <HeadingTag className="download-queue-widget__title">{heading}</HeadingTag>
+                    <h2 className="download-queue-widget__title">{heading}</h2>
                     <span className="download-queue-widget__total">{loading ? '-' : total}</span>
                 </div>
 
@@ -230,9 +205,7 @@ const DownloadQueueWidgetBase = forwardRef<HTMLDivElement, DownloadQueueWidgetPr
                                 <Skeleton className="download-queue-widget__item" height={48} />
                             </>
                         ) : (
-                            displayedDownloads.map((download) => (
-                                <DownloadItem key={download.id} download={download} url={getDownloadUrl?.(download)} />
-                            ))
+                            displayedDownloads.map((download) => <DownloadItem key={download.id} download={download} />)
                         )}
                     </div>
                 )}

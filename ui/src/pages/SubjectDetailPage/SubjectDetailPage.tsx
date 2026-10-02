@@ -32,7 +32,7 @@ import { MetadataLinks } from '@/components/ui/MetadataLinks';
 import { MetadataInspector } from '@/components/metadata-inspector/MetadataInspector';
 import { PreviewsTab } from '@/components/content/ContentTabs';
 import type { PreviewClip } from '@/components/ui/PreviewPlayer';
-import { SubjectDetailsHeaderSlot } from '@/components/ui/Slot/SubjectSlots';
+import { Slot } from '@/components/ui/Slot';
 import { ExtensionTabContents, useTabSlotExtensions } from '@/components/ui/Slot/ExtensionTabs';
 import { Tabs, TabsContent, DetailTabTrigger, DetailTabsList } from '@/components/ui/Tabs';
 import { useToast } from '@/components/ui/Toast';
@@ -550,7 +550,7 @@ export function SubjectDetailPage() {
                 </Link>
             )}
 
-            <SubjectDetailsHeaderSlot {...detailSlotProps}>
+            <Slot slot="subject.details.header" {...detailSlotProps}>
                 <header
                     className="subject-detail-page__header"
                     data-component="subject-detail-header"
@@ -624,7 +624,7 @@ export function SubjectDetailPage() {
                         )}
                     </div>
                 </header>
-            </SubjectDetailsHeaderSlot>
+            </Slot>
 
             <DetailInfoGrid aria-label="Subject supporting information" className="detail-info-grid--under-header">
                 <SubjectTagsChipStrip

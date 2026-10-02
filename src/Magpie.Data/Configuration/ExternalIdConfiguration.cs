@@ -10,13 +10,9 @@ internal sealed class ExternalIdConfiguration : IEntityTypeConfiguration<Externa
     public void Configure(EntityTypeBuilder<ExternalId> builder)
     {
         builder.ToTable("metadata_externalId");
-        builder.HasKey(e => e.Id);
-        builder.Property(e => e.Id).ValueGeneratedOnAdd();
         builder.HasOne<MetadataContribution>()
             .WithMany(e => e.ExternalIds)
             .HasForeignKey(e => e.MetadataContributionId)
             .OnDelete(DeleteBehavior.Restrict);
-        builder.HasIndex(e => e.MetadataContributionId);
-        builder.HasIndex(e => e.ReleaseId);
     }
 }

@@ -56,5 +56,5 @@ public record QualityTierList
     /// <summary>
     /// The rank of each quality tier in the list.
     /// </summary>
-    public ICollection<QualityTierListRank> QualityTierRanks { get; init; } = [];
+    public ICollection<QualityTierListRank> QualityTierRanks { get; set; } = [];
 }

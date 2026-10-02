@@ -166,47 +166,78 @@ describe('local preview workflow', () => {
         );
     });
 
-    it.each([
-        [300, 120, true],
-        [120, 120, false],
-    ])(
-        'shows the full open label in a tooltip only when the ellipsis hides part of it (scroll %d, client %d)',
-        async (scrollWidth, clientWidth, expectTooltip) => {
-            // Arrange
-            const longTitle = 'A Very Long Title That Does Not Fit On One Line Of The Drawer Footer';
-            vi.mocked(apiGet)
-                .mockResolvedValueOnce({ id: 'local', name: 'Fallback', contentType: 'movie', level: 'movie' })
-                .mockResolvedValueOnce({ title: longTitle });
-            vi.spyOn(HTMLElement.prototype, 'scrollWidth', 'get').mockReturnValue(scrollWidth);
-            vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(clientWidth);
-            const user = userEvent.setup();
-            render(
-                <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
-                    <MemoryRouter>
-                        <LocalContentPreviewProvider>
-                            <LocalContentLink contentId="local">Inspect item</LocalContentLink>
-                        </LocalContentPreviewProvider>
-                    </MemoryRouter>
-                </QueryClientProvider>,
-                { wrapper: TooltipProvider },
-            );
-            fireEvent.click(screen.getByRole('link', { name: 'Inspect item' }));
-            const open = await screen.findByRole('button', { name: `Open ${longTitle}` });
+    it('shows the full open label in a tooltip when the ellipsis hides part of it', async () => {
+        // Arrange
+        vi.mocked(apiGet)
+            .mockResolvedValueOnce({ id: 'local', name: 'Fallback', contentType: 'movie', level: 'movie' })
+            .mockResolvedValueOnce({ title: 'A Very Long Title That Does Not Fit On One Line Of The Drawer Footer' });
+        vi.spyOn(HTMLElement.prototype, 'scrollWidth', 'get').mockReturnValue(300);
+        vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(120);
+        const user = userEvent.setup();
+        render(
+            <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+                <MemoryRouter>
+                    <LocalContentPreviewProvider>
+                        <LocalContentLink contentId="local">Inspect item</LocalContentLink>
+                    </LocalContentPreviewProvider>
+                </MemoryRouter>
+            </QueryClientProvider>,
+            { wrapper: TooltipProvider },
+        );
+        fireEvent.click(screen.getByRole('link', { name: 'Inspect item' }));
+        const open = await screen.findByRole('button', {
+            name: 'Open A Very Long Title That Does Not Fit On One Line Of The Drawer Footer',
+        });
 
-            // Act
-            await user.hover(open);
+        // Act
+        await user.hover(open);
 
-            // Assert
-            expect(open.querySelector('.preview-drawer__open-label')).toHaveTextContent(`Open ${longTitle}`);
-            if (expectTooltip) {
-                expect(await screen.findByRole('tooltip')).toHaveTextContent(`Open ${longTitle}`);
-            } else {
-                await new Promise((resolve) => setTimeout(resolve, 300));
-                expect(screen.queryByRole('tooltip')).not.toBeInTheDocument();
-            }
-            vi.restoreAllMocks();
-        },
-    );
+        // Assert
+        expect(open.querySelector('.preview-drawer__open-label')).toHaveTextContent(
+            'Open A Very Long Title That Does Not Fit On One Line Of The Drawer Footer',
+        );
+        expect(await screen.findByRole('tooltip')).toHaveTextContent(
+            'Open A Very Long Title That Does Not Fit On One Line Of The Drawer Footer',
+        );
+        vi.restoreAllMocks();
+    });
+
+    it('shows no tooltip for the open label when the ellipsis hides nothing', async () => {
+        // Arrange
+        vi.useFakeTimers({ shouldAdvanceTime: true });
+        vi.mocked(apiGet)
+            .mockResolvedValueOnce({ id: 'local', name: 'Fallback', contentType: 'movie', level: 'movie' })
+            .mockResolvedValueOnce({ title: 'A Very Long Title That Does Not Fit On One Line Of The Drawer Footer' });
+        vi.spyOn(HTMLElement.prototype, 'scrollWidth', 'get').mockReturnValue(120);
+        vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(120);
+        const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+        render(
+            <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+                <MemoryRouter>
+                    <LocalContentPreviewProvider>
+                        <LocalContentLink contentId="local">Inspect item</LocalContentLink>
+                    </LocalContentPreviewProvider>
+                </MemoryRouter>
+            </QueryClientProvider>,
+            { wrapper: TooltipProvider },
+        );
+        fireEvent.click(screen.getByRole('link', { name: 'Inspect item' }));
+        const open = await screen.findByRole('button', {
+            name: 'Open A Very Long Title That Does Not Fit On One Line Of The Drawer Footer',
+        });
+
+        // Act
+        await user.hover(open);
+        await vi.advanceTimersByTimeAsync(300);
+
+        // Assert
+        expect(open.querySelector('.preview-drawer__open-label')).toHaveTextContent(
+            'Open A Very Long Title That Does Not Fit On One Line Of The Drawer Footer',
+        );
+        expect(screen.queryByRole('tooltip')).not.toBeInTheDocument();
+        vi.useRealTimers();
+        vi.restoreAllMocks();
+    });
 
     it('shows an unavailable item without a provider fallback or enabled detail navigation', async () => {
         // Arrange

@@ -40,7 +40,7 @@ public interface IUserRepository :
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Adds one to the failed login counter of a user and applies a lockout, in a single atomic step.
+    /// Records a failed login of a user.
     /// </summary>
     /// <param name="userId">The id of the user</param>
     /// <param name="lockedUntil">The end of the lockout, or <c>null</c> to keep the stored value</param>

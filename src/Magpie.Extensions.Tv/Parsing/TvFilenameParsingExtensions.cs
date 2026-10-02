@@ -28,14 +28,69 @@ internal static class TvFilenameParsingExtensions
 
     private static readonly HashSet<string> ReleaseTagTokens = new(StringComparer.OrdinalIgnoreCase)
     {
-        "480p", "540p", "576p", "720p", "1080p", "1080i", "2160p", "4320p", "4k", "8k", "uhd", "hd", "sd",
-        "bluray", "bdrip", "brrip", "bdremux", "remux", "web-dl", "webdl", "webrip", "hdrip",
-        "dvdrip", "dvd", "hdtv", "pdtv", "sdtv", "hdcam", "hdts", "telesync", "scr",
-        "x264", "x265", "h264", "h265", "hevc", "avc", "av1", "xvid", "divx", "vp9", "10bit", "8bit",
-        "hdr", "hdr10", "dolbyvision", "sdr",
-        "aac", "ac3", "eac3", "dts", "dtshd", "truehd", "atmos", "flac", "mp3", "ddp", "ddp5",
+        "480p",
+        "540p",
+        "576p",
+        "720p",
+        "1080p",
+        "1080i",
+        "2160p",
+        "4320p",
+        "4k",
+        "8k",
+        "uhd",
+        "hd",
+        "sd",
+        "bluray",
+        "bdrip",
+        "brrip",
+        "bdremux",
+        "remux",
+        "web-dl",
+        "webdl",
+        "webrip",
+        "hdrip",
+        "dvdrip",
+        "dvd",
+        "hdtv",
+        "pdtv",
+        "sdtv",
+        "hdcam",
+        "hdts",
+        "telesync",
+        "scr",
+        "x264",
+        "x265",
+        "h264",
+        "h265",
+        "hevc",
+        "avc",
+        "av1",
+        "xvid",
+        "divx",
+        "vp9",
+        "10bit",
+        "8bit",
+        "hdr",
+        "hdr10",
+        "dolbyvision",
+        "sdr",
+        "aac",
+        "ac3",
+        "eac3",
+        "dts",
+        "dtshd",
+        "truehd",
+        "atmos",
+        "flac",
+        "mp3",
+        "ddp",
+        "ddp5",
         "dd5",
-        "repack", "rerip", "imax", "vostfr"
+        "repack",
+        "rerip",
+        "imax",
+        "vostfr"
     };
 
     internal static ParsedTvFile? ParseTvFilename(this string filePath, out string? reason)
@@ -72,28 +127,26 @@ internal static class TvFilenameParsingExtensions
         if (sxxEyyMatch.Success)
         {
             var season = int.Parse(sxxEyyMatch.Groups["season"].Value, CultureInfo.InvariantCulture);
-            var episode = int.Parse(sxxEyyMatch.Groups["episode"].Value, CultureInfo.InvariantCulture);
             var title = TitleFromStemOrFolder(
                 normalisedStem,
                 sxxEyyMatch.Index,
                 normalisedParent,
                 normalisedGrandparent,
                 isSeasonFolderParent: IsSeasonFolder(normalisedParent));
-            return BuildResult(title, season, episode, out reason);
+            return BuildResult(title, season, sxxEyyMatch.ParseEpisodes(), out reason);
         }
 
         var numXMatch = TvParsingPatterns.NumXNum.Match(normalisedStem);
         if (numXMatch.Success)
         {
             var season = int.Parse(numXMatch.Groups["season"].Value, CultureInfo.InvariantCulture);
-            var episode = int.Parse(numXMatch.Groups["episode"].Value, CultureInfo.InvariantCulture);
             var title = TitleFromStemOrFolder(
                 normalisedStem,
                 numXMatch.Index,
                 normalisedParent,
                 normalisedGrandparent,
                 isSeasonFolderParent: IsSeasonFolder(normalisedParent));
-            return BuildResult(title, season, episode, out reason);
+            return BuildResult(title, season, numXMatch.ParseEpisodes(), out reason);
         }
 
         var seasonFolderMatch = SeasonFolderToken.Match(normalisedParent);
@@ -104,7 +157,7 @@ internal static class TvFilenameParsingExtensions
             {
                 var season = int.Parse(seasonFolderMatch.Groups["season"].Value, CultureInfo.InvariantCulture);
                 var episode = int.Parse(leafMatch.Groups["episode"].Value, CultureInfo.InvariantCulture);
-                return BuildResult(normalisedGrandparent, season, episode, out reason);
+                return BuildResult(normalisedGrandparent, season, [episode], out reason);
             }
         }
 
@@ -114,7 +167,7 @@ internal static class TvFilenameParsingExtensions
             if (leafMatch.Success)
             {
                 var episode = int.Parse(leafMatch.Groups["episode"].Value, CultureInfo.InvariantCulture);
-                return BuildResult(normalisedGrandparent, season: 0, episode, out reason);
+                return BuildResult(normalisedGrandparent, season: 0, [episode], out reason);
             }
         }
 
@@ -125,7 +178,7 @@ internal static class TvFilenameParsingExtensions
     private static ParsedTvFile? BuildResult(
         string title,
         int season,
-        int episode,
+        IReadOnlyList<int> episodes,
         out string? reason)
     {
         var (cleanTitle, year) = StripYearAndReleaseTags(title);
@@ -141,7 +194,7 @@ internal static class TvFilenameParsingExtensions
             Title = cleanTitle,
             Year = year,
             Season = season,
-            Episode = episode
+            Episodes = episodes
         };
     }
 

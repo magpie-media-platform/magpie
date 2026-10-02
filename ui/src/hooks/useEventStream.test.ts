@@ -5,13 +5,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { installSharedWorkerHarness } from '@/test/sharedWorkerHarness';
 
-import {
-    getActiveEventSubscriptionCount,
-    getActiveEventSubscriptions,
-    useEventStream,
-    useGlobalEventStreamConnection,
-    type EventStreamPayload,
-} from './useEventStream';
+import { useEventStream, useGlobalEventStreamConnection, type EventStreamPayload } from './useEventStream';
 
 type Listener = (evt: { data: string }) => void;
 
@@ -264,44 +258,42 @@ describe('useEventStream', () => {
         expect(handler).not.toHaveBeenCalled();
     });
 
-    it('keeps the subscription count at baseline across repeated strict mode navigation', () => {
-        const baseline = getActiveEventSubscriptionCount();
-
+    it('dispatches to one listener across repeated strict mode navigation', () => {
         for (let index = 0; index < 10; index += 1) {
+            const handler = vi.fn();
             const view = render(
                 createElement(
                     StrictMode,
                     null,
                     createElement(SessionWrapper, {
-                        handler: vi.fn(),
+                        handler,
                         showListener: true,
                     }),
                 ),
             );
+            const activeSource = sources.at(-1)!;
 
-            expect(getActiveEventSubscriptionCount()).toBe(baseline + 1);
-            expect(getActiveEventSubscriptions().at(-1)?.owner).toBe('event-stream');
+            activeSource.emit(JSON.stringify(payload()));
             view.unmount();
-            expect(getActiveEventSubscriptionCount()).toBe(baseline);
+            activeSource.emit(JSON.stringify(payload()));
+
+            expect(handler).toHaveBeenCalledTimes(1);
         }
     });
 
     it('replaces a subscription when its scope changes', () => {
-        const baseline = getActiveEventSubscriptionCount();
-        const { rerender, unmount } = renderHook(
-            ({ eventName }) => useEventStream(vi.fn(), { eventName, owner: 'route-surface' }),
-            {
-                initialProps: { eventName: 'subject.updated' },
-                wrapper: ActiveSessionWrapper,
-            },
-        );
+        const handler = vi.fn();
+        const { rerender } = renderHook(({ eventName }) => useEventStream(handler, { eventName }), {
+            initialProps: { eventName: 'subject.updated' },
+            wrapper: ActiveSessionWrapper,
+        });
 
-        expect(getActiveEventSubscriptionCount()).toBe(baseline + 1);
         rerender({ eventName: 'download.updated' });
-        expect(getActiveEventSubscriptionCount()).toBe(baseline + 1);
-        expect(getActiveEventSubscriptions().at(-1)?.eventNames).toEqual(['download.updated']);
-        unmount();
-        expect(getActiveEventSubscriptionCount()).toBe(baseline);
+        sources[0].emit(JSON.stringify(payload('subject.updated')));
+        sources[0].emit(JSON.stringify(payload('download.updated')));
+
+        expect(handler).toHaveBeenCalledTimes(1);
+        expect(handler).toHaveBeenCalledWith(payload('download.updated'));
     });
 
     it('closes the source when the application session ends', () => {

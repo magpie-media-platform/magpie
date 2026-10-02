@@ -139,7 +139,7 @@ public sealed class ReleaseSearchEnqueueTests
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(() => _roots.ToDictionary(id => id,
                 id => new ContentHierarchyItemAncestry { Id = id, EffectiveMonitoring = MonitoringMode.Monitored }));
-        _scan = new ReleaseSearchScanJob(_manager, _executions, _hierarchy.Object,
+        _scan = new ReleaseSearchScanJob(_manager, _executions, _hierarchy.Object, TimeProvider.System,
             NullLogger<ReleaseSearchScanJob>.Instance, Mock.Of<IProgressReporter>());
         _services = new ServiceCollection().BuildServiceProvider();
         var migration = new DatabaseMigrationState();
@@ -222,8 +222,9 @@ public sealed class ReleaseSearchEnqueueTests
 
     [TestCase(50, 53)]
     [TestCase(51, 51)]
-    public async Task ExecuteAsync_QueuesEveryRoot_UnlessTheScanIsAboveItsSkipThreshold(
-        int alreadyActive, int expectedActive)
+    public async Task ExecuteAsync_QueuesEveryRoot_WhenTheScanIsNotAboveItsSkipThreshold(
+        int alreadyActive,
+        int expectedActive)
     {
         // Arrange
         _context.JobExecutions.AddRange(Enumerable.Range(0, alreadyActive).Select(_ => new JobExecution

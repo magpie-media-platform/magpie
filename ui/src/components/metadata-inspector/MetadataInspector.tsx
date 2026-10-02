@@ -183,6 +183,8 @@ interface InspectorContribution {
 
 type BufferRelationship = InspectorRelationship & { subjectName?: string; subjectKind?: string };
 
+type SubItemLists = Record<MetadataSubItemKey, { itemId: string }[]>;
+
 const SCALAR_PATCH_KEYS: Record<string, keyof MetadataContainerPatch> = {
     Title: 'title',
     OriginalTitle: 'originalTitle',
@@ -376,6 +378,55 @@ function userContributionHasContent(contribution: InspectorContribution): boolea
         return true;
     }
     return SUBITEM_RENDERERS.some((renderer) => (contribution[renderer.key]?.length ?? 0) > 0);
+}
+
+function userBaseline(contributions: InspectorContribution[]): InspectorContribution {
+    const serverUser = contributions.find((c) => c.isUserContribution);
+    if (serverUser) {
+        return serverUser;
+    }
+    const minOrdinal = contributions.reduce((min, c) => Math.min(min, c.ordinal), 0);
+    return emptyUserContribution(minOrdinal - 1);
+}
+
+function rebaseUserContribution(
+    saved: InspectorContribution,
+    current: InspectorContribution,
+    next: InspectorContribution,
+): InspectorContribution {
+    const rebased = cloneUserContribution(next);
+    for (const key of new Set([...Object.keys(saved.fieldValues), ...Object.keys(current.fieldValues)])) {
+        const value = current.fieldValues[key];
+        if (value === saved.fieldValues[key]) {
+            continue;
+        }
+        if (value === undefined) {
+            delete rebased.fieldValues[key];
+        } else {
+            rebased.fieldValues[key] = value;
+        }
+    }
+    const savedLists: SubItemLists = saved;
+    const currentLists: SubItemLists = current;
+    const rebasedLists: SubItemLists = rebased;
+    for (const { key } of SUBITEM_RENDERERS) {
+        const savedById = new Map(savedLists[key].map((item) => [item.itemId, JSON.stringify(item)]));
+        const currentIds = new Set(currentLists[key].map((item) => item.itemId));
+        const items = rebasedLists[key].filter((item) => !savedById.has(item.itemId) || currentIds.has(item.itemId));
+        for (const item of currentLists[key]) {
+            if (savedById.get(item.itemId) === JSON.stringify(item)) {
+                continue;
+            }
+            const index = items.findIndex((existing) => existing.itemId === item.itemId);
+            if (index >= 0) {
+                items[index] = item;
+            } else {
+                items.push(item);
+            }
+        }
+        rebasedLists[key] = items;
+    }
+    return rebased;
 }
 
 function mergeFields(
@@ -727,7 +778,11 @@ function nextBufferItemId(): string {
     return `new:${bufferItemCounter}`;
 }
 
-function payloadToElement(kind: MetadataSubItemKey, payload: SubItemPayload, itemId: string): Record<string, unknown> {
+function payloadToElement(
+    kind: MetadataSubItemKey,
+    payload: SubItemPayload,
+    itemId: string,
+): { itemId: string } & Record<string, unknown> {
     switch (kind) {
         case 'relationships': {
             const p = payload as import('@/types').RelationshipSubItemPayload;
@@ -739,7 +794,7 @@ function payloadToElement(kind: MetadataSubItemKey, payload: SubItemPayload, ite
                 element.subjectKind = p.subjectKind;
                 element.name = p.subjectName;
             }
-            return element as unknown as Record<string, unknown>;
+            return { ...element };
         }
         case 'genres': {
             const p = payload as import('@/types').GenreSubItemPayload;
@@ -1236,17 +1291,10 @@ export function MetadataInspector({ contentId, owner }: MetadataInspectorProps) 
         [inspectorContributions],
     );
 
-    const baselineUser = useMemo<InspectorContribution | null>(() => {
-        if (!data) {
-            return null;
-        }
-        const serverUser = inspectorContributions.find((c) => c.isUserContribution);
-        if (serverUser) {
-            return serverUser;
-        }
-        const minOrdinal = providerContributions.reduce((min, c) => Math.min(min, c.ordinal), 0);
-        return emptyUserContribution(minOrdinal - 1);
-    }, [data, inspectorContributions, providerContributions]);
+    const baselineUser = useMemo<InspectorContribution | null>(
+        () => (data ? userBaseline(inspectorContributions) : null),
+        [data, inspectorContributions],
+    );
 
     const [bufferUser, setBufferUser] = useState<InspectorContribution | null>(null);
     const baselineUserRef = useRef<InspectorContribution | null>(null);
@@ -1300,13 +1348,15 @@ export function MetadataInspector({ contentId, owner }: MetadataInspectorProps) 
         return keys;
     }, [workingUser, baselineUser]);
 
+    // A successful save's own events can arrive before its refetch; they must not mark the draft stale.
+    const [awaitingSavedState, setAwaitingSavedState] = useState(false);
     const {
         state: conflictState,
         beginOwnSave,
         endOwnSave,
         clearConflict,
     } = useExternalChangeConflict({
-        dirty: dirty || reorder.isPending,
+        dirty: (dirty || reorder.isPending) && !awaitingSavedState,
         entityId: resolvedOwner.id,
         eventNames: isContentOwner
             ? ['content.hierarchyItem.updated', 'content.hierarchyItem.deleted', 'metadata.refreshed']
@@ -1461,22 +1511,17 @@ export function MetadataInspector({ contentId, owner }: MetadataInspectorProps) 
         }
         const { kind, mode, itemId } = subItemForm;
         mutateUser((draft) => {
-            const container = draft as unknown as Record<string, Record<string, unknown>[]>;
+            const container: SubItemLists = draft;
             const list = [...(container[kind] ?? [])];
             if (mode === 'add') {
                 list.push(payloadToElement(kind, payload, nextBufferItemId()));
             } else if (itemId) {
-                const index = list.findIndex((row) => (row.itemId as string) === itemId);
+                const index = list.findIndex((row) => row.itemId === itemId);
                 if (index >= 0) {
                     const element = payloadToElement(kind, payload, itemId);
-                    const relElement = element as unknown as BufferRelationship;
-                    const relExisting = list[index] as unknown as BufferRelationship;
-                    if (
-                        kind === 'relationships' &&
-                        relElement.subjectId &&
-                        relElement.subjectId === relExisting.subjectId
-                    ) {
-                        relElement.name = relExisting.name ?? null;
+                    const relExisting = list[index] as BufferRelationship;
+                    if (kind === 'relationships' && element.subjectId && element.subjectId === relExisting.subjectId) {
+                        element.name = relExisting.name ?? null;
                     }
                     list[index] = element;
                 }
@@ -1488,8 +1533,8 @@ export function MetadataInspector({ contentId, owner }: MetadataInspectorProps) 
 
     const onDeleteSubItem = (kind: MetadataSubItemKey, itemId: string) => {
         mutateUser((draft) => {
-            const container = draft as unknown as Record<string, Record<string, unknown>[]>;
-            container[kind] = (container[kind] ?? []).filter((row) => (row.itemId as string) !== itemId);
+            const container: SubItemLists = draft;
+            container[kind] = (container[kind] ?? []).filter((row) => row.itemId !== itemId);
         });
     };
 
@@ -1506,12 +1551,26 @@ export function MetadataInspector({ contentId, owner }: MetadataInspectorProps) 
         if (!baselineUser) {
             return;
         }
+        const saved = workingUser;
+        const savedOwnerKey = ownerKey;
         beginOwnSave();
-        patch.mutate(buildDeltaPatch(baselineUser, workingUser), {
+        patch.mutate(buildDeltaPatch(baselineUser, saved), {
             onSuccess: () => {
                 endOwnSave(true);
+                setAwaitingSavedState(true);
                 setShowStaleSaveDialog(false);
                 toast({ title: 'Metadata saved', variant: 'success' });
+                void query.refetch({ cancelRefetch: false }).then((result) => {
+                    if (result.status === 'success' && ownerKeyRef.current === savedOwnerKey) {
+                        const next = userBaseline(
+                            result.data.contributions.map((c) =>
+                                toInspectorContribution(c, result.data.subjects ?? {}),
+                            ),
+                        );
+                        setBufferUser((current) => current && rebaseUserContribution(saved, current, next));
+                    }
+                    setAwaitingSavedState(false);
+                });
             },
             onError: (err) => {
                 endOwnSave(false);
@@ -1546,7 +1605,7 @@ export function MetadataInspector({ contentId, owner }: MetadataInspectorProps) 
             <EditToolbar
                 changeCount={changeCount}
                 canManage={canManage}
-                pending={patch.isPending}
+                pending={patch.isPending || awaitingSavedState}
                 conflictState={conflictState}
                 onSave={onSave}
                 onRevert={onRevert}

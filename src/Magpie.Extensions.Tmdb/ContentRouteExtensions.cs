@@ -114,9 +114,8 @@ internal static class ContentRouteExtensions
             !int.TryParse(resolvedSeriesId, out _) ||
             !int.TryParse(seasonNumber, out _))
         {
-            logger.LogDebug(
-                "The TMDb provider skipped the cast for {Level} item {Id} with no resolvable series id and " +
-                "season number.",
+            logger.LogInformation(
+                "TMDb cast skipped for {Level} item {Id}: no series id or season number",
                 item.Level,
                 item.Id);
             return null;
@@ -131,9 +130,7 @@ internal static class ContentRouteExtensions
             ?? ParseEpisodeNumberFromSlug(item.Slug);
         if (episodeNumber is null || !int.TryParse(episodeNumber, out _))
         {
-            logger.LogDebug(
-                "The TMDb provider skipped the cast for episode item {Id} with no resolvable episode number.",
-                item.Id);
+            logger.LogInformation("TMDb cast skipped for episode item {Id}: no episode number", item.Id);
             return null;
         }
 

@@ -192,20 +192,6 @@ export const subjectFieldRegistry: FieldRegistry = {
     ],
 };
 
-export function getAllFieldNames(registry: FieldRegistry): string[] {
-    const names: string[] = [];
-    for (const f of registry.scalarFields) {
-        names.push(f.name);
-    }
-    for (const f of registry.collectionFields) {
-        names.push(f.name);
-        for (const alias of f.aliases) {
-            names.push(alias);
-        }
-    }
-    return names;
-}
-
 export function getScalarField(registry: FieldRegistry, name: string): ScalarFieldDef | undefined {
     return registry.scalarFields.find((f) => f.name.toLowerCase() === name.toLowerCase());
 }

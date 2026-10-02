@@ -16,21 +16,9 @@
         gap: var(--space-sm);
     }
 
-    .library-add-page__title-row {
-        display: flex;
-        align-items: center;
-        gap: var(--space-sm);
-    }
-
     .library-add-page__icon {
         font-size: var(--text-2xl);
         color: var(--accent-primary);
-    }
-
-    .library-add-page__subtitle {
-        margin: 0;
-        font-size: var(--text-sm);
-        color: var(--text-secondary);
     }
 
     .library-add-page__field {
@@ -131,15 +119,6 @@
         }
     }
 
-    .library-add-page__warnings-list {
-        list-style: none;
-        margin: 0;
-        padding: 0;
-        display: flex;
-        flex-direction: column;
-        gap: var(--space-2xs);
-    }
-
     .library-add-page__pagination {
         padding-top: var(--space-sm);
     }
@@ -157,12 +136,6 @@
         align-items: center;
         justify-content: center;
         color: var(--text-muted);
-    }
-
-    .library-add-page__poster-link {
-        display: block;
-        line-height: 0;
-        border-radius: var(--radius-sm);
     }
 
     .library-add-page__title-cell {

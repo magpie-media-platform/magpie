@@ -7,7 +7,6 @@ using Magpie.Models;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
-using Magpie.Models.Paging;
 using Magpie.Sdk.Api;
 using Magpie.Sdk.Services;
 
@@ -155,11 +154,7 @@ internal sealed class WishlistsEndpointGroup : IApiEndpointGroup
     {
         var query = new WishlistDiscoveredQuery
         {
-            Paging = new PagingParameter
-            {
-                PageNumber = pageNumber ?? 1,
-                PageSize = pageSize ?? 25,
-            },
+            Paging = new() { PageNumber = pageNumber ?? 1, PageSize = pageSize ?? 25 },
             InLibrary = inLibrary,
             Status = status,
             Sort = sort ?? WishlistDiscoveredSort.Discovered,

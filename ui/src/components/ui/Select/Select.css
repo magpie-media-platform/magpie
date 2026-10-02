@@ -194,12 +194,6 @@
         letter-spacing: var(--tracking-wide);
     }
 
-    .select-separator {
-        height: 1px;
-        margin: var(--space-xs) 0;
-        background-color: var(--border-default);
-    }
-
     @media (pointer: coarse) {
         .select-item {
             min-height: var(--touch-target-min);

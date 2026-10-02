@@ -91,11 +91,9 @@ public class TokenServiceTests
 
         // Act
         var accessToken = await _subject.GenerateAccessTokenAsync(user).ConfigureAwait(false);
+        var jwt = new JwtSecurityTokenHandler().ReadJwtToken(accessToken.Token);
 
         // Assert
-        var handler = new JwtSecurityTokenHandler();
-        var jwt = handler.ReadJwtToken(accessToken.Token);
-
         using (Assert.EnterMultipleScope())
         {
             Assert.That(accessToken, Has.Property(nameof(accessToken.ExpiresAt)).GreaterThan(DateTime.UtcNow));
@@ -138,9 +136,9 @@ public class TokenServiceTests
             new()
             {
                 ValidateIssuer = true,
-                ValidIssuer = _options.Issuer,
+                ValidIssuer = "magpie-test",
                 ValidateAudience = true,
-                ValidAudience = _options.Audience,
+                ValidAudience = "magpie-test-audience",
                 ValidateIssuerSigningKey = true,
                 IssuerSigningKey = new SymmetricSecurityKey(_jwtHmacKey),
                 ValidateLifetime = true,
@@ -158,8 +156,12 @@ public class TokenServiceTests
         var time = new Mock<TimeProvider>();
         time.Setup(provider => provider.GetUtcNow())
             .Returns(new DateTimeOffset(2000, 1, 1, 0, 0, 0, TimeSpan.Zero));
-        ITokenService subject = new TokenService(_options, _refreshTokenRepository.Object, _keyStore.Object,
-            new KeyStoreHmacCryptoProviderFactory(), time.Object);
+        ITokenService subject = new TokenService(
+            _options,
+            _refreshTokenRepository.Object,
+            _keyStore.Object,
+            new KeyStoreHmacCryptoProviderFactory(),
+            time.Object);
         var user = new User
         {
             Id = Guid.NewGuid(),
@@ -235,7 +237,6 @@ public class TokenServiceTests
         // Assert
         Assert.That(accessToken.Token, Is.Not.Empty);
         keyStore.Verify(m => m.CreateHmacKeyAsync("jwt-hmac", It.IsAny<CancellationToken>()), Times.Once);
-        keyStore.Verify(m => m.CreateSigningKeyAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Test]
@@ -296,26 +297,8 @@ public class TokenServiceTests
             m => m.ComputeHmacAsync("jwt-hmac", It.IsAny<byte[]>(), It.IsAny<CancellationToken>()),
             Times.AtLeastOnce);
         keyStore.Verify(
-            m => m.VerifyHmacAsync(
-                "jwt-hmac",
-                It.IsAny<byte[]>(),
-                It.IsAny<byte[]>(),
-                It.IsAny<CancellationToken>()),
+            m => m.VerifyHmacAsync("jwt-hmac", It.IsAny<byte[]>(), It.IsAny<byte[]>(), It.IsAny<CancellationToken>()),
             Times.Once);
-        keyStore.Verify(m => m.GetPublicKeyAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
-        keyStore.Verify(
-            m => m.SignAsync(
-                It.IsAny<string>(),
-                It.IsAny<byte[]>(),
-                It.IsAny<CancellationToken>()),
-            Times.Never);
-        keyStore.Verify(
-            m => m.VerifySignatureAsync(
-                It.IsAny<string>(),
-                It.IsAny<byte[]>(),
-                It.IsAny<byte[]>(),
-                It.IsAny<CancellationToken>()),
-            Times.Never);
     }
 
     [Test]
@@ -335,11 +318,9 @@ public class TokenServiceTests
 
         // Act
         var accessToken = await _subject.GenerateAccessTokenAsync(user).ConfigureAwait(false);
+        var jwt = new JwtSecurityTokenHandler().ReadJwtToken(accessToken.Token);
 
         // Assert
-        var handler = new JwtSecurityTokenHandler();
-        var jwt = handler.ReadJwtToken(accessToken.Token);
-
         Assert.That(
             jwt,
             Has.Property(nameof(jwt.Claims)).With.One
@@ -364,15 +345,13 @@ public class TokenServiceTests
 
         // Act
         var accessToken = await _subject.GenerateAccessTokenAsync(user).ConfigureAwait(false);
+        var jwt = new JwtSecurityTokenHandler().ReadJwtToken(accessToken.Token);
 
         // Assert
-        var handler = new JwtSecurityTokenHandler();
-        var jwt = handler.ReadJwtToken(accessToken.Token);
-
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(jwt, Has.Property(nameof(jwt.Issuer)).EqualTo(_options.Issuer));
-            Assert.That(jwt, Has.Property(nameof(jwt.Audiences)).With.One.EqualTo(_options.Audience));
+            Assert.That(jwt, Has.Property(nameof(jwt.Issuer)).EqualTo("magpie-test"));
+            Assert.That(jwt, Has.Property(nameof(jwt.Audiences)).With.One.EqualTo("magpie-test-audience"));
         }
     }
 
@@ -448,69 +427,6 @@ public class TokenServiceTests
                 Has.Property(nameof(capturedToken.ExpiresAt))
                     .EqualTo(new DateTime(2026, 9, 16, 12, 0, 0, DateTimeKind.Utc)));
         }
-    }
-
-    [Test]
-    public async Task TryValidateRefreshTokenAsync_ReturnsUserId_WhenValidToken()
-    {
-        // Arrange
-        var userId = Guid.NewGuid();
-        var token = "test-token";
-
-        _refreshTokenRepository
-            .Setup(m => m.GetByHashAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new RefreshToken
-            {
-                UserId = userId,
-                TokenHash = "hash",
-                ExpiresAt = DateTime.UtcNow.AddDays(1),
-                CreatedAt = DateTime.UtcNow
-            });
-
-        // Act
-        var result = await _subject.TryValidateRefreshTokenAsync(token).ConfigureAwait(false);
-
-        // Assert
-        Assert.That(result, Is.EqualTo(userId));
-    }
-
-    [Test]
-    public async Task TryValidateRefreshTokenAsync_ReturnsNull_WhenExpiredToken()
-    {
-        // Arrange
-        var userId = Guid.NewGuid();
-        var token = "test-token";
-
-        _refreshTokenRepository
-            .Setup(m => m.GetByHashAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new RefreshToken
-            {
-                UserId = userId,
-                TokenHash = "hash",
-                ExpiresAt = DateTime.UtcNow.AddMinutes(-1),
-                CreatedAt = DateTime.UtcNow.AddDays(-1)
-            });
-
-        // Act
-        var result = await _subject.TryValidateRefreshTokenAsync(token).ConfigureAwait(false);
-
-        // Assert
-        Assert.That(result, Is.Null);
-    }
-
-    [Test]
-    public async Task TryValidateRefreshTokenAsync_ReturnsNull_WhenNonexistentToken()
-    {
-        // Arrange
-        _refreshTokenRepository
-            .Setup(m => m.GetByHashAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(default(RefreshToken?));
-
-        // Act
-        var result = await _subject.TryValidateRefreshTokenAsync("nonexistent-token").ConfigureAwait(false);
-
-        // Assert
-        Assert.That(result, Is.Null);
     }
 
     [Test]

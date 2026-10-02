@@ -1382,10 +1382,9 @@ internal sealed class SearchExecutorTests
             Root = root,
             Dispositions = []
         };
-        var executor = new SearchExecutor(_client.Object, NullLogger<SearchExecutor>.Instance);
 
         // Act
-        var result = await executor.ExecuteAsync(plan, default).ConfigureAwait(false);
+        var result = await _executor.ExecuteAsync(plan, default).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -1438,10 +1437,9 @@ internal sealed class SearchExecutorTests
             },
             Dispositions = []
         };
-        var executor = new SearchExecutor(_client.Object, NullLogger<SearchExecutor>.Instance);
 
         // Act
-        var result = await executor.ExecuteAsync(plan, default).ConfigureAwait(false);
+        var result = await _executor.ExecuteAsync(plan, default).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -1489,10 +1487,9 @@ internal sealed class SearchExecutorTests
             },
             Dispositions = []
         };
-        var executor = new SearchExecutor(_client.Object, NullLogger<SearchExecutor>.Instance);
 
         // Act
-        var result = await executor.ExecuteAsync(plan, default).ConfigureAwait(false);
+        var result = await _executor.ExecuteAsync(plan, default).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -1571,10 +1568,9 @@ internal sealed class SearchExecutorTests
             Root = root,
             Dispositions = []
         };
-        var executor = new SearchExecutor(_client.Object, NullLogger<SearchExecutor>.Instance);
 
         // Act
-        var result = await executor.ExecuteAsync(plan, default).ConfigureAwait(false);
+        var result = await _executor.ExecuteAsync(plan, default).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -1649,10 +1645,9 @@ internal sealed class SearchExecutorTests
             Root = root,
             Dispositions = []
         };
-        var executor = new SearchExecutor(_client.Object, NullLogger<SearchExecutor>.Instance);
 
         // Act
-        var result = await executor.ExecuteAsync(plan, default).ConfigureAwait(false);
+        var result = await _executor.ExecuteAsync(plan, default).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -1714,10 +1709,9 @@ internal sealed class SearchExecutorTests
             Root = root,
             Dispositions = []
         };
-        var executor = new SearchExecutor(_client.Object, NullLogger<SearchExecutor>.Instance);
 
         // Act
-        var result = await executor.ExecuteAsync(plan, default).ConfigureAwait(false);
+        var result = await _executor.ExecuteAsync(plan, default).ConfigureAwait(false);
 
         // Assert
         Assert.That(result.Matches.Select(match => match.ExternalId), Is.EqualTo(["2"]));
@@ -1828,10 +1822,9 @@ internal sealed class SearchExecutorTests
             Root = root,
             Dispositions = []
         };
-        var executor = new SearchExecutor(_client.Object, NullLogger<SearchExecutor>.Instance);
 
         // Act
-        var result = await executor.ExecuteAsync(plan, default).ConfigureAwait(false);
+        var result = await _executor.ExecuteAsync(plan, default).ConfigureAwait(false);
 
         // Assert
         Assert.That(result.Matches.Select(match => match.ExternalId), Is.EqualTo(["30", "20"]));
@@ -1895,10 +1888,9 @@ internal sealed class SearchExecutorTests
             Root = root,
             Dispositions = []
         };
-        var executor = new SearchExecutor(_client.Object, NullLogger<SearchExecutor>.Instance);
 
         // Act
-        var result = await executor.ExecuteAsync(plan, default).ConfigureAwait(false);
+        var result = await _executor.ExecuteAsync(plan, default).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -1966,10 +1958,9 @@ internal sealed class SearchExecutorTests
             Root = root,
             Dispositions = []
         };
-        var executor = new SearchExecutor(_client.Object, NullLogger<SearchExecutor>.Instance);
 
         // Act
-        var result = await executor.ExecuteAsync(plan, default).ConfigureAwait(false);
+        var result = await _executor.ExecuteAsync(plan, default).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -2036,10 +2027,9 @@ internal sealed class SearchExecutorTests
             Root = root,
             Dispositions = []
         };
-        var executor = new SearchExecutor(_client.Object, NullLogger<SearchExecutor>.Instance);
 
         // Act
-        var result = await executor.ExecuteAsync(plan, default).ConfigureAwait(false);
+        var result = await _executor.ExecuteAsync(plan, default).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -2103,10 +2093,9 @@ internal sealed class SearchExecutorTests
             Root = root,
             Dispositions = []
         };
-        var executor = new SearchExecutor(_client.Object, NullLogger<SearchExecutor>.Instance);
 
         // Act
-        var result = await executor.ExecuteAsync(plan, default).ConfigureAwait(false);
+        var result = await _executor.ExecuteAsync(plan, default).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -2157,10 +2146,9 @@ internal sealed class SearchExecutorTests
             Root = root,
             Dispositions = []
         };
-        var executor = new SearchExecutor(_client.Object, NullLogger<SearchExecutor>.Instance);
 
         // Act
-        var result = await executor.ExecuteAsync(plan, default).ConfigureAwait(false);
+        var result = await _executor.ExecuteAsync(plan, default).ConfigureAwait(false);
 
         // Assert
         Assert.That(result.Matches.Select(match => match.ExternalId), Is.EqualTo(["1"]));
@@ -2198,10 +2186,9 @@ internal sealed class SearchExecutorTests
             Root = root,
             Dispositions = []
         };
-        var executor = new SearchExecutor(_client.Object, NullLogger<SearchExecutor>.Instance);
 
         // Act
-        var execute = () => executor.ExecuteAsync(plan, default);
+        var execute = () => _executor.ExecuteAsync(plan, default);
 
         // Assert
         Assert.That(execute, Throws.TypeOf<InvalidOperationException>());
@@ -2304,10 +2291,9 @@ internal sealed class SearchExecutorTests
             Root = root,
             Dispositions = []
         };
-        var executor = new SearchExecutor(_client.Object, NullLogger<SearchExecutor>.Instance);
 
         // Act
-        var result = await executor.ExecuteAsync(plan, default).ConfigureAwait(false);
+        var result = await _executor.ExecuteAsync(plan, default).ConfigureAwait(false);
 
         // Assert
         Assert.That(result.Matches.Select(match => match.ExternalId), Is.EqualTo(["1"]));
@@ -2378,10 +2364,9 @@ internal sealed class SearchExecutorTests
             Root = root,
             Dispositions = []
         };
-        var executor = new SearchExecutor(_client.Object, NullLogger<SearchExecutor>.Instance);
 
         // Act
-        var result = await executor.ExecuteAsync(plan, default).ConfigureAwait(false);
+        var result = await _executor.ExecuteAsync(plan, default).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -2445,10 +2430,9 @@ internal sealed class SearchExecutorTests
             Root = root,
             Dispositions = []
         };
-        var executor = new SearchExecutor(_client.Object, NullLogger<SearchExecutor>.Instance);
 
         // Act
-        var execute = () => executor.ExecuteAsync(plan, default);
+        var execute = () => _executor.ExecuteAsync(plan, default);
 
         // Assert
         Assert.That(execute, Throws.TypeOf<InvalidOperationException>());
@@ -2516,10 +2500,9 @@ internal sealed class SearchExecutorTests
             },
             Dispositions = []
         };
-        var executor = new SearchExecutor(_client.Object, NullLogger<SearchExecutor>.Instance);
 
         // Act
-        var result = await executor.ExecuteAsync(plan, default).ConfigureAwait(false);
+        var result = await _executor.ExecuteAsync(plan, default).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -2604,10 +2587,9 @@ internal sealed class SearchExecutorTests
             },
             Dispositions = []
         };
-        var executor = new SearchExecutor(_client.Object, NullLogger<SearchExecutor>.Instance);
 
         // Act
-        var result = await executor.ExecuteAsync(plan, default).ConfigureAwait(false);
+        var result = await _executor.ExecuteAsync(plan, default).ConfigureAwait(false);
 
         // Assert
         Assert.That(result.Matches.Select(match => match.ExternalId), Is.EqualTo(["82"]));
@@ -2692,10 +2674,9 @@ internal sealed class SearchExecutorTests
                     Name = "Lost",
                     Externals = new ExternalsDto { Imdb = "tt0411008" },
                 });
-        var executor = new SearchExecutor(_client.Object, NullLogger<SearchExecutor>.Instance);
 
         // Act
-        var result = await executor.ExecuteAsync(plan, default).ConfigureAwait(false);
+        var result = await _executor.ExecuteAsync(plan, default).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -2788,10 +2769,9 @@ internal sealed class SearchExecutorTests
                     Name = "Lost",
                     Externals = new ExternalsDto { Imdb = "tt9999999" },
                 });
-        var executor = new SearchExecutor(_client.Object, NullLogger<SearchExecutor>.Instance);
 
         // Act
-        var result = await executor.ExecuteAsync(plan, default).ConfigureAwait(false);
+        var result = await _executor.ExecuteAsync(plan, default).ConfigureAwait(false);
 
         // Assert
         Assert.That(result.Matches, Is.Empty);
@@ -2834,10 +2814,9 @@ internal sealed class SearchExecutorTests
         _client
             .Setup(client => client.GetShowWithEmbedsAsync(82, Array.Empty<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new ShowDto { Id = 82, Name = "Lost" });
-        var executor = new SearchExecutor(_client.Object, NullLogger<SearchExecutor>.Instance);
 
         // Act
-        var result = await executor.ExecuteAsync(plan, default).ConfigureAwait(false);
+        var result = await _executor.ExecuteAsync(plan, default).ConfigureAwait(false);
 
         // Assert
         Assert.That(result.Matches.Select(match => match.ExternalId), Is.EqualTo(["82"]));
@@ -2905,10 +2884,9 @@ internal sealed class SearchExecutorTests
                     Akas = [new AkaDto { Name = "Perdidos" }]
                 }
             });
-        var executor = new SearchExecutor(_client.Object, NullLogger<SearchExecutor>.Instance);
 
         // Act
-        var result = await executor.ExecuteAsync(plan, default).ConfigureAwait(false);
+        var result = await _executor.ExecuteAsync(plan, default).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -2986,10 +2964,9 @@ internal sealed class SearchExecutorTests
                             },
                         },
                 ]);
-        var executor = new SearchExecutor(_client.Object, NullLogger<SearchExecutor>.Instance);
 
         // Act
-        var result = await executor.ExecuteAsync(plan, default).ConfigureAwait(false);
+        var result = await _executor.ExecuteAsync(plan, default).ConfigureAwait(false);
 
         // Assert
         Assert.That(result.Matches, Is.Empty);
@@ -3086,10 +3063,9 @@ internal sealed class SearchExecutorTests
         _client
             .Setup(client => client.SearchPeopleAsync("Matthew Fox", It.IsAny<CancellationToken>()))
             .ReturnsAsync([]);
-        var executor = new SearchExecutor(_client.Object, NullLogger<SearchExecutor>.Instance);
 
         // Act
-        var result = await executor.ExecuteAsync(plan, default).ConfigureAwait(false);
+        var result = await _executor.ExecuteAsync(plan, default).ConfigureAwait(false);
 
         // Assert
         Assert.That(result.Matches, Is.Empty);
@@ -3225,10 +3201,9 @@ internal sealed class SearchExecutorTests
                             },
                         },
                 ]);
-        var executor = new SearchExecutor(_client.Object, NullLogger<SearchExecutor>.Instance);
 
         // Act
-        var result = await executor.ExecuteAsync(plan, default).ConfigureAwait(false);
+        var result = await _executor.ExecuteAsync(plan, default).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -3317,10 +3292,9 @@ internal sealed class SearchExecutorTests
                             },
                         },
                 ]);
-        var executor = new SearchExecutor(_client.Object, NullLogger<SearchExecutor>.Instance);
 
         // Act
-        var result = await executor.ExecuteAsync(plan, default).ConfigureAwait(false);
+        var result = await _executor.ExecuteAsync(plan, default).ConfigureAwait(false);
 
         // Assert
         Assert.That(result.Matches.Select(match => match.ExternalId), Is.EqualTo(["82"]));
@@ -3396,10 +3370,9 @@ internal sealed class SearchExecutorTests
                             },
                         },
                     ]);
-        var executor = new SearchExecutor(_client.Object, NullLogger<SearchExecutor>.Instance);
 
         // Act
-        var result = await executor.ExecuteAsync(plan, default).ConfigureAwait(false);
+        var result = await _executor.ExecuteAsync(plan, default).ConfigureAwait(false);
 
         // Assert
         Assert.That(result.Matches, Has.Count.EqualTo(6));
@@ -3487,10 +3460,9 @@ internal sealed class SearchExecutorTests
         _client
             .Setup(client => client.SearchPeopleAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync([]);
-        var executor = new SearchExecutor(_client.Object, NullLogger<SearchExecutor>.Instance);
 
         // Act
-        var result = await executor.ExecuteAsync(plan, default).ConfigureAwait(false);
+        var result = await _executor.ExecuteAsync(plan, default).ConfigureAwait(false);
 
         // Assert
         Assert.That(result.Matches, Is.Empty);
@@ -3604,10 +3576,9 @@ internal sealed class SearchExecutorTests
                         },
                 ]);
         _client.Setup(client => client.GetPersonCrewCreditsAsync(307, It.IsAny<CancellationToken>())).ReturnsAsync([]);
-        var executor = new SearchExecutor(_client.Object, NullLogger<SearchExecutor>.Instance);
 
         // Act
-        var result = await executor.ExecuteAsync(plan, default).ConfigureAwait(false);
+        var result = await _executor.ExecuteAsync(plan, default).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -3711,10 +3682,9 @@ internal sealed class SearchExecutorTests
                             },
                         ]
                     : []);
-        var executor = new SearchExecutor(_client.Object, NullLogger<SearchExecutor>.Instance);
 
         // Act
-        var result = await executor.ExecuteAsync(plan, default).ConfigureAwait(false);
+        var result = await _executor.ExecuteAsync(plan, default).ConfigureAwait(false);
 
         // Assert
         Assert.That(result.Matches.Select(match => match.ExternalId), Has.Member("82"));
@@ -3782,10 +3752,9 @@ internal sealed class SearchExecutorTests
                             },
                         },
                 ]);
-        var executor = new SearchExecutor(_client.Object, NullLogger<SearchExecutor>.Instance);
 
         // Act
-        var result = await executor.ExecuteAsync(plan, default).ConfigureAwait(false);
+        var result = await _executor.ExecuteAsync(plan, default).ConfigureAwait(false);
 
         // Assert
         Assert.That(result.Matches.Select(match => match.ExternalId), Is.EqualTo(["82"]));
@@ -3865,10 +3834,9 @@ internal sealed class SearchExecutorTests
                             Show = new ShowDto { Id = id, Name = "Show" },
                         },
                     })]);
-        var executor = new SearchExecutor(_client.Object, NullLogger<SearchExecutor>.Instance);
 
         // Act
-        var result = await executor.ExecuteAsync(plan, default).ConfigureAwait(false);
+        var result = await _executor.ExecuteAsync(plan, default).ConfigureAwait(false);
 
         // Assert
         Assert.That(result.Matches, Has.Count.EqualTo(11));
@@ -3942,10 +3910,9 @@ internal sealed class SearchExecutorTests
                             Show = new ShowDto { Id = id, Name = "Show" },
                         },
                     })]);
-        var executor = new SearchExecutor(_client.Object, NullLogger<SearchExecutor>.Instance);
 
         // Act
-        var result = await executor.ExecuteAsync(plan, default).ConfigureAwait(false);
+        var result = await _executor.ExecuteAsync(plan, default).ConfigureAwait(false);
 
         // Assert
         Assert.That(result.Matches, Has.Count.EqualTo(11));
@@ -3996,10 +3963,9 @@ internal sealed class SearchExecutorTests
             })
             .ToArray();
         _client.Setup(client => client.SearchShowsAsync("Show", It.IsAny<CancellationToken>())).ReturnsAsync(hits);
-        var executor = new SearchExecutor(_client.Object, NullLogger<SearchExecutor>.Instance);
 
         // Act
-        var result = await executor.ExecuteAsync(plan, default).ConfigureAwait(false);
+        var result = await _executor.ExecuteAsync(plan, default).ConfigureAwait(false);
 
         // Assert
         Assert.That(result.Matches, Has.Count.EqualTo(11));
@@ -4049,10 +4015,9 @@ internal sealed class SearchExecutorTests
                             Show = new ShowDto { Id = 82, Name = "Game of Thrones" },
                         },
                 ]);
-        var executor = new SearchExecutor(_client.Object, NullLogger<SearchExecutor>.Instance);
 
         // Act
-        var result = await executor.ExecuteAsync(plan, default).ConfigureAwait(false);
+        var result = await _executor.ExecuteAsync(plan, default).ConfigureAwait(false);
 
         // Assert
         Assert.That(result.Matches.Select(match => match.ExternalId), Is.EqualTo(["82"]));
@@ -4134,10 +4099,9 @@ internal sealed class SearchExecutorTests
                     }
                 }
             ]);
-        var executor = new SearchExecutor(_client.Object, NullLogger<SearchExecutor>.Instance);
 
         // Act
-        var result = await executor.ExecuteAsync(plan, default).ConfigureAwait(false);
+        var result = await _executor.ExecuteAsync(plan, default).ConfigureAwait(false);
 
         // Assert
         Assert.That(result.Matches.Select(match => match.ExternalId), Is.EqualTo(["82"]));
@@ -4213,10 +4177,9 @@ internal sealed class SearchExecutorTests
                             },
                         },
                 ]);
-        var executor = new SearchExecutor(_client.Object, NullLogger<SearchExecutor>.Instance);
 
         // Act
-        var result = await executor.ExecuteAsync(plan, default).ConfigureAwait(false);
+        var result = await _executor.ExecuteAsync(plan, default).ConfigureAwait(false);
 
         // Assert
         Assert.That(result.Matches.Select(match => match.ExternalId), Is.EqualTo(["82"]));
@@ -4329,10 +4292,9 @@ internal sealed class SearchExecutorTests
                         Crew = [],
                     },
                 });
-        var executor = new SearchExecutor(_client.Object, NullLogger<SearchExecutor>.Instance);
 
         // Act
-        var result = await executor.ExecuteAsync(plan, default).ConfigureAwait(false);
+        var result = await _executor.ExecuteAsync(plan, default).ConfigureAwait(false);
 
         // Assert
         Assert.That(result.Matches, Is.Empty);
@@ -4402,10 +4364,9 @@ internal sealed class SearchExecutorTests
                     }
                 }
             ]);
-        var executor = new SearchExecutor(_client.Object, NullLogger<SearchExecutor>.Instance);
 
         // Act
-        var result = await executor.ExecuteAsync(plan, default).ConfigureAwait(false);
+        var result = await _executor.ExecuteAsync(plan, default).ConfigureAwait(false);
 
         // Assert
         Assert.That(result.Matches.Select(match => match.ExternalId), Is.EqualTo(["82"]));
@@ -4502,10 +4463,9 @@ internal sealed class SearchExecutorTests
                     ]
                 }
             });
-        var executor = new SearchExecutor(_client.Object, NullLogger<SearchExecutor>.Instance);
 
         // Act
-        var result = await executor.ExecuteAsync(plan, default).ConfigureAwait(false);
+        var result = await _executor.ExecuteAsync(plan, default).ConfigureAwait(false);
 
         // Assert
         Assert.That(result.Matches.Select(match => match.ExternalId), Is.EqualTo(["82"]));
@@ -4642,10 +4602,9 @@ internal sealed class SearchExecutorTests
                     ]
                 }
             });
-        var executor = new SearchExecutor(_client.Object, NullLogger<SearchExecutor>.Instance);
 
         // Act
-        var result = await executor.ExecuteAsync(plan, default).ConfigureAwait(false);
+        var result = await _executor.ExecuteAsync(plan, default).ConfigureAwait(false);
 
         // Assert
         Assert.That(result.Matches.Select(match => match.ExternalId), Is.EqualTo(["82"]));
@@ -4751,10 +4710,9 @@ internal sealed class SearchExecutorTests
                 Name = "Other",
                 Embedded = new ShowEmbeddedDto { Images = [] }
             });
-        var executor = new SearchExecutor(_client.Object, NullLogger<SearchExecutor>.Instance);
 
         // Act
-        var result = await executor.ExecuteAsync(plan, default).ConfigureAwait(false);
+        var result = await _executor.ExecuteAsync(plan, default).ConfigureAwait(false);
 
         // Assert
         Assert.That(result.Matches.Select(match => match.ExternalId), Is.EqualTo(["83"]));
@@ -4885,10 +4843,9 @@ internal sealed class SearchExecutorTests
                         ]
                 }
             });
-        var executor = new SearchExecutor(_client.Object, NullLogger<SearchExecutor>.Instance);
 
         // Act
-        var result = await executor.ExecuteAsync(plan, default).ConfigureAwait(false);
+        var result = await _executor.ExecuteAsync(plan, default).ConfigureAwait(false);
 
         // Assert
         Assert.That(result.Matches.Select(match => match.ExternalId), Is.EqualTo(["82"]));
@@ -4974,10 +4931,9 @@ internal sealed class SearchExecutorTests
                     Images = null
                 }
             });
-        var executor = new SearchExecutor(_client.Object, NullLogger<SearchExecutor>.Instance);
 
         // Act
-        var result = await executor.ExecuteAsync(plan, default).ConfigureAwait(false);
+        var result = await _executor.ExecuteAsync(plan, default).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -5006,10 +4962,9 @@ internal sealed class SearchExecutorTests
             Root = new UnionPlanNode { Id = 1, Contributes = "known-empty show candidates", Children = [] },
             Dispositions = []
         };
-        var executor = new SearchExecutor(_client.Object, NullLogger<SearchExecutor>.Instance);
 
         // Act
-        var result = await executor.ExecuteAsync(plan, default).ConfigureAwait(false);
+        var result = await _executor.ExecuteAsync(plan, default).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -5035,10 +4990,9 @@ internal sealed class SearchExecutorTests
             Root = new UnionPlanNode { Id = 1, Contributes = "known-empty show candidates", Children = [] },
             Dispositions = []
         };
-        var executor = new SearchExecutor(_client.Object, NullLogger<SearchExecutor>.Instance);
 
         // Act
-        var result = await executor.ExecuteAsync(plan, default).ConfigureAwait(false);
+        var result = await _executor.ExecuteAsync(plan, default).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -5074,10 +5028,9 @@ internal sealed class SearchExecutorTests
             }
         };
         var plan = new SearchPlanner(NullLogger<SearchPlanner>.Instance).Plan(query, 25);
-        var executor = new SearchExecutor(_client.Object, NullLogger<SearchExecutor>.Instance);
 
         // Act
-        var result = await executor.ExecuteAsync(plan, default).ConfigureAwait(false);
+        var result = await _executor.ExecuteAsync(plan, default).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -5123,10 +5076,9 @@ internal sealed class SearchExecutorTests
             }
         };
         var plan = new SearchPlanner(NullLogger<SearchPlanner>.Instance).Plan(query, 25);
-        var executor = new SearchExecutor(_client.Object, NullLogger<SearchExecutor>.Instance);
 
         // Act
-        var result = await executor.ExecuteAsync(plan, default).ConfigureAwait(false);
+        var result = await _executor.ExecuteAsync(plan, default).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())

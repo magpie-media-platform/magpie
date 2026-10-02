@@ -10,8 +10,6 @@ internal sealed class SubjectConfiguration : IEntityTypeConfiguration<Subject>
     public void Configure(EntityTypeBuilder<Subject> builder)
     {
         builder.ToTable("content_subject");
-        builder.HasKey(e => e.Id);
-        builder.Property(e => e.Id).ValueGeneratedOnAdd();
         builder.HasOne(e => e.MetadataContainer)
             .WithMany()
             .HasForeignKey(e => e.MetadataContainerId)

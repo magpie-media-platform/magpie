@@ -400,11 +400,6 @@ describe('ContentStatsWidget accessibility', () => {
         expect(screen.getByRole('heading', { level: 2, name: 'Content' })).toBeInTheDocument();
     });
 
-    it('supports custom heading level', () => {
-        renderWithRouter(<ContentStatsWidget counts={defaultCounts} headingLevel={3} />);
-        expect(screen.getByRole('heading', { level: 3, name: 'Content' })).toBeInTheDocument();
-    });
-
     it('clickable rows have aria-label', () => {
         const getStatusUrl = (status: FulfillmentStatus) => `/library?fulfillment=${status}`;
         renderWithRouter(<ContentStatsWidget counts={defaultCounts} getStatusUrl={getStatusUrl} />);

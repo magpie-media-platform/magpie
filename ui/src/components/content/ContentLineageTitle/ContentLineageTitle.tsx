@@ -4,13 +4,12 @@ import {
     useContext,
     useEffect,
     useMemo,
-    useRef,
     useState,
     type ComponentPropsWithoutRef,
     type ReactNode,
 } from 'react';
 
-import { useQueryClient } from '@tanstack/react-query';
+import { skipToken, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { useEventStream, type EventStreamPayload } from '@/hooks/useEventStream';
 import { apiGet, isApiError } from '@/lib/api';
@@ -34,17 +33,8 @@ interface ContentLineageTitleFallback {
     level?: string;
 }
 
-type ContentLineageQualifiedNameLoader = (id: string) => Promise<ContentLineageQualifiedName | null>;
-
 interface ContentLineageContextValue {
-    refresh: ContentLineageRefresh;
-    resolve: ContentLineageQualifiedNameLoader;
     resolveTitle: (title: string, fallback?: ContentLineageTitleFallback) => string;
-}
-
-interface ContentLineageRefresh {
-    all: boolean;
-    itemId: string | null;
 }
 
 const ContentLineageContext = createContext<ContentLineageContextValue | null>(null);
@@ -73,20 +63,17 @@ interface ContentLineageProviderProps {
 
 export function ContentLineageProvider({ children, contentTypes }: ContentLineageProviderProps) {
     const queryClient = useQueryClient();
-    const [refresh, setRefresh] = useState<ContentLineageRefresh>({ all: false, itemId: null });
 
     const handleEvent = useCallback(
         (event: EventStreamPayload) => {
             if (event.name === 'stream.reconnected' || event.name === 'library.scan.completed') {
                 void queryClient.cancelQueries({ queryKey: ['content-lineage'] });
                 void queryClient.invalidateQueries({ queryKey: ['content-lineage'] });
-                setRefresh({ all: true, itemId: null });
             } else {
                 const itemId = event.context['content.hierarchyItemId'];
                 if (itemId) {
                     void queryClient.cancelQueries({ queryKey: ['content-lineage', itemId], exact: true });
                     void queryClient.invalidateQueries({ queryKey: ['content-lineage', itemId], exact: true });
-                    setRefresh({ all: false, itemId });
                 }
             }
         },
@@ -102,18 +89,8 @@ export function ContentLineageProvider({ children, contentTypes }: ContentLineag
             'library.scan.completed',
             'stream.reconnected',
         ],
-        owner: 'content-lineage-provider',
     });
 
-    const resolve = useCallback(
-        (id: string) =>
-            queryClient.fetchQuery({
-                queryKey: ['content-lineage', id],
-                queryFn: () => fetchContentLineageQualifiedName(id),
-                staleTime: Infinity,
-            }),
-        [queryClient],
-    );
     const fallbackTitles = useMemo(() => {
         const types = new Map<string, string>();
         const levels = new Map<string, string>();
@@ -147,7 +124,7 @@ export function ContentLineageProvider({ children, contentTypes }: ContentLineag
         },
         [fallbackTitles],
     );
-    const value = useMemo(() => ({ refresh, resolve, resolveTitle }), [refresh, resolve, resolveTitle]);
+    const value = useMemo(() => ({ resolveTitle }), [resolveTitle]);
 
     return <ContentLineageContext.Provider value={value}>{children}</ContentLineageContext.Provider>;
 }
@@ -172,62 +149,25 @@ type ParentState =
 function LineageNode({ qualifiedName, fallback, isLeaf, onPathChange, visitedIds }: LineageNodeProps) {
     const context = useContext(ContentLineageContext);
     const title = (context?.resolveTitle(qualifiedName.title, fallback) ?? qualifiedName.title.trim()) || 'Content';
-    const refresh = context?.refresh;
-    const resolve = context?.resolve;
     const parentId = qualifiedName.parentId ?? null;
     const canResolveParent =
         parentId !== null && !visitedIds.includes(parentId) && visitedIds.length <= MAX_ANCESTOR_DEPTH;
-    const [parent, setParent] = useState<ParentState>({ status: canResolveParent ? 'loading' : 'none' });
+    const parentQuery = useQuery({
+        queryKey: ['content-lineage', parentId],
+        queryFn: parentId === null ? skipToken : () => fetchContentLineageQualifiedName(parentId),
+        enabled: canResolveParent,
+        staleTime: Infinity,
+    });
+    const parent: ParentState = !canResolveParent
+        ? { status: 'none' }
+        : parentQuery.isPending
+          ? { status: 'loading' }
+          : parentQuery.isError
+            ? { status: 'failed' }
+            : parentQuery.data === null
+              ? { status: 'missing' }
+              : { status: 'resolved', qualifiedName: parentQuery.data };
     const [parentPath, setParentPath] = useState<PathState>({ loading: false, path: '' });
-    const lastResolution = useRef<
-        | {
-              canResolveParent: boolean;
-              parentId: string | null;
-              resolve: ContentLineageQualifiedNameLoader | undefined;
-          }
-        | undefined
-    >(undefined);
-    const resolutionSequence = useRef(0);
-
-    useEffect(
-        () => () => {
-            resolutionSequence.current += 1;
-            lastResolution.current = undefined;
-        },
-        [],
-    );
-
-    useEffect(() => {
-        const sourceChanged =
-            lastResolution.current?.parentId !== parentId ||
-            lastResolution.current?.resolve !== resolve ||
-            lastResolution.current?.canResolveParent !== canResolveParent;
-        if (!sourceChanged && !refresh?.all && refresh?.itemId !== parentId) {
-            return;
-        }
-        lastResolution.current = { canResolveParent, parentId, resolve };
-        resolutionSequence.current += 1;
-        const sequence = resolutionSequence.current;
-
-        if (!resolve || !canResolveParent) {
-            setParent({ status: 'none' });
-            return;
-        }
-
-        setParent({ status: 'loading' });
-        void resolve(parentId)
-            .then((resolved) => {
-                if (resolutionSequence.current === sequence) {
-                    setParent(resolved ? { status: 'resolved', qualifiedName: resolved } : { status: 'missing' });
-                }
-            })
-            .catch(() => {
-                if (resolutionSequence.current === sequence) {
-                    setParent({ status: 'failed' });
-                }
-            });
-    }, [refresh, resolve, canResolveParent, parentId]);
-
     const handleParentPathChange = useCallback((state: PathState) => {
         setParentPath((current) =>
             current.loading === state.loading && current.path === state.path ? current : state,

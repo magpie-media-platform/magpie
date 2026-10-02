@@ -116,8 +116,7 @@ public sealed class ReleaseAutoGrabScanJobTests
         var contentBId = Guid.NewGuid();
         _hierarchyRepository
             .Setup(r => r.QueryAsync(
-                It.Is<ContentHierarchyItemCriteria>(c => c.ImportPending == false && c.Fulfillment != null &&
-                    c.Fulfillment.And.Any(p => p.Value == FulfillmentStatus.Missing)),
+                It.Is<ContentHierarchyItemCriteria>(c => c.ImportPending == false && c.AfterId == null),
                 It.IsAny<PagingParameter>(),
                 It.IsAny<SortParameter?>(),
                 It.IsAny<CancellationToken>()))
@@ -194,8 +193,7 @@ public sealed class ReleaseAutoGrabScanJobTests
         var contentItemId = Guid.NewGuid();
         _hierarchyRepository
             .Setup(r => r.QueryAsync(
-                It.Is<ContentHierarchyItemCriteria>(c => c.Fulfillment != null &&
-                    c.Fulfillment.And.Any(p => p.Value == FulfillmentStatus.Upgradable)),
+                It.Is<ContentHierarchyItemCriteria>(c => c.AfterId == null),
                 It.IsAny<PagingParameter>(),
                 It.IsAny<SortParameter?>(),
                 It.IsAny<CancellationToken>()))
@@ -244,8 +242,7 @@ public sealed class ReleaseAutoGrabScanJobTests
         var hierarchyItemId = Guid.NewGuid();
         _hierarchyRepository
             .Setup(r => r.QueryAsync(
-                It.Is<ContentHierarchyItemCriteria>(c => c.Fulfillment != null &&
-                    c.Fulfillment.And.Any(p => p.Value == FulfillmentStatus.Missing)),
+                It.Is<ContentHierarchyItemCriteria>(c => c.AfterId == null),
                 It.IsAny<PagingParameter>(),
                 It.IsAny<SortParameter?>(),
                 It.IsAny<CancellationToken>()))
@@ -302,8 +299,7 @@ public sealed class ReleaseAutoGrabScanJobTests
         // Arrange
         _hierarchyRepository
             .Setup(r => r.QueryAsync(
-                It.Is<ContentHierarchyItemCriteria>(c => c.Fulfillment != null &&
-                    c.Fulfillment.And.Any(p => p.Value == FulfillmentStatus.Missing)),
+                It.Is<ContentHierarchyItemCriteria>(c => c.AfterId == null),
                 It.IsAny<PagingParameter>(),
                 It.IsAny<SortParameter?>(),
                 It.IsAny<CancellationToken>()))
@@ -372,8 +368,7 @@ public sealed class ReleaseAutoGrabScanJobTests
         // Arrange
         _hierarchyRepository
             .Setup(r => r.QueryAsync(
-                It.Is<ContentHierarchyItemCriteria>(c => c.Fulfillment != null &&
-                    c.Fulfillment.And.Any(p => p.Value == FulfillmentStatus.Missing)),
+                It.Is<ContentHierarchyItemCriteria>(c => c.AfterId == null),
                 It.IsAny<PagingParameter>(),
                 It.IsAny<SortParameter?>(),
                 It.IsAny<CancellationToken>()))
@@ -456,8 +451,7 @@ public sealed class ReleaseAutoGrabScanJobTests
         var contentItemId = Guid.NewGuid();
         _hierarchyRepository
             .Setup(r => r.QueryAsync(
-                It.Is<ContentHierarchyItemCriteria>(c => c.Fulfillment != null &&
-                    c.Fulfillment.And.Any(p => p.Value == FulfillmentStatus.Missing)),
+                It.Is<ContentHierarchyItemCriteria>(c => c.AfterId == null),
                 It.IsAny<PagingParameter>(),
                 It.IsAny<SortParameter?>(),
                 It.IsAny<CancellationToken>()))
@@ -520,8 +514,7 @@ public sealed class ReleaseAutoGrabScanJobTests
         var contentItemId = Guid.NewGuid();
         _hierarchyRepository
             .Setup(r => r.QueryAsync(
-                It.Is<ContentHierarchyItemCriteria>(c => c.Fulfillment != null &&
-                    c.Fulfillment.And.Any(p => p.Value == FulfillmentStatus.Missing)),
+                It.Is<ContentHierarchyItemCriteria>(c => c.AfterId == null),
                 It.IsAny<PagingParameter>(),
                 It.IsAny<SortParameter?>(),
                 It.IsAny<CancellationToken>()))
@@ -576,8 +569,7 @@ public sealed class ReleaseAutoGrabScanJobTests
         var contentItemId = Guid.NewGuid();
         _hierarchyRepository
             .Setup(r => r.QueryAsync(
-                It.Is<ContentHierarchyItemCriteria>(c => c.Fulfillment != null &&
-                    c.Fulfillment.And.Any(p => p.Value == FulfillmentStatus.Missing)),
+                It.Is<ContentHierarchyItemCriteria>(c => c.AfterId == null),
                 It.IsAny<PagingParameter>(),
                 It.IsAny<SortParameter?>(),
                 It.IsAny<CancellationToken>()))
@@ -635,8 +627,7 @@ public sealed class ReleaseAutoGrabScanJobTests
         var contentItemId = Guid.NewGuid();
         _hierarchyRepository
             .Setup(r => r.QueryAsync(
-                It.Is<ContentHierarchyItemCriteria>(c => c.Fulfillment != null &&
-                    c.Fulfillment.And.Any(p => p.Value == FulfillmentStatus.Missing)),
+                It.Is<ContentHierarchyItemCriteria>(c => c.AfterId == null),
                 It.IsAny<PagingParameter>(),
                 It.IsAny<SortParameter?>(),
                 It.IsAny<CancellationToken>()))
@@ -698,8 +689,7 @@ public sealed class ReleaseAutoGrabScanJobTests
         var contentItemId = Guid.NewGuid();
         _hierarchyRepository
             .Setup(r => r.QueryAsync(
-                It.Is<ContentHierarchyItemCriteria>(c => c.Fulfillment != null &&
-                    c.Fulfillment.And.Any(p => p.Value == FulfillmentStatus.Missing)),
+                It.Is<ContentHierarchyItemCriteria>(c => c.AfterId == null),
                 It.IsAny<PagingParameter>(),
                 It.IsAny<SortParameter?>(),
                 It.IsAny<CancellationToken>()))
@@ -760,8 +750,7 @@ public sealed class ReleaseAutoGrabScanJobTests
         // Arrange
         _hierarchyRepository
             .Setup(r => r.QueryAsync(
-                It.Is<ContentHierarchyItemCriteria>(c => c.Fulfillment != null &&
-                    c.Fulfillment.And.Any(p => p.Value == FulfillmentStatus.Missing)),
+                It.Is<ContentHierarchyItemCriteria>(c => c.AfterId == null),
                 It.IsAny<PagingParameter>(),
                 It.IsAny<SortParameter?>(),
                 It.IsAny<CancellationToken>()))
@@ -796,5 +785,390 @@ public sealed class ReleaseAutoGrabScanJobTests
 
         // Assert
         Assert.ThrowsAsync<OperationCanceledException>(Act);
+    }
+
+    [Test]
+    public async Task ExecuteAsync_EnqueuesOneAutoGrab_WhenTwoHierarchyItemsShareAContentItem()
+    {
+        // Arrange
+        var contentItemId = Guid.NewGuid();
+        var otherContentItemId = Guid.NewGuid();
+        _hierarchyRepository
+            .Setup(r => r.QueryAsync(
+                It.Is<ContentHierarchyItemCriteria>(c => c.AfterId == null),
+                It.IsAny<PagingParameter>(),
+                It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<ContentHierarchyItem>
+            {
+                Items =
+                [
+                    new ContentHierarchyItem
+                    {
+                        Id = Guid.NewGuid(),
+                        ContentType = "movie",
+                        Level = "movie",
+                        Slug = "leaf",
+                        Name = "Leaf",
+                        EffectiveMonitoring = MonitoringMode.Monitored,
+                        ContentItem = new ContentItem
+                        {
+                            Id = contentItemId,
+                            Fulfillment = FulfillmentStatus.Missing,
+                            DateLastSearched = DateTime.UtcNow.AddDays(-1)
+                        }
+                    },
+                    new ContentHierarchyItem
+                    {
+                        Id = Guid.NewGuid(),
+                        ContentType = "movie",
+                        Level = "movie",
+                        Slug = "leaf",
+                        Name = "Leaf",
+                        EffectiveMonitoring = MonitoringMode.Monitored,
+                        ContentItem = new ContentItem
+                        {
+                            Id = contentItemId,
+                            Fulfillment = FulfillmentStatus.Missing,
+                            DateLastSearched = DateTime.UtcNow.AddDays(-1)
+                        }
+                    },
+                    new ContentHierarchyItem
+                    {
+                        Id = Guid.NewGuid(),
+                        ContentType = "movie",
+                        Level = "movie",
+                        Slug = "leaf",
+                        Name = "Leaf",
+                        EffectiveMonitoring = MonitoringMode.Monitored,
+                        ContentItem = new ContentItem
+                        {
+                            Id = otherContentItemId,
+                            Fulfillment = FulfillmentStatus.Upgradable,
+                            DateLastSearched = DateTime.UtcNow.AddDays(-1)
+                        }
+                    }
+                ],
+                TotalItems = 3
+            });
+
+        // Act
+        await _subject.ExecuteAsync(_jobContext).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            _jobManager.Verify(
+                m => m.ExecuteAsync(
+                    It.Is<JobEnqueueRequest>(r =>
+                        r.JobType == "ReleaseAutoGrabItem" &&
+                        r.Parameters != null &&
+                        r.Parameters["contentItemId"] == contentItemId.ToString()),
+                    It.IsAny<CancellationToken>()),
+                Times.Once);
+            _jobManager.Verify(
+                m => m.ExecuteAsync(
+                    It.Is<JobEnqueueRequest>(r =>
+                        r.JobType == "ReleaseAutoGrabItem" &&
+                        r.Parameters != null &&
+                        r.Parameters["contentItemId"] == otherContentItemId.ToString()),
+                    It.IsAny<CancellationToken>()),
+                Times.Once);
+        }
+    }
+
+    [Test]
+    public async Task ExecuteAsync_EnqueuesOneAutoGrab_WhenTwoHierarchyItemsShareAContentItemAcrossPages()
+    {
+        // Arrange
+        var sharedContentItemId = Guid.NewGuid();
+        var otherContentItemId = Guid.NewGuid();
+        var lastOfFirstPage = Guid.NewGuid();
+        _hierarchyRepository
+            .Setup(r => r.QueryAsync(
+                It.Is<ContentHierarchyItemCriteria>(c => c.AfterId == null),
+                It.IsAny<PagingParameter>(),
+                It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<ContentHierarchyItem>
+            {
+                Items =
+                [
+                    new ContentHierarchyItem
+                    {
+                        Id = Guid.NewGuid(),
+                        ContentType = "movie",
+                        Level = "movie",
+                        Slug = "leaf",
+                        Name = "Leaf",
+                        EffectiveMonitoring = MonitoringMode.Monitored,
+                        ContentItem = new ContentItem
+                        {
+                            Id = sharedContentItemId,
+                            Fulfillment = FulfillmentStatus.Missing,
+                            DateLastSearched = DateTime.UtcNow.AddDays(-1)
+                        }
+                    },
+                    new ContentHierarchyItem
+                    {
+                        Id = lastOfFirstPage,
+                        ContentType = "movie",
+                        Level = "movie",
+                        Slug = "leaf",
+                        Name = "Leaf",
+                        EffectiveMonitoring = MonitoringMode.Monitored,
+                        ContentItem = new ContentItem
+                        {
+                            Id = otherContentItemId,
+                            Fulfillment = FulfillmentStatus.Missing,
+                            DateLastSearched = DateTime.UtcNow.AddDays(-1)
+                        }
+                    }
+                ],
+                TotalItems = 3
+            });
+        _hierarchyRepository
+            .Setup(r => r.QueryAsync(
+                It.Is<ContentHierarchyItemCriteria>(c => c.AfterId == lastOfFirstPage),
+                It.IsAny<PagingParameter>(),
+                It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<ContentHierarchyItem>
+            {
+                Items =
+                [
+                    new ContentHierarchyItem
+                    {
+                        Id = Guid.NewGuid(),
+                        ContentType = "movie",
+                        Level = "movie",
+                        Slug = "leaf",
+                        Name = "Leaf",
+                        EffectiveMonitoring = MonitoringMode.Monitored,
+                        ContentItem = new ContentItem
+                        {
+                            Id = sharedContentItemId,
+                            Fulfillment = FulfillmentStatus.Missing,
+                            DateLastSearched = DateTime.UtcNow.AddDays(-1)
+                        }
+                    }
+                ],
+                TotalItems = 1
+            });
+
+        // Act
+        await _subject.ExecuteAsync(_jobContext).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            _jobManager.Verify(
+                m => m.ExecuteAsync(
+                    It.Is<JobEnqueueRequest>(r =>
+                        r.JobType == "ReleaseAutoGrabItem" &&
+                        r.Parameters != null &&
+                        r.Parameters["contentItemId"] == sharedContentItemId.ToString()),
+                    It.IsAny<CancellationToken>()),
+                Times.Once);
+            _jobManager.Verify(
+                m => m.ExecuteAsync(
+                    It.Is<JobEnqueueRequest>(r =>
+                        r.JobType == "ReleaseAutoGrabItem" &&
+                        r.Parameters != null &&
+                        r.Parameters["contentItemId"] == otherContentItemId.ToString()),
+                    It.IsAny<CancellationToken>()),
+                Times.Once);
+        }
+    }
+
+    [Test]
+    public async Task ExecuteAsync_EnqueuesTheCandidate_WhenItChangesBetweenMissingAndUpgradable()
+    {
+        // Arrange
+        var contentItemId = Guid.NewGuid();
+        _hierarchyRepository
+            .Setup(r => r.QueryAsync(
+                It.Is<ContentHierarchyItemCriteria>(c =>
+                    c.AfterId == null &&
+                    c.Fulfillment.And.Any(p =>
+                        p.Operator == CriteriaValueOperator.In &&
+                        p.Values!.Contains(FulfillmentStatus.Missing) &&
+                        p.Values!.Contains(FulfillmentStatus.Upgradable))),
+                It.IsAny<PagingParameter>(),
+                It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<ContentHierarchyItem>
+            {
+                Items =
+                [
+                    new ContentHierarchyItem
+                    {
+                        Id = Guid.NewGuid(),
+                        ContentType = "movie",
+                        Level = "movie",
+                        Slug = "leaf",
+                        Name = "Leaf",
+                        EffectiveMonitoring = MonitoringMode.Monitored,
+                        ContentItem = new ContentItem
+                        {
+                            Id = contentItemId,
+                            Fulfillment = FulfillmentStatus.Upgradable,
+                            DateLastSearched = DateTime.UtcNow.AddDays(-1)
+                        }
+                    }
+                ],
+                TotalItems = 1
+            });
+
+        // Act
+        await _subject.ExecuteAsync(_jobContext).ConfigureAwait(false);
+
+        // Assert
+        _jobManager.Verify(
+            m => m.ExecuteAsync(
+                It.Is<JobEnqueueRequest>(r =>
+                    r.JobType == "ReleaseAutoGrabItem" &&
+                    r.Parameters != null &&
+                    r.Parameters["contentItemId"] == contentItemId.ToString()),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Test]
+    public async Task ExecuteAsync_EnqueuesMissingCandidatesBeforeUpgradableOnes_WhenTheUpgradableItemComesFirst()
+    {
+        // Arrange
+        var upgradableContentItemId = Guid.NewGuid();
+        var missingContentItemId = Guid.NewGuid();
+        _hierarchyRepository
+            .Setup(r => r.QueryAsync(
+                It.Is<ContentHierarchyItemCriteria>(c => c.AfterId == null),
+                It.IsAny<PagingParameter>(),
+                It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<ContentHierarchyItem>
+            {
+                Items =
+                [
+                    new ContentHierarchyItem
+                    {
+                        Id = Guid.NewGuid(),
+                        ContentType = "movie",
+                        Level = "movie",
+                        Slug = "leaf",
+                        Name = "Leaf",
+                        EffectiveMonitoring = MonitoringMode.Monitored,
+                        ContentItem = new ContentItem
+                        {
+                            Id = upgradableContentItemId,
+                            Fulfillment = FulfillmentStatus.Upgradable,
+                            DateLastSearched = DateTime.UtcNow.AddDays(-1)
+                        }
+                    },
+                    new ContentHierarchyItem
+                    {
+                        Id = Guid.NewGuid(),
+                        ContentType = "movie",
+                        Level = "movie",
+                        Slug = "leaf",
+                        Name = "Leaf",
+                        EffectiveMonitoring = MonitoringMode.Monitored,
+                        ContentItem = new ContentItem
+                        {
+                            Id = missingContentItemId,
+                            Fulfillment = FulfillmentStatus.Missing,
+                            DateLastSearched = DateTime.UtcNow.AddDays(-1)
+                        }
+                    }
+                ],
+                TotalItems = 2
+            });
+
+        // Act
+        await _subject.ExecuteAsync(_jobContext).ConfigureAwait(false);
+
+        // Assert
+        var enqueued = _jobManager.Invocations
+            .Where(invocation => invocation.Method.Name == nameof(IJobManager.ExecuteAsync))
+            .Select(invocation => ((JobEnqueueRequest)invocation.Arguments[0]).Parameters!["contentItemId"]);
+        Assert.That(
+            enqueued,
+            Is.EqualTo([missingContentItemId.ToString(), upgradableContentItemId.ToString()]));
+    }
+
+    [Test]
+    public async Task ExecuteAsync_EnqueuesEachCandidateOnce_WhenTheLibraryChangesAfterTheFirstPage()
+    {
+        // Arrange
+        var firstPage = Enumerable.Range(0, 500)
+            .Select(_ => new ContentHierarchyItem
+            {
+                Id = Guid.NewGuid(),
+                ContentType = "movie",
+                Level = "movie",
+                Slug = "leaf",
+                Name = "Leaf",
+                EffectiveMonitoring = MonitoringMode.Monitored,
+                ContentItem = new ContentItem
+                {
+                    Id = Guid.NewGuid(),
+                    Fulfillment = FulfillmentStatus.Missing,
+                    DateLastSearched = DateTime.UtcNow.AddDays(-1)
+                }
+            })
+            .ToList();
+        var lastOfFirstPage = firstPage[^1].Id;
+        var afterTheChange = new ContentHierarchyItem
+        {
+            Id = Guid.NewGuid(),
+            ContentType = "movie",
+            Level = "movie",
+            Slug = "leaf",
+            Name = "Leaf",
+            EffectiveMonitoring = MonitoringMode.Monitored,
+            ContentItem = new ContentItem
+            {
+                Id = Guid.NewGuid(),
+                Fulfillment = FulfillmentStatus.Missing,
+                DateLastSearched = DateTime.UtcNow.AddDays(-1)
+            }
+        };
+        _hierarchyRepository
+            .Setup(r => r.QueryAsync(
+                It.Is<ContentHierarchyItemCriteria>(c => c.AfterId == null),
+                It.Is<PagingParameter>(p => p.PageNumber == 1),
+                It.Is<SortParameter?>(s =>
+                    s != null && s.PropertyName == "Id" && s.Direction == SortDirection.Ascending),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<ContentHierarchyItem> { Items = firstPage, TotalItems = 501 });
+        _hierarchyRepository
+            .Setup(r => r.QueryAsync(
+                It.Is<ContentHierarchyItemCriteria>(c => c.AfterId == lastOfFirstPage),
+                It.IsAny<PagingParameter>(),
+                It.Is<SortParameter?>(s =>
+                    s != null && s.PropertyName == "Id" && s.Direction == SortDirection.Ascending),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<ContentHierarchyItem> { Items = [afterTheChange], TotalItems = 1 });
+
+        // Act
+        await _subject.ExecuteAsync(_jobContext).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            _jobManager.Verify(
+                m => m.ExecuteAsync(
+                    It.Is<JobEnqueueRequest>(r => r.JobType == "ReleaseAutoGrabItem"),
+                    It.IsAny<CancellationToken>()),
+                Times.Exactly(501));
+            _jobManager.Verify(
+                m => m.ExecuteAsync(
+                    It.Is<JobEnqueueRequest>(r =>
+                        r.JobType == "ReleaseAutoGrabItem" &&
+                        r.Parameters != null &&
+                        r.Parameters["contentItemId"] == afterTheChange.ContentItem!.Id.ToString()),
+                    It.IsAny<CancellationToken>()),
+                Times.Once);
+        }
     }
 }

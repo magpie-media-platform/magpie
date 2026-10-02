@@ -53,7 +53,11 @@ internal sealed class DatabaseMaintenanceJob(
                 DefaultBackupIntervalDays.ToString(CultureInfo.InvariantCulture))
             {
                 ValidateScheduleValue = (value, parameters, utcNow) => ValidateInterval(
-                    value, parameters, utcNow, MagpieJobs.Parameters.BackupEnabled, DefaultBackupEnabled)
+                    value,
+                    parameters,
+                    utcNow,
+                    MagpieJobs.Parameters.BackupEnabled,
+                    DefaultBackupEnabled)
             },
             new(
                 MagpieJobs.Parameters.BackupRetentionCount,
@@ -78,7 +82,11 @@ internal sealed class DatabaseMaintenanceJob(
                 DefaultOptimizeIntervalDays.ToString(CultureInfo.InvariantCulture))
             {
                 ValidateScheduleValue = (value, parameters, utcNow) => ValidateInterval(
-                    value, parameters, utcNow, MagpieJobs.Parameters.OptimizeEnabled, DefaultOptimizeEnabled)
+                    value,
+                    parameters,
+                    utcNow,
+                    MagpieJobs.Parameters.OptimizeEnabled,
+                    DefaultOptimizeEnabled)
             }
         ],
     };

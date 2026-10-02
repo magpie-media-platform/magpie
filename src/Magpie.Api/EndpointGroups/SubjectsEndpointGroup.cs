@@ -89,9 +89,8 @@ internal sealed class SubjectsEndpointGroup : IApiEndpointGroup
         if (!string.IsNullOrWhiteSpace(filter))
         {
             var parseResult = filterService.ParseSubjectCriteria(filter);
-            if (!parseResult.IsSuccess)
+            if (parseResult.Error is { } error)
             {
-                var error = parseResult.Error!;
                 return Results.Problem(
                     detail: error.Message,
                     statusCode: StatusCodes.Status400BadRequest,
@@ -113,18 +112,10 @@ internal sealed class SubjectsEndpointGroup : IApiEndpointGroup
             RelatedContentHierarchyItemId = relatedContentId
         };
 
-        var paging = new PagingParameter
-        {
-            PageNumber = pageNumber ?? 1,
-            PageSize = pageSize ?? 25
-        };
+        var paging = new PagingParameter { PageNumber = pageNumber ?? 1, PageSize = pageSize ?? 25 };
 
         var sort = sortBy is not null
-            ? new SortParameter
-            {
-                PropertyName = sortBy,
-                Direction = sortDirection ?? SortDirection.Ascending
-            }
+            ? new SortParameter { PropertyName = sortBy, Direction = sortDirection ?? SortDirection.Ascending }
             : null;
 
         var result = await subjectService.QueryAsync(query, paging, sort, cancellationToken)

@@ -12,8 +12,6 @@ internal sealed class NotificationRuleConfiguration : IEntityTypeConfiguration<N
     public void Configure(EntityTypeBuilder<NotificationRule> builder)
     {
         builder.ToTable("notification_rule");
-        builder.HasKey(e => e.Id);
-        builder.Property(e => e.Id).ValueGeneratedOnAdd();
         builder.Property(e => e.Settings).UseStringDictionaryConversion();
         builder.Property(e => e.EventFilter).HasConversion(
             v => JsonSerializer.Serialize(v, JsonSerializerOptions.Default),

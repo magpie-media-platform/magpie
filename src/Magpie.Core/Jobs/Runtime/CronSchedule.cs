@@ -6,7 +6,7 @@ namespace Magpie.Core.Jobs.Runtime;
 
 internal readonly record struct CronSchedule
 {
-    private readonly CronExpression? _expression;
+    private readonly CronExpression _expression;
 
     private CronSchedule(CronExpression expression)
     {
@@ -26,7 +26,7 @@ internal readonly record struct CronSchedule
 
         try
         {
-            result = new CronSchedule(CronExpression.Parse(schedule.Trim()));
+            result = new(CronExpression.Parse(schedule.Trim()));
             return true;
         }
         catch (CronFormatException ex)
@@ -36,18 +36,8 @@ internal readonly record struct CronSchedule
         }
     }
 
-    public static bool IsValid(string schedule)
-    {
-        return TryParse(schedule, out _, out _);
-    }
-
     public DateTime? NextOccurrence(DateTime fromUtc)
     {
-        if (_expression is null)
-        {
-            return null;
-        }
-
         var from = fromUtc.Kind == DateTimeKind.Utc
             ? fromUtc
             : DateTime.SpecifyKind(fromUtc, DateTimeKind.Utc);

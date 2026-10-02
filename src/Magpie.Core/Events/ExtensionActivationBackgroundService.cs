@@ -38,9 +38,10 @@ internal sealed class ExtensionActivationBackgroundService(
     {
         try
         {
-            using var listener = eventBus is EventBus bus
-                ? bus.CreateListener(MagpieEvents.Names.ExtensionActivationChanged, false, "extension-activation")
-                : eventBus.CreateListener(MagpieEvents.Names.ExtensionActivationChanged);
+            using var listener = eventBus.CreateListener(
+                MagpieEvents.Names.ExtensionActivationChanged,
+                false,
+                "extension-activation");
             _listenerReady.TrySetResult();
             await databaseMigration.Completion.WaitAsync(stoppingToken).ConfigureAwait(false);
             await Task.WhenAll(

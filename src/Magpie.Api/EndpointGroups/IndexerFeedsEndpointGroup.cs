@@ -63,17 +63,11 @@ internal sealed class IndexerFeedsEndpointGroup : IApiEndpointGroup
     {
         var feeds = await indexerService.ListFeedsAsync(cancellationToken).ConfigureAwait(false);
 
-        var schemas = new Dictionary<string, IReadOnlyList<SettingSchemaDefinition>>(StringComparer.OrdinalIgnoreCase);
         var responses = new List<IndexerFeedResponse>(feeds.Count);
         foreach (var feed in feeds)
         {
-            if (!schemas.TryGetValue(feed.ProviderType, out var schema))
-            {
-                schema = await indexerService.GetFeedSettingsSchemaAsync(feed.ProviderType, cancellationToken)
-                    .ConfigureAwait(false);
-                schemas[feed.ProviderType] = schema;
-            }
-
+            var schema = await indexerService.GetFeedSettingsSchemaAsync(feed.ProviderType, cancellationToken)
+                .ConfigureAwait(false);
             responses.Add(CreateResponse(feed, schema));
         }
 
@@ -144,9 +138,7 @@ internal sealed class IndexerFeedsEndpointGroup : IApiEndpointGroup
         return Results.Ok(result);
     }
 
-    private static IndexerFeedResponse CreateResponse(
-        IndexerFeed feed,
-        IReadOnlyList<SettingSchemaDefinition> schema)
+    private static IndexerFeedResponse CreateResponse(IndexerFeed feed, IReadOnlyList<SettingSchemaDefinition> schema)
     {
         return new()
         {

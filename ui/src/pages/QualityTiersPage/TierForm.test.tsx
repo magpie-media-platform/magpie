@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
@@ -776,5 +776,250 @@ describe('TierForm accessibility', () => {
 
         const infoButton = screen.getByRole('button', { name: /cutoff help/i });
         expect(infoButton).toBeInTheDocument();
+    });
+});
+
+describe('TierForm shared tier', () => {
+    const sharedTier = {
+        id: 't1-1',
+        name: 'Bluray-1080p',
+        isCutoff: false,
+        criteria: [{ id: 'c1', field: 'source', operator: 'Equals' as const, value: 'Bluray' }],
+    };
+
+    it('names the other lists that use the tier', () => {
+        render(
+            <TestWrapper>
+                <TierForm
+                    open={true}
+                    onOpenChange={vi.fn()}
+                    initialValues={sharedTier}
+                    tierListName="HD Copy"
+                    sharedWith={['HD Standard']}
+                    onSubmit={vi.fn()}
+                />
+            </TestWrapper>,
+        );
+
+        expect(screen.getByText('Update the tier configuration in "HD Copy" and 1 other list.')).toBeInTheDocument();
+        expect(screen.getByTestId('shared-tier-notice')).toHaveTextContent(
+            'Name, criteria and exclusions also change in "HD Standard". The cutoff applies only to "HD Copy". ' +
+                'Clone Tier adds a copy that only this list uses and keeps the shared tier until you remove it.',
+        );
+    });
+
+    it('shows no shared notice when no other list uses the tier', () => {
+        render(
+            <TestWrapper>
+                <TierForm
+                    open={true}
+                    onOpenChange={vi.fn()}
+                    initialValues={sharedTier}
+                    tierListName="HD Copy"
+                    sharedWith={[]}
+                    onSubmit={vi.fn()}
+                />
+            </TestWrapper>,
+        );
+
+        expect(screen.getByText('Update the tier configuration in "HD Copy".')).toBeInTheDocument();
+        expect(screen.queryByTestId('shared-tier-notice')).not.toBeInTheDocument();
+    });
+
+    it('asks before saving a name change to a shared tier and saves nothing on keep editing', async () => {
+        const user = userEvent.setup();
+        const onSubmit = vi.fn();
+        render(
+            <TestWrapper>
+                <TierForm
+                    open={true}
+                    onOpenChange={vi.fn()}
+                    initialValues={sharedTier}
+                    tierListName="HD Copy"
+                    sharedWith={['HD Standard']}
+                    onSubmit={onSubmit}
+                />
+            </TestWrapper>,
+        );
+
+        await user.type(screen.getByLabelText(/name/i), '!');
+        await user.click(screen.getByRole('button', { name: 'Save' }));
+
+        const dialog = screen.getByRole('dialog', { name: 'Save changes to 2 lists?' });
+        expect(dialog).toHaveTextContent(
+            'Name, criteria and exclusions change in every list that uses this tier: "HD Copy", "HD Standard".',
+        );
+        await user.click(within(dialog).getByRole('button', { name: 'Keep editing' }));
+
+        expect(onSubmit).not.toHaveBeenCalled();
+        expect(screen.getByLabelText(/name/i)).toHaveValue('Bluray-1080p!');
+    });
+
+    it('saves a shared tier change after the user confirms it', async () => {
+        const user = userEvent.setup();
+        const onSubmit = vi.fn();
+        render(
+            <TestWrapper>
+                <TierForm
+                    open={true}
+                    onOpenChange={vi.fn()}
+                    initialValues={sharedTier}
+                    tierListName="HD Copy"
+                    sharedWith={['HD Standard']}
+                    onSubmit={onSubmit}
+                />
+            </TestWrapper>,
+        );
+
+        await user.type(screen.getByLabelText(/name/i), '!');
+        await user.click(screen.getByRole('button', { name: 'Save' }));
+        await user.click(screen.getByRole('button', { name: 'Save anyway' }));
+
+        expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ name: 'Bluray-1080p!' }));
+    });
+
+    it('saves a cutoff-only change to a shared tier without asking', async () => {
+        const user = userEvent.setup();
+        const onSubmit = vi.fn();
+        render(
+            <TestWrapper>
+                <TierForm
+                    open={true}
+                    onOpenChange={vi.fn()}
+                    initialValues={sharedTier}
+                    tierListName="HD Copy"
+                    sharedWith={['HD Standard']}
+                    onSubmit={onSubmit}
+                />
+            </TestWrapper>,
+        );
+
+        await user.click(screen.getByRole('switch', { name: 'Set as Cutoff' }));
+        await user.click(screen.getByRole('button', { name: 'Save' }));
+
+        expect(screen.queryByRole('dialog', { name: /save changes to/i })).not.toBeInTheDocument();
+        expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ isCutoff: true }));
+    });
+
+    it('disables save and names no list scope while the lists that use the tier are unknown', () => {
+        render(
+            <TestWrapper>
+                <TierForm
+                    open={true}
+                    onOpenChange={vi.fn()}
+                    initialValues={sharedTier}
+                    tierListName="HD Copy"
+                    sharedWith={null}
+                    onSubmit={vi.fn()}
+                />
+            </TestWrapper>,
+        );
+
+        expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+        expect(screen.getByText('Update the tier configuration.')).toBeInTheDocument();
+    });
+
+    it('shows the load error and keeps save disabled when the lists that use the tier fail to load', async () => {
+        const user = userEvent.setup();
+        const onRetrySharedWith = vi.fn();
+        render(
+            <TestWrapper>
+                <TierForm
+                    open={true}
+                    onOpenChange={vi.fn()}
+                    initialValues={sharedTier}
+                    tierListName="HD Copy"
+                    sharedWith={null}
+                    sharedWithFailed
+                    onRetrySharedWith={onRetrySharedWith}
+                    onSubmit={vi.fn()}
+                />
+            </TestWrapper>,
+        );
+
+        expect(screen.getByTestId('shared-tier-error')).toHaveTextContent(
+            'Failed to load the tier listsThe lists that use this tier are unknown.',
+        );
+        expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+        await user.click(screen.getByRole('button', { name: 'Retry' }));
+
+        expect(onRetrySharedWith).toHaveBeenCalledTimes(1);
+    });
+
+    it('clones the tier from the shared notice', async () => {
+        const user = userEvent.setup();
+        const onClone = vi.fn();
+        render(
+            <TestWrapper>
+                <TierForm
+                    open={true}
+                    onOpenChange={vi.fn()}
+                    initialValues={sharedTier}
+                    tierListName="HD Copy"
+                    sharedWith={['HD Standard']}
+                    onClone={onClone}
+                    onSubmit={vi.fn()}
+                />
+            </TestWrapper>,
+        );
+
+        await user.click(screen.getByRole('button', { name: 'Clone Tier' }));
+
+        expect(onClone).toHaveBeenCalledTimes(1);
+    });
+
+    it('asks to discard unsaved edits before cloning from the shared notice', async () => {
+        const user = userEvent.setup();
+        const onClone = vi.fn();
+        const onOpenChange = vi.fn();
+        render(
+            <TestWrapper>
+                <TierForm
+                    open={true}
+                    onOpenChange={onOpenChange}
+                    initialValues={sharedTier}
+                    tierListName="HD Copy"
+                    sharedWith={['HD Standard']}
+                    onClone={onClone}
+                    onSubmit={vi.fn()}
+                />
+            </TestWrapper>,
+        );
+
+        await user.type(screen.getByLabelText(/name/i), '!');
+        await user.click(screen.getByRole('button', { name: 'Clone Tier' }));
+
+        const dialog = screen.getByRole('dialog', { name: 'Discard Changes and Clone?' });
+        expect(dialog).toHaveTextContent('Clone Tier copies the saved tier. It does not copy your unsaved changes.');
+        expect(onClone).not.toHaveBeenCalled();
+        await user.click(within(dialog).getByRole('button', { name: 'Discard and Clone' }));
+
+        expect(onClone).toHaveBeenCalledTimes(1);
+        expect(onOpenChange).not.toHaveBeenCalled();
+    });
+
+    it('keeps the unsaved edits when the user backs out of cloning', async () => {
+        const user = userEvent.setup();
+        const onClone = vi.fn();
+        render(
+            <TestWrapper>
+                <TierForm
+                    open={true}
+                    onOpenChange={vi.fn()}
+                    initialValues={sharedTier}
+                    tierListName="HD Copy"
+                    sharedWith={['HD Standard']}
+                    onClone={onClone}
+                    onSubmit={vi.fn()}
+                />
+            </TestWrapper>,
+        );
+
+        await user.type(screen.getByLabelText(/name/i), '!');
+        await user.click(screen.getByRole('button', { name: 'Clone Tier' }));
+        await user.click(screen.getByRole('button', { name: 'Keep Editing' }));
+
+        expect(onClone).not.toHaveBeenCalled();
+        expect(screen.getByLabelText(/name/i)).toHaveValue('Bluray-1080p!');
     });
 });

@@ -25,7 +25,7 @@ internal sealed class SetupPrerequisitesDiagnostic(
 
     private static DiagnosticFinding Error(string title, string detail)
     {
-        return new DiagnosticFinding
+        return new()
         {
             DiagnosticCheckId = Id,
             Severity = DiagnosticFindingSeverity.Error,

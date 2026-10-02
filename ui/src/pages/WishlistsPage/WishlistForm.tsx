@@ -154,16 +154,12 @@ export function WishlistForm({
     const isEditing = !!initialValues?.id;
 
     const [values, setValues] = useState<WishlistFormValues>(initialValues ?? emptyValues);
-    const { tierLists: applicableTierLists } = useQualityTierLists({
-        contentType: values.contentType || undefined,
-        enabled: qualityTierLists === undefined && !!values.contentType,
-    });
-    const { tierLists: allTierLists, isLoading: allTierListsLoading } = useQualityTierLists({
-        enabled: qualityTierLists === undefined && !!values.qualityTierListId,
+    const { tierLists: loadedTierLists, isLoading: tierListsLoading } = useQualityTierLists({
+        enabled: qualityTierLists === undefined && (!!values.contentType || !!values.qualityTierListId),
     });
     const availableTierLists: QualityTierListOption[] =
         qualityTierLists ??
-        applicableTierLists.map((tierList) => ({
+        loadedTierLists.map((tierList) => ({
             id: tierList.id,
             name: tierList.name,
             mimeTypes: tierList.mimeTypes,
@@ -504,8 +500,8 @@ export function WishlistForm({
     );
 
     const selectedQualityTierList = useMemo(
-        () => (qualityTierLists ?? allTierLists).find((tierList) => tierList.id === values.qualityTierListId),
-        [allTierLists, qualityTierLists, values.qualityTierListId],
+        () => (qualityTierLists ?? loadedTierLists).find((tierList) => tierList.id === values.qualityTierListId),
+        [loadedTierLists, qualityTierLists, values.qualityTierListId],
     );
 
     const eligibleRootFolders = useMemo(() => {
@@ -741,7 +737,7 @@ export function WishlistForm({
                                                   : 'Any MIME type'
                                           }`
                                         : values.qualityTierListId
-                                          ? allTierListsLoading
+                                          ? tierListsLoading
                                               ? 'Loading...'
                                               : 'Unknown tier list'
                                           : 'Inherit'}

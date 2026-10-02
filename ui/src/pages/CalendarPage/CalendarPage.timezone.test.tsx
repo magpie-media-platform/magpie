@@ -74,54 +74,52 @@ describe('CalendarPage fetch range timezone handling', () => {
         vi.unstubAllEnvs();
     });
 
-    for (const { label, tz } of timezones) {
-        describe(label, () => {
-            beforeEach(() => {
-                vi.stubEnv('TZ', tz);
-            });
-
-            it('day view fetches the locally selected date, not the UTC-shifted one', () => {
-                render(
-                    <MemoryRouter initialEntries={['/calendar?view=day&date=2025-06-15']}>
-                        <CalendarPage />
-                    </MemoryRouter>,
-                    { wrapper: TooltipProvider },
-                );
-
-                expect(lastFetchRange()).toEqual({ startDate: '2025-06-15', endDate: '2025-06-15' });
-            });
-
-            it('month view fetches the local first and last grid days', () => {
-                render(
-                    <MemoryRouter initialEntries={['/calendar?view=month&date=2025-06-15']}>
-                        <CalendarPage />
-                    </MemoryRouter>,
-                    { wrapper: TooltipProvider },
-                );
-
-                const monthDays = getMonthDays(2025, 5);
-                const range = lastFetchRange();
-                expect(range.startDate).toBe(localYmd(monthDays[0]));
-                expect(range.endDate).toBe(localYmd(monthDays[monthDays.length - 1]));
-            });
-
-            it('week view fetches the local week start and end', () => {
-                render(
-                    <MemoryRouter initialEntries={['/calendar?view=week&date=2025-06-15']}>
-                        <CalendarPage />
-                    </MemoryRouter>,
-                    { wrapper: TooltipProvider },
-                );
-
-                const weekStart = getWeekStart(new Date(2025, 5, 15));
-                const weekEnd = new Date(weekStart);
-                weekEnd.setDate(weekStart.getDate() + 6);
-                const range = lastFetchRange();
-                expect(range.startDate).toBe(localYmd(weekStart));
-                expect(range.endDate).toBe(localYmd(weekEnd));
-            });
+    describe.each(timezones)('$label', ({ tz }) => {
+        beforeEach(() => {
+            vi.stubEnv('TZ', tz);
         });
-    }
+
+        it('day view fetches the locally selected date, not the UTC-shifted one', () => {
+            render(
+                <MemoryRouter initialEntries={['/calendar?view=day&date=2025-06-15']}>
+                    <CalendarPage />
+                </MemoryRouter>,
+                { wrapper: TooltipProvider },
+            );
+
+            expect(lastFetchRange()).toEqual({ startDate: '2025-06-15', endDate: '2025-06-15' });
+        });
+
+        it('month view fetches the local first and last grid days', () => {
+            render(
+                <MemoryRouter initialEntries={['/calendar?view=month&date=2025-06-15']}>
+                    <CalendarPage />
+                </MemoryRouter>,
+                { wrapper: TooltipProvider },
+            );
+
+            const monthDays = getMonthDays(2025, 5);
+            const range = lastFetchRange();
+            expect(range.startDate).toBe(localYmd(monthDays[0]));
+            expect(range.endDate).toBe(localYmd(monthDays[monthDays.length - 1]));
+        });
+
+        it('week view fetches the local week start and end', () => {
+            render(
+                <MemoryRouter initialEntries={['/calendar?view=week&date=2025-06-15']}>
+                    <CalendarPage />
+                </MemoryRouter>,
+                { wrapper: TooltipProvider },
+            );
+
+            const weekStart = getWeekStart(new Date(2025, 5, 15));
+            const weekEnd = new Date(weekStart);
+            weekEnd.setDate(weekStart.getDate() + 6);
+            const range = lastFetchRange();
+            expect(range.startDate).toBe(localYmd(weekStart));
+            expect(range.endDate).toBe(localYmd(weekEnd));
+        });
+    });
 
     it('keeps last-grid-day events in range under a positive UTC offset', () => {
         vi.stubEnv('TZ', 'Asia/Tokyo');

@@ -7,7 +7,6 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <InternalsVisibleTo Include="Magpie.Test.Core" />
     <InternalsVisibleTo Include="Magpie.Test.Extensions.Cardigann" />
     <InternalsVisibleTo Include="DynamicProxyGenAssembly2" />
   </ItemGroup>

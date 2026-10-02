@@ -213,12 +213,12 @@ internal sealed class AuditRecordRepository(
 
             await transactionManager.OnCommittedAsync(
                 token => eventBus.PublishAsync(
-                    AuditRecordEventBuilder.BuildAuditRecordCreatedEvent(auditRecord.Id), token),
+                    AuditRecordEventBuilder.BuildAuditRecordCreatedEvent(auditRecord.Id),
+                    token),
                 cancellationToken).ConfigureAwait(false);
 
             logger.LogDebug(
-                "The audit record repository recorded {AuditCategory} {AuditOperation} on {EntityType} " +
-                "{EntityId}",
+                "The audit record repository recorded {AuditCategory} {AuditOperation} on {EntityType} {EntityId}",
                 auditRecord.Category,
                 auditRecord.Operation,
                 auditRecord.EntityType ?? "",
@@ -237,9 +237,7 @@ internal sealed class AuditRecordRepository(
         }
     }
 
-    public async Task<int> DeleteWhereAsync(
-        AuditRecordQuery query,
-        CancellationToken cancellationToken = default)
+    public async Task<int> DeleteWhereAsync(AuditRecordQuery query, CancellationToken cancellationToken = default)
     {
         try
         {

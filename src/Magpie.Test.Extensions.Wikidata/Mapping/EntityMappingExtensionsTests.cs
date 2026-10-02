@@ -271,6 +271,7 @@ internal sealed class EntityMappingExtensionsTests
             Assert.That(result.OriginalTitle, Is.EqualTo("The Matrix"));
             Assert.That(result.Language, Is.EqualTo("en"));
             Assert.That(result.PublishDate, Is.EqualTo(new DateTime(1999, 3, 31, 0, 0, 0, DateTimeKind.Utc)));
+            Assert.That(result.PublishDatePrecision, Is.EqualTo(TemporalPrecision.Day));
             Assert.That(result.Duration, Is.EqualTo(TimeSpan.FromMinutes(136)));
             Assert.That(result.Genres.Single().Name, Is.EqualTo("drame"));
             Assert.That(
@@ -1129,7 +1130,11 @@ internal sealed class EntityMappingExtensionsTests
             DateTime.UtcNow);
 
         // Assert
-        Assert.That(result?.PublishDate, Is.EqualTo(new DateTime(1999, 1, 1, 0, 0, 0, DateTimeKind.Utc)));
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result?.PublishDate, Is.EqualTo(new DateTime(1999, 1, 1, 0, 0, 0, DateTimeKind.Utc)));
+            Assert.That(result?.PublishDatePrecision, Is.EqualTo(TemporalPrecision.Year));
+        }
     }
 
     [TestCase("+2", "Q11574", 2d)]
@@ -1196,14 +1201,7 @@ internal sealed class EntityMappingExtensionsTests
 
         // Assert
         Assert.That(result, Is.Not.Null);
-        if (expectedSeconds is null)
-        {
-            Assert.That(result!.Duration, Is.Null);
-        }
-        else
-        {
-            Assert.That(result!.Duration, Is.EqualTo(TimeSpan.FromSeconds(expectedSeconds.Value)));
-        }
+        Assert.That(result!.Duration?.TotalSeconds, Is.EqualTo(expectedSeconds));
     }
 
     [Test]
@@ -2330,14 +2328,13 @@ internal sealed class EntityMappingExtensionsTests
         }
     }
 
-    [TestCase("movie", Constants.MovieQid)]
-    [TestCase("show", Constants.TelevisionSeriesQid)]
+    [TestCase(EntityKind.Movie, Constants.MovieQid)]
+    [TestCase(EntityKind.Show, Constants.TelevisionSeriesQid)]
     public void ToMetadataContribution_MapsAllValidTruthyOfficialWebsites_WhenSearchableKind(
-        string kindName,
+        EntityKind kind,
         string typeQid)
     {
         // Arrange
-        var kind = kindName == "movie" ? EntityKind.Movie : EntityKind.Show;
         var entity = new EntityDto
         {
             Id = "Q123",

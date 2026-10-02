@@ -12,7 +12,6 @@ interface InvalidateQueriesOnEventsOptions {
     exact: boolean;
     failOpenEventNames?: readonly string[];
     maxWaitMs?: number;
-    owner: string;
     prePredicate?: (event: EventStreamPayload) => boolean;
     predicate?: (event: EventStreamPayload) => boolean;
     unprovableMembership?: boolean;
@@ -89,7 +88,6 @@ export function useInvalidateQueriesOnEvents(
     debounceMsRef.current = options.debounceMs ?? recommendedDebounceMs(eventNames);
 
     const exact = options.exact;
-    const owner = options.owner;
     const scopeKey = useMemo(
         () =>
             JSON.stringify({
@@ -98,7 +96,6 @@ export function useInvalidateQueriesOnEvents(
                 eventNames: [...eventNames].sort(),
                 exact,
                 failOpenEventNames: [...(options.failOpenEventNames ?? [])].sort(),
-                owner,
                 queryKeys,
                 unprovableMembership: options.unprovableMembership,
             }),
@@ -109,7 +106,6 @@ export function useInvalidateQueriesOnEvents(
             options.entityIds,
             options.failOpenEventNames,
             options.unprovableMembership,
-            owner,
             queryKeys,
         ],
     );
@@ -261,7 +257,6 @@ export function useInvalidateQueriesOnEvents(
                     options.entityIds.length > 0 ||
                     Boolean(options.failOpenEventNames?.length)),
             eventName: [...eventNames, 'stream.reconnected'],
-            owner,
         },
     );
 }

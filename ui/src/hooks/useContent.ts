@@ -98,7 +98,6 @@ function useContentQueryEvents(
         exact: true,
         failOpenEventNames: options?.failOpenEventNames,
         maxWaitMs: options?.maxWaitMs,
-        owner: 'content-query',
         predicate: options?.predicate,
         unprovableMembership: options?.unprovableMembership,
     });
@@ -109,7 +108,6 @@ function useContentQueryEvents(
             debounceMs: options?.debounceMs,
             exact: true,
             maxWaitMs: options?.maxWaitMs,
-            owner: 'content-query',
         },
     );
 }
@@ -387,7 +385,7 @@ async function refreshContent(id: string): Promise<JobActionDisposition> {
 async function rescanContentMediaInfo(id: string): Promise<JobActionDisposition> {
     return executeImmediateJobRequest({
         jobType: 'MediaInfoExtractScan',
-        parameters: { contentHierarchyItemId: id },
+        parameters: { contentHierarchyItemId: id, mediaInfoPolicy: 'All' },
     });
 }
 
@@ -469,12 +467,11 @@ export function useContentHierarchy(
     useInvalidateQueriesOnEvents(SCOPED_CONTENT_CHANGE_EVENTS, hierarchyIds.map(contentQueryKeys.detail), {
         entityIds: hierarchyIds,
         exact: true,
-        owner: 'content-hierarchy',
     });
     useInvalidateQueriesOnEvents(
         hierarchyIds.length > 0 ? ['library.scan.completed'] : [],
         hierarchyIds.map(contentQueryKeys.detail),
-        { exact: true, owner: 'content-hierarchy' },
+        { exact: true },
     );
     const queries = useQueries({
         queries: [
@@ -519,11 +516,9 @@ export function useContentAncestors(leafParentId: string | undefined): ContentAn
     useInvalidateQueriesOnEvents(SCOPED_CONTENT_CHANGE_EVENTS, ids.map(contentQueryKeys.detail), {
         entityIds: ids,
         exact: true,
-        owner: 'content-ancestors',
     });
     useInvalidateQueriesOnEvents(ids.length > 0 ? ['library.scan.completed'] : [], ids.map(contentQueryKeys.detail), {
         exact: true,
-        owner: 'content-ancestors',
     });
 
     useEffect(() => {
@@ -624,7 +619,6 @@ export function usePendingRefresh(id: string | undefined, options?: { enabled?: 
             entityIds: id ? [id] : [],
             exact: true,
             maxWaitMs: 600,
-            owner: 'content-pending-refresh',
             predicate: (event) =>
                 event.name === 'metadata.refreshed' ||
                 event.context['execution.jobType'] === 'ContentMetadataRefreshItem',

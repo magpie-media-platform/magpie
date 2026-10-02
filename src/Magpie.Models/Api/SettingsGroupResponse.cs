@@ -37,7 +37,7 @@ public sealed record SettingsGroupResponse
     public IReadOnlyList<SettingSchemaDefinition> Schema { get; init; } = [];
 
     /// <summary>
-    /// Whether Magpie resolved the schema for the group. If not, Magpie withholds every value.
+    /// Whether Magpie resolved the schema for the group.
     /// </summary>
     public bool SchemaResolved { get; init; } = true;
 

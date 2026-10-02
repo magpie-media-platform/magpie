@@ -205,8 +205,10 @@ internal sealed class ContentFilterRepository(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "The content filter repository failed to create content filter " +
-                "{ContentFilterName}.", model.Name);
+            logger.LogError(
+                ex,
+                "The content filter repository failed to create content filter {ContentFilterName}.",
+                model.Name);
             throw;
         }
     }
@@ -304,8 +306,10 @@ internal sealed class ContentFilterRepository(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "The content filter repository failed to update content filter " +
-                "{ContentFilterId}.", model.Id);
+            logger.LogError(
+                ex,
+                "The content filter repository failed to update content filter {ContentFilterId}.",
+                model.Id);
             throw;
         }
     }
@@ -516,8 +520,10 @@ internal sealed class ContentFilterRepository(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "The content filter repository failed to patch content filter " +
-                "{ContentFilterId}.", patch.Id);
+            logger.LogError(
+                ex,
+                "The content filter repository failed to patch content filter {ContentFilterId}.",
+                patch.Id);
             throw;
         }
     }

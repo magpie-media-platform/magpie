@@ -10,6 +10,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 
+using Magpie.Models;
 using Magpie.Sdk.Caching;
 
 using Microsoft.Extensions.Logging;
@@ -25,7 +26,8 @@ internal sealed class QbittorrentClient(
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
-        PropertyNameCaseInsensitive = true
+        PropertyNameCaseInsensitive = true,
+        PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower
     };
 
     private const string LoginPath = "api/v2/auth/login";
@@ -113,7 +115,7 @@ internal sealed class QbittorrentClient(
         }
 
         var numeric = trimmed.Substring(0, cutoff);
-        return Version.TryParse(numeric, out version!);
+        return Version.TryParse(numeric, out version);
     }
 
     private static HttpRequestMessage CreateRequest(
@@ -217,9 +219,10 @@ internal sealed class QbittorrentClient(
             content.Add(new StringContent(tags), "tags");
         }
 
-        content.Add(
-            new StringContent(settings.AddPaused ? "true" : "false"),
-            "paused");
+        // qBittorrent 4.x reads paused and 5.x reads stopped. Each version ignores the other field.
+        var paused = settings.AddPaused ? "true" : "false";
+        content.Add(new StringContent(paused), "paused");
+        content.Add(new StringContent(paused), "stopped");
     }
 
     public async Task<string> GetVersionAsync(
@@ -234,19 +237,6 @@ internal sealed class QbittorrentClient(
 
         response.EnsureSuccessStatusCode();
         return (await response.Content.ReadAsStringAsync().ConfigureAwait(false)).Trim();
-    }
-
-    public Task<IReadOnlyList<TorrentInfo>> GetTorrentInfoAsync(
-        QbittorrentSettings settings,
-        string hash,
-        CancellationToken cancellationToken)
-    {
-        if (string.IsNullOrEmpty(hash))
-        {
-            throw new ArgumentException("Hash is required.", nameof(hash));
-        }
-
-        return GetTorrentInfoAsync(settings, [hash], cancellationToken);
     }
 
     public async Task<IReadOnlyList<TorrentInfo>> GetTorrentInfoAsync(
@@ -412,7 +402,7 @@ internal sealed class QbittorrentClient(
     {
         if (response.StatusCode == HttpStatusCode.UnsupportedMediaType)
         {
-            throw new QbittorrentAddRejectedException(
+            throw new ReleasePayloadRejectedException(
                 $"qBittorrent rejected the {what}: the .torrent file is not valid (HTTP 415).");
         }
 
@@ -444,10 +434,7 @@ internal sealed class QbittorrentClient(
 
         void Reject(string responseBody)
         {
-            logger.LogWarning(
-                "qBittorrent rejected the request to add {What} with body {Body}.",
-                what,
-                responseBody);
+            logger.LogWarning("qBittorrent rejected the request to add {What} with body {Body}.", what, responseBody);
             throw new QbittorrentAddRejectedException(
                 $"qBittorrent rejected the {what} (response {responseBody}).",
                 responseBody);
@@ -476,9 +463,7 @@ internal sealed class QbittorrentClient(
                 return version5;
             }
 
-            logger.LogWarning(
-                "qBittorrent /app/version returned an invalid version string {Version}.",
-                raw);
+            logger.LogWarning("qBittorrent /app/version returned an invalid version string {Version}.", raw);
         }
         catch (Exception ex) when (
             !cancellationToken.IsCancellationRequested &&
@@ -628,10 +613,7 @@ internal sealed class QbittorrentClient(
 
         if (code is >= 400 and < 500)
         {
-            logger.LogInformation(
-                "The qBittorrent request {Description} returned HTTP {Status}.",
-                description,
-                code);
+            logger.LogInformation("The qBittorrent request {Description} returned HTTP {Status}.", description, code);
             return false;
         }
 

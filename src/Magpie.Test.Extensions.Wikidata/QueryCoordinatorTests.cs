@@ -544,8 +544,7 @@ internal sealed class QueryCoordinatorTests
         ];
 
         // Act
-        var result = await subject.GetSearchAsync("remote", _ => Task.FromResult(rows), default)
-            .ConfigureAwait(false);
+        var result = await subject.GetSearchAsync("remote", _ => Task.FromResult(rows), default).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -826,8 +825,7 @@ internal sealed class QueryCoordinatorTests
         // Act
         var failure = Assert.CatchAsync<HttpRequestException>(async () =>
             await subject.GetEntitiesAsync(ids, context, default).ConfigureAwait(false));
-        var cached = await subject.GetEntitiesAsync(["Q1"], context, default)
-            .ConfigureAwait(false);
+        var cached = await subject.GetEntitiesAsync(["Q1"], context, default).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -913,10 +911,8 @@ internal sealed class QueryCoordinatorTests
         var subject = new QueryCoordinator(client.Object, _scopeFactory);
 
         // Act
-        var first = await subject.GetEntitiesAsync(["Q59431323"], context, default)
-            .ConfigureAwait(false);
-        var second = await subject.GetEntitiesAsync(["Q59431323"], context, default)
-            .ConfigureAwait(false);
+        var first = await subject.GetEntitiesAsync(["Q59431323"], context, default).ConfigureAwait(false);
+        var second = await subject.GetEntitiesAsync(["Q59431323"], context, default).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())

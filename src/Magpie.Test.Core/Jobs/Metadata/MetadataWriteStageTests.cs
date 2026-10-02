@@ -41,6 +41,7 @@ public sealed class MetadataWriteStageTests
     private SqliteConnection _template = null!;
     private ContentMetadataRefreshItemJob _subject = null!;
     private Guid _itemId;
+    private JobContext _jobContext = null!;
     private Guid _containerId;
     private Guid _mediaOwnerId;
     private List<SubjectRelationshipDefinition> _definitions = null!;
@@ -175,6 +176,14 @@ public sealed class MetadataWriteStageTests
         _context.ContentHierarchyItems.Add(item);
         _context.SaveChanges();
         _itemId = item.Id;
+        _jobContext = new JobContext(
+            ExecutionId: Guid.NewGuid(),
+            ScheduleTriggerId: null,
+            EventTriggerId: null,
+            ManualTriggerUserId: null,
+            ExecutionMode: JobExecutionMode.Queue,
+            Parameters: new Dictionary<string, string> { ["contentHierarchyItemId"] = _itemId.ToString("D") },
+            Event: null);
         _containerId = item.MetadataContainerId;
         var existingChild = new ContentHierarchyItem
         {
@@ -311,8 +320,8 @@ public sealed class MetadataWriteStageTests
         }
 
         _subject = new ContentMetadataRefreshItemJob(providers, hierarchy, containers, subjects, events,
-            types.Object, transactions, jobs, kinds.Object, TimeProvider.System,
-            NullLogger<ContentMetadataRefreshItemJob>.Instance, Mock.Of<IProgressReporter>());
+            types.Object, transactions, jobs, Mock.Of<ILibraryImportCandidateRepository>(), kinds.Object,
+            TimeProvider.System, NullLogger<ContentMetadataRefreshItemJob>.Instance, Mock.Of<IProgressReporter>());
         _context.ChangeTracker.Clear();
     }
 
@@ -324,7 +333,7 @@ public sealed class MetadataWriteStageTests
     }
 
     [Test]
-    public async Task RefreshAsync_PreservesPersistedResults_WhenLargeMetadataIsRepeatedAndRelationshipsChange()
+    public async Task ExecuteAsync_PreservesPersistedResults_WhenLargeMetadataIsRepeatedAndRelationshipsChange()
     {
         // Arrange
         var phases = new[]
@@ -337,7 +346,7 @@ public sealed class MetadataWriteStageTests
         {
             _context.ChangeTracker.Clear();
             _writeCommands.Clear();
-            await _subject.RefreshAsync(_itemId, null, null, Mock.Of<IProgressReporter>()).ConfigureAwait(false);
+            await _subject.ExecuteAsync(_jobContext).ConfigureAwait(false);
             var writeSelects = _writeCommands.Count(command => command.Contains("SELECT", StringComparison.Ordinal));
 
             // Assert
@@ -405,7 +414,7 @@ public sealed class MetadataWriteStageTests
 
     [TestCase(false)]
     [TestCase(true)]
-    public async Task RefreshAsync_RollsBackAndRetriesWithoutDuplicates_WhenAQueueWriteFails(bool cancel)
+    public async Task ExecuteAsync_RollsBackAndRetriesWithoutDuplicates_WhenAQueueWriteFails(bool cancel)
     {
         // Arrange
         _definitions.Add(new SubjectRelationshipDefinition
@@ -426,8 +435,7 @@ public sealed class MetadataWriteStageTests
         _failure.RemainingWrites = 2;
 
         // Act
-        var failure = Assert.CatchAsync<Exception>(() => _subject.RefreshAsync(
-            _itemId, null, null, Mock.Of<IProgressReporter>(), cancellationToken: cancellation.Token));
+        var failure = Assert.CatchAsync<Exception>(() => _subject.ExecuteAsync(_jobContext, cancellation.Token));
         _context.ChangeTracker.Clear();
 
         // Assert
@@ -451,9 +459,9 @@ public sealed class MetadataWriteStageTests
         // Act
         _failure.RemainingWrites = 0;
         _failure.Cancellation = null;
-        await _subject.RefreshAsync(_itemId, null, null, Mock.Of<IProgressReporter>()).ConfigureAwait(false);
+        await _subject.ExecuteAsync(_jobContext).ConfigureAwait(false);
         _context.ChangeTracker.Clear();
-        await _subject.RefreshAsync(_itemId, null, null, Mock.Of<IProgressReporter>()).ConfigureAwait(false);
+        await _subject.ExecuteAsync(_jobContext).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())

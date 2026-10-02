@@ -79,7 +79,7 @@ const anyConfiguredIndexer = (indexers: ApiIndexer[]) => countConfiguredIndexerI
 const presenceStaleTime = POLLING_INTERVALS.normal / 2;
 
 export function useOnboardingStatus() {
-    const invalidationOptions = { debounceMs: 300, exact: true, maxWaitMs: 1200, owner: 'onboarding-shell' };
+    const invalidationOptions = { debounceMs: 300, exact: true, maxWaitMs: 1200 };
     useInvalidateQueriesOnEvents(
         ['indexer.created', 'indexer.updated', 'indexer.deleted'],
         [indexerListQueryKey],

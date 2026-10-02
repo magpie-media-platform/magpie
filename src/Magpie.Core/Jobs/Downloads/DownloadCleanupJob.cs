@@ -55,6 +55,10 @@ internal sealed class DownloadCleanupJob(
         return candidate.HeldByPolicy ? null : "client-released";
     }
 
+    private static bool NeedsTransfer(Download attempt, IReadOnlyDictionary<string, string> settings) =>
+        !DownloadStatuses.Finished.Contains(attempt.Status) ||
+        attempt is { Status: DownloadStatus.Imported, HeldByPolicy: true } && ShouldHonorClientHoldPolicy(settings);
+
     private static bool ShouldHonorClientHoldPolicy(IReadOnlyDictionary<string, string> settings)
     {
         if (!settings.TryGetValue(DownloadClientSettingsKeys.HonorClientHoldPolicy, out var value) ||
@@ -159,6 +163,13 @@ internal sealed class DownloadCleanupJob(
                 continue;
             }
 
+            var attempts = await downloadRepository.ListTransferAttemptsAsync(candidate.DownloadId, cancellationToken)
+                .ConfigureAwait(false);
+            if (attempts.Any(attempt => NeedsTransfer(attempt, settings)))
+            {
+                continue;
+            }
+
             bool clientConfirmed;
             try
             {
@@ -199,6 +210,18 @@ internal sealed class DownloadCleanupJob(
 
             await StampRemovedAsync(candidate, now, userId, correlationId, trigger, cancellationToken)
                 .ConfigureAwait(false);
+            foreach (var attempt in attempts.Where(attempt => attempt.Id != candidate.DownloadId))
+            {
+                await StampRemovedAsync(
+                    candidate with { DownloadId = attempt.Id, Title = attempt.Title },
+                    now,
+                    userId,
+                    correlationId,
+                    trigger,
+                    cancellationToken)
+                    .ConfigureAwait(false);
+            }
+
             removed++;
         }
 

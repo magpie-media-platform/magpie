@@ -86,7 +86,6 @@ public sealed class ContentHierarchyItemRepositoryQueryTests
     [TearDown]
     public void TearDown()
     {
-        _context.Database.CloseConnection();
         _context.Dispose();
     }
 
@@ -244,7 +243,7 @@ public sealed class ContentHierarchyItemRepositoryQueryTests
     }
 
     [Test]
-    public async Task QueryAsync_ReturnsTheTagNamesOfEachItem()
+    public async Task QueryAsync_ReturnsTheTagNamesOfEachItem_WhenItemsHaveTags()
     {
         // Arrange
         var untaggedContainer = new MetadataContainer { CreatedAt = DateTime.UtcNow };
@@ -272,12 +271,12 @@ public sealed class ContentHierarchyItemRepositoryQueryTests
         var container = await _context.MetadataContainers
             .SingleAsync(c => c.Id == _metadataContainerId)
             .ConfigureAwait(false);
-        foreach (var name in new[] { "zeta", "alpha" })
-        {
-            var tag = new Tag { Name = name };
-            tag.MetadataContainers.Add(container);
-            _context.Tags.Add(tag);
-        }
+        var tag1 = new Tag { Name = "zeta" };
+        tag1.MetadataContainers.Add(container);
+        _context.Tags.Add(tag1);
+        var tag2 = new Tag { Name = "alpha" };
+        tag2.MetadataContainers.Add(container);
+        _context.Tags.Add(tag2);
 
         _context.Tags.Add(new Tag { Name = "unused" });
         await _context.SaveChangesAsync().ConfigureAwait(false);
@@ -426,29 +425,48 @@ public sealed class ContentHierarchyItemRepositoryQueryTests
         _context.ContentHierarchyItems.Add(series);
         await _context.SaveChangesAsync().ConfigureAwait(false);
 
-        var episodes = new[]
+        var container1 = new MetadataContainer { CreatedAt = DateTime.UtcNow };
+        _context.MetadataContainers.Add(container1);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.ContentHierarchyItems.Add(new ContentHierarchyItem
         {
-            ("s01e02", "Cancer Man"),
-            ("s01e03", "Cat's in the Bag"),
-            ("s01e01", "And the Bag's in the River"),
-        };
-        foreach (var (slug, name) in episodes)
+            MetadataContainerId = container1.Id,
+            ParentId = series.Id,
+            ContentType = "type-f",
+            Level = "level-d",
+            Slug = "s01e02",
+            Name = "Cancer Man",
+            Monitoring = MonitoringMode.Monitored,
+            CreatedAt = DateTime.UtcNow
+        });
+        var container2 = new MetadataContainer { CreatedAt = DateTime.UtcNow };
+        _context.MetadataContainers.Add(container2);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.ContentHierarchyItems.Add(new ContentHierarchyItem
         {
-            var container = new MetadataContainer { CreatedAt = DateTime.UtcNow };
-            _context.MetadataContainers.Add(container);
-            await _context.SaveChangesAsync().ConfigureAwait(false);
-            _context.ContentHierarchyItems.Add(new ContentHierarchyItem
-            {
-                MetadataContainerId = container.Id,
-                ParentId = series.Id,
-                ContentType = "type-f",
-                Level = "level-d",
-                Slug = slug,
-                Name = name,
-                Monitoring = MonitoringMode.Monitored,
-                CreatedAt = DateTime.UtcNow
-            });
-        }
+            MetadataContainerId = container2.Id,
+            ParentId = series.Id,
+            ContentType = "type-f",
+            Level = "level-d",
+            Slug = "s01e03",
+            Name = "Cat's in the Bag",
+            Monitoring = MonitoringMode.Monitored,
+            CreatedAt = DateTime.UtcNow
+        });
+        var container3 = new MetadataContainer { CreatedAt = DateTime.UtcNow };
+        _context.MetadataContainers.Add(container3);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.ContentHierarchyItems.Add(new ContentHierarchyItem
+        {
+            MetadataContainerId = container3.Id,
+            ParentId = series.Id,
+            ContentType = "type-f",
+            Level = "level-d",
+            Slug = "s01e01",
+            Name = "And the Bag's in the River",
+            Monitoring = MonitoringMode.Monitored,
+            CreatedAt = DateTime.UtcNow
+        });
 
         await _context.SaveChangesAsync().ConfigureAwait(false);
 
@@ -534,12 +552,14 @@ public sealed class ContentHierarchyItemRepositoryQueryTests
             }
         };
 
+        // Act
+        var act = (AsyncTestDelegate)(async () => await _subject.QueryAsync(
+            criteria,
+            new() { PageNumber = 1, PageSize = 100 },
+            null).ConfigureAwait(false));
+
         // Assert
-        Assert.That(
-            async () => await _subject.QueryAsync(criteria,
-                new() { PageNumber = 1, PageSize = 100 },
-                null).ConfigureAwait(false),
-            Throws.ArgumentException);
+        Assert.ThrowsAsync<ArgumentException>(act);
     }
 
     [TestCase("images.test")]
@@ -603,12 +623,14 @@ public sealed class ContentHierarchyItemRepositoryQueryTests
             }
         };
 
+        // Act
+        var act = (AsyncTestDelegate)(async () => await _subject.QueryAsync(
+            criteria,
+            new() { PageNumber = 1, PageSize = 100 },
+            null).ConfigureAwait(false));
+
         // Assert
-        Assert.That(
-            async () => await _subject.QueryAsync(criteria,
-                new() { PageNumber = 1, PageSize = 100 },
-                null).ConfigureAwait(false),
-            Throws.ArgumentException);
+        Assert.ThrowsAsync<ArgumentException>(act);
     }
 
     [Test]
@@ -715,24 +737,81 @@ public sealed class ContentHierarchyItemRepositoryQueryTests
     public async Task QueryAsync_ReturnsPagedItems_WhenPagingIsSet()
     {
         // Arrange
-        for (var i = 0; i < 5; i++)
-        {
-            var container = new MetadataContainer { CreatedAt = DateTime.UtcNow };
-            _context.MetadataContainers.Add(container);
-            await _context.SaveChangesAsync().ConfigureAwait(false);
+        var container1 = new MetadataContainer { CreatedAt = DateTime.UtcNow };
+        _context.MetadataContainers.Add(container1);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
-            var item = new ContentHierarchyItem
-            {
-                MetadataContainerId = container.Id,
-                ContentType = "type-a",
-                Level = "level-a",
-                Slug = $"movie-{i}",
-                Name = $"Movie {i}",
-                Monitoring = MonitoringMode.Monitored,
-                CreatedAt = DateTime.UtcNow
-            };
-            _context.ContentHierarchyItems.Add(item);
-        }
+        var item1 = new ContentHierarchyItem
+        {
+            MetadataContainerId = container1.Id,
+            ContentType = "type-a",
+            Level = "level-a",
+            Slug = "movie-0",
+            Name = "Movie 0",
+            Monitoring = MonitoringMode.Monitored,
+            CreatedAt = DateTime.UtcNow
+        };
+        _context.ContentHierarchyItems.Add(item1);
+        var container2 = new MetadataContainer { CreatedAt = DateTime.UtcNow };
+        _context.MetadataContainers.Add(container2);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        var item2 = new ContentHierarchyItem
+        {
+            MetadataContainerId = container2.Id,
+            ContentType = "type-a",
+            Level = "level-a",
+            Slug = "movie-1",
+            Name = "Movie 1",
+            Monitoring = MonitoringMode.Monitored,
+            CreatedAt = DateTime.UtcNow
+        };
+        _context.ContentHierarchyItems.Add(item2);
+        var container3 = new MetadataContainer { CreatedAt = DateTime.UtcNow };
+        _context.MetadataContainers.Add(container3);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        var item3 = new ContentHierarchyItem
+        {
+            MetadataContainerId = container3.Id,
+            ContentType = "type-a",
+            Level = "level-a",
+            Slug = "movie-2",
+            Name = "Movie 2",
+            Monitoring = MonitoringMode.Monitored,
+            CreatedAt = DateTime.UtcNow
+        };
+        _context.ContentHierarchyItems.Add(item3);
+        var container4 = new MetadataContainer { CreatedAt = DateTime.UtcNow };
+        _context.MetadataContainers.Add(container4);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        var item4 = new ContentHierarchyItem
+        {
+            MetadataContainerId = container4.Id,
+            ContentType = "type-a",
+            Level = "level-a",
+            Slug = "movie-3",
+            Name = "Movie 3",
+            Monitoring = MonitoringMode.Monitored,
+            CreatedAt = DateTime.UtcNow
+        };
+        _context.ContentHierarchyItems.Add(item4);
+        var container5 = new MetadataContainer { CreatedAt = DateTime.UtcNow };
+        _context.MetadataContainers.Add(container5);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        var item5 = new ContentHierarchyItem
+        {
+            MetadataContainerId = container5.Id,
+            ContentType = "type-a",
+            Level = "level-a",
+            Slug = "movie-4",
+            Name = "Movie 4",
+            Monitoring = MonitoringMode.Monitored,
+            CreatedAt = DateTime.UtcNow
+        };
+        _context.ContentHierarchyItems.Add(item5);
 
         await _context.SaveChangesAsync().ConfigureAwait(false);
 
@@ -749,6 +828,164 @@ public sealed class ContentHierarchyItemRepositoryQueryTests
             Assert.That(result, Has.Property(nameof(result.TotalItems)).EqualTo(5));
             Assert.That(result, Has.Property(nameof(result.PageNumber)).EqualTo(1));
             Assert.That(result, Has.Property(nameof(result.PageSize)).EqualTo(2));
+        }
+    }
+
+    [Test]
+    public async Task QueryIdsAsync_ReturnsEveryRemainingId_WhenAnEarlierItemIsDeletedBetweenCursorPages()
+    {
+        // Arrange
+        var id0 = Guid.Parse("27f65cd0-25de-48b2-98d1-e510e9371339");
+        var id1 = Guid.Parse("2ab79b34-816f-46d4-a516-2f8ce05995dc");
+        var id2 = Guid.Parse("5471cd4e-c856-4e65-9f8f-69a52f8e8e6d");
+        var id3 = Guid.Parse("902867a0-6825-4b33-8982-a336478ea265");
+        var id4 = Guid.Parse("b53dd6ab-80d1-47af-9495-7096cae03857");
+        var container0 = new MetadataContainer { CreatedAt = DateTime.UtcNow };
+        _context.MetadataContainers.Add(container0);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.ContentHierarchyItems.Add(new ContentHierarchyItem
+        {
+            Id = id0,
+            MetadataContainerId = container0.Id,
+            ContentType = "type-a",
+            Level = "level-a",
+            Slug = "item-0",
+            Name = "Item 5",
+            CreatedAt = DateTime.UtcNow
+        });
+        var container1 = new MetadataContainer { CreatedAt = DateTime.UtcNow };
+        _context.MetadataContainers.Add(container1);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.ContentHierarchyItems.Add(new ContentHierarchyItem
+        {
+            Id = id1,
+            MetadataContainerId = container1.Id,
+            ContentType = "type-a",
+            Level = "level-a",
+            Slug = "item-1",
+            Name = "Item 4",
+            CreatedAt = DateTime.UtcNow
+        });
+        var container2 = new MetadataContainer { CreatedAt = DateTime.UtcNow };
+        _context.MetadataContainers.Add(container2);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.ContentHierarchyItems.Add(new ContentHierarchyItem
+        {
+            Id = id2,
+            MetadataContainerId = container2.Id,
+            ContentType = "type-a",
+            Level = "level-a",
+            Slug = "item-2",
+            Name = "Item 3",
+            CreatedAt = DateTime.UtcNow
+        });
+        var container3 = new MetadataContainer { CreatedAt = DateTime.UtcNow };
+        _context.MetadataContainers.Add(container3);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.ContentHierarchyItems.Add(new ContentHierarchyItem
+        {
+            Id = id3,
+            MetadataContainerId = container3.Id,
+            ContentType = "type-a",
+            Level = "level-a",
+            Slug = "item-3",
+            Name = "Item 2",
+            CreatedAt = DateTime.UtcNow
+        });
+        var container4 = new MetadataContainer { CreatedAt = DateTime.UtcNow };
+        _context.MetadataContainers.Add(container4);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.ContentHierarchyItems.Add(new ContentHierarchyItem
+        {
+            Id = id4,
+            MetadataContainerId = container4.Id,
+            ContentType = "type-a",
+            Level = "level-a",
+            Slug = "item-4",
+            Name = "Item 1",
+            CreatedAt = DateTime.UtcNow
+        });
+
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        var sort = new SortParameter { PropertyName = "Id", Direction = SortDirection.Ascending };
+        var paging = new PagingParameter { PageNumber = 1, PageSize = 2 };
+
+        // Act
+        var first = await _subject.QueryIdsAsync(new(), paging, sort).ConfigureAwait(false);
+        await _context.ContentHierarchyItems.Where(item => item.Id == id0).ExecuteDeleteAsync().ConfigureAwait(false);
+        var second = await _subject.QueryIdsAsync(new() { AfterId = id1 }, paging, sort).ConfigureAwait(false);
+        var third = await _subject.QueryIdsAsync(new() { AfterId = id3 }, paging, sort).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(first, Is.EqualTo([id0, id1]));
+            Assert.That(second, Is.EqualTo([id2, id3]));
+            Assert.That(third, Is.EqualTo([id4]));
+        }
+    }
+
+    [Test]
+    public async Task QueryAsync_ReturnsTheItemsAfterTheId_WhenAfterIdIsSet()
+    {
+        // Arrange
+        var id0 = Guid.Parse("27f65cd0-25de-48b2-98d1-e510e9371339");
+        var id1 = Guid.Parse("2ab79b34-816f-46d4-a516-2f8ce05995dc");
+        var id2 = Guid.Parse("5471cd4e-c856-4e65-9f8f-69a52f8e8e6d");
+        var container0 = new MetadataContainer { CreatedAt = DateTime.UtcNow };
+        _context.MetadataContainers.Add(container0);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.ContentHierarchyItems.Add(new ContentHierarchyItem
+        {
+            Id = id0,
+            MetadataContainerId = container0.Id,
+            ContentType = "type-a",
+            Level = "level-a",
+            Slug = "item-0",
+            Name = "Item 3",
+            CreatedAt = DateTime.UtcNow
+        });
+        var container1 = new MetadataContainer { CreatedAt = DateTime.UtcNow };
+        _context.MetadataContainers.Add(container1);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.ContentHierarchyItems.Add(new ContentHierarchyItem
+        {
+            Id = id1,
+            MetadataContainerId = container1.Id,
+            ContentType = "type-a",
+            Level = "level-a",
+            Slug = "item-1",
+            Name = "Item 2",
+            CreatedAt = DateTime.UtcNow
+        });
+        var container2 = new MetadataContainer { CreatedAt = DateTime.UtcNow };
+        _context.MetadataContainers.Add(container2);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.ContentHierarchyItems.Add(new ContentHierarchyItem
+        {
+            Id = id2,
+            MetadataContainerId = container2.Id,
+            ContentType = "type-a",
+            Level = "level-a",
+            Slug = "item-2",
+            Name = "Item 1",
+            CreatedAt = DateTime.UtcNow
+        });
+
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        var sort = new SortParameter { PropertyName = "Id", Direction = SortDirection.Ascending };
+
+        // Act
+        var result = await _subject.QueryAsync(
+            new() { AfterId = id0 },
+            new() { PageNumber = 1, PageSize = 25 },
+            sort).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.Items.Select(item => item.Id), Is.EqualTo([id1, id2]));
+            Assert.That(result.TotalItems, Is.EqualTo(2));
         }
     }
 
@@ -1383,36 +1620,82 @@ public sealed class ContentHierarchyItemRepositoryQueryTests
     public async Task QueryAsync_ReturnsTheDescendantsWithFiles_WhenFilesHaveAnEmptyCriterion()
     {
         // Arrange
-        static ContentHierarchyItem NewItem(string slug, Guid? parentId) => new()
+        var show = new ContentHierarchyItem
         {
             Id = Guid.NewGuid(),
-            ParentId = parentId,
+            ParentId = null,
             MetadataContainer = new MetadataContainer { CreatedAt = DateTime.UtcNow },
             ContentType = "tv",
             Level = "level",
-            Slug = slug,
-            Name = slug,
+            Slug = "show",
+            Name = "show",
             CreatedAt = DateTime.UtcNow
         };
-        var show = NewItem("show", null);
-        var season = NewItem("season", show.Id);
-        var emptyEpisode = NewItem("empty-episode", season.Id);
-        var otherShow = NewItem("other-show", null);
+        var season = new ContentHierarchyItem
+        {
+            Id = Guid.NewGuid(),
+            ParentId = show.Id,
+            MetadataContainer = new MetadataContainer { CreatedAt = DateTime.UtcNow },
+            ContentType = "tv",
+            Level = "level",
+            Slug = "season",
+            Name = "season",
+            CreatedAt = DateTime.UtcNow
+        };
+        var emptyEpisode = new ContentHierarchyItem
+        {
+            Id = Guid.NewGuid(),
+            ParentId = season.Id,
+            MetadataContainer = new MetadataContainer { CreatedAt = DateTime.UtcNow },
+            ContentType = "tv",
+            Level = "level",
+            Slug = "empty-episode",
+            Name = "empty-episode",
+            CreatedAt = DateTime.UtcNow
+        };
+        var otherShow = new ContentHierarchyItem
+        {
+            Id = Guid.NewGuid(),
+            ParentId = null,
+            MetadataContainer = new MetadataContainer { CreatedAt = DateTime.UtcNow },
+            ContentType = "tv",
+            Level = "level",
+            Slug = "other-show",
+            Name = "other-show",
+            CreatedAt = DateTime.UtcNow
+        };
         _context.ContentHierarchyItems.AddRange(show, season, emptyEpisode, otherShow);
         await _context.SaveChangesAsync().ConfigureAwait(false);
-        foreach (var owner in new[] { show, season, otherShow })
+        var contentItem1 = new ContentItem { ContentHierarchyItemId = show.Id, CreatedAt = DateTime.UtcNow };
+        contentItem1.MediaFiles.Add(new MediaFile
         {
-            var contentItem = new ContentItem { ContentHierarchyItemId = owner.Id, CreatedAt = DateTime.UtcNow };
-            contentItem.MediaFiles.Add(new MediaFile
-            {
-                FileKind = "video",
-                MimeType = "video/mp4",
-                FilePath = $"/tv/{owner.Slug}.mp4",
-                PathKey = $"/tv/{owner.Slug}.mp4",
-                CreatedAt = DateTime.UtcNow
-            });
-            _context.ContentItems.Add(contentItem);
-        }
+            FileKind = "video",
+            MimeType = "video/mp4",
+            FilePath = $"/tv/{show.Slug}.mp4",
+            PathKey = $"/tv/{show.Slug}.mp4",
+            CreatedAt = DateTime.UtcNow
+        });
+        _context.ContentItems.Add(contentItem1);
+        var contentItem2 = new ContentItem { ContentHierarchyItemId = season.Id, CreatedAt = DateTime.UtcNow };
+        contentItem2.MediaFiles.Add(new MediaFile
+        {
+            FileKind = "video",
+            MimeType = "video/mp4",
+            FilePath = $"/tv/{season.Slug}.mp4",
+            PathKey = $"/tv/{season.Slug}.mp4",
+            CreatedAt = DateTime.UtcNow
+        });
+        _context.ContentItems.Add(contentItem2);
+        var contentItem3 = new ContentItem { ContentHierarchyItemId = otherShow.Id, CreatedAt = DateTime.UtcNow };
+        contentItem3.MediaFiles.Add(new MediaFile
+        {
+            FileKind = "video",
+            MimeType = "video/mp4",
+            FilePath = $"/tv/{otherShow.Slug}.mp4",
+            PathKey = $"/tv/{otherShow.Slug}.mp4",
+            CreatedAt = DateTime.UtcNow
+        });
+        _context.ContentItems.Add(contentItem3);
 
         await _context.SaveChangesAsync().ConfigureAwait(false);
 
@@ -1497,6 +1780,193 @@ public sealed class ContentHierarchyItemRepositoryQueryTests
         }
     }
 
+    [TestCase("episode-1", 1, 0)]
+    [TestCase("episode-2", 0, 1)]
+    public async Task GetByIdAsync_ReturnsTheSharedFileWithItsCoverageAndNoPendingImport_WhenAFileCoversTwoEpisodes(
+        string slug,
+        int ownedFiles,
+        int coveringFiles)
+    {
+        // Arrange
+        var season = new ContentHierarchyItem
+        {
+            Id = Guid.NewGuid(),
+            MetadataContainerId = _metadataContainerId,
+            ContentType = "tv",
+            Level = "season",
+            Slug = "season-1",
+            Name = "Season 1",
+            CreatedAt = DateTime.UtcNow
+        };
+        var firstEpisode = new ContentHierarchyItem
+        {
+            MetadataContainer = new() { CreatedAt = DateTime.UtcNow },
+            ParentId = season.Id,
+            ContentType = "tv",
+            Level = "episode",
+            Slug = "episode-1",
+            Name = "Episode 1",
+            Ordinal = 1,
+            CreatedAt = DateTime.UtcNow,
+            ContentItem = new() { CreatedAt = DateTime.UtcNow }
+        };
+        var secondEpisode = new ContentHierarchyItem
+        {
+            MetadataContainer = new() { CreatedAt = DateTime.UtcNow },
+            ParentId = season.Id,
+            ContentType = "tv",
+            Level = "episode",
+            Slug = "episode-2",
+            Name = "Episode 2",
+            Ordinal = 2,
+            CreatedAt = DateTime.UtcNow,
+            ContentItem = new() { CreatedAt = DateTime.UtcNow }
+        };
+        _context.ContentHierarchyItems.AddRange(season, firstEpisode, secondEpisode);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        var mediaFile = new MediaFile
+        {
+            ContentItemId = firstEpisode.ContentItem.Id,
+            FileKind = "video",
+            FilePath = "/tv/S01E01-E02.mkv",
+            PathKey = "/tv/S01E01-E02.mkv",
+            CreatedAt = DateTime.UtcNow
+        };
+        mediaFile.Coverage.Add(new() { ContentItemId = secondEpisode.ContentItem.Id });
+        _context.MediaFiles.Add(mediaFile);
+        var rootFolder = new RootFolder
+        {
+            Name = "TV",
+            Path = "/tv",
+            ContentType = "tv",
+            CreatedAt = DateTime.UtcNow
+        };
+        _context.RootFolders.Add(rootFolder);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.LibraryImportCandidates.AddRange(
+            new LibraryImportCandidate
+            {
+                RootFolderId = rootFolder.Id,
+                ScanRunId = Guid.NewGuid(),
+                FilePath = "/tv/S01E01.mkv",
+                ContentType = "tv",
+                Status = LibraryImportCandidateStatus.Pending,
+                ContentHierarchyItemId = firstEpisode.Id
+            },
+            new LibraryImportCandidate
+            {
+                RootFolderId = rootFolder.Id,
+                ScanRunId = Guid.NewGuid(),
+                FilePath = "/tv/S01E02.mkv",
+                ContentType = "tv",
+                Status = LibraryImportCandidateStatus.Pending,
+                ContentHierarchyItemId = secondEpisode.Id
+            });
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.ChangeTracker.Clear();
+        var targetId = await _context.ContentHierarchyItems
+            .Where(item => item.Slug == slug)
+            .Select(item => item.Id)
+            .SingleAsync()
+            .ConfigureAwait(false);
+
+        // Act
+        var result = await _subject.GetByIdAsync(targetId).ConfigureAwait(false);
+
+        // Assert
+        var shared = result!.ContentItem!.MediaFiles.Concat(result.ContentItem.CoveringMediaFiles).Single();
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.ContentItem.MediaFiles, Has.Count.EqualTo(ownedFiles));
+            Assert.That(result.ContentItem.CoveringMediaFiles, Has.Count.EqualTo(coveringFiles));
+            Assert.That(shared.FilePath, Is.EqualTo("/tv/S01E01-E02.mkv"));
+            Assert.That(
+                shared.Coverage.Select(coverage => coverage.ContentItemId),
+                Is.EqualTo([secondEpisode.ContentItem.Id]));
+            Assert.That(result.ImportPending, Is.False);
+        }
+    }
+
+    [Test]
+    public async Task QueryAsync_ReturnsTheCoveredEpisode_WhenFilesHaveAnEmptyCriterion()
+    {
+        // Arrange
+        var season = new ContentHierarchyItem
+        {
+            Id = Guid.NewGuid(),
+            MetadataContainerId = _metadataContainerId,
+            ContentType = "tv",
+            Level = "season",
+            Slug = "season-1",
+            Name = "Season 1",
+            CreatedAt = DateTime.UtcNow
+        };
+        var firstEpisode = new ContentHierarchyItem
+        {
+            MetadataContainer = new() { CreatedAt = DateTime.UtcNow },
+            ParentId = season.Id,
+            ContentType = "tv",
+            Level = "episode",
+            Slug = "episode-1",
+            Name = "Episode 1",
+            Ordinal = 1,
+            CreatedAt = DateTime.UtcNow,
+            ContentItem = new() { CreatedAt = DateTime.UtcNow }
+        };
+        var secondEpisode = new ContentHierarchyItem
+        {
+            MetadataContainer = new() { CreatedAt = DateTime.UtcNow },
+            ParentId = season.Id,
+            ContentType = "tv",
+            Level = "episode",
+            Slug = "episode-2",
+            Name = "Episode 2",
+            Ordinal = 2,
+            CreatedAt = DateTime.UtcNow,
+            ContentItem = new() { CreatedAt = DateTime.UtcNow }
+        };
+        var thirdEpisode = new ContentHierarchyItem
+        {
+            MetadataContainer = new() { CreatedAt = DateTime.UtcNow },
+            ParentId = season.Id,
+            ContentType = "tv",
+            Level = "episode",
+            Slug = "episode-3",
+            Name = "Episode 3",
+            Ordinal = 3,
+            CreatedAt = DateTime.UtcNow,
+            ContentItem = new() { CreatedAt = DateTime.UtcNow }
+        };
+        _context.ContentHierarchyItems.AddRange(season, firstEpisode, secondEpisode, thirdEpisode);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        var mediaFile = new MediaFile
+        {
+            ContentItemId = firstEpisode.ContentItem.Id,
+            FileKind = "video",
+            FilePath = "/tv/S01E01-E02.mkv",
+            PathKey = "/tv/S01E01-E02.mkv",
+            CreatedAt = DateTime.UtcNow
+        };
+        mediaFile.Coverage.Add(new() { ContentItemId = secondEpisode.ContentItem.Id });
+        _context.MediaFiles.Add(mediaFile);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        // Act
+        var result = await _subject
+            .QueryAsync(
+                new ContentHierarchyItemCriteria
+                {
+                    AncestorId = season.Id,
+                    MediaFiles = new() { Some = [[new MediaFileCriteria()]] }
+                },
+                new() { PageNumber = 1, PageSize = 100 },
+                null)
+            .ConfigureAwait(false);
+
+        // Assert
+        Assert.That(result.Items.Select(item => item.Slug), Is.EquivalentTo(["episode-1", "episode-2"]));
+    }
+
     [Test]
     public async Task GetStatsAsync_ReturnsZeroes_WhenLibraryIsEmpty()
     {
@@ -1519,23 +1989,34 @@ public sealed class ContentHierarchyItemRepositoryQueryTests
     public async Task GetStatsAsync_AggregatesAcrossEntireLibrary_WhenLibraryHasItems()
     {
         // Arrange
-        foreach (var slug in new[] { "item-a", "item-b" })
+        var container1 = new MetadataContainer { CreatedAt = DateTime.UtcNow };
+        _context.MetadataContainers.Add(container1);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.ContentHierarchyItems.Add(new ContentHierarchyItem
         {
-            var container = new MetadataContainer { CreatedAt = DateTime.UtcNow };
-            _context.MetadataContainers.Add(container);
-            await _context.SaveChangesAsync().ConfigureAwait(false);
-            _context.ContentHierarchyItems.Add(new ContentHierarchyItem
-            {
-                MetadataContainerId = container.Id,
-                ContentType = "type-a",
-                Level = "level-a",
-                Slug = slug,
-                Name = slug,
-                Monitoring = MonitoringMode.Monitored,
-                CreatedAt = DateTime.UtcNow
-            });
-            await _context.SaveChangesAsync().ConfigureAwait(false);
-        }
+            MetadataContainerId = container1.Id,
+            ContentType = "type-a",
+            Level = "level-a",
+            Slug = "item-a",
+            Name = "item-a",
+            Monitoring = MonitoringMode.Monitored,
+            CreatedAt = DateTime.UtcNow
+        });
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        var container2 = new MetadataContainer { CreatedAt = DateTime.UtcNow };
+        _context.MetadataContainers.Add(container2);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.ContentHierarchyItems.Add(new ContentHierarchyItem
+        {
+            MetadataContainerId = container2.Id,
+            ContentType = "type-a",
+            Level = "level-a",
+            Slug = "item-b",
+            Name = "item-b",
+            Monitoring = MonitoringMode.Monitored,
+            CreatedAt = DateTime.UtcNow
+        });
+        await _context.SaveChangesAsync().ConfigureAwait(false);
 
         foreach (var (slug, fulfillment) in new[]
         {

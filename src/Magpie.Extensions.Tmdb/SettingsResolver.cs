@@ -29,13 +29,13 @@ internal sealed class SettingsResolver(
         var envKey = Environment.GetEnvironmentVariable(EnvApiKeyVariable);
         if (!string.IsNullOrWhiteSpace(envKey))
         {
-            resolved[Settings.ApiKeyKey] = envKey!;
+            resolved[Settings.ApiKeyKey] = envKey;
         }
 
         var envLanguage = Environment.GetEnvironmentVariable(EnvLanguageVariable);
         if (!string.IsNullOrWhiteSpace(envLanguage))
         {
-            resolved[Settings.LanguageKey] = envLanguage!;
+            resolved[Settings.LanguageKey] = envLanguage;
         }
 
         var detail = await settingsService
@@ -71,23 +71,10 @@ internal sealed class SettingsResolver(
         }
     }
 
-    public async Task<RequestContext?> AcquireContextAsync(
+    public Task<RequestContext?> AcquireContextAsync(
         string? defaultLanguagePreference,
         CancellationToken cancellationToken)
-    {
-        var snapshot = await ReadSnapshotAsync(cancellationToken).ConfigureAwait(false);
-        if (!snapshot.IsConfigured)
-        {
-            WarnMissingApiKey();
-            return null;
-        }
-
-        return new RequestContext
-        {
-            ApiKey = snapshot.ApiKey,
-            Language = snapshot.ResolveLanguage(defaultLanguagePreference)
-        };
-    }
+        => AcquireContextAsync(null, defaultLanguagePreference, cancellationToken);
 
     public async Task<RequestContext?> AcquireContextAsync(
         IEnumerable<string>? ancestorLanguagePreferences,
@@ -121,8 +108,7 @@ internal sealed class SettingsResolver(
 
         _missingApiKeyWarned = true;
         logger.LogWarning(
-            "TMDb metadata is disabled because settings group {GroupName} has no {ApiKey} and " +
-            "environment variable {EnvVar} is not set.",
+            "TMDb disabled: settings group {GroupName} has no {ApiKey} and environment variable {EnvVar} is not set",
             Settings.GroupName,
             Settings.ApiKeyKey,
             EnvApiKeyVariable);

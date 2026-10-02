@@ -56,14 +56,14 @@ public sealed class MagpieExceptionHandlerTests
             CancellationToken.None).ConfigureAwait(false);
 
         // Assert
-        Assert.Multiple(() =>
+        using (Assert.EnterMultipleScope())
         {
             Assert.That(handled, Is.True);
             Assert.That(httpContext.Response.StatusCode, Is.EqualTo(StatusCodes.Status503ServiceUnavailable));
             Assert.That(httpContext.Response.Headers.RetryAfter.ToString(), Is.EqualTo(expectedRetryAfter));
             Assert.That(_written?.ProblemDetails.Status, Is.EqualTo(StatusCodes.Status503ServiceUnavailable));
             Assert.That(_written?.ProblemDetails.Detail, Is.EqualTo("The provider is busy. Try again later."));
-        });
+        }
     }
 
     [Test]
@@ -79,10 +79,10 @@ public sealed class MagpieExceptionHandlerTests
             CancellationToken.None).ConfigureAwait(false);
 
         // Assert
-        Assert.Multiple(() =>
+        using (Assert.EnterMultipleScope())
         {
             Assert.That(httpContext.Response.StatusCode, Is.EqualTo(StatusCodes.Status400BadRequest));
             Assert.That(httpContext.Response.Headers.ContainsKey("Retry-After"), Is.False);
-        });
+        }
     }
 }

@@ -1,6 +1,3 @@
-using System;
-using System.Collections.Generic;
-
 namespace Magpie.Models.Arguments;
 
 /// <summary>
@@ -8,11 +5,6 @@ namespace Magpie.Models.Arguments;
 /// </summary>
 public sealed record NotificationRuleQuery
 {
-    /// <summary>
-    /// The ids of the owners whose rules to match, or <c>null</c> to not constrain by owner.
-    /// </summary>
-    public IReadOnlyList<Guid>? OwnerUserIds { get; init; }
-
     /// <summary>
     /// The enabled state to match.
     /// </summary>

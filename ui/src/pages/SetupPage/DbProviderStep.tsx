@@ -4,7 +4,7 @@ import { ArrowClockwiseIcon, ArrowRightIcon, DatabaseIcon } from '@phosphor-icon
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Label } from '@/components/ui/Label';
-import { isApiError } from '@/lib/api';
+import { getErrorMessage } from '@/lib/errors';
 import { useConfigureSetupDatabase, useSetupDatabaseStatus } from '@/hooks/useSetup';
 
 interface DbProviderStepProps {
@@ -39,16 +39,6 @@ const PROVIDER_OPTIONS: readonly ProviderOption[] = [
         connectionHint: 'Example: Server=.\\SQLEXPRESS;Database=Magpie;Trusted_Connection=true;',
     },
 ] as const;
-
-function getErrorMessage(error: unknown): string {
-    if (isApiError(error)) {
-        return error.message || 'Failed to save the database configuration. Try again.';
-    }
-    if (error instanceof Error && error.message) {
-        return error.message;
-    }
-    return 'Failed to save the database configuration. Try again.';
-}
 
 export function DbProviderStep({ onAdvance }: DbProviderStepProps): ReactNode {
     const statusQuery = useSetupDatabaseStatus();
@@ -99,7 +89,7 @@ export function DbProviderStep({ onAdvance }: DbProviderStepProps): ReactNode {
                 });
                 setAwaitingRestart(true);
             } catch (err) {
-                setError(getErrorMessage(err));
+                setError(getErrorMessage(err, 'Failed to save the database configuration. Try again.'));
             }
         },
         [configure, connectionString, selectedProvider],

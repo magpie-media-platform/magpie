@@ -49,7 +49,7 @@ const mockMimeMappings: MimeMapping[] = [
     },
 ];
 
-function createTestWrapper() {
+function createTestWrapper(initialEntry = '/') {
     const queryClient = new QueryClient({
         defaultOptions: {
             queries: { retry: false, gcTime: 0 },
@@ -60,7 +60,7 @@ function createTestWrapper() {
     return function TestWrapper({ children }: { children: ReactNode }) {
         return (
             <QueryClientProvider client={queryClient}>
-                <MemoryRouter>
+                <MemoryRouter initialEntries={[initialEntry]}>
                     <TooltipProvider>
                         <ToastProvider>
                             <ToastStateProvider>
@@ -806,6 +806,16 @@ describe('FileTypesPage mime registry paging and sort', () => {
         });
     });
 
+    it('leaves sorting to the table headers at table width', async () => {
+        render(<FileTypesPage />, { wrapper: createTestWrapper() });
+
+        await waitFor(() => {
+            expect(document.querySelector('[data-table="mime-registry"]')).toBeInTheDocument();
+        });
+
+        expect(screen.queryByRole('combobox', { name: 'Sort by field' })).not.toBeInTheDocument();
+    });
+
     it('no longer renders the filter input', async () => {
         render(<FileTypesPage />, { wrapper: createTestWrapper() });
 
@@ -855,7 +865,7 @@ describe('FileTypesPage (mobile card collapse)', () => {
         expect(denySection.querySelectorAll('[data-action="toggle-row-mobile"]').length).toBeGreaterThan(0);
     });
 
-    it('starts each section with the mobile selection mode inactive', async () => {
+    it('starts the deny list with the mobile selection mode inactive', async () => {
         render(<FileTypesPage />, { wrapper: createTestWrapper() });
 
         await waitFor(() => {
@@ -864,13 +874,6 @@ describe('FileTypesPage (mobile card collapse)', () => {
         const denySection = document.querySelector('[data-section="deny-list"]') as HTMLElement;
         expect(within(denySection).getByRole('button', { name: 'Select' })).toBeInTheDocument();
         expect(denySection.querySelector('.data-table')).toHaveAttribute('data-mobile-selection-active', 'false');
-
-        await waitFor(() => {
-            expect(document.querySelector('[data-table="mime-registry"]')).toBeInTheDocument();
-        });
-        const mimeSection = document.querySelector('[data-section="mime-registry"]') as HTMLElement;
-        expect(within(mimeSection).getByRole('button', { name: 'Select' })).toBeInTheDocument();
-        expect(mimeSection.querySelector('.data-table')).toHaveAttribute('data-mobile-selection-active', 'false');
     });
 
     it('bulk-deletes every selected deny-list entry', async () => {
@@ -912,5 +915,121 @@ describe('FileTypesPage (mobile card collapse)', () => {
             expect(mockApiDelete).toHaveBeenCalledWith('/system/file-types/mime/.mkv');
             expect(mockApiDelete).toHaveBeenCalledWith('/system/file-types/mime/.weirdo');
         });
+    });
+});
+
+describe('FileTypesPage mime registry sort toolbar (card layout)', () => {
+    beforeEach(() => {
+        vi.clearAllMocks();
+        setupApiMocks();
+        vi.stubGlobal(
+            'matchMedia',
+            vi.fn((query: string) => ({
+                matches: query === '(max-width: 1023px)',
+                media: query,
+                addEventListener: () => {},
+                removeEventListener: () => {},
+            })),
+        );
+    });
+
+    afterEach(() => {
+        vi.unstubAllGlobals();
+        vi.restoreAllMocks();
+    });
+
+    it('sorts the MIME registry by field and direction through the toolbar', async () => {
+        // Arrange
+        const user = userEvent.setup();
+        let search = '';
+        function LocationProbe() {
+            search = useLocation().search;
+            return null;
+        }
+        render(
+            <>
+                <FileTypesPage />
+                <LocationProbe />
+            </>,
+            { wrapper: createTestWrapper() },
+        );
+        await waitFor(() => {
+            expect(document.querySelector('[data-table="mime-registry"]')).toBeInTheDocument();
+        });
+        const section = document.querySelector('[data-section="mime-registry"]') as HTMLElement;
+
+        // Act
+        await user.click(within(section).getByRole('combobox', { name: 'Sort by field' }));
+        await user.click(await screen.findByRole('option', { name: 'MIME type' }));
+
+        // Assert
+        await waitFor(() => {
+            expect(search).toBe('?msort=mimeType%3Aasc');
+        });
+        expect(section.querySelector('[data-row-id]')).toHaveAttribute('data-row-id', '.weirdo');
+
+        // Act
+        await user.click(within(section).getByRole('button', { name: 'Sort descending' }));
+
+        // Assert
+        await waitFor(() => {
+            expect(search).toBe('?msort=mimeType%3Adesc');
+        });
+        expect(section.querySelector('[data-row-id]')).toHaveAttribute('data-row-id', '.mkv');
+    });
+
+    it('shows the sort already in the URL in the toolbar', async () => {
+        // Arrange
+        render(<FileTypesPage />, { wrapper: createTestWrapper('/?msort=mimeType%3Adesc') });
+        await waitFor(() => {
+            expect(document.querySelector('[data-table="mime-registry"]')).toBeInTheDocument();
+        });
+
+        // Act
+        const section = document.querySelector('[data-section="mime-registry"]') as HTMLElement;
+
+        // Assert
+        expect(within(section).getByRole('combobox', { name: 'Sort by field' })).toHaveTextContent('MIME type');
+        expect(within(section).getByRole('button', { name: 'Sort ascending' })).toHaveAttribute(
+            'data-direction',
+            'desc',
+        );
+    });
+
+    it('starts with the selection mode inactive', async () => {
+        // Arrange
+        render(<FileTypesPage />, { wrapper: createTestWrapper() });
+        await waitFor(() => {
+            expect(document.querySelector('[data-table="mime-registry"]')).toBeInTheDocument();
+        });
+
+        // Act
+        const section = document.querySelector('[data-section="mime-registry"]') as HTMLElement;
+
+        // Assert
+        expect(within(section).getByRole('button', { name: 'Select', pressed: false })).toBeInTheDocument();
+        expect(section.querySelector('.data-table')).toHaveAttribute('data-mobile-selection-active', 'false');
+    });
+
+    it('keeps the selection mode and the selected row while the sort changes', async () => {
+        // Arrange
+        const user = userEvent.setup();
+        render(<FileTypesPage />, { wrapper: createTestWrapper() });
+        await waitFor(() => {
+            expect(document.querySelector('[data-table="mime-registry"]')).toBeInTheDocument();
+        });
+        const section = document.querySelector('[data-section="mime-registry"]') as HTMLElement;
+        await user.click(within(section).getByRole('button', { name: 'Select', pressed: false }));
+        await user.click(within(section).getByLabelText('Select .mkv'));
+
+        // Act
+        await user.click(within(section).getByRole('button', { name: 'Sort descending' }));
+
+        // Assert
+        await waitFor(() => {
+            expect(section.querySelector('[data-row-id]')).toHaveAttribute('data-row-id', '.weirdo');
+        });
+        expect(within(section).getByRole('button', { name: 'Select', pressed: true })).toBeInTheDocument();
+        expect(within(section).getByLabelText('Select .mkv')).toBeChecked();
     });
 });

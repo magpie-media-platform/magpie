@@ -84,7 +84,7 @@ export function useUsers(params?: UserQueryParams, options?: UseUsersOptions) {
     useInvalidateQueriesOnEvents(
         ['user.created', 'user.updated', 'user.deleted', 'user.lockedOut', 'user.unlocked'],
         [userQueryKeys.list(params)],
-        { exact: true, owner: 'users:list' },
+        { exact: true },
     );
     const queryClient = useQueryClient();
     const enabled = options?.enabled ?? true;
@@ -191,7 +191,6 @@ export function useCurrentUser() {
         {
             entityIds: currentUserQuery.data?.id ? [currentUserQuery.data.id] : [],
             exact: true,
-            owner: 'users:current',
         },
     );
 

@@ -40,12 +40,7 @@ public static class FilteringQueryableExtensions
             where TEntity : class
             where TProperty : IEquatable<TProperty>
     {
-        if (criteria?.And is null || !criteria.And.Any())
-        {
-            return query;
-        }
-
-        foreach (var c in criteria.And)
+        foreach (var c in criteria?.And ?? [])
         {
             query = query.Where(BuildPredicate<TEntity, TProperty>(c, property));
         }
@@ -73,12 +68,7 @@ public static class FilteringQueryableExtensions
         CriteriaSet<PropertyCriterion<string>>? criteria,
         string property) where TEntity : class
     {
-        if (criteria?.And is null || !criteria.And.Any())
-        {
-            return query;
-        }
-
-        foreach (var c in criteria.And)
+        foreach (var c in criteria?.And ?? [])
         {
             query = query.Where(BuildStringPredicate<TEntity>(c, property, ignoreCase: true));
         }
@@ -106,12 +96,7 @@ public static class FilteringQueryableExtensions
         CriteriaSet<PropertyCriterion<string>>? criteria,
         string property) where TEntity : class
     {
-        if (criteria?.And is null || !criteria.And.Any())
-        {
-            return query;
-        }
-
-        foreach (var c in criteria.And)
+        foreach (var c in criteria?.And ?? [])
         {
             var lowered = new PropertyCriterion<string>
             {
@@ -146,12 +131,7 @@ public static class FilteringQueryableExtensions
         CriteriaSet<PropertyCriterion<string>>? criteria,
         string property) where TEntity : class
     {
-        if (criteria?.And is null || !criteria.And.Any())
-        {
-            return query;
-        }
-
-        foreach (var c in criteria.And)
+        foreach (var c in criteria?.And ?? [])
         {
             query = query.Where(BuildStringPredicate<TEntity>(c, property, ignoreCase: false));
         }
@@ -179,12 +159,7 @@ public static class FilteringQueryableExtensions
         CriteriaSet<PropertyCriterion<int>>? criteria,
         string property) where TEntity : class
     {
-        if (criteria?.And is null || !criteria.And.Any())
-        {
-            return query;
-        }
-
-        foreach (var c in criteria.And)
+        foreach (var c in criteria?.And ?? [])
         {
             query = query.Where(BuildPredicate<TEntity>(c, property));
         }
@@ -212,12 +187,7 @@ public static class FilteringQueryableExtensions
         CriteriaSet<PropertyCriterion<long>>? criteria,
         string property) where TEntity : class
     {
-        if (criteria?.And is null || !criteria.And.Any())
-        {
-            return query;
-        }
-
-        foreach (var c in criteria.And)
+        foreach (var c in criteria?.And ?? [])
         {
             query = query.Where(BuildPredicate<TEntity>(c, property));
         }
@@ -245,12 +215,7 @@ public static class FilteringQueryableExtensions
         CriteriaSet<PropertyCriterion<DateTime>>? criteria,
         string property) where TEntity : class
     {
-        if (criteria?.And is null || !criteria.And.Any())
-        {
-            return query;
-        }
-
-        foreach (var c in criteria.And)
+        foreach (var c in criteria?.And ?? [])
         {
             query = query.Where(BuildPredicate<TEntity>(c, property));
         }
@@ -278,12 +243,7 @@ public static class FilteringQueryableExtensions
         CriteriaSet<PropertyCriterion<TimeSpan>>? criteria,
         string property) where TEntity : class
     {
-        if (criteria?.And is null || !criteria.And.Any())
-        {
-            return query;
-        }
-
-        foreach (var c in criteria.And)
+        foreach (var c in criteria?.And ?? [])
         {
             query = query.Where(BuildPredicate<TEntity>(c, property));
         }
@@ -311,12 +271,7 @@ public static class FilteringQueryableExtensions
         CriteriaSet<PropertyCriterion<TemporalValue>>? criteria,
         string property) where TEntity : class
     {
-        if (criteria?.And is null || !criteria.And.Any())
-        {
-            return query;
-        }
-
-        foreach (var c in criteria.And)
+        foreach (var c in criteria?.And ?? [])
         {
             var parameter = Expression.Parameter(typeof(TEntity), "e");
             var value = Expression.Call(
@@ -415,7 +370,7 @@ public static class FilteringQueryableExtensions
             var op => throw new NotSupportedException($"Operator {op} is not supported for string fields")
         };
 
-        Expression<Func<string?, string?>> lower = v => v!.ToLower();
+        Expression<Func<string, string>> lower = v => v.ToLower();
         var compared = ignoreCase
             ? ReplacingExpressionVisitor.Replace(lower.Parameters[0], accessor, lower.Body)
             : accessor;

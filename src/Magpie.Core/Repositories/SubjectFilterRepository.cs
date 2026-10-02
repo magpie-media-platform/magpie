@@ -211,8 +211,10 @@ internal sealed class SubjectFilterRepository(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "The subject filter repository failed to create subject filter " +
-                "{SubjectFilterName}.", model.Name);
+            logger.LogError(
+                ex,
+                "The subject filter repository failed to create subject filter {SubjectFilterName}.",
+                model.Name);
             throw;
         }
     }
@@ -275,7 +277,8 @@ internal sealed class SubjectFilterRepository(
                     {
                         await transactionManager.OnCommittedAsync(
                             token => eventBus.PublishAsync(
-                                SubjectEventBuilder.BuildSubjectFilterUpdatedEvent(model.Id, changedFields), token),
+                                SubjectEventBuilder.BuildSubjectFilterUpdatedEvent(model.Id, changedFields),
+                                token),
                             cancellationToken).ConfigureAwait(false);
                     }
 
@@ -285,8 +288,10 @@ internal sealed class SubjectFilterRepository(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "The subject filter repository failed to update subject filter " +
-                "{SubjectFilterId}.", model.Id);
+            logger.LogError(
+                ex,
+                "The subject filter repository failed to update subject filter {SubjectFilterId}.",
+                model.Id);
             throw;
         }
     }
@@ -490,8 +495,10 @@ internal sealed class SubjectFilterRepository(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "The subject filter repository failed to patch subject filter " +
-                "{SubjectFilterId}.", patch.Id);
+            logger.LogError(
+                ex,
+                "The subject filter repository failed to patch subject filter {SubjectFilterId}.",
+                patch.Id);
             throw;
         }
     }

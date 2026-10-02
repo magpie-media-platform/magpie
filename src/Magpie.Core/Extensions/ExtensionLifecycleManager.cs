@@ -59,11 +59,6 @@ internal sealed class ExtensionLifecycleManager(
     {
         await DisableFailedExtensionsAsync(cancellationToken).ConfigureAwait(false);
 
-        if (loadContext.Loaded.Count == 0)
-        {
-            return;
-        }
-
         if (!loadContext.Loaded.Any(extension => extension is IExtensionLifecycle))
         {
             return;
@@ -135,7 +130,9 @@ internal sealed class ExtensionLifecycleManager(
                     await DispatchVersionHookAsync(
                         () => lifecycle.OnExtensionInstallAsync(context, cancellationToken),
                         nameof(IExtensionLifecycle.OnExtensionInstallAsync),
-                        extension, row, cancellationToken).ConfigureAwait(false);
+                        extension,
+                        row,
+                        cancellationToken).ConfigureAwait(false);
                 }
                 else if (!string.Equals(row.LifecycleVersion, currentVersion, StringComparison.Ordinal))
                 {
@@ -144,7 +141,9 @@ internal sealed class ExtensionLifecycleManager(
                             ? () => lifecycle.OnExtensionUpgradeAsync(context, previousVersion, cancellationToken)
                             : () => Task.CompletedTask,
                         nameof(IExtensionLifecycle.OnExtensionUpgradeAsync),
-                        extension, row, cancellationToken).ConfigureAwait(false);
+                        extension,
+                        row,
+                        cancellationToken).ConfigureAwait(false);
                 }
             }
 
@@ -173,10 +172,7 @@ internal sealed class ExtensionLifecycleManager(
 
     private ExtensionLifecycleContext CreateContext(IServiceProvider scopedServices)
     {
-        return new ExtensionLifecycleContext(
-            hostEnvironment.NodeId,
-            scopedServices,
-            loggerFactory);
+        return new(hostEnvironment.NodeId, scopedServices, loggerFactory);
     }
 
     private async Task InvokeHookAsync(
@@ -230,7 +226,7 @@ internal sealed class ExtensionLifecycleManager(
                 logger.LogError(
                     ex,
                     "The lifecycle manager failed to disable extension {PackageId} ({ExtensionId}) " +
-                    "after a load failure, so the extension is still enabled",
+                    "after a load failure",
                     extension.PackageId,
                     extension.Id);
             }
@@ -256,11 +252,7 @@ internal sealed class ExtensionLifecycleManager(
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            logger.LogError(
-                ex,
-                "Extension {ExtensionName} threw an exception in {HookName}",
-                match.Name,
-                hookName);
+            logger.LogError(ex, "Extension {ExtensionName} threw an exception in {HookName}", match.Name, hookName);
         }
     }
 
@@ -271,10 +263,7 @@ internal sealed class ExtensionLifecycleManager(
         Extension row,
         CancellationToken cancellationToken)
     {
-        if (!await TryInvokeAsync(
-            hook,
-            loaded.Name,
-            hookName).ConfigureAwait(false))
+        if (!await TryInvokeAsync(hook, loaded.Name, hookName).ConfigureAwait(false))
         {
             return;
         }
@@ -289,8 +278,7 @@ internal sealed class ExtensionLifecycleManager(
         {
             logger.LogWarning(
                 ex,
-                "The lifecycle manager failed to record version {LifecycleVersion} for extension " +
-                "{ExtensionName}",
+                "The lifecycle manager failed to record version {LifecycleVersion} for extension {ExtensionName}",
                 currentVersion,
                 row.Name);
         }
@@ -305,11 +293,7 @@ internal sealed class ExtensionLifecycleManager(
         }
         catch (Exception ex)
         {
-            logger.LogError(
-                ex,
-                "Extension {ExtensionName} threw an exception in {HookName}",
-                extensionName,
-                hookName);
+            logger.LogError(ex, "Extension {ExtensionName} threw an exception in {HookName}", extensionName, hookName);
             return false;
         }
     }

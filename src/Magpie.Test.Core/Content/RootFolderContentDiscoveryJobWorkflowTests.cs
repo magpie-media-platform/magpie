@@ -317,7 +317,10 @@ public sealed class RootFolderContentDiscoveryJobWorkflowTests
 
         // Assert
         var ex = Assert.Throws<InvalidOperationException>(Act);
-        Assert.That(ex.Message, Does.Contain("Root folder"));
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(ex.Message, Does.Contain("Root folder"));
+        }
     }
 
     [Test]
@@ -342,17 +345,20 @@ public sealed class RootFolderContentDiscoveryJobWorkflowTests
         await _scanJob.ExecuteAsync(context).ConfigureAwait(false);
 
         // Assert
-        Assert.That(_createdCandidates, Is.Empty);
-        _candidates.Verify(
-            r => r.DeleteByRootFolderAsync(
-                It.IsAny<Guid>(),
-                It.IsAny<IReadOnlyCollection<Guid>?>(),
-                It.IsAny<Guid?>(),
-                It.IsAny<CancellationToken>()),
-            Times.Never);
-        _progress.Verify(
-            value => value.Report(1, "The scan stopped because the content type has no definition provider."),
-            Times.Once);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(_createdCandidates, Is.Empty);
+            _candidates.Verify(
+                r => r.DeleteByRootFolderAsync(
+                    It.IsAny<Guid>(),
+                    It.IsAny<IReadOnlyCollection<Guid>?>(),
+                    It.IsAny<Guid?>(),
+                    It.IsAny<CancellationToken>()),
+                Times.Never);
+            _progress.Verify(
+                value => value.Report(1, "The scan stopped because the content type has no definition provider."),
+                Times.Once);
+        }
     }
 
     [Test]
@@ -1023,7 +1029,10 @@ public sealed class RootFolderContentDiscoveryJobWorkflowTests
 
         // Assert
         Assert.Throws<OperationCanceledException>(Act);
-        Assert.That(_createdCandidates, Is.Empty);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(_createdCandidates, Is.Empty);
+        }
     }
 
     [Test]

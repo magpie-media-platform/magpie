@@ -21,7 +21,7 @@ export function usePendingFileAssociations(contentHierarchyItemId: string | unde
     useInvalidateQueriesOnEvents(
         contentHierarchyItemId ? ['library.scan.completed', 'library.importCandidate.updated'] : [],
         [queryKey],
-        { debounceMs: 300, exact: true, maxWaitMs: 1200, owner: 'pending-file-associations' },
+        { debounceMs: 300, exact: true, maxWaitMs: 1200 },
     );
 
     return useQuery({

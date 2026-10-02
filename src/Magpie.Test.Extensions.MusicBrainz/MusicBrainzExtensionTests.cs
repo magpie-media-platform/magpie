@@ -19,16 +19,12 @@ public class MusicBrainzExtensionTests
         // Act
         var id = extension.Id;
         var name = extension.Name;
-        var version = extension.Version;
-        var targetAbi = extension.TargetABI;
 
         // Assert
         using (Assert.EnterMultipleScope())
         {
             Assert.That(id, Is.EqualTo(new Guid("95171BBE-D8F6-4771-9434-860AC2B5BC30")));
             Assert.That(name, Is.EqualTo("MusicBrainz"));
-            Assert.That(version, Is.EqualTo(new Version(1, 0, 0)));
-            Assert.That(targetAbi, Is.EqualTo("[1.0.0,)"));
         }
     }
 

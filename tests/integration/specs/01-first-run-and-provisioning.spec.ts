@@ -291,7 +291,7 @@ test.describe.serial('Journey 1: day one: unbox the instance', () => {
                         path: `/library/${root.directory}`,
                         contentType: root.contentType,
                         isDefault: true,
-                        defaultMonitoring: true,
+                        defaultMonitoring: 'Monitored',
                         defaults: root.defaults,
                     }),
                 ]);
@@ -308,7 +308,7 @@ test.describe.serial('Journey 1: day one: unbox the instance', () => {
                 '--json',
                 JSON.stringify({
                     isDefault: { value: true },
-                    defaultMonitoring: { value: true },
+                    defaultMonitoring: { value: 'Monitored' },
                     defaults: { value: { movie: { qualityTierListId: videoTierListId } } },
                 }),
             ]);
@@ -452,7 +452,7 @@ test.describe.serial('Journey 1: day one: unbox the instance', () => {
             const tests = [
                 ['/api/download-clients', '/test', 'default'],
                 ['/api/media-servers', '/test', 'default'],
-                ['/api/notification-rules', '/test', 'Test notification delivered.'],
+                ['/api/notification-rules', '/test', 'Test notification sent to the provider.'],
             ] as const;
             for (const [listPath, action, expected] of tests) {
                 const resources = await api.get<NamedResource[]>(listPath);

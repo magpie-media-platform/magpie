@@ -62,7 +62,6 @@ export function useAddContentByExternalId() {
         {
             eventName: METADATA_REFRESHED_EVENT_NAME,
             enabled: pendingIds.length > 0,
-            owner: 'add-content-metadata-refresh',
         },
     );
 

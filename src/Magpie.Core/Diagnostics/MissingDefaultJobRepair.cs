@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -26,14 +25,24 @@ internal sealed class MissingDefaultJobRepair(
 
     public string RepairId => Id;
 
+    internal static bool IsUnboundDefaultEventTrigger(EventTrigger trigger, EventTrigger entry) =>
+        entry.Parameters.Count > 0 &&
+        trigger.Parameters.Count == 0 &&
+        trigger.CreatedByUserId is null &&
+        trigger.ModifiedByUserId is null &&
+        string.Equals(trigger.JobType, entry.JobType, StringComparison.Ordinal) &&
+        string.Equals(
+            trigger.EventFilter.EventName?.Value,
+            entry.EventFilter.EventName?.Value,
+            StringComparison.Ordinal);
+
     public async Task<DiagnosticRepairResult> RunAsync(
         DiagnosticFinding finding,
         CancellationToken cancellationToken = default)
     {
         var affected = finding.AffectedEntity;
         if (affected is not null &&
-            affected.StartsWith(
-                JobDiagnosticAffectedEntityPrefixes.EventTriggerJob, StringComparison.Ordinal))
+            affected.StartsWith(JobDiagnosticAffectedEntityPrefixes.EventTriggerJob, StringComparison.Ordinal))
         {
             return await ReseedEventTriggerAsync(
                 affected[JobDiagnosticAffectedEntityPrefixes.EventTriggerJob.Length..],
@@ -41,8 +50,16 @@ internal sealed class MissingDefaultJobRepair(
                 .ConfigureAwait(false);
         }
 
-        if (affected is null ||
-            !affected.StartsWith(JobDiagnosticAffectedEntityPrefixes.Job, StringComparison.Ordinal))
+        if (affected is not null &&
+            affected.StartsWith(JobDiagnosticAffectedEntityPrefixes.EventTrigger, StringComparison.Ordinal))
+        {
+            return await BindEventTriggerAsync(
+                affected[JobDiagnosticAffectedEntityPrefixes.EventTrigger.Length..],
+                cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        if (affected is null || !affected.StartsWith(JobDiagnosticAffectedEntityPrefixes.Job, StringComparison.Ordinal))
         {
             return DiagnosticRepairResult.Failed("The finding does not identify a default job to re-seed.");
         }
@@ -93,6 +110,52 @@ internal sealed class MissingDefaultJobRepair(
         return DiagnosticRepairResult.Succeeded($"Re-seeded the {entry.JobType} schedule.");
     }
 
+    private async Task<DiagnosticRepairResult> BindEventTriggerAsync(
+        string rawTriggerId,
+        CancellationToken cancellationToken)
+    {
+        if (!Guid.TryParse(rawTriggerId, out var triggerId))
+        {
+            return DiagnosticRepairResult.Failed("The finding does not identify an event trigger.");
+        }
+
+        var trigger = await eventTriggers.GetByIdAsync(triggerId, cancellationToken).ConfigureAwait(false);
+        if (trigger is null)
+        {
+            return DiagnosticRepairResult.Failed($"Event trigger {triggerId} no longer exists.");
+        }
+
+        if (trigger.ModifiedByUserId is not null)
+        {
+            return DiagnosticRepairResult.Failed($"Event trigger {trigger.Name} was modified by a user.");
+        }
+
+        var entry = DefaultJobTriggerCatalog.EventTriggers
+            .FirstOrDefault(candidate => IsUnboundDefaultEventTrigger(trigger, candidate));
+        if (entry is null)
+        {
+            return DiagnosticRepairResult.Succeeded(
+                $"Event trigger {trigger.Name} has parameters or is not a built-in trigger; nothing to bind.");
+        }
+
+        await eventTriggers.PatchAsync(
+            new EventTriggerPatch
+            {
+                Id = trigger.Id,
+                Parameters = new() { Add = new(entry.Parameters, StringComparer.Ordinal) }
+            },
+            null,
+            cancellationToken).ConfigureAwait(false);
+
+        logger.LogInformation(
+            "The diagnostic repair bound event trigger {TriggerId} for {JobType} to the built-in parameters",
+            trigger.Id,
+            trigger.JobType);
+
+        return DiagnosticRepairResult.Succeeded(
+            $"Bound the {trigger.JobType} event trigger {trigger.Name} to {string.Join(", ", entry.Parameters.Keys)}.");
+    }
+
     private async Task<DiagnosticRepairResult> ReseedEventTriggerAsync(
         string jobType,
         CancellationToken cancellationToken)
@@ -120,7 +183,7 @@ internal sealed class MissingDefaultJobRepair(
             EventFilter = entry.EventFilter,
             Enabled = true,
             DelaySeconds = entry.DelaySeconds,
-            Parameters = new Dictionary<string, string>(entry.Parameters, StringComparer.Ordinal),
+            Parameters = new(entry.Parameters, StringComparer.Ordinal),
             CreatedAt = timeProvider.GetUtcNow().UtcDateTime,
         };
 

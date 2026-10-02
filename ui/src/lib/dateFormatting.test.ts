@@ -20,6 +20,21 @@ describe('formatPublishDate', () => {
         expect(formatPublishDate(null, '--')).toBe('--');
         expect(formatPublishDate('0001-01-01T00:00:00Z', '--')).toBe('--');
     });
+
+    it('shows only the year of a year-precision date', () => {
+        expect(formatPublishDate('1975-01-01T00:00:00Z', '--', 'Year')).toBe('1975');
+        expect(formatPublishDate('1970-01-01T00:00:00Z', '--', 'Year')).toBe('1970');
+    });
+
+    it('shows the month and year of a month-precision date', () => {
+        expect(formatPublishDate('1975-03-01T00:00:00Z', '--', 'Month')).toBe('Mar 1975');
+    });
+
+    it('shows the full date of a day-precision date or a date without a precision', () => {
+        expect(formatPublishDate('1975-01-01T00:00:00Z', '--', 'Day')).toBe('Jan 1, 1975');
+        expect(formatPublishDate('1975-01-01T00:00:00Z', '--', null)).toBe('Jan 1, 1975');
+        expect(formatPublishDate('1975-01-01T00:00:00Z', '--')).toBe('Jan 1, 1975');
+    });
 });
 
 describe('formatShortDate', () => {
@@ -65,6 +80,10 @@ describe('formatShortDate', () => {
         expect(formatShortDate('1970-01-01T00:00:00.000Z', '--')).toBe('--');
         expect(formatShortDate('1970-01-01T00:00:00', '--')).toBe('--');
         expect(formatShortDate('1970-01-01', '--')).toBe('--');
+    });
+
+    it('shows the year of a year-precision 1970 date instead of the sentinel fallback', () => {
+        expect(formatShortDate('1970-01-01T00:00:00Z', '--', 'Year')).toBe('1970');
     });
 
     it('renders the default fallback for the epoch sentinel when none is given', () => {

@@ -17,7 +17,10 @@ public sealed class CardigannReleaseComparerTests
     [TestCase("""{"seeders":"many","leechers":10}""", """{"seeders":1,"leechers":9}""", 0)]
     [TestCase("""{"seeders":"many"}""", """{"seeders":1,"leechers":9}""", 0)]
     [TestCase("""[]""", """not-json""", 0)]
-    public void Compare_Result_WhenPeerMetadataVaries(string leftProperties, string rightProperties, int expected)
+    public void Compare_ReturnsExpectedOrdering_WhenPeerMetadataVaries(
+        string leftProperties,
+        string rightProperties,
+        int expected)
     {
         // Arrange
         var comparer = new CardigannReleaseComparer();
@@ -50,7 +53,7 @@ public sealed class CardigannReleaseComparerTests
     [TestCase("""{"seeders":-1,"leechers":1}""", false)]
     [TestCase("""{"seeders":1,"leechers":"-1"}""", false)]
     [TestCase("""not-json""", false)]
-    public void CanCompare_Result_WhenPeerMetadataVaries(string properties, bool expected)
+    public void CanCompare_ReturnsExpectedFlag_WhenPeerMetadataVaries(string properties, bool expected)
     {
         // Arrange
         var comparer = new CardigannReleaseComparer();
@@ -69,7 +72,7 @@ public sealed class CardigannReleaseComparerTests
     }
 
     [Test]
-    public void Compare_Result_WhenThreeReleasesHaveCompletePeerMetadata()
+    public void Compare_OrdersReleasesByPeerMetadata_WhenThreeReleasesHaveCompletePeerMetadata()
     {
         // Arrange
         var comparer = new CardigannReleaseComparer();

@@ -126,7 +126,7 @@ internal sealed class QueryPlanner : IQueryPlanner
             ? Empty(request, RefusalIdentityEmpty)
             : new QueryPlan
             {
-                Root = new PlanNode
+                Root = new()
                 {
                     Kind = PlanNodeKind.Fetch,
                     SourceTerms = [Term("title", [value])],
@@ -149,7 +149,7 @@ internal sealed class QueryPlanner : IQueryPlanner
                 ? Empty(request, RefusalIdentityEmpty)
                 : new QueryPlan
                 {
-                    Root = new PlanNode
+                    Root = new()
                     {
                         Kind = PlanNodeKind.Fetch,
                         SourceTerms = [Term("key", [string.Concat("/works/", workOlid)])],
@@ -171,7 +171,7 @@ internal sealed class QueryPlanner : IQueryPlanner
                 ? Empty(request, RefusalIdentityEmpty)
                 : new QueryPlan
                 {
-                    Root = new PlanNode
+                    Root = new()
                     {
                         Kind = PlanNodeKind.Fetch,
                         SourceTerms = [Term("isbn", [isbn])],
@@ -1115,7 +1115,7 @@ internal sealed class QueryPlanner : IQueryPlanner
         });
         return new QueryPlan
         {
-            Root = new PlanNode
+            Root = new()
             {
                 Kind = PlanNodeKind.Fetch,
                 State = PlanNodeState.Empty,
@@ -1212,7 +1212,7 @@ internal sealed class QueryPlanner : IQueryPlanner
 
     private string? CleanText(string? value)
     {
-        return string.IsNullOrWhiteSpace(value) ? null : value!.Trim();
+        return string.IsNullOrWhiteSpace(value) ? null : value.Trim();
     }
 
     private PlannedCriterion PlanAuthorDate(PropertyCriterion<TemporalValue> criterion, AuthorDateField field)
@@ -2171,6 +2171,12 @@ internal sealed class QueryPlanner : IQueryPlanner
             dispositions.Add("excludeIds:constant-absent-content-item-id");
         }
 
+        if (criteria.AfterId is not null)
+        {
+            planned.Add(KnownEmpty());
+            dispositions.Add("afterId:constant-absent");
+        }
+
         if (criteria.AncestorId is not null)
         {
             planned.Add(KnownEmpty());
@@ -2308,139 +2314,39 @@ internal sealed class QueryPlanner : IQueryPlanner
     private List<PlannedCriterion> PlanCriteria(MetadataCriteria criteria)
     {
         var planned = new List<PlannedCriterion>();
-        foreach (var criterion in criteria.ProviderType.And)
-        {
-            planned.Add(PlanSelfIdentity(criterion, ProviderIdentities));
-        }
-
-        foreach (var criterion in criteria.Source.And)
-        {
-            planned.Add(PlanSelfIdentity(criterion, ProviderIdentities));
-        }
-
-        foreach (var criterion in criteria.Title.And)
-        {
-            planned.Add(PlanTitle(criterion));
-        }
-
-        foreach (var criterion in criteria.Language.And)
-        {
-            planned.Add(PlanLanguage(criterion));
-        }
-
-        foreach (var criterion in criteria.Overview.And)
-        {
-            planned.Add(PlanOverview(criterion));
-        }
-
-        foreach (var criterion in criteria.PublishDate.And)
-        {
-            planned.Add(PlanPublishDate(criterion));
-        }
-
+        planned.AddRange(criteria.ProviderType.And.Select(c => PlanSelfIdentity(c, ProviderIdentities)));
+        planned.AddRange(criteria.Source.And.Select(c => PlanSelfIdentity(c, ProviderIdentities)));
+        planned.AddRange(criteria.Title.And.Select(PlanTitle));
+        planned.AddRange(criteria.Language.And.Select(PlanLanguage));
+        planned.AddRange(criteria.Overview.And.Select(PlanOverview));
+        planned.AddRange(criteria.PublishDate.And.Select(PlanPublishDate));
         foreach (var criterion in criteria.CustomMetadata.And)
         {
             PlanCustomMetadata(criterion, planned);
         }
 
-        foreach (var criterion in criteria.OriginalTitle.And)
-        {
-            planned.Add(PlanOriginalTitle(criterion));
-        }
-
-        foreach (var criterion in criteria.Duration.And)
-        {
-            planned.Add(PlanAbsentProperty(criterion));
-        }
-
-        foreach (var criterion in criteria.ProductionStatus.And)
-        {
-            planned.Add(PlanAbsentProperty(criterion));
-        }
-
-        foreach (var criterion in criteria.Established.And)
-        {
-            planned.Add(PlanAbsentProperty(criterion));
-        }
-
-        foreach (var criterion in criteria.Dissolved.And)
-        {
-            planned.Add(PlanAbsentProperty(criterion));
-        }
-
-        foreach (var criterion in criteria.BirthDate.And)
-        {
-            planned.Add(PlanAuthorDate(criterion, AuthorDateField.BirthDate));
-        }
-
-        foreach (var criterion in criteria.DeathDate.And)
-        {
-            planned.Add(PlanAuthorDate(criterion, AuthorDateField.DeathDate));
-        }
-
+        planned.AddRange(criteria.OriginalTitle.And.Select(PlanOriginalTitle));
+        planned.AddRange(criteria.Duration.And.Select(c => PlanAbsentProperty(c)));
+        planned.AddRange(criteria.ProductionStatus.And.Select(c => PlanAbsentProperty(c)));
+        planned.AddRange(criteria.Established.And.Select(c => PlanAbsentProperty(c)));
+        planned.AddRange(criteria.Dissolved.And.Select(c => PlanAbsentProperty(c)));
+        planned.AddRange(criteria.BirthDate.And.Select(c => PlanAuthorDate(c, AuthorDateField.BirthDate)));
+        planned.AddRange(criteria.DeathDate.And.Select(c => PlanAuthorDate(c, AuthorDateField.DeathDate)));
         PlanAbsentCollection(criteria.Awards, planned);
-        foreach (var group in criteria.ExternalIds.Some)
-        {
-            planned.Add(PlanExternalIds(group));
-        }
-
-        foreach (var excluded in criteria.ExternalIds.None)
-        {
-            planned.Add(PlanExcludedExternalId(excluded));
-        }
-
-        foreach (var group in criteria.References.Some)
-        {
-            planned.Add(PlanReferences(group, excluded: false));
-        }
-
-        foreach (var excluded in criteria.References.None)
-        {
-            planned.Add(PlanReferences([excluded], excluded: true));
-        }
-
-        foreach (var group in criteria.Relationships.Some)
-        {
-            planned.Add(PlanRelationships(group));
-        }
-
-        foreach (var excluded in criteria.Relationships.None)
-        {
-            planned.Add(PlanRelationships([excluded], excluded: true));
-        }
-
-        foreach (var group in criteria.Images.Some)
-        {
-            planned.Add(PlanImages(group, excluded: false));
-        }
-
-        foreach (var excluded in criteria.Images.None)
-        {
-            planned.Add(PlanImages([excluded], excluded: true));
-        }
-
+        planned.AddRange(criteria.ExternalIds.Some.Select(PlanExternalIds));
+        planned.AddRange(criteria.ExternalIds.None.Select(PlanExcludedExternalId));
+        planned.AddRange(criteria.References.Some.Select(g => PlanReferences(g, excluded: false)));
+        planned.AddRange(criteria.References.None.Select(e => PlanReferences([e], excluded: true)));
+        planned.AddRange(criteria.Relationships.Some.Select(g => PlanRelationships(g)));
+        planned.AddRange(criteria.Relationships.None.Select(e => PlanRelationships([e], excluded: true)));
+        planned.AddRange(criteria.Images.Some.Select(g => PlanImages(g, excluded: false)));
+        planned.AddRange(criteria.Images.None.Select(e => PlanImages([e], excluded: true)));
         PlanAbsentCollection(criteria.Previews, planned);
-        foreach (var group in criteria.AlternateTexts.Some)
-        {
-            planned.Add(PlanAlternateTexts(group, excluded: false));
-        }
-
-        foreach (var excluded in criteria.AlternateTexts.None)
-        {
-            planned.Add(PlanAlternateTexts([excluded], excluded: true));
-        }
-
+        planned.AddRange(criteria.AlternateTexts.Some.Select(g => PlanAlternateTexts(g, excluded: false)));
+        planned.AddRange(criteria.AlternateTexts.None.Select(e => PlanAlternateTexts([e], excluded: true)));
         PlanAbsentCollection(criteria.ContentRatings, planned);
-        foreach (var group in criteria.Genres.Some)
-        {
-            planned.Add(PlanGenre(group, excluded: false));
-        }
-
-        foreach (var excluded in criteria.Genres.None)
-        {
-            planned.Add(PlanGenre([excluded], excluded: true));
-        }
-
+        planned.AddRange(criteria.Genres.Some.Select(g => PlanGenre(g, excluded: false)));
+        planned.AddRange(criteria.Genres.None.Select(e => PlanGenre([e], excluded: true)));
         PlanAbsentCollection(criteria.Tags, planned);
         return planned;
     }

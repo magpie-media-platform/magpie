@@ -5,6 +5,8 @@ using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 
+using FFMpegCore.Exceptions;
+
 using Magpie.Models.Data;
 using Magpie.Sdk.Media;
 
@@ -19,6 +21,8 @@ namespace Magpie.Extensions.MediaInfo.FFProbe;
 /// </summary>
 public sealed class FFProbeMediaInfoExtractor(ILogger<FFProbeMediaInfoExtractor> logger) : IMediaInfoExtractor
 {
+    private const string InvalidDataError = "Invalid data found when processing input";
+
     private readonly ILogger<FFProbeMediaInfoExtractor> _logger = logger;
 
     private static string StreamName(Dictionary<string, string>? tags, string fallback)
@@ -79,6 +83,9 @@ public sealed class FFProbeMediaInfoExtractor(ILogger<FFProbeMediaInfoExtractor>
         return properties;
     }
 
+    internal static bool IsUnreadableFormat(string? errorOutput) =>
+        errorOutput?.TrimEnd().EndsWith(InvalidDataError, StringComparison.Ordinal) == true;
+
     private static void RecordOutcome(Activity? activity, Stopwatch stopwatch, string outcome)
     {
         var tag = new KeyValuePair<string, object?>("outcome", outcome);
@@ -118,16 +125,19 @@ public sealed class FFProbeMediaInfoExtractor(ILogger<FFProbeMediaInfoExtractor>
         {
             throw;
         }
+        catch (FFMpegException ex) when (IsUnreadableFormat(ex.FFMpegErrorOutput))
+        {
+            RecordOutcome(activity, stopwatch, "unreadable_format");
+            _logger.LogDebug(ex, "FFprobe cannot read the format of the file {FilePath}.", filePath);
+            return null;
+        }
         catch (Exception ex)
         {
             RecordOutcome(activity, stopwatch, "analysis_failed");
             activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
             activity?.AddException(ex);
             activity?.SetTag("error.type", ex.GetType().FullName);
-            _logger.LogWarning(
-                ex,
-                "FFprobe failed to analyze the file {FilePath}.",
-                filePath);
+            _logger.LogWarning(ex, "FFprobe failed to analyze the file {FilePath}.", filePath);
             throw;
         }
 

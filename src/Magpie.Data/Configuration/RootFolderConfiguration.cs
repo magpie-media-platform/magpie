@@ -13,8 +13,6 @@ internal sealed class RootFolderConfiguration : IEntityTypeConfiguration<RootFol
     public void Configure(EntityTypeBuilder<RootFolder> builder)
     {
         builder.ToTable("system_rootFolder");
-        builder.HasKey(e => e.Id);
-        builder.Property(e => e.Id).ValueGeneratedOnAdd();
         builder.HasIndex(e => e.ContentType);
         builder.HasIndex(e => new { e.ContentType, e.IsDefault });
         builder.HasIndex(e => e.Path).IsUnique();

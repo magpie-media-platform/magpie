@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Text.Json;
 using System.Threading;
@@ -17,6 +18,7 @@ using Magpie.Models.Api;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
+using Magpie.Models.Filtering;
 using Magpie.Models.Jobs;
 using Magpie.Models.Releases;
 using Magpie.Sdk.Events;
@@ -221,8 +223,7 @@ internal sealed class ReleaseSearchService(
         };
     }
 
-    private static IReadOnlyList<ReleaseSearchPhase> BuildPlan(
-        IReadOnlyList<IReadOnlyList<ContentFact>> factSets)
+    private static IReadOnlyList<ReleaseSearchPhase> BuildPlan(IReadOnlyList<IReadOnlyList<ContentFact>> factSets)
     {
         var phases = new List<ReleaseSearchPhase>();
         foreach (var factSet in factSets)
@@ -540,6 +541,11 @@ internal sealed class ReleaseSearchService(
         bool force = false,
         CancellationToken cancellationToken = default)
     {
+        // The first progress report overwrites the status message that marks a deferred execution.
+        var execution = currentExecutionId is { } executionId
+            ? await jobExecutionRepository.GetByIdAsync(executionId, cancellationToken).ConfigureAwait(false)
+            : null;
+        var resumed = execution?.StatusMessage == MagpieJobs.StatusMessages.UpstreamThrottled;
         progress?.Report(0, "The search will load the content item.");
 
         var skipReason = await ResolveRecentSearchSkipReasonAsync(
@@ -596,7 +602,15 @@ internal sealed class ReleaseSearchService(
         if (childCounts.TryGetValue(item.Id, out var childCount) && childCount > 0)
         {
             var subtree = await LoadSubtreeAsync(item.Id, cancellationToken).ConfigureAwait(false);
-            var fanOut = await FanOutNodeAsync(item, subtree, userId, correlationId, force, cancellationToken)
+            var leadTimeDays = force ? null : ReadLeadTimeDays(execution);
+            var fanOut = await FanOutNodeAsync(
+                item,
+                subtree,
+                leadTimeDays,
+                userId,
+                correlationId,
+                force,
+                cancellationToken)
                 .ConfigureAwait(false);
             if (await CanEscalateAsync(item, subtree, fanOut.ChildNodeIds, force, cancellationToken)
                 .ConfigureAwait(false))
@@ -607,6 +621,7 @@ internal sealed class ReleaseSearchService(
                     correlationId,
                     progress,
                     escalationTurn: true,
+                    resumed,
                     force,
                     cancellationToken)
                     .ConfigureAwait(false);
@@ -642,6 +657,7 @@ internal sealed class ReleaseSearchService(
             correlationId,
             progress,
             escalationTurn: false,
+            resumed,
             force,
             cancellationToken)
             .ConfigureAwait(false);
@@ -649,6 +665,13 @@ internal sealed class ReleaseSearchService(
 
     private static bool NeedsAcquisition(ContentHierarchyItem item) =>
         item.EffectiveMonitoring != MonitoringMode.Unmonitored && IsUnfulfilledLeaf(item);
+
+    private static int? ReadLeadTimeDays(JobExecution? execution) =>
+        execution is not null &&
+        execution.Parameters.TryGetValue(MagpieJobs.Parameters.LeadTimeDays, out var raw) &&
+        int.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var leadTimeDays)
+            ? leadTimeDays
+            : null;
 
     private IIndexerIntegration? ResolveIntegration(Indexer? indexer)
     {
@@ -753,9 +776,7 @@ internal sealed class ReleaseSearchService(
                     {
                         var end = start + 1;
                         while (end < tieGroup.Count &&
-                            comparer.Compare(
-                                tieGroup[start].Candidate.Release,
-                                tieGroup[end].Candidate.Release) == 0)
+                            comparer.Compare(tieGroup[start].Candidate.Release, tieGroup[end].Candidate.Release) == 0)
                         {
                             end++;
                         }
@@ -777,9 +798,7 @@ internal sealed class ReleaseSearchService(
                         left.Candidate.Release.PublishDate);
                     return comparison != 0
                         ? comparison
-                        : string.CompareOrdinal(
-                            StableKey(left.Candidate.Release),
-                            StableKey(right.Candidate.Release));
+                        : string.CompareOrdinal(StableKey(left.Candidate.Release), StableKey(right.Candidate.Release));
                 });
                 ranked.AddRange(tieGroup);
             }
@@ -829,6 +848,7 @@ internal sealed class ReleaseSearchService(
         Guid? correlationId,
         IProgressReporter? progress,
         bool escalationTurn,
+        bool resumed,
         bool force,
         CancellationToken cancellationToken)
     {
@@ -985,6 +1005,7 @@ internal sealed class ReleaseSearchService(
                     retainedReleaseIds,
                     rejectedReleaseIds,
                     actionableHierarchyItemIds,
+                    resumed,
                     userId,
                     engineExecution.Results,
                     cancellationToken).ConfigureAwait(false);
@@ -994,13 +1015,8 @@ internal sealed class ReleaseSearchService(
 
             var searchCompleted = engineExecution.ConnectionsSucceeded > 0;
             var searchPartial = engineExecution.Partial;
-            if (!searchCompleted)
+            if (!searchCompleted && engineExecution.RetryAt is null)
             {
-                if (engineExecution.RetryAt is { } retryAt)
-                {
-                    throw new UpstreamThrottledException(retryAt);
-                }
-
                 var connectionsAttempted = result.Sum(phase => phase.ConnectionsAttempted);
                 if (connectionsAttempted > 0)
                 {
@@ -1085,11 +1101,14 @@ internal sealed class ReleaseSearchService(
     private async Task<(HashSet<Guid> ChildNodeIds, int QueuedCount)> FanOutNodeAsync(
         ContentHierarchyItem node,
         IReadOnlyList<ContentHierarchyItem> subtree,
+        int? leadTimeDays,
         Guid? userId,
         Guid? correlationId,
         bool force,
         CancellationToken cancellationToken)
     {
+        var leafIdsOutsideLeadTime = await LoadLeafIdsOutsideLeadTimeAsync(node.Id, leadTimeDays, cancellationToken)
+            .ConfigureAwait(false);
         var leafSearchVolume = await CountActiveLeafSearchesAsync(cancellationToken).ConfigureAwait(false);
         var underLeafBudget = leafSearchVolume <= searchOptions.BackpressureThreshold;
 
@@ -1105,7 +1124,7 @@ internal sealed class ReleaseSearchService(
 
         var unfulfilledLeaves = subtree
             .Where(item => !parentIds.Contains(item.Id) && item.EffectiveMonitoring != MonitoringMode.Unmonitored &&
-                IsUnfulfilledLeaf(item) && (force || !item.ImportPending));
+                IsUnfulfilledLeaf(item) && (force || !item.ImportPending) && !leafIdsOutsideLeadTime.Contains(item.Id));
         var residualChildIds = new HashSet<Guid>();
         foreach (var leaf in unfulfilledLeaves)
         {
@@ -1123,6 +1142,7 @@ internal sealed class ReleaseSearchService(
             await EnqueueChildSearchAsync(
                 childId,
                 MagpieJobs.ParameterValues.NodeSearchKind,
+                leadTimeDays,
                 userId,
                 correlationId,
                 force,
@@ -1145,7 +1165,7 @@ internal sealed class ReleaseSearchService(
         var searchedBefore = timeProvider.GetUtcNow().UtcDateTime - searchOptions.MinimumSearchAge;
         var leafChildren = await LoadUnfulfilledLeafChildrenAsync(node.Id, force, cancellationToken)
             .ConfigureAwait(false);
-        foreach (var leaf in leafChildren)
+        foreach (var leaf in leafChildren.Where(item => !leafIdsOutsideLeadTime.Contains(item.Id)))
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (force ||
@@ -1155,6 +1175,7 @@ internal sealed class ReleaseSearchService(
                 await EnqueueChildSearchAsync(
                     leaf.Id,
                     MagpieJobs.ParameterValues.LeafSearchKind,
+                    leadTimeDays,
                     userId,
                     correlationId,
                     force,
@@ -1183,6 +1204,46 @@ internal sealed class ReleaseSearchService(
             !(execution.Parameters.TryGetValue(MagpieJobs.Parameters.SearchKind, out var kind) &&
                 kind == MagpieJobs.ParameterValues.NodeSearchKind) &&
             (execution.Status != JobExecutionStatus.Running || execution.LastHeartbeat >= liveSince));
+    }
+
+    private async Task<HashSet<Guid>> LoadLeafIdsOutsideLeadTimeAsync(
+        Guid nodeId,
+        int? leadTimeDays,
+        CancellationToken cancellationToken)
+    {
+        if (leadTimeDays is not { } days)
+        {
+            return [];
+        }
+
+        var items = await contentHierarchyItemRepository.QueryAllAsync(
+            new()
+            {
+                AncestorId = nodeId,
+                LeafOnly = true,
+                Metadata = new()
+                {
+                    And = [new()
+                    {
+                        PublishDate = new()
+                        {
+                            And = [new()
+                            {
+                                Operator = CriteriaValueOperator.GreaterThan,
+                                Value = new TemporalValue
+                                {
+                                    Value = timeProvider.GetUtcNow().UtcDateTime.AddDays(days),
+                                    Precision = TemporalPrecision.Instant,
+                                },
+                            }],
+                        },
+                    }],
+                },
+            },
+            sort: null,
+            cancellationToken).ConfigureAwait(false);
+
+        return [.. items.Select(item => item.Id)];
     }
 
     private async Task<IReadOnlyList<ContentHierarchyItem>> LoadUnfulfilledLeafChildrenAsync(
@@ -1451,9 +1512,7 @@ internal sealed class ReleaseSearchService(
 
         try
         {
-            return await HasExhaustedStoredReleaseCandidatesAsync(
-                contentItem,
-                cancellationToken).ConfigureAwait(false);
+            return await HasExhaustedStoredReleaseCandidatesAsync(contentItem, cancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
@@ -1483,7 +1542,9 @@ internal sealed class ReleaseSearchService(
                 new KeyValuePair<string, object?>("mode", "interactive"),
                 new KeyValuePair<string, object?>("outcome", "invalid_release"));
             return new InteractiveReleaseGrabOutcome(
-                InteractiveReleaseGrabResult.InvalidRelease, null, "A release with a title is required.");
+                InteractiveReleaseGrabResult.InvalidRelease,
+                null,
+                "A release with a title is required.");
         }
 
         var hierarchyItem = await contentHierarchyItemRepository
@@ -1528,10 +1589,11 @@ internal sealed class ReleaseSearchService(
         if (!clients.Any(client => client.Enabled))
         {
             return new InteractiveReleaseGrabOutcome(
-                InteractiveReleaseGrabResult.NoDownloadClient, null, "No enabled download client is configured.");
+                InteractiveReleaseGrabResult.NoDownloadClient,
+                null,
+                "No enabled download client is configured.");
         }
 
-        Release persisted = null!;
         await transactionManager.ExecuteWithTransactionAsync(
             async transactionCancellationToken =>
             {
@@ -1543,18 +1605,15 @@ internal sealed class ReleaseSearchService(
                 await UpsertReleaseAsync(
                     release,
                     [],
-                    null,
-                    null,
                     contentHierarchyItemId,
                     actingUserId,
                     actingUserId,
                     transactionCancellationToken)
                     .ConfigureAwait(false);
-                persisted = release;
             },
             cancellationToken).ConfigureAwait(false);
 
-        var releaseIdParameter = persisted.Id.ToString();
+        var releaseIdParameter = release.Id.ToString();
         var activeAcquisitions = await jobExecutionRepository.QueryAllAsync(
             new()
             {
@@ -1574,7 +1633,7 @@ internal sealed class ReleaseSearchService(
             return new InteractiveReleaseGrabOutcome(
                 InteractiveReleaseGrabResult.AlreadyInProgress,
                 null,
-                $"Release {persisted.Id} is already being acquired.");
+                $"Release {release.Id} is already being acquired.");
         }
 
         var correlationId = Guid.NewGuid();
@@ -1603,7 +1662,7 @@ internal sealed class ReleaseSearchService(
             return new InteractiveReleaseGrabOutcome(
                 InteractiveReleaseGrabResult.AlreadyInProgress,
                 executionId,
-                $"Release {persisted.Id} is already being acquired.");
+                $"Release {release.Id} is already being acquired.");
         }
 
         return new InteractiveReleaseGrabOutcome(InteractiveReleaseGrabResult.Accepted, executionId, null);
@@ -1662,22 +1721,28 @@ internal sealed class ReleaseSearchService(
     private async Task EnqueueChildSearchAsync(
         Guid contentHierarchyItemId,
         string searchKind,
+        int? leadTimeDays,
         Guid? userId,
         Guid? correlationId,
         bool force,
         CancellationToken cancellationToken)
     {
+        var parameters = new Dictionary<string, string>
+        {
+            [MagpieJobs.Parameters.ContentHierarchyItemId] = contentHierarchyItemId.ToString("D"),
+            [MagpieJobs.Parameters.SearchKind] = searchKind,
+            [MagpieJobs.Parameters.Force] = force ? "true" : "false",
+        };
+        if (leadTimeDays is { } days)
+        {
+            parameters[MagpieJobs.Parameters.LeadTimeDays] = days.ToString(CultureInfo.InvariantCulture);
+        }
+
         await jobManager.ExecuteAsync(
             new JobEnqueueRequest
             {
                 JobType = MagpieJobs.Types.ReleaseSearchItem,
-                Parameters = new Dictionary<string, string>
-                {
-                    [MagpieJobs.Parameters.ContentHierarchyItemId] =
-                        contentHierarchyItemId.ToString("D"),
-                    [MagpieJobs.Parameters.SearchKind] = searchKind,
-                    [MagpieJobs.Parameters.Force] = force ? "true" : "false",
-                },
+                Parameters = parameters,
                 Mode = JobExecutionMode.Queue,
                 UserId = userId,
                 CorrelationId = correlationId,
@@ -1712,6 +1777,7 @@ internal sealed class ReleaseSearchService(
         HashSet<Guid> retainedReleaseIds,
         HashSet<Guid> rejectedReleaseIds,
         HashSet<Guid> actionableHierarchyItemIds,
+        bool resumed,
         Guid? userId,
         IReadOnlyList<EvaluatedRelease>? evaluatedResults,
         CancellationToken cancellationToken)
@@ -1869,8 +1935,6 @@ internal sealed class ReleaseSearchService(
                     var upsert = await UpsertReleaseAsync(
                         acceptedObservation.Release,
                         acceptedObservation.ReleaseFacts,
-                        evaluationContext,
-                        acceptedObservation.Assessment,
                         item.Id,
                         userId,
                         null,
@@ -1885,7 +1949,8 @@ internal sealed class ReleaseSearchService(
                         observedReleaseIds.Add(acceptedObservation.Release.Id);
                     }
 
-                    foreach (var scopedHierarchyItemId in upsert.ActionableNodeIds)
+                    foreach (var scopedHierarchyItemId in upsert.ActionableNodeIds.Where(nodeId =>
+                        !resumed || upsert.CreatedScopeNodeIds.Contains(nodeId)))
                     {
                         actionableHierarchyItemIds.Add(scopedHierarchyItemId);
                     }
@@ -2069,12 +2134,32 @@ internal sealed class ReleaseSearchService(
 
         var indexers = await indexerRepository.ListAllAsync(cancellationToken).ConfigureAwait(false);
         var indexerNamesById = IndexerNamesById(indexers);
-        var acquisitionStatuses = await releaseBlockList
-            .ResolveStatusesAsync(
-                [.. candidates.Select(candidate => candidate.Release)],
-                contentHierarchyItemId,
-                cancellationToken)
-            .ConfigureAwait(false);
+        var subtree = await LoadSubtreeAsync(contentHierarchyItemId, cancellationToken).ConfigureAwait(false);
+        IReadOnlyList<Guid> contentHierarchyItemIds =
+            [.. subtree.Select(item => item.Id).Prepend(contentHierarchyItemId).Distinct()];
+        var storedReleases = await releaseRepository.QueryAllAsync(
+            new ReleaseQuery { ContentHierarchyItemIds = contentHierarchyItemIds, IncludeUnmatched = true },
+            sort: null,
+            cancellationToken).ConfigureAwait(false);
+        var downloadsByReleaseId = await releaseBlockList.LoadDownloadsByReleaseIdAsync(
+            contentHierarchyItemIds,
+            storedReleases,
+            cancellationToken).ConfigureAwait(false);
+        var downloadsByIndexerExternalId = ReleaseBlockList.BuildDownloadsByIndexerExternalId(
+            storedReleases,
+            downloadsByReleaseId);
+        var logicalDownloadsByReleaseId = new Dictionary<Guid, Download>();
+        foreach (var release in candidates.Select(candidate => candidate.Release))
+        {
+            var latest = storedReleases
+                .Where(stored => downloadsByReleaseId.ContainsKey(stored.Id) && RefersToSameRelease(stored, release))
+                .Select(stored => downloadsByReleaseId[stored.Id])
+                .MaxBy(download => download.CreatedAt);
+            if (latest is not null)
+            {
+                logicalDownloadsByReleaseId[release.Id] = latest;
+            }
+        }
 
         var enriched = new InteractiveSearchCandidate[candidates.Count];
         for (var i = 0; i < candidates.Count; i++)
@@ -2088,13 +2173,15 @@ internal sealed class ReleaseSearchService(
                 indexerNamesById.TryGetValue(indexerId, out indexerName);
             }
 
+            var (acquisitionStatus, failureReason) = ReleaseBlockList.ResolveAcquisition(
+                logicalDownloadsByReleaseId,
+                downloadsByIndexerExternalId,
+                release);
             enriched[i] = candidate with
             {
                 IndexerName = indexerName,
-                AcquisitionStatus = acquisitionStatuses.TryGetValue(release.Id, out var acquisition)
-                    ? acquisition.Status
-                    : null,
-                FailureReason = acquisition.FailureReason,
+                AcquisitionStatus = acquisitionStatus,
+                FailureReason = failureReason,
             };
         }
 
@@ -2104,8 +2191,6 @@ internal sealed class ReleaseSearchService(
     private async Task<ReleaseUpsertResult> UpsertReleaseAsync(
         Release release,
         IReadOnlyList<ContentFact> releaseFacts,
-        ReleaseEvaluationContext? searchedContext,
-        ReleaseAssessment? searchedAssessment,
         Guid searchedHierarchyItemId,
         Guid? userId,
         Guid? scopeUserId,
@@ -2130,17 +2215,9 @@ internal sealed class ReleaseSearchService(
             }
         }
 
-        var releaseScope = releaseEvaluationService is ReleaseEvaluationService implementation &&
-            searchedContext is not null && searchedAssessment is not null
-                ? await implementation.ResolveScopeAsync(
-                    release,
-                    releaseFacts,
-                    searchedContext,
-                    searchedAssessment,
-                    cancellationToken).ConfigureAwait(false)
-                : await releaseEvaluationService
-                    .ResolveScopeAsync(release, releaseFacts, searchedHierarchyItemId, cancellationToken)
-                    .ConfigureAwait(false);
+        var releaseScope = await releaseEvaluationService
+            .ResolveScopeAsync(release, releaseFacts, searchedHierarchyItemId, cancellationToken)
+            .ConfigureAwait(false);
         var existingScopes = await releaseScopeRepository.QueryAllAsync(
             new ReleaseScopeQuery { ReleaseId = release.Id },
             sort: null,
@@ -2154,7 +2231,7 @@ internal sealed class ReleaseSearchService(
                 null,
                 cancellationToken).ConfigureAwait(false)).Items.Any())
         {
-            releaseScope = new ReleaseScopeResolution(
+            releaseScope = new(
                 [.. releaseScope.ScopeNodeIds.Where(existingScopeNodeIds.Contains)],
                 [.. releaseScope.ActionableNodeIds.Where(existingScopeNodeIds.Contains)]);
         }
@@ -2169,7 +2246,8 @@ internal sealed class ReleaseSearchService(
             }
         }
 
-        foreach (var scopeNodeId in releaseScope.ScopeNodeIds.Except(existingScopeNodeIds))
+        var createdScopeNodeIds = releaseScope.ScopeNodeIds.Except(existingScopeNodeIds).ToList();
+        foreach (var scopeNodeId in createdScopeNodeIds)
         {
             await releaseScopeRepository.CreateAsync(
                 new ReleaseScope
@@ -2187,6 +2265,7 @@ internal sealed class ReleaseSearchService(
             .ToHashSet();
         return new ReleaseUpsertResult(
             [.. releaseScope.ActionableNodeIds.Where(nodeId => !unmatchedNodeIds.Contains(nodeId))],
+            createdScopeNodeIds,
             !created);
     }
 
@@ -2251,9 +2330,7 @@ internal sealed class ReleaseSearchService(
                 continue;
             }
 
-            if (!execution.Parameters.TryGetValue(
-                MagpieJobs.Parameters.ContentHierarchyItemId,
-                out var raw))
+            if (!execution.Parameters.TryGetValue(MagpieJobs.Parameters.ContentHierarchyItemId, out var raw))
             {
                 continue;
             }
@@ -2308,5 +2385,8 @@ internal sealed class ReleaseSearchService(
             execution.CreatedAt,
             searchOptions.CoalescingWindow);
 
-    private sealed record ReleaseUpsertResult(IReadOnlyList<Guid> ActionableNodeIds, bool Rediscovered);
+    private sealed record ReleaseUpsertResult(
+        IReadOnlyList<Guid> ActionableNodeIds,
+        IReadOnlyList<Guid> CreatedScopeNodeIds,
+        bool Rediscovered);
 }

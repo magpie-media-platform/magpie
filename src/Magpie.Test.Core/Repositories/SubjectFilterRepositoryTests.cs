@@ -76,11 +76,10 @@ public sealed class SubjectFilterRepositoryTests
 
         _userId = user.Id;
 
-        var loggerFactory = NullLoggerFactory.Instance;
         var auditRepo = new AuditRecordRepository(
             _context,
             Mock.Of<IEventBus>(),
-            loggerFactory.CreateLogger<AuditRecordRepository>(),
+            NullLogger<AuditRecordRepository>.Instance,
             new TransactionManager(_context, NullLogger<TransactionManager>.Instance),
             Mock.Of<IJobExecutionScopeFactory>(),
             timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
@@ -92,14 +91,13 @@ public sealed class SubjectFilterRepositoryTests
             auditRepo,
             transactionManager,
             _updateEvents.Object,
-            loggerFactory.CreateLogger<SubjectFilterRepository>(),
+            NullLogger<SubjectFilterRepository>.Instance,
             timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
     }
 
     [TearDown]
     public void TearDown()
     {
-        _context.Database.CloseConnection();
         _context.Dispose();
     }
 
@@ -211,13 +209,8 @@ public sealed class SubjectFilterRepositoryTests
     public async Task ListSharedByTagAsync_ReturnsSubjectFilters_WhenTagMatches()
     {
         // Arrange
-        foreach (var tagName in new[] { "shared", "unique" })
-        {
-            if (!_context.Tags.Any(t => t.Name == tagName))
-            {
-                _context.Tags.Add(new Tag { Name = tagName });
-            }
-        }
+        _context.Tags.Add(new Tag { Name = "shared" });
+        _context.Tags.Add(new Tag { Name = "unique" });
 
         await _context.SaveChangesAsync().ConfigureAwait(false);
         var tag1 = _context.Tags.First(t => t.Name == "shared");
@@ -263,13 +256,7 @@ public sealed class SubjectFilterRepositoryTests
     public async Task ListSharedByTagAsync_ExcludesOwnedFilters_WhenTagMatchesPrivateFilter()
     {
         // Arrange
-        foreach (var tagName in new[] { "shared" })
-        {
-            if (!_context.Tags.Any(t => t.Name == tagName))
-            {
-                _context.Tags.Add(new Tag { Name = tagName });
-            }
-        }
+        _context.Tags.Add(new Tag { Name = "shared" });
 
         await _context.SaveChangesAsync().ConfigureAwait(false);
         var tag = _context.Tags.First(t => t.Name == "shared");
@@ -661,13 +648,9 @@ public sealed class SubjectFilterRepositoryTests
     public async Task PatchAsync_PatchesTags_WhenTagsAreAdded()
     {
         // Arrange
-        foreach (var tagName in new[] { "existing", "newTag1", "newTag2" })
-        {
-            if (!_context.Tags.Any(t => t.Name == tagName))
-            {
-                _context.Tags.Add(new Tag { Name = tagName });
-            }
-        }
+        _context.Tags.Add(new Tag { Name = "existing" });
+        _context.Tags.Add(new Tag { Name = "newTag1" });
+        _context.Tags.Add(new Tag { Name = "newTag2" });
 
         await _context.SaveChangesAsync().ConfigureAwait(false);
         var existingTag = _context.Tags.First(t => t.Name == "existing");
@@ -710,13 +693,8 @@ public sealed class SubjectFilterRepositoryTests
     public async Task PatchAsync_PatchesTags_WhenTagsAreRemoved()
     {
         // Arrange
-        foreach (var tagName in new[] { "keepMe", "removeMe" })
-        {
-            if (!_context.Tags.Any(t => t.Name == tagName))
-            {
-                _context.Tags.Add(new Tag { Name = tagName });
-            }
-        }
+        _context.Tags.Add(new Tag { Name = "keepMe" });
+        _context.Tags.Add(new Tag { Name = "removeMe" });
 
         await _context.SaveChangesAsync().ConfigureAwait(false);
         var keepTag = _context.Tags.First(t => t.Name == "keepMe");
@@ -761,13 +739,9 @@ public sealed class SubjectFilterRepositoryTests
     public async Task PatchAsync_PatchesTags_WhenTagsAreAddedAndRemoved()
     {
         // Arrange
-        foreach (var tagName in new[] { "existing", "toRemove", "toAdd" })
-        {
-            if (!_context.Tags.Any(t => t.Name == tagName))
-            {
-                _context.Tags.Add(new Tag { Name = tagName });
-            }
-        }
+        _context.Tags.Add(new Tag { Name = "existing" });
+        _context.Tags.Add(new Tag { Name = "toRemove" });
+        _context.Tags.Add(new Tag { Name = "toAdd" });
 
         await _context.SaveChangesAsync().ConfigureAwait(false);
         var existingTag = _context.Tags.First(t => t.Name == "existing");

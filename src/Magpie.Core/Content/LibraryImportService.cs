@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -48,7 +49,30 @@ internal sealed class LibraryImportService(
     IRootFolderRepository rootFolderRepository,
     ILogger<LibraryImportService> logger) : ILibraryImportService
 {
-    private static readonly TimeSpan PendingChildLevelWait = TimeSpan.FromMinutes(30);
+    private static readonly Regex FilesystemSubstitutePattern = new(
+        @"[/\\:*?""<>|+\-\s]+",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+    private static readonly HashSet<string> ExtraDirectoryNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Behind The Scenes",
+        "Bonus Features",
+        "Deleted Scenes",
+        "Extras",
+        "Featurettes",
+        "Interviews",
+        "Other",
+        "Sample",
+        "Samples",
+        "Scenes",
+        "Shorts",
+        "Special Features",
+        "Trailers"
+    };
+
+    private static readonly Regex ExtraFileNamePattern = new(
+        "^trailer$|-(behindthescenes|deleted|featurette|interview|other|scene|short|trailer)$",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
 
     private static string ExceptionMessages(Exception exception) =>
         string.Join(" -> ", GenerateExceptionMessages(exception));
@@ -60,6 +84,16 @@ internal sealed class LibraryImportService(
             yield return current.Message;
         }
     }
+
+    private static bool IsExtra(string? itemFolder, string filePath) =>
+        (itemFolder is not null &&
+            (Path.GetDirectoryName(Path.GetRelativePath(itemFolder, filePath)) ?? string.Empty)
+                .Split(['/', '\\'], StringSplitOptions.RemoveEmptyEntries)
+                .Any(ExtraDirectoryNames.Contains)) ||
+        ReleaseFiles.IsSample(filePath) ||
+        ExtraFileNamePattern.IsMatch(Path.GetFileNameWithoutExtension(filePath));
+
+    private static bool IsVideo(MediaFile file) => file.FileKind == nameof(FileKind.Video);
 
     public async Task<PagedList<LibraryImportCandidate>> QueryCandidatesAsync(
         LibraryImportCandidateQuery query,
@@ -305,17 +339,14 @@ internal sealed class LibraryImportService(
         return changed;
     }
 
-    private async Task<bool> HasNoPrimaryFileAsync(Guid contentHierarchyItemId, CancellationToken cancellationToken)
-    {
-        var item = await contentHierarchyItemRepository.GetByIdAsync(contentHierarchyItemId, cancellationToken)
-            .ConfigureAwait(false);
-        var level = item is null
-            ? null
-            : contentTypeRegistry.GetDefinitionFor(item.ContentType)?.LevelDefinitions
-                .FirstOrDefault(definition => definition.Slug == item.Level);
-        return level is not null && !(item!.ContentItem?.MediaFiles ?? [])
+    private async Task<bool> HasNoPrimaryFileAsync(Guid contentHierarchyItemId, CancellationToken cancellationToken) =>
+        await contentHierarchyItemRepository.GetByIdAsync(contentHierarchyItemId, cancellationToken)
+            .ConfigureAwait(false) is { } item && HasNoPrimaryFile(item);
+
+    private bool HasNoPrimaryFile(ContentHierarchyItem item) =>
+        LevelOf(item) is { } level && !(item.ContentItem?.MediaFiles ?? [])
+            .Concat(item.ContentItem?.CoveringMediaFiles ?? [])
             .Any(file => FileSystem.IsPrimaryFile(fileSystem, level, file));
-    }
 
     public async Task<LibraryImportSubmissionResult> AssociateAsync(
         IReadOnlyCollection<Guid> candidateIds,
@@ -562,7 +593,13 @@ internal sealed class LibraryImportService(
         Guid? correlationId,
         CancellationToken cancellationToken = default) =>
         ImportCoreAsync(
-            candidateId, matchIndex, monitoringMode, associate: false, actingUserId, correlationId, cancellationToken);
+            candidateId,
+            matchIndex,
+            monitoringMode,
+            associate: false,
+            actingUserId,
+            correlationId,
+            cancellationToken);
 
     public Task<LibraryImportCompletionResult> AssociateCandidateAsync(
         Guid candidateId,
@@ -647,7 +684,16 @@ internal sealed class LibraryImportService(
         }
         catch (ChildLevelPendingException ex)
         {
-            return new() { Status = LibraryImportCompletionStatus.Waiting, Message = ex.Message };
+            return new()
+            {
+                Status = LibraryImportCompletionStatus.Waiting,
+                Message = ex.Message,
+                ContentHierarchyItemId = ex.ContentHierarchyItemId
+            };
+        }
+        catch (UpstreamThrottledException)
+        {
+            throw;
         }
         catch (Exception ex)
         {
@@ -814,11 +860,7 @@ internal sealed class LibraryImportService(
                 return null;
             }
 
-            var routed = await RouteFileAsync(
-                    root,
-                    candidate.FilePath,
-                    candidate.ParsedSignals,
-                    cancellationToken)
+            var routed = await RouteFileAsync(root, candidate.FilePath, candidate.ParsedSignals, cancellationToken)
                 .ConfigureAwait(false);
             return routed.StoppedEarly ? null : routed.Node.Id;
         }
@@ -1051,8 +1093,10 @@ internal sealed class LibraryImportService(
         foreach (var leaf in context.Items.Values.Where(item => !IsContainer(item)).ToList())
         {
             await PlanDuplicatesAsync(leaf, context, cancellationToken).ConfigureAwait(false);
+            await PlanCoverageAsync(leaf, context, cancellationToken).ConfigureAwait(false);
         }
 
+        await PlanReassignCoverageAsync(context, cancellationToken).ConfigureAwait(false);
         return context.Plan;
     }
 
@@ -1065,26 +1109,41 @@ internal sealed class LibraryImportService(
 
         var results = new List<MediaFileCleanupRowResult>();
         var reassignRows = request.Rows.Where(row => row.Action == MediaFileCleanupAction.Reassign).ToList();
-        if (reassignRows.Count > 0)
+        var coverRows = request.Rows.Where(row => row.Action == MediaFileCleanupAction.Cover).ToList();
+        if (reassignRows.Count > 0 || coverRows.Count > 0)
         {
             var plan = await PlanAsync(request.RootId, cancellationToken).ConfigureAwait(false);
             foreach (var row in reassignRows)
             {
-                var planned = plan.Reassign.FirstOrDefault(candidate => candidate.MediaFileId == row.MediaFileId &&
-                    candidate.FilePath == row.FilePath &&
-                    candidate.TargetItemId == row.TargetItemId);
+                var planned = plan.Reassign.FirstOrDefault(candidate => MatchesTarget(candidate, row));
                 results.Add(await RunAsync(
                         row,
                         planned,
-                        () => contentService.ReassignFileAsync(
-                            planned!.CurrentItemId,
-                            planned.MediaFileId,
-                            new()
-                            {
-                                TargetContentHierarchyItemId = planned.TargetItemId!.Value,
-                                ExpectedFilePath = planned.FilePath
-                            },
-                            actingUserId,
+                        () => transactionManager.ExecuteWithTransactionAsync(
+                            async ct => await contentService.ReassignFileAsync(
+                                    planned!.CurrentItemId,
+                                    planned.MediaFileId,
+                                    new()
+                                    {
+                                        TargetContentHierarchyItemId = planned.TargetItemId!.Value,
+                                        ExpectedFilePath = planned.FilePath
+                                    },
+                                    actingUserId,
+                                    ct)
+                                .ConfigureAwait(false) &&
+                                await CoverAsync(planned, actingUserId, ct).ConfigureAwait(false),
+                            cancellationToken))
+                    .ConfigureAwait(false));
+            }
+
+            foreach (var row in coverRows)
+            {
+                var planned = plan.Cover.FirstOrDefault(candidate => MatchesTarget(candidate, row));
+                results.Add(await RunAsync(
+                        row,
+                        planned,
+                        () => transactionManager.ExecuteWithTransactionAsync(
+                            ct => CoverAsync(planned!, actingUserId, ct),
                             cancellationToken))
                     .ConfigureAwait(false));
             }
@@ -1107,14 +1166,16 @@ internal sealed class LibraryImportService(
                 var planned = dryRun.Unlink.Any(Matches) ? plan.Unlink.FirstOrDefault(Matches) : null;
                 if (planned is not null &&
                     row.Action == MediaFileCleanupAction.Delete &&
-                    !fileSystem.FileExists(planned.KeepFilePath!))
+                    (planned.KeepFilePath is not { } keepFilePath || !fileSystem.FileExists(keepFilePath)))
                 {
                     results.Add(new()
                     {
                         MediaFileId = row.MediaFileId,
                         Action = row.Action,
-                        Message = $"The copy that stays, {planned.KeepFilePath}, is not on disk, so this file is " +
-                            "not deleted."
+                        Message = planned.KeepFilePath is null
+                            ? "No copy stays in place of this file, so it is not deleted."
+                            : $"The copy that stays, {planned.KeepFilePath}, is not on disk, so this file is " +
+                                "not deleted."
                     });
                     continue;
                 }
@@ -1148,6 +1209,12 @@ internal sealed class LibraryImportService(
         return results;
     }
 
+    private static bool MatchesTarget(MediaFileCleanupRow planned, MediaFileCleanupRow row) =>
+        planned.MediaFileId == row.MediaFileId &&
+        planned.FilePath == row.FilePath &&
+        planned.TargetItemId == row.TargetItemId &&
+        planned.CoveredItemIds.SequenceEqual(row.CoveredItemIds);
+
     private static async Task<MediaFileCleanupRowResult> RunAsync(
         MediaFileCleanupRow row,
         MediaFileCleanupRow? planned,
@@ -1174,6 +1241,28 @@ internal sealed class LibraryImportService(
         {
             return result with { Message = ex.Message };
         }
+    }
+
+    private async Task<bool> CoverAsync(
+        MediaFileCleanupRow row,
+        Guid? actingUserId,
+        CancellationToken cancellationToken)
+    {
+        foreach (var itemId in row.CoveredItemIds)
+        {
+            var item = await contentHierarchyItemRepository.GetByIdAsync(itemId, cancellationToken)
+                    .ConfigureAwait(false)
+                ?? throw new KeyNotFoundException($"Content hierarchy item {itemId} no longer exists.");
+            if (row.Primary && !HasNoPrimaryFile(item))
+            {
+                throw new InvalidOperationException($"The {item.Level} '{item.Name}' already has a primary file.");
+            }
+
+            await contentService.AttachFileAsync(itemId, row.FilePath, actingUserId, cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        return true;
     }
 
     private async Task<IReadOnlyList<ContentHierarchyItem>> LoadItemsWithFilesAsync(
@@ -1270,6 +1359,7 @@ internal sealed class LibraryImportService(
                     Action = MediaFileCleanupAction.Reassign,
                     Reason = $"The binding matched {route.Node.Level} '{route.Node.Name}'."
                 });
+                context.Covered[file.Id] = route.Covered;
                 context.Items.TryAdd(route.Node.Id, route.Node);
                 if (!context.Incoming.TryGetValue(route.Node.Id, out var incoming))
                 {
@@ -1282,6 +1372,106 @@ internal sealed class LibraryImportService(
             {
                 context.Plan.Review.Add(row with { Reason = ex.Message });
             }
+        }
+    }
+
+    private async Task PlanReassignCoverageAsync(PlanContext context, CancellationToken cancellationToken)
+    {
+        for (var index = 0; index < context.Plan.Reassign.Count; index++)
+        {
+            var row = context.Plan.Reassign[index];
+            if (context.Covered.GetValueOrDefault(row.MediaFileId) is not { Count: > 0 } covered ||
+                context.UnlinksOrReviews(row.MediaFileId))
+            {
+                continue;
+            }
+
+            var added = covered.Where(HasNoPrimaryFile).ToList();
+            context.Plan.Reassign[index] = row with
+            {
+                CoveredItemIds = [.. added.Select(item => item.Id)],
+                CoveredItems = await NamesAsync(added, context, cancellationToken).ConfigureAwait(false),
+                Reason = row.Reason + CoverageReason(added, [.. covered.Except(added)])
+            };
+        }
+    }
+
+    private async Task PlanCoverageAsync(
+        ContentHierarchyItem leaf,
+        PlanContext context,
+        CancellationToken cancellationToken)
+    {
+        if (leaf.ParentId is not { } parentId ||
+            LevelOf(leaf) is not { } level ||
+            contentTypeRegistry.FindProviderFor(leaf.ContentType) is not
+                IFileRoutingContentTypeDefinitionProvider provider)
+        {
+            return;
+        }
+
+        foreach (var file in (leaf.ContentItem?.MediaFiles ?? [])
+            .Where(file => FileSystem.IsPrimaryFile(fileSystem, level, file) && !context.UnlinksOrReviews(file.Id)))
+        {
+            var signals = RootFolderContentDiscoveryJob.ToSignalDictionary(provider.Parse(file.FilePath, out _));
+            var namesSeveralItems = signals.Values.Any(values => values.Count > 1);
+            if (!namesSeveralItems ||
+                await contentHierarchyItemRepository.GetByIdAsync(parentId, cancellationToken).ConfigureAwait(false)
+                    is not { } parent)
+            {
+                continue;
+            }
+
+            var siblings = await ListDirectChildrenAsync(parentId, cancellationToken).ConfigureAwait(false);
+            var named = await ResolveFileMatchAsync(parent, siblings, file.FilePath, signals, cancellationToken)
+                .ConfigureAwait(false);
+            var review = named.Count == 0
+                ? $"The binding matched no single item below {parent.Level} '{parent.Name}'."
+                : named.All(item => item.Id != leaf.Id)
+                    ? $"The file name does not name {leaf.Level} '{leaf.Name}', which owns the file."
+                    : null;
+            if (review is not null)
+            {
+                context.Plan.Review.Add(await RowAsync(
+                        file,
+                        true,
+                        null,
+                        null,
+                        MediaFileCleanupAction.Review,
+                        review,
+                        context,
+                        cancellationToken)
+                    .ConfigureAwait(false));
+                continue;
+            }
+
+            var others = named.Where(item => item.Id != leaf.Id &&
+                    !file.Coverage.Any(coverage => coverage.ContentItemId == item.ContentItem?.Id))
+                .ToList();
+            var added = others.Where(HasNoPrimaryFile).ToList();
+            if (added.Count == 0)
+            {
+                continue;
+            }
+
+            var leftOut = others.Except(added).ToList();
+            var owner = named.Except(leftOut).First();
+            var row = await RowAsync(
+                    file,
+                    true,
+                    null,
+                    null,
+                    MediaFileCleanupAction.Cover,
+                    CoverageReason(added, leftOut).TrimStart(),
+                    context,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            context.Plan.Cover.Add(row with
+            {
+                TargetItemId = owner.Id,
+                TargetItem = await NameAsync(owner.Id, context, cancellationToken).ConfigureAwait(false),
+                CoveredItemIds = [.. added.Select(item => item.Id)],
+                CoveredItems = await NamesAsync(added, context, cancellationToken).ConfigureAwait(false),
+            });
         }
     }
 
@@ -1305,8 +1495,66 @@ internal sealed class LibraryImportService(
             return;
         }
 
+        var folder = await contentFileService.GetEffectivePathAsync(leaf.Id, cancellationToken).ConfigureAwait(false);
+        var longest = primaries.Where(IsVideo).Max(file => file.MediaInfo?.DurationSeconds);
+        var marked = primaries
+            .Where(file => IsExtra(
+                    folder is not null && fileSystem.IsPathWithin(folder, file.FilePath) ? folder : null,
+                    file.FilePath) ||
+                (IsVideo(file) && file.MediaInfo?.DurationSeconds < longest / 2))
+            .ToList();
+        var extras = marked.Count < primaries.Count ? marked : [];
+        foreach (var extra in extras)
+        {
+            context.Plan.Unlink.Add(await RowAsync(
+                    extra,
+                    true,
+                    null,
+                    null,
+                    MediaFileCleanupAction.Unlink,
+                    "The file is an extra.",
+                    context,
+                    cancellationToken)
+                .ConfigureAwait(false));
+        }
+
+        var copies = primaries.Except(extras).ToList();
+        var (keep, unlinked) = copies.Count < 2
+            ? (null, [])
+            : await PlanCopiesAsync(leaf, copies, context, cancellationToken).ConfigureAwait(false);
+        var unlinkedPaths = extras.Concat(unlinked).Select(file => file.FilePath).ToList();
+        var stayingPaths = copies.Except(unlinked).Select(file => file.FilePath).ToList();
+        var sidecars = files
+            .Where(file => !FileSystem.IsPrimaryFile(fileSystem, level, file))
+            .DistinctBy(file => file.Id)
+            .Select(file => (
+                File: file,
+                Primary: DownloadImportItemJob.FindPrimary(file.FilePath, unlinkedPaths)))
+            .Where(pair => pair.Primary is not null &&
+                DownloadImportItemJob.FindPrimary(pair.File.FilePath, stayingPaths) is null);
+        foreach (var (sidecar, primaryPath) in sidecars)
+        {
+            context.Plan.Unlink.Add(await RowAsync(
+                    sidecar,
+                    false,
+                    null,
+                    unlinked.Any(file => file.FilePath == primaryPath) ? keep : null,
+                    MediaFileCleanupAction.Unlink,
+                    $"The sidecar belongs to {primaryPath}, which this plan unlinks.",
+                    context,
+                    cancellationToken)
+                .ConfigureAwait(false));
+        }
+    }
+
+    private async Task<(MediaFile? Keep, List<MediaFile> Unlinked)> PlanCopiesAsync(
+        ContentHierarchyItem leaf,
+        IReadOnlyList<MediaFile> copies,
+        PlanContext context,
+        CancellationToken cancellationToken)
+    {
         var ranks = new Dictionary<Guid, int?>();
-        foreach (var file in primaries)
+        foreach (var file in copies)
         {
             var score = await releaseEvaluationService.ScoreFileForContentAsync(file, leaf.Id, cancellationToken)
                 .ConfigureAwait(false);
@@ -1316,7 +1564,7 @@ internal sealed class LibraryImportService(
         var best = ranks.Values.Min();
         if (best is null)
         {
-            foreach (var file in primaries)
+            foreach (var file in copies)
             {
                 context.Plan.Review.Add(await RowAsync(
                         file,
@@ -1330,10 +1578,10 @@ internal sealed class LibraryImportService(
                     .ConfigureAwait(false));
             }
 
-            return;
+            return (null, []);
         }
 
-        var bestFiles = primaries.Where(file => ranks[file.Id] == best).ToList();
+        var bestFiles = copies.Where(file => ranks[file.Id] == best).ToList();
         var keep = bestFiles[0];
         if (bestFiles.Count > 1)
         {
@@ -1355,7 +1603,7 @@ internal sealed class LibraryImportService(
         var rootFolder = await rootFolderRepository.GetByIdAsync(leaf.EffectiveRootFolderId, cancellationToken)
             .ConfigureAwait(false);
         var unlinked = new List<MediaFile>();
-        foreach (var file in primaries.Where(file => ranks[file.Id] != best))
+        foreach (var file in copies.Where(file => ranks[file.Id] != best))
         {
             var rank = ranks[file.Id];
             if (rank is null)
@@ -1402,29 +1650,7 @@ internal sealed class LibraryImportService(
             unlinked.Add(file);
         }
 
-        var unlinkedPaths = unlinked.Select(file => file.FilePath).ToList();
-        var stayingPaths = primaries.Except(unlinked).Select(file => file.FilePath).ToList();
-        var sidecars = files
-            .Where(file => !FileSystem.IsPrimaryFile(fileSystem, level, file))
-            .DistinctBy(file => file.Id)
-            .Select(file => (
-                File: file,
-                Primary: DownloadImportItemJob.FindPrimary(file.FilePath, unlinkedPaths)))
-            .Where(pair => pair.Primary is not null &&
-                DownloadImportItemJob.FindPrimary(pair.File.FilePath, stayingPaths) is null);
-        foreach (var (sidecar, primaryPath) in sidecars)
-        {
-            context.Plan.Unlink.Add(await RowAsync(
-                    sidecar,
-                    false,
-                    null,
-                    keep,
-                    MediaFileCleanupAction.Unlink,
-                    $"The sidecar belongs to {primaryPath}, which this plan unlinks.",
-                    context,
-                    cancellationToken)
-                .ConfigureAwait(false));
-        }
+        return (keep, unlinked);
     }
 
     private async Task<MediaFileCleanupRow> RowAsync(
@@ -1466,6 +1692,20 @@ internal sealed class LibraryImportService(
         return name;
     }
 
+    private async Task<List<string>> NamesAsync(
+        IReadOnlyList<ContentHierarchyItem> items,
+        PlanContext context,
+        CancellationToken cancellationToken)
+    {
+        var names = new List<string>();
+        foreach (var item in items)
+        {
+            names.Add(await NameAsync(item.Id, context, cancellationToken).ConfigureAwait(false));
+        }
+
+        return names;
+    }
+
     public async Task<bool> DeleteMediaFileAsync(
         Guid contentHierarchyItemId,
         Guid mediaFileId,
@@ -1486,6 +1726,20 @@ internal sealed class LibraryImportService(
         return operation.Deleted;
     }
 
+    private static string CoverageReason(
+        IReadOnlyList<ContentHierarchyItem> added,
+        IReadOnlyList<ContentHierarchyItem> leftOut) =>
+        (added.Count > 0 ? $" The file name also covers {Describe(added)}." : string.Empty) +
+        leftOut.Count switch
+        {
+            0 => string.Empty,
+            1 => $" The file does not cover {Describe(leftOut)}, which already has a primary file.",
+            _ => $" The file does not cover {Describe(leftOut)}; each already has a primary file.",
+        };
+
+    private static string Describe(IEnumerable<ContentHierarchyItem> items) =>
+        string.Join(", ", items.Select(item => $"{item.Level} '{item.Name}'"));
+
     private static ContentHierarchyItem? ResolveByTitleSignal(
         IReadOnlyList<ContentHierarchyItem> children,
         string? parsedTitle)
@@ -1495,11 +1749,15 @@ internal sealed class LibraryImportService(
             return null;
         }
 
+        var title = TitleMatchText(parsedTitle);
         var matches = children
-            .Where(child => string.Equals(child.Name.Trim(), parsedTitle.Trim(), StringComparison.OrdinalIgnoreCase))
+            .Where(child => string.Equals(TitleMatchText(child.Name), title, StringComparison.OrdinalIgnoreCase))
             .ToList();
         return matches.Count == 1 ? matches[0] : null;
     }
+
+    private static string TitleMatchText(string value) =>
+        FilesystemSubstitutePattern.Replace(value.NormalizeMediaFilename(), " ").Trim();
 
     private async Task<FileRouteResult> RouteFileAsync(
         ContentHierarchyItem root,
@@ -1508,6 +1766,7 @@ internal sealed class LibraryImportService(
         CancellationToken cancellationToken)
     {
         var current = root;
+        IReadOnlyList<ContentHierarchyItem> covered = [];
 
         while (true)
         {
@@ -1519,33 +1778,34 @@ internal sealed class LibraryImportService(
                 {
                     var levels = string.Join(", ", childLevels.Select(level => level.Slug));
 
-                    if (current.PendingMetadataRefresh &&
-                        timeProvider.GetUtcNow().UtcDateTime - current.CreatedAt < PendingChildLevelWait)
+                    if (current.PendingMetadataRefresh)
                     {
                         throw new ChildLevelPendingException(
                             $"The import is waiting until the {levels} level below {current.Level} " +
-                            $"'{current.Name}' exists.");
+                            $"'{current.Name}' exists.",
+                            current.Id);
                     }
 
                     throw new InvalidOperationException(
                         $"The target {levels} level does not exist yet below {current.Level}.");
                 }
 
-                return new(current, StoppedEarly: false);
+                return new(current, covered, StoppedEarly: false);
             }
 
             var next = await ResolveFileMatchAsync(current, children, filePath, signals, cancellationToken)
                 .ConfigureAwait(false);
-            if (next is null)
+            if (next.Count == 0)
             {
-                return new(current, StoppedEarly: true);
+                return new(current, [], StoppedEarly: true);
             }
 
-            current = next;
+            current = next[0];
+            covered = [.. next.Skip(1)];
         }
     }
 
-    private async Task<ContentHierarchyItem?> ResolveFileMatchAsync(
+    private async Task<IReadOnlyList<ContentHierarchyItem>> ResolveFileMatchAsync(
         ContentHierarchyItem parent,
         IReadOnlyList<ContentHierarchyItem> children,
         string filePath,
@@ -1555,8 +1815,8 @@ internal sealed class LibraryImportService(
         if (contentTypeRegistry.FindProviderFor(parent.ContentType) is
             IFileRoutingContentTypeDefinitionProvider fileRouter)
         {
-            var childId = fileRouter.ResolveFileChild(parent, children, signals);
-            return children.SingleOrDefault(child => child.Id == childId);
+            return [.. fileRouter.ResolveFileChildren(parent, children, signals)
+                .Join(children, id => id, child => child.Id, (_, child) => child)];
         }
 
         var release = new Release { Protocol = "file", Title = Path.GetFileName(filePath) };
@@ -1565,8 +1825,11 @@ internal sealed class LibraryImportService(
             .AssignFilesToLeavesAsync(release, parent, children, [fileRef], cancellationToken)
             .ConfigureAwait(false);
         var leafId = assignments.FirstOrDefault()?.LeafContentHierarchyItemId;
-        return (leafId is { } id ? children.FirstOrDefault(child => child.Id == id) : null)
-            ?? ResolveByTitleSignal(children, FirstNonEmptySignal(signals, ParsedFileSignalKeys.Title));
+        var leaf = (leafId is { } id ? children.FirstOrDefault(child => child.Id == id) : null)
+            ?? ResolveByTitleSignal(
+                [.. children.Where(IsContainer)],
+                FirstNonEmptySignal(signals, ParsedFileSignalKeys.Title));
+        return leaf is null ? [] : [leaf];
     }
 
     private async Task<IReadOnlyList<ContentHierarchyItem>> ListDirectChildrenAsync(
@@ -1611,14 +1874,16 @@ internal sealed class LibraryImportService(
             return null;
         }
 
-        var routed = await RouteFileAsync(
-                root,
-                candidate.FilePath,
-                candidate.ParsedSignals,
-                cancellationToken)
+        var routed = await RouteFileAsync(root, candidate.FilePath, candidate.ParsedSignals, cancellationToken)
             .ConfigureAwait(false);
         return await AttachRoutedFileAsync(
-                candidate, match, routed, associate, actingUserId, correlationId, cancellationToken)
+                candidate,
+                match,
+                routed,
+                associate,
+                actingUserId,
+                correlationId,
+                cancellationToken)
             .ConfigureAwait(false);
     }
 
@@ -1674,7 +1939,10 @@ internal sealed class LibraryImportService(
         Guid? correlationId,
         CancellationToken cancellationToken)
     {
-        if (routed.StoppedEarly)
+        if (routed.StoppedEarly &&
+            !(LevelOf(routed.Node) is { AcceptedFileTypes.Count: > 0 } level &&
+                await fileSystem.MatchesAnyFileTypeAsync(candidate.FilePath, level.AcceptedFileTypes, cancellationToken)
+                    .ConfigureAwait(false)))
         {
             throw new InvalidOperationException(
                 $"The file assignment is unresolved below {routed.Node.Level} '{routed.Node.Name}'. " +
@@ -1683,7 +1951,6 @@ internal sealed class LibraryImportService(
 
         var hierarchyItemId = routed.Node.Id;
 
-        // Association keeps the folder of an item that already has files; an empty item takes the folder of the file.
         var keepFolder = associate && (await contentHierarchyItemRepository
             .GetByIdAsync(hierarchyItemId, cancellationToken)
             .ConfigureAwait(false))?.ContentItem?.MediaFiles.Count > 0;
@@ -1741,7 +2008,9 @@ internal sealed class LibraryImportService(
                         !pathOwner.PendingMetadataRefresh &&
                         pathOwner.DateLastRefreshed is not null &&
                         !string.IsNullOrWhiteSpace(pathOwner.Name) &&
-                        string.Equals(pathOwner.Path, pathOwner.Name.ToGeneratedContentPath(refreshedYear),
+                        string.Equals(
+                            pathOwner.Path,
+                            pathOwner.Name.ToGeneratedContentPath(refreshedYear),
                             StringComparison.Ordinal);
                     if (!canReplacePath ||
                         !alreadyDiscovered && !refreshedPlaceholder &&
@@ -1782,9 +2051,16 @@ internal sealed class LibraryImportService(
                 var attachment = await contentFileService
                     .AttachImportedAsync(hierarchyItemId, candidate.FilePath, actingUserId, ct)
                     .ConfigureAwait(false);
-                var attachedContentItemId = attachment.Result?.MediaFile.ContentItemId
-                    ?? throw new KeyNotFoundException(
-                        $"Content hierarchy item {hierarchyItemId} no longer exists.");
+                var attached = attachment.Result?.MediaFile
+                    ?? throw new KeyNotFoundException($"Content hierarchy item {hierarchyItemId} no longer exists.");
+                foreach (var covered in routed.Covered)
+                {
+                    if (await HasNoPrimaryFileAsync(covered.Id, ct).ConfigureAwait(false))
+                    {
+                        await contentFileService.AttachAsync(covered.Id, candidate.FilePath, actingUserId, ct)
+                            .ConfigureAwait(false);
+                    }
+                }
 
                 if (attachment.FulfillmentChanged)
                 {
@@ -1808,7 +2084,7 @@ internal sealed class LibraryImportService(
                         CorrelationId = correlationId
                     },
                     ct).ConfigureAwait(false);
-                return (attachedContentItemId, (MediaFile?)null);
+                return (attached.ContentItemId, (MediaFile?)null);
             },
         cancellationToken).ConfigureAwait(false);
 
@@ -2066,7 +2342,11 @@ internal sealed class LibraryImportService(
         }
 
         var files = new List<FileRenameEntry>();
-        var routed = new List<(Guid CandidateId, string Path, IReadOnlyList<ContentHierarchyItem> Lineage)>();
+        var routed = new List<(
+            Guid CandidateId,
+            string Path,
+            IReadOnlyList<ContentHierarchyItem> Lineage,
+            IReadOnlyList<ContentHierarchyItem> Covered)>();
         var hasMask = false;
         foreach (var id in ids)
         {
@@ -2084,14 +2364,17 @@ internal sealed class LibraryImportService(
                     .ConfigureAwait(false);
 
                 var match = candidate.Matches[0];
-                var nodes = await contentService.PreviewImportHierarchyAsync(new PreviewByExternalIdRequest
-                {
-                    ProviderType = match.ProviderType,
-                    ExternalIdKey = match.ExternalIdKey,
-                    ExternalId = match.ExternalId,
-                    ContentType = candidate.ContentType,
-                    LevelSlug = match.LevelSlug
-                }, candidate.RootFolderId, cancellationToken).ConfigureAwait(false);
+                var nodes = await contentService.PreviewImportHierarchyAsync(
+                    new PreviewByExternalIdRequest
+                    {
+                        ProviderType = match.ProviderType,
+                        ExternalIdKey = match.ExternalIdKey,
+                        ExternalId = match.ExternalId,
+                        ContentType = candidate.ContentType,
+                        LevelSlug = match.LevelSlug
+                    },
+                    candidate.RootFolderId,
+                    cancellationToken).ConfigureAwait(false);
                 var current = nodes[0];
                 var lineage = new List<ContentHierarchyItem> { current };
                 var ancestor = current;
@@ -2102,6 +2385,7 @@ internal sealed class LibraryImportService(
                     ancestor = parent;
                 }
 
+                IReadOnlyList<ContentHierarchyItem> covered = [];
                 while (true)
                 {
                     var children = nodes.Where(node => node.ParentId == current.Id).ToArray();
@@ -2131,21 +2415,25 @@ internal sealed class LibraryImportService(
                             candidate.ParsedSignals,
                             cancellationToken)
                         .ConfigureAwait(false);
-                    if (next is null)
+                    if (next.Count == 0)
                     {
                         throw new InvalidOperationException(
                             $"The file assignment is unresolved below {current.Level}.");
                     }
 
-                    current = next;
+                    current = next[0];
+                    covered = [.. next.Skip(1)];
                     lineage.Insert(0, current);
                 }
 
                 var preview = await contentFileService.PreviewImportRenameMaskAsync(
-                    lineage, candidate.FilePath, cancellationToken).ConfigureAwait(false);
+                    lineage,
+                    covered,
+                    candidate.FilePath,
+                    cancellationToken).ConfigureAwait(false);
                 hasMask |= preview.HasMask;
                 files.AddRange(preview.Files.Select(file => file with { CandidateId = id }));
-                routed.Add((id, candidate.FilePath, lineage));
+                routed.Add((id, candidate.FilePath, lineage, covered));
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -2157,8 +2445,12 @@ internal sealed class LibraryImportService(
         foreach (var route in routed.Where(route => primaryPlans.Count(file =>
             file.ContentHierarchyItemId == route.Lineage[0].Id) > 1))
         {
-            var combined = await contentFileService.PreviewImportRenameMaskAsync(route.Lineage, route.Path,
-                cancellationToken, primaryPlans.Where(file =>
+            var combined = await contentFileService.PreviewImportRenameMaskAsync(
+                route.Lineage,
+                route.Covered,
+                route.Path,
+                cancellationToken,
+                primaryPlans.Where(file =>
                     file.ContentHierarchyItemId == route.Lineage[0].Id).ToArray()).ConfigureAwait(false);
             files.RemoveAll(file => file.CandidateId == route.CandidateId);
             files.AddRange(combined.Files.Select(file => file with { CandidateId = route.CandidateId }));
@@ -2189,8 +2481,13 @@ internal sealed class LibraryImportService(
     {
         var candidate = await libraryImportCandidateRepository.GetByIdAsync(candidateId, cancellationToken)
             .ConfigureAwait(false);
-        var result = await ImportCandidateAsync(candidateId, matchIndex, monitoringMode, actingUserId,
-            correlationId, cancellationToken).ConfigureAwait(false);
+        var result = await ImportCandidateAsync(
+            candidateId,
+            matchIndex,
+            monitoringMode,
+            actingUserId,
+            correlationId,
+            cancellationToken).ConfigureAwait(false);
         if (result.Status != LibraryImportCompletionStatus.Completed || result.ContentHierarchyItemId is not { } id)
         {
             return result;
@@ -2217,21 +2514,27 @@ internal sealed class LibraryImportService(
                 MediaFileId = current.Files.FirstOrDefault(file =>
                     fileSystem.PathsEqual(file.OriginalPath, entry.OriginalPath))?.MediaFileId
             }).ToArray();
-            var renamed = await contentFileService.ExecuteRenameMaskAsync(id,
+            var renamed = await contentFileService.ExecuteRenameMaskAsync(
+                id,
                 new() { HasMask = true, Files = entries },
-                actingUserId, cancellationToken).ConfigureAwait(false);
+                actingUserId,
+                cancellationToken).ConfigureAwait(false);
             return result with
             {
                 Message = renamed.Files.All(file => file.Completed)
                     ? "Association and explicit rename completed."
                     : "Association completed. Rename failed: " +
-                        string.Join("; ", renamed.Files.Where(file => file.Error is not null)
-                            .Select(file => file.Error))
+                        string.Join(
+                            "; ",
+                            renamed.Files.Where(file => file.Error is not null)
+                                .Select(file => file.Error))
             };
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            logger.LogWarning(ex, "Association completed but explicit rename failed for candidate {CandidateId}",
+            logger.LogWarning(
+                ex,
+                "Association completed but explicit rename failed for candidate {CandidateId}",
                 candidateId);
             return result with { Message = "Association completed. Rename failed: " + ex.Message };
         }
@@ -2244,9 +2547,15 @@ internal sealed class LibraryImportService(
         string AbsolutePath,
         bool WasMetadataPlaceholder);
 
-    private sealed record FileRouteResult(ContentHierarchyItem Node, bool StoppedEarly);
+    private sealed record FileRouteResult(
+        ContentHierarchyItem Node,
+        IReadOnlyList<ContentHierarchyItem> Covered,
+        bool StoppedEarly);
 
-    private sealed class ChildLevelPendingException(string message) : Exception(message);
+    private sealed class ChildLevelPendingException(string message, Guid contentHierarchyItemId) : Exception(message)
+    {
+        public Guid ContentHierarchyItemId { get; } = contentHierarchyItemId;
+    }
 
     private sealed class PlanContext
     {
@@ -2261,5 +2570,10 @@ internal sealed class LibraryImportService(
         public Dictionary<Guid, List<MediaFile>> Incoming { get; } = [];
 
         public Dictionary<Guid, string> Names { get; } = [];
+
+        public Dictionary<Guid, IReadOnlyList<ContentHierarchyItem>> Covered { get; } = [];
+
+        public bool UnlinksOrReviews(Guid mediaFileId) =>
+            Plan.Unlink.Concat(Plan.Review).Any(row => row.MediaFileId == mediaFileId);
     }
 }

@@ -399,64 +399,6 @@ describe('cache invalidation', () => {
             expect(spy).toHaveBeenCalledWith({ queryKey: indexerQueryKeys.list() });
         });
 
-        it('should invalidate indexer list after update indexer', async () => {
-            const queryClient = createTestClient();
-            const spy = vi.spyOn(queryClient, 'invalidateQueries');
-            mockApiGet.mockImplementation((url: string) => {
-                if (url === '/indexers') {
-                    return Promise.resolve(mockIndexers);
-                }
-                if (url === '/indexer-feeds') {
-                    return Promise.resolve(mockFeeds);
-                }
-                return Promise.resolve([]);
-            });
-            mockApiPatch.mockResolvedValue(undefined);
-
-            const { result } = renderHook(() => useIndexers(), {
-                wrapper: createWrapper(queryClient),
-            });
-
-            await waitFor(() => {
-                expect(result.current.isLoading).toBe(false);
-            });
-
-            await act(async () => {
-                await result.current.updateIndexer('i1', { name: { value: 'Updated' } });
-            });
-
-            expect(spy).toHaveBeenCalledWith({ queryKey: indexerQueryKeys.list() });
-        });
-
-        it('should invalidate indexer list after delete indexer', async () => {
-            const queryClient = createTestClient();
-            const spy = vi.spyOn(queryClient, 'invalidateQueries');
-            mockApiGet.mockImplementation((url: string) => {
-                if (url === '/indexers') {
-                    return Promise.resolve(mockIndexers);
-                }
-                if (url === '/indexer-feeds') {
-                    return Promise.resolve(mockFeeds);
-                }
-                return Promise.resolve([]);
-            });
-            mockApiDelete.mockResolvedValue(undefined);
-
-            const { result } = renderHook(() => useIndexers(), {
-                wrapper: createWrapper(queryClient),
-            });
-
-            await waitFor(() => {
-                expect(result.current.isLoading).toBe(false);
-            });
-
-            await act(async () => {
-                await result.current.deleteIndexer('i1');
-            });
-
-            expect(spy).toHaveBeenCalledWith({ queryKey: indexerQueryKeys.list() });
-        });
-
         it('should invalidate feeds query after enable feed', async () => {
             const queryClient = createTestClient();
             const spy = vi.spyOn(queryClient, 'invalidateQueries');

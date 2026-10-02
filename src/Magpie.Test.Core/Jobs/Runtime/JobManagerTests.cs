@@ -464,7 +464,7 @@ public sealed class JobManagerTests
         // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(scheduler.Total, Is.EqualTo(options.PoolSize));
+            Assert.That(scheduler.Total, Is.EqualTo(50));
             _runtime.Verify(m => m.ExecuteAsync(executionId, It.IsAny<CancellationToken>()), Times.Once);
         }
     }
@@ -1077,7 +1077,7 @@ public sealed class JobManagerTests
             TimeProvider.System,
             NullLoggerFactory.Instance.CreateLogger<JobManager>(), _transactions.Object);
 
-        // Assert
+        // Act and Assert
         Assert.ThrowsAsync<MagpieException>(
             async () => await subject.CreateScheduleTriggerAsync(
                 create,
@@ -1534,6 +1534,22 @@ public sealed class JobManagerTests
 
         // Assert
         Assert.That(result, Has.Property(nameof(result.Name)).EqualTo("TestEventTrigger"));
+    }
+
+    [TestCase("${event.name}", true)]
+    [TestCase("before ${event.name} after", true)]
+    [TestCase("${event.name", true)]
+    [TestCase("$${event.name}", false)]
+    [TestCase("plain", false)]
+    public void ContainsEventBinding_ReturnsWhetherTheScanMeetsABinding_WhenTheValueIsScanned(
+        string value,
+        bool expected)
+    {
+        // Act
+        var contains = JobManager.ContainsEventBinding(value);
+
+        // Assert
+        Assert.That(contains, Is.EqualTo(expected));
     }
 
     [Test]

@@ -1,11 +1,12 @@
 import { useState, useCallback, useEffect, useRef, type ReactNode } from 'react';
-import { FloppyDiskIcon, XIcon, InfoIcon, CheckFatIcon } from '@phosphor-icons/react';
+import { FloppyDiskIcon, XIcon, InfoIcon, CheckFatIcon, CopyIcon } from '@phosphor-icons/react';
 
 import { useUnsavedChangesGuard } from '@/hooks/useUnsavedChangesGuard';
 import { stripBlankRows, useFormDirty } from '@/hooks/useFormDirty';
 import { useExternalChangeConflict } from '@/hooks/useExternalChangeConflict';
 import type { ApiQualityTierRule } from '@/hooks/useQualityTierLists';
 
+import { Alert } from '@/components/ui/Alert';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Label } from '@/components/ui/Label';
@@ -48,6 +49,16 @@ interface TierFormProps {
     onSubmit: (values: TierFormValues) => void | Promise<void>;
 
     isSubmitting?: boolean;
+
+    sharedWith?: readonly string[] | null;
+
+    sharedWithFailed?: boolean;
+
+    onRetrySharedWith?: () => void;
+
+    onClone?: () => void;
+
+    isCloning?: boolean;
 }
 
 const emptyValues: TierFormValues = {
@@ -58,13 +69,20 @@ const emptyValues: TierFormValues = {
     sourceRules: [],
 };
 
-function normalizeTier(values: TierFormValues): unknown {
+function normalizeSharedFields(values: TierFormValues) {
     return {
         name: values.name,
-        isCutoff: values.isCutoff,
         criteria: stripBlankRows(values.criteria, isBlankCriterion),
         exclusions: normalizeExclusions(values.exclusions ?? []),
     };
+}
+
+function normalizeTier(values: TierFormValues): unknown {
+    return { ...normalizeSharedFields(values), isCutoff: values.isCutoff };
+}
+
+function quoteNames(names: readonly string[]): string {
+    return names.map((name) => `"${name}"`).join(', ');
 }
 
 export function TierForm({
@@ -75,8 +93,16 @@ export function TierForm({
     tierListId,
     onSubmit,
     isSubmitting = false,
+    sharedWith,
+    sharedWithFailed = false,
+    onRetrySharedWith,
+    onClone,
+    isCloning = false,
 }: TierFormProps): ReactNode {
     const isEditing = !!initialValues?.id;
+    const sharingUnknown = isEditing && sharedWith === null;
+    const otherLists = (isEditing && sharedWith) || [];
+    const isShared = otherLists.length > 0;
 
     const [values, setValues] = useState<TierFormValues>(initialValues ?? emptyValues);
     const [errors, setErrors] = useState<Record<string, string>>({});
@@ -84,8 +110,11 @@ export function TierForm({
     const cleanValuesRef = useRef<TierFormValues>(initialValues ?? emptyValues);
     const [showUnsavedDialog, setShowUnsavedDialog] = useState(false);
     const [showStaleSaveConfirmation, setShowStaleSaveConfirmation] = useState(false);
+    const [showSharedSaveConfirmation, setShowSharedSaveConfirmation] = useState(false);
+    const [showCloneDiscard, setShowCloneDiscard] = useState(false);
     const loadedEntityIdRef = useRef<string | null | undefined>(undefined);
     const isDirty = useFormDirty(values, cleanValuesRef.current, normalizeTier);
+    const sharedFieldsDirty = useFormDirty(values, cleanValuesRef.current, normalizeSharedFields);
     const isDirtyRef = useRef(isDirty);
     isDirtyRef.current = isDirty;
 
@@ -104,7 +133,9 @@ export function TierForm({
         loadedEntityIdRef.current = nextEntityId;
         setErrors({});
         setShowUnsavedDialog(false);
+        setShowCloneDiscard(false);
         setShowStaleSaveConfirmation(false);
+        setShowSharedSaveConfirmation(false);
     }, [open, initialValues]);
 
     const conflict = useExternalChangeConflict({
@@ -137,6 +168,19 @@ export function TierForm({
     const handleKeepEditing = useCallback(() => {
         setShowUnsavedDialog(false);
     }, []);
+
+    const handleClone = useCallback(() => {
+        if (isDirty) {
+            setShowCloneDiscard(true);
+            return;
+        }
+        onClone?.();
+    }, [isDirty, onClone]);
+
+    const handleDiscardAndClone = useCallback(() => {
+        setShowCloneDiscard(false);
+        onClone?.();
+    }, [onClone]);
 
     const handleCancel = useCallback(() => {
         handleOpenChange(false);
@@ -190,20 +234,31 @@ export function TierForm({
         }
     }, [conflict, onSubmit, values]);
 
+    const confirmSharedOrSave = useCallback(() => {
+        if (isShared && sharedFieldsDirty) {
+            setShowSharedSaveConfirmation(true);
+            return;
+        }
+        void save();
+    }, [isShared, save, sharedFieldsDirty]);
+
     const handleSubmit = useCallback(
         (e: React.SubmitEvent) => {
             e.preventDefault();
-            if (conflict.state === 'deleted' || !validate()) {
+            if (conflict.state === 'deleted' || sharingUnknown || !validate()) {
                 return;
             }
             if (conflict.state === 'stale') {
                 setShowStaleSaveConfirmation(true);
                 return;
             }
-            void save();
+            confirmSharedOrSave();
         },
-        [conflict.state, save, validate],
+        [conflict.state, confirmSharedOrSave, sharingUnknown, validate],
     );
+
+    const listScope = isShared ? ` and ${otherLists.length} other ${otherLists.length === 1 ? 'list' : 'lists'}` : '';
+    const editScope = tierListName && !sharingUnknown ? ` in "${tierListName}"${listScope}` : '';
 
     return (
         <Sheet open={open} onOpenChange={handleOpenChange}>
@@ -212,7 +267,7 @@ export function TierForm({
                     <SheetTitle>{isEditing ? 'Edit Tier' : 'Add Tier'}</SheetTitle>
                     <SheetDescription>
                         {isEditing
-                            ? `Update the tier configuration${tierListName ? ` in "${tierListName}".` : '.'}`
+                            ? `Update the tier configuration${editScope}.`
                             : `Add a new tier${tierListName ? ` to "${tierListName}".` : '.'}`}
                     </SheetDescription>
                 </SheetHeader>
@@ -225,6 +280,40 @@ export function TierForm({
                                 entityLabel="Tier list"
                                 id="tier-external-change"
                             />
+                        )}
+                        {sharingUnknown && sharedWithFailed && (
+                            <Alert
+                                variant="error"
+                                title="Failed to load the tier lists"
+                                data-testid="shared-tier-error"
+                            >
+                                <p className="tier-form__notice-text">The lists that use this tier are unknown.</p>
+                                <Button type="button" variant="secondary" size="sm" onClick={onRetrySharedWith}>
+                                    Retry
+                                </Button>
+                            </Alert>
+                        )}
+                        {isShared && (
+                            <Alert variant="info" title="Shared tier" data-testid="shared-tier-notice">
+                                <p className="tier-form__notice-text">
+                                    Name, criteria and exclusions also change in {quoteNames(otherLists)}. The cutoff
+                                    applies only to {tierListName ? `"${tierListName}"` : 'this list'}. Clone Tier adds
+                                    a copy that only this list uses and keeps the shared tier until you remove it.
+                                </p>
+                                {onClone && (
+                                    <Button
+                                        type="button"
+                                        size="sm"
+                                        onClick={handleClone}
+                                        loading={isCloning}
+                                        disabled={isSubmitting}
+                                        data-action="clone-tier"
+                                    >
+                                        <CopyIcon weight="bold" aria-hidden="true" />
+                                        Clone Tier
+                                    </Button>
+                                )}
+                            </Alert>
                         )}
                         <div className="tier-form__field">
                             <Label htmlFor="tier-name" error={!!errors.name} required>
@@ -324,7 +413,7 @@ export function TierForm({
                             type="submit"
                             variant="primary"
                             loading={isSubmitting}
-                            disabled={conflict.state === 'deleted'}
+                            disabled={conflict.state === 'deleted' || sharingUnknown}
                             data-action="save"
                         >
                             <FloppyDiskIcon weight="bold" aria-hidden="true" />
@@ -335,6 +424,14 @@ export function TierForm({
             </SheetContent>
 
             <UnsavedChangesDialog open={showUnsavedDialog} onDiscard={handleDiscard} onCancel={handleKeepEditing} />
+            <UnsavedChangesDialog
+                open={showCloneDiscard}
+                title="Discard Changes and Clone?"
+                description="Clone Tier copies the saved tier. It does not copy your unsaved changes."
+                discardLabel="Discard and Clone"
+                onDiscard={handleDiscardAndClone}
+                onCancel={() => setShowCloneDiscard(false)}
+            />
             <StaleSaveConfirmationDialog
                 open={showStaleSaveConfirmation}
                 title="Save changes based on older data?"
@@ -343,6 +440,19 @@ export function TierForm({
                 onCancel={() => setShowStaleSaveConfirmation(false)}
                 onConfirm={() => {
                     setShowStaleSaveConfirmation(false);
+                    confirmSharedOrSave();
+                }}
+            />
+            <StaleSaveConfirmationDialog
+                open={showSharedSaveConfirmation}
+                title={`Save changes to ${otherLists.length + 1} lists?`}
+                description={`Name, criteria and exclusions change in every list that uses this tier: ${quoteNames(
+                    tierListName ? [tierListName, ...otherLists] : otherLists,
+                )}.`}
+                saving={isSubmitting}
+                onCancel={() => setShowSharedSaveConfirmation(false)}
+                onConfirm={() => {
+                    setShowSharedSaveConfirmation(false);
                     void save();
                 }}
             />

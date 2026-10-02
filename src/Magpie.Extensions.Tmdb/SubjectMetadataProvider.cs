@@ -42,14 +42,14 @@ internal sealed class SubjectMetadataProvider(
         var tmdbId = existingMetadata.FindTmdbId();
         if (tmdbId is null)
         {
-            logger.LogDebug("TMDb subject provider has no TMDb id for Subject {Id}", subject.Id);
+            logger.LogInformation("TMDb id missing for Subject {Id}", subject.Id);
             return null;
         }
 
         if (!int.TryParse(tmdbId, out _))
         {
-            logger.LogDebug(
-                "TMDb subject provider found a non-numeric TMDb id {TmdbId} for Subject {Id}",
+            logger.LogInformation(
+                "TMDb id {TmdbId} is not numeric for Subject {Id}",
                 tmdbId,
                 subject.Id);
             return null;

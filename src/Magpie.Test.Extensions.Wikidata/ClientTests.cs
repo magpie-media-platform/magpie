@@ -392,8 +392,7 @@ internal sealed class ClientTests
         };
 
         // Act
-        var action = async () => await subject.GetEntitiesAsync(ids, context, default)
-            .ConfigureAwait(false);
+        var action = async () => await subject.GetEntitiesAsync(ids, context, default).ConfigureAwait(false);
 
         // Assert
         Assert.That(action, Throws.TypeOf<InvalidOperationException>());
@@ -604,65 +603,6 @@ internal sealed class ClientTests
         // Arrange
         var time = new FakeTimeProvider(new DateTimeOffset(2026, 9, 22, 12, 0, 0, TimeSpan.Zero));
         using var arrived = new SemaphoreSlim(0);
-        var subject = CreatePagedSearchClient(time, arrived, TimeSpan.FromSeconds(16), cancelAfterFirstPage: null);
-        var context = new RequestContext { Language = "en", FallbackLanguages = ["en"], UserAgent = "test" };
-        var started = time.GetUtcNow();
-
-        // Act
-        var pending = subject.SearchEntitiesAsync("test", context, default);
-        for (var page = 0; page < 4; page++)
-        {
-            await arrived.WaitAsync().ConfigureAwait(false);
-            time.Advance(TimeSpan.FromSeconds(16));
-        }
-
-        var result = await pending.ConfigureAwait(false);
-
-        // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(result, Is.EqualTo(["Q1", "Q2", "Q3", "Q4"]));
-            Assert.That(time.GetUtcNow() - started, Is.EqualTo(TimeSpan.FromSeconds(64)));
-        }
-    }
-
-    [TestCase(false, 25)]
-    [TestCase(true, 16)]
-    public async Task SearchEntitiesAsync_StopsAfterOnePage_WhenTheRequestTimesOutOrTheCallerCancels(
-        bool cancelAfterFirstPage,
-        int responseSeconds)
-    {
-        // Arrange
-        var time = new FakeTimeProvider(new DateTimeOffset(2026, 9, 22, 12, 0, 0, TimeSpan.Zero));
-        using var arrived = new SemaphoreSlim(0);
-        using var lifetime = new CancellationTokenSource();
-        var subject = CreatePagedSearchClient(
-            time,
-            arrived,
-            TimeSpan.FromSeconds(responseSeconds),
-            cancelAfterFirstPage ? lifetime : null);
-        var context = new RequestContext { Language = "en", FallbackLanguages = ["en"], UserAgent = "test" };
-
-        // Act
-        var pending = subject.SearchEntitiesAsync("test", context, lifetime.Token);
-        await arrived.WaitAsync().ConfigureAwait(false);
-        time.Advance(TimeSpan.FromSeconds(responseSeconds));
-
-        // Assert
-        Assert.CatchAsync<OperationCanceledException>(async () => await pending.ConfigureAwait(false));
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(arrived.CurrentCount, Is.Zero);
-            Assert.That(lifetime.IsCancellationRequested, Is.EqualTo(cancelAfterFirstPage));
-        }
-    }
-
-    private static WikidataClient CreatePagedSearchClient(
-        FakeTimeProvider time,
-        SemaphoreSlim arrived,
-        TimeSpan responseDelay,
-        CancellationTokenSource? cancelAfterFirstPage)
-    {
         string[] pages =
         [
             "{\"search\":[{\"id\":\"Q1\"}],\"search-continue\":1}",
@@ -677,14 +617,9 @@ internal sealed class ClientTests
             .Returns(async (HttpRequestMessage _, CancellationToken token) =>
             {
                 var page = pages[Interlocked.Increment(ref sends) - 1];
-                var response = Task.Delay(responseDelay, time, token);
+                var response = Task.Delay(TimeSpan.FromSeconds(16), time, token);
                 arrived.Release();
                 await response.ConfigureAwait(false);
-                if (cancelAfterFirstPage is not null)
-                {
-                    await cancelAfterFirstPage.CancelAsync().ConfigureAwait(false);
-                }
-
                 return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(page) };
             });
         var factory = new Mock<IHttpClientFactory>();
@@ -693,6 +628,114 @@ internal sealed class ClientTests
         var cooldown = new ServiceCollection().AddSingleton<TimeProvider>(time)
             .AddHttpClient("cooldown").AddUpstreamCooldown().Services.BuildServiceProvider()
             .GetRequiredService<IUpstreamCooldown>();
-        return new WikidataClient(factory.Object, cooldown, time);
+        var subject = new WikidataClient(factory.Object, cooldown, time);
+        var context = new RequestContext { Language = "en", FallbackLanguages = ["en"], UserAgent = "test" };
+        var started = time.GetUtcNow();
+
+        // Act
+        var pending = subject.SearchEntitiesAsync("test", context, default);
+        await arrived.WaitAsync().ConfigureAwait(false);
+        time.Advance(TimeSpan.FromSeconds(16));
+        await arrived.WaitAsync().ConfigureAwait(false);
+        time.Advance(TimeSpan.FromSeconds(16));
+        await arrived.WaitAsync().ConfigureAwait(false);
+        time.Advance(TimeSpan.FromSeconds(16));
+        await arrived.WaitAsync().ConfigureAwait(false);
+        time.Advance(TimeSpan.FromSeconds(16));
+        var result = await pending.ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result, Is.EqualTo(["Q1", "Q2", "Q3", "Q4"]));
+            Assert.That(time.GetUtcNow() - started, Is.EqualTo(TimeSpan.FromSeconds(64)));
+        }
+    }
+
+    [Test]
+    public async Task SearchEntitiesAsync_StopsAfterOnePage_WhenTheRequestTimesOut()
+    {
+        // Arrange
+        var time = new FakeTimeProvider(new DateTimeOffset(2026, 9, 22, 12, 0, 0, TimeSpan.Zero));
+        using var arrived = new SemaphoreSlim(0);
+        using var lifetime = new CancellationTokenSource();
+        var handler = new Mock<HttpMessageHandler>();
+        handler.Protected().Setup<Task<HttpResponseMessage>>("SendAsync",
+                ItExpr.IsAny<HttpRequestMessage>(), ItExpr.IsAny<CancellationToken>())
+            .Returns(async (HttpRequestMessage _, CancellationToken token) =>
+            {
+                var response = Task.Delay(TimeSpan.FromSeconds(25), time, token);
+                arrived.Release();
+                await response.ConfigureAwait(false);
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("{\"search\":[{\"id\":\"Q1\"}],\"search-continue\":1}")
+                };
+            });
+        var factory = new Mock<IHttpClientFactory>();
+        factory.Setup(value => value.CreateClient(WikidataClient.HttpClientName))
+            .Returns(() => new HttpClient(handler.Object, disposeHandler: false));
+        var cooldown = new ServiceCollection().AddSingleton<TimeProvider>(time)
+            .AddHttpClient("cooldown").AddUpstreamCooldown().Services.BuildServiceProvider()
+            .GetRequiredService<IUpstreamCooldown>();
+        var subject = new WikidataClient(factory.Object, cooldown, time);
+        var context = new RequestContext { Language = "en", FallbackLanguages = ["en"], UserAgent = "test" };
+
+        // Act
+        var pending = subject.SearchEntitiesAsync("test", context, lifetime.Token);
+        await arrived.WaitAsync().ConfigureAwait(false);
+        time.Advance(TimeSpan.FromSeconds(25));
+
+        // Assert
+        Assert.CatchAsync<OperationCanceledException>(async () => await pending.ConfigureAwait(false));
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(arrived.CurrentCount, Is.Zero);
+            Assert.That(lifetime.IsCancellationRequested, Is.False);
+        }
+    }
+
+    [Test]
+    public async Task SearchEntitiesAsync_StopsAfterOnePage_WhenTheCallerCancels()
+    {
+        // Arrange
+        var time = new FakeTimeProvider(new DateTimeOffset(2026, 9, 22, 12, 0, 0, TimeSpan.Zero));
+        using var arrived = new SemaphoreSlim(0);
+        using var lifetime = new CancellationTokenSource();
+        var handler = new Mock<HttpMessageHandler>();
+        handler.Protected().Setup<Task<HttpResponseMessage>>("SendAsync",
+                ItExpr.IsAny<HttpRequestMessage>(), ItExpr.IsAny<CancellationToken>())
+            .Returns(async (HttpRequestMessage _, CancellationToken token) =>
+            {
+                var response = Task.Delay(TimeSpan.FromSeconds(16), time, token);
+                arrived.Release();
+                await response.ConfigureAwait(false);
+                await lifetime.CancelAsync().ConfigureAwait(false);
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("{\"search\":[{\"id\":\"Q1\"}],\"search-continue\":1}")
+                };
+            });
+        var factory = new Mock<IHttpClientFactory>();
+        factory.Setup(value => value.CreateClient(WikidataClient.HttpClientName))
+            .Returns(() => new HttpClient(handler.Object, disposeHandler: false));
+        var cooldown = new ServiceCollection().AddSingleton<TimeProvider>(time)
+            .AddHttpClient("cooldown").AddUpstreamCooldown().Services.BuildServiceProvider()
+            .GetRequiredService<IUpstreamCooldown>();
+        var subject = new WikidataClient(factory.Object, cooldown, time);
+        var context = new RequestContext { Language = "en", FallbackLanguages = ["en"], UserAgent = "test" };
+
+        // Act
+        var pending = subject.SearchEntitiesAsync("test", context, lifetime.Token);
+        await arrived.WaitAsync().ConfigureAwait(false);
+        time.Advance(TimeSpan.FromSeconds(16));
+
+        // Assert
+        Assert.CatchAsync<OperationCanceledException>(async () => await pending.ConfigureAwait(false));
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(arrived.CurrentCount, Is.Zero);
+            Assert.That(lifetime.IsCancellationRequested, Is.True);
+        }
     }
 }

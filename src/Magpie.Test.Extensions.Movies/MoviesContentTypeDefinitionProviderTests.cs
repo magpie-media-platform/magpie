@@ -140,7 +140,9 @@ public class MoviesContentTypeDefinitionProviderTests
     [TestCase("Dune.2020.1080p.BluRay", ReleaseMatchResult.NoMatch)]
     [TestCase("Arrival.2021.1080p.BluRay", ReleaseMatchResult.NoMatch)]
     [TestCase("Dune.1080p.BluRay", ReleaseMatchResult.Indeterminate)]
-    public void IsMatch_Result_WhenMovieEvidenceIsEvaluated(string releaseTitle, ReleaseMatchResult expected)
+    public void IsMatch_ReturnsExpectedMatch_WhenMovieEvidenceIsEvaluated(
+        string releaseTitle,
+        ReleaseMatchResult expected)
     {
         // Arrange
         var itemId = Guid.NewGuid();
@@ -185,7 +187,7 @@ public class MoviesContentTypeDefinitionProviderTests
     }
 
     [Test]
-    public void Parse_Result_WhenDottedReleaseNameHasYear()
+    public void Parse_ReturnsTitleAndYear_WhenDottedReleaseNameHasYear()
     {
         // Arrange
         // Act

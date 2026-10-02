@@ -266,6 +266,7 @@ public static class MagpieCoreServiceCollectionExtensions
         services.RegisterJob<MediaServerRefreshJob>(MediaServerRefreshJob.Spec);
         services.RegisterJob<RootFolderContentDiscoveryJob>(RootFolderContentDiscoveryJob.Spec);
         services.RegisterJob<RootFolderContentImportItemJob>(RootFolderContentImportItemJob.Spec);
+        services.RegisterJob<RootFolderContentImportResumeJob>(RootFolderContentImportResumeJob.Spec);
         services.RegisterJob<LibraryImportMatchResolutionJob>(LibraryImportMatchResolutionJob.Spec);
         services.RegisterJob<RetentionCleanupJob>(RetentionCleanupJob.Spec);
         services.RegisterJob<DatabaseMaintenanceJob>(DatabaseMaintenanceJob.Spec);

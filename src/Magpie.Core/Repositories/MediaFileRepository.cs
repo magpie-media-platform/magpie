@@ -36,6 +36,7 @@ internal sealed class MediaFileRepository(
             var pathKey = ToMediaFilePathKey(filePath);
             return await context.MediaFiles
                 .AsNoTracking()
+                .Include(mediaFile => mediaFile.Coverage)
                 .FirstOrDefaultAsync(mediaFile => mediaFile.PathKey == pathKey, cancellationToken)
                 .ConfigureAwait(false);
         }
@@ -52,6 +53,7 @@ internal sealed class MediaFileRepository(
         {
             return await context.MediaFiles
                 .AsNoTracking()
+                .Include(mediaFile => mediaFile.Coverage)
                 .ToListAsync(cancellationToken)
                 .ConfigureAwait(false);
         }
@@ -68,6 +70,7 @@ internal sealed class MediaFileRepository(
         {
             return await context.MediaFiles
                 .AsNoTracking()
+                .Include(m => m.Coverage)
                 .FirstOrDefaultAsync(m => m.Id == id, cancellationToken)
                 .ConfigureAwait(false);
         }
@@ -123,9 +126,11 @@ internal sealed class MediaFileRepository(
             var totalItems = await items.CountAsync(cancellationToken).ConfigureAwait(false);
             items = items.Skip((paging.PageNumber - 1) * paging.PageSize).Take(paging.PageSize);
 
-            return new PagedList<MediaFile>
+            return new()
             {
-                Items = await items.ToListAsync(cancellationToken).ConfigureAwait(false),
+                Items = await items.Include(item => item.Coverage)
+                    .ToListAsync(cancellationToken)
+                    .ConfigureAwait(false),
                 TotalItems = totalItems,
                 PageNumber = paging.PageNumber,
                 PageSize = paging.PageSize
@@ -148,6 +153,14 @@ internal sealed class MediaFileRepository(
             return await transactionManager.ExecuteWithTransactionAsync(async ct =>
             {
                 var owners = await LockOwnersAsync([mediaFile.ContentItemId], ct).ConfigureAwait(false);
+                var items = await RequireSiblingsInOrdinalOrderAsync(mediaFile, ct).ConfigureAwait(false);
+                mediaFile.ContentItemId = items[0];
+                mediaFile.Coverage.Clear();
+                foreach (var contentItemId in items.Skip(1))
+                {
+                    mediaFile.Coverage.Add(new() { ContentItemId = contentItemId });
+                }
+
                 mediaFile.PathKey = ToMediaFilePathKey(mediaFile.FilePath);
                 mediaFile.CreatedByUserId = createdByUserId;
                 context.MediaFiles.Add(mediaFile);
@@ -163,8 +176,10 @@ internal sealed class MediaFileRepository(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "The media file repository failed to create media file " +
-                "{FilePath}.", mediaFile.FilePath);
+            logger.LogError(
+                ex,
+                "The media file repository failed to create media file {FilePath}.",
+                mediaFile.FilePath);
             throw;
         }
     }
@@ -228,12 +243,13 @@ internal sealed class MediaFileRepository(
 
                 var owners = await LockOwnersAsync([current.ContentItemId, mediaFile.ContentItemId], ct)
                     .ConfigureAwait(false);
+                var items = await RequireSiblingsInOrdinalOrderAsync(mediaFile, ct).ConfigureAwait(false);
                 var pathKey = ToMediaFilePathKey(mediaFile.FilePath);
                 var updated = await context.MediaFiles
                     .Where(item => item.Id == mediaFile.Id && item.ContentItemId == current.ContentItemId)
                     .ExecuteUpdateAsync(
                         s => s
-                            .SetProperty(item => item.ContentItemId, mediaFile.ContentItemId)
+                            .SetProperty(item => item.ContentItemId, items[0])
                             .SetProperty(item => item.FileKind, mediaFile.FileKind)
                             .SetProperty(item => item.MimeType, mediaFile.MimeType)
                             .SetProperty(item => item.FilePath, mediaFile.FilePath)
@@ -247,6 +263,11 @@ internal sealed class MediaFileRepository(
                             .SetProperty(item => item.ModifiedByUserId, modifiedByUserId),
                         ct)
                     .ConfigureAwait(false);
+                if (updated > 0 && (current.Coverage.Count > 0 || items.Count > 1))
+                {
+                    await WriteCoverageAsync(mediaFile.Id, [.. items.Skip(1)], ct).ConfigureAwait(false);
+                }
+
                 foreach (var owner in owners)
                 {
                     await contentRepository.ReconcileMediaStateAsync(owner, modifiedByUserId, ct)
@@ -260,12 +281,15 @@ internal sealed class MediaFileRepository(
                         var impact = new ContentEventImpact
                         {
                             HierarchyItemId = owner,
-                            ItemId = mediaFile.ContentItemId
+                            ItemId = items[0]
                         };
-                        await transactionManager.OnCommittedAsync(token => eventBus.PublishAsync(
-                            ContentEventBuilder.BuildContentHierarchyItemUpdatedEvent(
-                                impact,
-                                [nameof(MediaFile.MediaInfo)]), token), ct).ConfigureAwait(false);
+                        await transactionManager.OnCommittedAsync(
+                            token => eventBus.PublishAsync(
+                                ContentEventBuilder.BuildContentHierarchyItemUpdatedEvent(
+                                    impact,
+                                    [nameof(MediaFile.MediaInfo)]),
+                                token),
+                            ct).ConfigureAwait(false);
                     }
                 }
 
@@ -277,6 +301,59 @@ internal sealed class MediaFileRepository(
             logger.LogError(ex, "The media file repository failed to update media file {MediaFileId}.", mediaFile.Id);
             throw;
         }
+    }
+
+    private async Task<IReadOnlyList<Guid>> RequireSiblingsInOrdinalOrderAsync(
+        MediaFile mediaFile,
+        CancellationToken cancellationToken)
+    {
+        var ids = mediaFile.Coverage.Select(coverage => coverage.ContentItemId)
+            .Prepend(mediaFile.ContentItemId)
+            .Distinct()
+            .ToList();
+        if (ids.Count == 1)
+        {
+            return ids;
+        }
+
+        var items = await context.ContentItems.AsNoTracking()
+            .Where(item => ids.Contains(item.Id))
+            .Join(
+                context.ContentHierarchyItems.AsNoTracking(),
+                item => item.ContentHierarchyItemId,
+                node => node.Id,
+                (item, node) => new { item.Id, node.ParentId, node.Ordinal })
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+        if (items.Count != ids.Count || items.Any(item => item.ParentId is null || item.ParentId != items[0].ParentId))
+        {
+            throw new InvalidOperationException("The items that the media file covers are not siblings.");
+        }
+
+        return [.. items.OrderBy(item => item.Ordinal ?? int.MaxValue)
+            .ThenBy(item => item.Id)
+            .Select(item => item.Id)];
+    }
+
+    private async Task WriteCoverageAsync(
+        Guid mediaFileId,
+        IReadOnlyCollection<Guid> contentItemIds,
+        CancellationToken cancellationToken)
+    {
+        var stored = await context.MediaFileCoverages
+            .Where(coverage => coverage.MediaFileId == mediaFileId)
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+        context.MediaFileCoverages.RemoveRange(
+            stored.Where(coverage => !contentItemIds.Contains(coverage.ContentItemId)));
+        context.MediaFileCoverages.AddRange(contentItemIds
+            .Except(stored.Select(coverage => coverage.ContentItemId))
+            .Select(contentItemId => new MediaFileCoverage
+            {
+                MediaFileId = mediaFileId,
+                ContentItemId = contentItemId
+            }));
+        await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
     }
 
     private async Task<IReadOnlyList<Guid>> LockOwnersAsync(
@@ -312,10 +389,7 @@ internal sealed class MediaFileRepository(
         return owners;
     }
 
-    private IQueryable<MediaFile> ApplySort(
-        IQueryable<MediaFile> items,
-        SortParameter? sort,
-        bool staleFirst)
+    private IQueryable<MediaFile> ApplySort(IQueryable<MediaFile> items, SortParameter? sort, bool staleFirst)
     {
         var property = context.Model.FindEntityType(typeof(MediaFile))!.GetProperties()
             .Where(candidate => !candidate.IsShadowProperty() &&

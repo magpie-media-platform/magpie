@@ -76,6 +76,7 @@ export function WishlistDiscoveredList({
     canEditFilter = true,
 }: WishlistDiscoveredListProps) {
     const usesCardLayout = useCardLayout();
+    const filterActionLabel = canEditFilter ? 'Edit filter' : 'View filter';
     const { sorting, filters, page, setSorting, setFilters, setPage } = useUrlTableState({
         defaultSort: DEFAULT_SORTING,
         defaultFilters: DEFAULT_FILTERS,
@@ -289,11 +290,15 @@ export function WishlistDiscoveredList({
                 <div className="wishlist-discovered__header-actions">
                     {hasActiveFilters && <ClearFiltersButton onClick={handleClearFilters} />}
                     {onOpenFilter && (
-                        <Button variant="secondary" size="sm" onClick={onOpenFilter} data-action="edit-filter">
+                        <Button
+                            variant="secondary"
+                            size="sm"
+                            onClick={onOpenFilter}
+                            aria-label={filterActionLabel}
+                            data-action="edit-filter"
+                        >
                             <FunnelSimpleIcon weight="bold" aria-hidden="true" />
-                            <span className="wishlist-discovered__action-label">
-                                {canEditFilter ? 'Edit filter' : 'View filter'}
-                            </span>
+                            <span className="wishlist-discovered__action-label">{filterActionLabel}</span>
                         </Button>
                     )}
                 </div>

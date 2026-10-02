@@ -110,7 +110,7 @@ internal sealed class QueryExecutor(
         QueryPlan plan,
         IReadOnlyList<string> warnings) => new()
         {
-            PageInfo = new ProviderSearchPageInfo
+            PageInfo = new()
             {
                 RequestedPage = plan.Page,
                 HasMore = false
@@ -136,7 +136,7 @@ internal sealed class QueryExecutor(
     {
         if (!string.IsNullOrWhiteSpace(value))
         {
-            values[source] = value!.Trim();
+            values[source] = value.Trim();
         }
     }
 
@@ -371,7 +371,7 @@ internal sealed class QueryExecutor(
             from filter in filters
             let collectionGroup = filter.CollectionGroup
             where collectionGroup?.Kind == ResidualCollectionKind.AlternateText
-            select collectionGroup!;
+            select collectionGroup;
         foreach (var group in alternateTextGroups)
         {
             foreach (var alternative in group.Alternatives)
@@ -435,16 +435,6 @@ internal sealed class QueryExecutor(
         hit.Label.Trim(),
         hit.Qid,
         StringComparison.OrdinalIgnoreCase);
-
-    private bool AcceptedType(EntityKind kind, string qid) => kind switch
-    {
-        EntityKind.Movie => qid is Constants.MovieQid
-            or Constants.ShortFilmQid
-            or Constants.TelevisionFilmQid,
-        EntityKind.Show => qid is Constants.TelevisionSeriesQid
-            or Constants.AnimatedSeriesQid,
-        _ => false
-    };
 
     public async Task<QueryResult> SearchAsync(
         QueryPlan plan,
@@ -547,8 +537,14 @@ internal sealed class QueryExecutor(
             {
                 var continued = await ContinueWindowsAsync(plan, context, totals, cancellationToken)
                     .ConfigureAwait(false);
-                Complete(activity, plan, totals, startedTimestamp, TerminalReason.Completed,
-                    continued.Hits.Count, continued);
+                Complete(
+                    activity,
+                    plan,
+                    totals,
+                    startedTimestamp,
+                    TerminalReason.Completed,
+                    continued.Hits.Count,
+                    continued);
                 return continued;
             }
 
@@ -583,7 +579,7 @@ internal sealed class QueryExecutor(
                     var seedQids = (from row in seedRows
                                     let qid = Read(row, "item").ToQid()
                                     where qid is not null
-                                    select qid!)
+                                    select qid)
                         .Distinct(StringComparer.Ordinal)
                         .ToArray();
                     var seedHasMore = seedQids.Length > SparqlQueryBuilder.CandidateWindow;
@@ -629,7 +625,7 @@ internal sealed class QueryExecutor(
             var result = new QueryResult
             {
                 Hits = [.. pageRows.Take(plan.MaximumResults)],
-                PageInfo = new ProviderSearchPageInfo
+                PageInfo = new()
                 {
                     RequestedPage = plan.Page,
                     HasMore = hasMore
@@ -733,7 +729,7 @@ internal sealed class QueryExecutor(
         var resolved = JsonSerializer.Serialize(new { plan.Strategy, plan.Filters, plan.TitleCandidateQids });
         if (progress.ResolvedSources is not null && progress.ResolvedSources != resolved)
         {
-            throw new MetadataSearchContinuationException("Wikidata resolved sources changed. Start a new search.");
+            throw new MetadataSearchContinuationException("Wikidata resolved sources changed.");
         }
 
         progress.ResolvedSources = resolved;
@@ -761,9 +757,15 @@ internal sealed class QueryExecutor(
                 var seedHasMore = false;
                 if (relationshipIndex >= 0)
                 {
-                    var seedRows = await ExecuteRequestAsync(SparqlQueryBuilder.BuildRelationshipSeed(
-                        plan.EntityKind, plan.Filters[relationshipIndex], progress.SeedOffset),
-                        context, totals, RequestRole.RelationshipSeedWindows, cancellationToken).ConfigureAwait(false);
+                    var seedRows = await ExecuteRequestAsync(
+                        SparqlQueryBuilder.BuildRelationshipSeed(
+                            plan.EntityKind,
+                            plan.Filters[relationshipIndex],
+                            progress.SeedOffset),
+                        context,
+                        totals,
+                        RequestRole.RelationshipSeedWindows,
+                        cancellationToken).ConfigureAwait(false);
                     var seedQids = seedRows.Select(row => Read(row, "item").ToQid()).OfType<string>()
                         .Distinct(StringComparer.Ordinal).ToArray();
                     seedHasMore = seedQids.Length > SparqlQueryBuilder.CandidateWindow;
@@ -777,8 +779,12 @@ internal sealed class QueryExecutor(
                     windowPlan = BindRelationshipSeed(plan, relationshipIndex, seed) with { UsesLocalPaging = true };
                 }
 
-                var window = await SearchCandidateWindowAsync(windowPlan, context, progress.CandidateOffset,
-                    totals, cancellationToken).ConfigureAwait(false);
+                var window = await SearchCandidateWindowAsync(
+                    windowPlan,
+                    context,
+                    progress.CandidateOffset,
+                    totals,
+                    cancellationToken).ConfigureAwait(false);
                 warnings.AddRange(window.Warnings);
                 var undelivered = window.Hits.Where(hit => !progress.Delivered.Contains(hit.Qid)).ToArray();
                 foreach (var hit in undelivered.Take(plan.MaximumResults - hits.Count))
@@ -827,7 +833,7 @@ internal sealed class QueryExecutor(
         return new QueryResult
         {
             Hits = hits,
-            PageInfo = new ProviderSearchPageInfo { RequestedPage = 1, HasMore = !progress.Exhausted },
+            PageInfo = new() { RequestedPage = 1, HasMore = !progress.Exhausted },
             Warnings = [.. warnings.Distinct()]
         };
     }
@@ -899,7 +905,7 @@ internal sealed class QueryExecutor(
         var hits = (from row in visibleRows
                     let hit = row.ToSearchHit()
                     where hit is not null
-                    select hit!).ToArray();
+                    select hit).ToArray();
         var filtered = FilterCandidates(plan, hits);
         var verified = new List<SearchHit>();
         var warnings = new List<string>();
@@ -1210,7 +1216,7 @@ internal sealed class QueryExecutor(
                                     ? alternative
                                     : ResolveAlternative(alternative, resolutions)
                                 where resolved is not null
-                                select resolved!).ToArray();
+                                select resolved).ToArray();
             if (filter.Alternatives.Count > 0 && alternatives.Length == 0)
             {
                 if (filter.Negate)
@@ -1301,7 +1307,7 @@ internal sealed class QueryExecutor(
         var projections = (from row in rows
                            let qid = Read(row, "item").ToQid()
                            where qid is not null
-                           group row by qid! into matches
+                           group row by qid into matches
                            select matches)
             .ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
         return (
@@ -1350,7 +1356,7 @@ internal sealed class QueryExecutor(
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var hit in hits)
         {
-            if (!AcceptedType(plan.EntityKind, hit.TypeQid) ||
+            if (!SparqlQueryBuilder.AcceptedTypes(plan.EntityKind).Contains(hit.TypeQid) ||
                 string.IsNullOrWhiteSpace(hit.Qid) ||
                 string.IsNullOrWhiteSpace(hit.Label) ||
                 IsQidFallbackLabel(hit) ||
@@ -1385,24 +1391,6 @@ internal sealed class QueryExecutor(
         return true;
     }
 
-    private Task<ResidualHydrationBatch> HydrateCandidatesAsync(
-        IEnumerable<string> qids,
-        RequestContext context,
-        CancellationToken cancellationToken,
-        Action<SearchCacheProvenance>? provenanceObserver = null)
-    {
-        return HydrateAsync(qids, CandidateLimit, context, cancellationToken, provenanceObserver);
-    }
-
-    private Task<ResidualHydrationBatch> HydrateSupportAsync(
-        IEnumerable<string> qids,
-        RequestContext context,
-        CancellationToken cancellationToken,
-        Action<SearchCacheProvenance>? provenanceObserver = null)
-    {
-        return HydrateAsync(qids, null, context, cancellationToken, provenanceObserver);
-    }
-
     private async Task<ResidualHydrationBatch> HydrateAsync(
         IEnumerable<string> qids,
         int? limit,
@@ -1418,9 +1406,7 @@ internal sealed class QueryExecutor(
         {
             return new ResidualHydrationBatch
             {
-                Entities = new Dictionary<string, EntityDto>(),
-                RequestedCount = 0,
-                Truncated = distinct.Length > 0
+                Entities = new Dictionary<string, EntityDto>()
             };
         }
 
@@ -1431,9 +1417,7 @@ internal sealed class QueryExecutor(
                 .ConfigureAwait(false);
             return new ResidualHydrationBatch
             {
-                Entities = entities,
-                RequestedCount = requested.Length,
-                Truncated = requested.Length < distinct.Length
+                Entities = entities
             };
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -1446,9 +1430,7 @@ internal sealed class QueryExecutor(
             return new ResidualHydrationBatch
             {
                 Entities = new Dictionary<string, EntityDto>(),
-                RequestedCount = requested.Length,
-                Failed = true,
-                Truncated = requested.Length < distinct.Length
+                Failed = true
             };
         }
     }
@@ -1488,8 +1470,9 @@ internal sealed class QueryExecutor(
             RequestRole.ResidualEntityHydration,
             string.Join("|", entityQids)))
         {
-            entityBatch = await HydrateCandidatesAsync(
+            entityBatch = await HydrateAsync(
                 entityQids,
+                CandidateLimit,
                 entityContext,
                 cancellationToken,
                 value => entityRemote |= value == SearchCacheProvenance.Remote).ConfigureAwait(false);
@@ -1557,8 +1540,7 @@ internal sealed class QueryExecutor(
             SkipStage(totals, RequestRole.ResidualSupportHydration, "no_support_qids");
             supportBatch = new ResidualHydrationBatch
             {
-                Entities = EmptyEntities,
-                RequestedCount = 0
+                Entities = EmptyEntities
             };
         }
         else
@@ -1567,8 +1549,9 @@ internal sealed class QueryExecutor(
             using var supportActivity = StartRequest(
                 RequestRole.ResidualSupportHydration,
                 string.Join("|", supportQids));
-            supportBatch = await HydrateSupportAsync(
+            supportBatch = await HydrateAsync(
                 supportQids,
+                null,
                 context,
                 cancellationToken,
                 value => supportRemote |= value == SearchCacheProvenance.Remote).ConfigureAwait(false);
@@ -2232,13 +2215,9 @@ internal sealed class QueryExecutor(
             return CriteriaMatcher.Match(actual, interpreted.Operator, predicate.StringValues, interpreted.Negate);
         }
 
-        var result = interpreted.Operator switch
-        {
-            CriteriaValueOperator.IsNull => CriteriaMatchResult.Matched,
-            CriteriaValueOperator.IsNotNull => CriteriaMatchResult.Rejected,
-            _ => CriteriaMatchResult.Rejected
-        };
-        return ApplyNegation(result, interpreted.Negate);
+        return ApplyNegation(
+            Result(interpreted.Operator == CriteriaValueOperator.IsNull),
+            interpreted.Negate);
     }
 
     private CriteriaMatchResult MatchKnownInteger(
@@ -2246,25 +2225,11 @@ internal sealed class QueryExecutor(
         ResidualCollectionPredicate predicate)
     {
         var interpreted = CriteriaMatcher.InterpretOperator(predicate.Operator, predicate.Negate);
-        if (actual is null)
+        if (actual is null || interpreted.Operator is CriteriaValueOperator.IsNull or CriteriaValueOperator.IsNotNull)
         {
-            var nullResult = interpreted.Operator switch
-            {
-                CriteriaValueOperator.IsNull => CriteriaMatchResult.Matched,
-                CriteriaValueOperator.IsNotNull => CriteriaMatchResult.Rejected,
-                _ => CriteriaMatchResult.Rejected
-            };
-            return ApplyNegation(nullResult, interpreted.Negate);
-        }
-
-        if (interpreted.Operator == CriteriaValueOperator.IsNull)
-        {
-            return ApplyNegation(CriteriaMatchResult.Rejected, interpreted.Negate);
-        }
-
-        if (interpreted.Operator == CriteriaValueOperator.IsNotNull)
-        {
-            return ApplyNegation(CriteriaMatchResult.Matched, interpreted.Negate);
+            return ApplyNegation(
+                Result((actual is null) == (interpreted.Operator == CriteriaValueOperator.IsNull)),
+                interpreted.Negate);
         }
 
         if (predicate.IntegerValues.Count == 0)
@@ -2291,25 +2256,11 @@ internal sealed class QueryExecutor(
         ResidualCollectionPredicate predicate)
     {
         var interpreted = CriteriaMatcher.InterpretOperator(predicate.Operator, predicate.Negate);
-        if (actual is null)
+        if (actual is null || interpreted.Operator is CriteriaValueOperator.IsNull or CriteriaValueOperator.IsNotNull)
         {
-            var nullResult = interpreted.Operator switch
-            {
-                CriteriaValueOperator.IsNull => CriteriaMatchResult.Matched,
-                CriteriaValueOperator.IsNotNull => CriteriaMatchResult.Rejected,
-                _ => CriteriaMatchResult.Rejected
-            };
-            return ApplyNegation(nullResult, interpreted.Negate);
-        }
-
-        if (interpreted.Operator == CriteriaValueOperator.IsNull)
-        {
-            return ApplyNegation(CriteriaMatchResult.Rejected, interpreted.Negate);
-        }
-
-        if (interpreted.Operator == CriteriaValueOperator.IsNotNull)
-        {
-            return ApplyNegation(CriteriaMatchResult.Matched, interpreted.Negate);
+            return ApplyNegation(
+                Result((actual is null) == (interpreted.Operator == CriteriaValueOperator.IsNull)),
+                interpreted.Negate);
         }
 
         if (interpreted.Operator is CriteriaValueOperator.Equals or CriteriaValueOperator.In)
@@ -2427,7 +2378,7 @@ internal sealed class QueryExecutor(
         var result = new List<CollectionItem>();
         var mappedByOrdinal = entity.ToAwards(support, language)
             .Where(value => value.SourceStatementOrdinal is not null)
-            .ToDictionary(value => value.SourceStatementOrdinal!.Value);
+            .ToDictionary(value => value.SourceStatementOrdinal.GetValueOrDefault());
         var missingYears = new HashSet<int?>();
         foreach (var candidate in entity.ToAwardCandidates())
         {
@@ -2472,7 +2423,7 @@ internal sealed class QueryExecutor(
         string language)
     {
         var incomplete = false;
-        var bodyQids = AwardQualifierBodyQids(statement)
+        var bodyQids = RelationshipMappingExtensions.QualifierEntityIds(statement, Constants.ConferredByPropertyId)
             .Concat(award.EntityClaimQids(Constants.ConferredByPropertyId));
         foreach (var bodyQid in bodyQids)
         {
@@ -2742,25 +2693,13 @@ internal sealed class QueryExecutor(
     {
         foreach (var candidate in entity.ToAwardCandidates())
         {
-            foreach (var qid in AwardQualifierBodyQids(candidate.Statement))
+            foreach (var qid in RelationshipMappingExtensions.QualifierEntityIds(
+                candidate.Statement,
+                Constants.ConferredByPropertyId))
             {
                 yield return qid;
             }
         }
-    }
-
-    private IReadOnlyList<string> AwardQualifierBodyQids(StatementDto statement)
-    {
-        if (statement.Qualifiers is null ||
-            !statement.Qualifiers.TryGetValue(Constants.ConferredByPropertyId, out var qualifiers))
-        {
-            return [];
-        }
-
-        return [.. from qualifier in qualifiers
-                let qid = qualifier.EntityId()
-                where qid is not null
-                select qid!];
     }
 
     private CriteriaMatchResult MatchAny(

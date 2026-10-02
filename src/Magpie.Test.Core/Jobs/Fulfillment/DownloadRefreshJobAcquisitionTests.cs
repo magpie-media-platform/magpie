@@ -224,7 +224,6 @@ public sealed class DownloadRefreshJobAcquisitionTests
     [TearDown]
     public void TearDown()
     {
-        _context.Database.CloseConnection();
         _context.Dispose();
     }
 
@@ -542,7 +541,7 @@ public sealed class DownloadRefreshJobAcquisitionTests
     }
 
     [Test]
-    public async Task ExecuteAsync_CompletesDeferredDownloads_WhenTheRefreshIsCanceledAfterADeferral()
+    public async Task ExecuteAsync_PublishesRefreshedStatus_WhenTheRefreshIsCanceledAfterAnUpdate()
     {
         // Arrange
         using var cancellation = new CancellationTokenSource();

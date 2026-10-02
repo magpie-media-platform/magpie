@@ -111,7 +111,7 @@ internal sealed class CardigannIndexerIntegration(
             return;
         }
 
-        var value = request.IdSearchValue!.Trim();
+        var value = request.IdSearchValue.Trim();
         switch (parameter)
         {
             case "imdbid":
@@ -400,7 +400,7 @@ internal sealed class CardigannIndexerIntegration(
         var targetUri = release.InfoUrl;
         var method = string.IsNullOrEmpty(download.Method)
             ? HttpMethod.Get
-            : new HttpMethod(download.Method!.ToUpperInvariant());
+            : new HttpMethod(download.Method.ToUpperInvariant());
 
         string body;
         try
@@ -579,9 +579,7 @@ internal sealed class CardigannIndexerIntegration(
             var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
             if (login is not null && attempt == 0 && sessions.IsLoggedOut(login, response.StatusCode, body))
             {
-                logger.LogDebug(
-                    "Cardigann {Tracker} response shows a logged-out session. Cardigann will log in again",
-                    definition.Id);
+                logger.LogDebug("Cardigann {Tracker} response shows a logged-out session", definition.Id);
                 sessions.InvalidateSession(SessionKey(baseUri, settings));
                 continue;
             }
@@ -672,7 +670,7 @@ internal sealed class CardigannIndexerIntegration(
         IReadOnlyDictionary<string, string> settings,
         CancellationToken cancellationToken)
     {
-        if (definition.Login!.Captcha is not null)
+        if (definition.Login is { Captcha: not null })
         {
             Telemetry.Logins.Add(
                 1,
@@ -690,7 +688,11 @@ internal sealed class CardigannIndexerIntegration(
         }
 
         var outcome = await EnsureLoginAsync(
-                baseUri, settings, forceRefresh: true, throwOnFailure: false, cancellationToken)
+                baseUri,
+                settings,
+                forceRefresh: true,
+                throwOnFailure: false,
+                cancellationToken)
             .ConfigureAwait(false);
         if (outcome is null || outcome.Success)
         {
@@ -900,13 +902,13 @@ internal sealed class CardigannIndexerIntegration(
         if (settings.TryGetValue(BaseUrlSettingKey, out var raw) &&
             !string.IsNullOrWhiteSpace(raw))
         {
-            if (Uri.TryCreate(raw, UriKind.Absolute, out var configured))
+            if (Uri.TryCreate(raw, UriKind.Absolute, out var configured) && configured.Scheme is "http" or "https")
             {
                 return EnsureTrailingSlash(configured);
             }
 
             throw new ArgumentException(
-                $"Setting {BaseUrlSettingKey} is not a valid absolute URL: {raw}.",
+                $"Setting {BaseUrlSettingKey} is not an http or https URL: {raw}.",
                 nameof(settings));
         }
 

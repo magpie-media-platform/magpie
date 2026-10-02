@@ -1,4 +1,4 @@
-import { Link, useNavigate } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 import { FilmStripIcon, ArrowCounterClockwiseIcon, PlusIcon, TelevisionIcon } from '@phosphor-icons/react';
 
 import { Button } from '@/components/ui/Button';
@@ -57,7 +57,6 @@ function TypeCardSkeleton() {
 
 export function LibraryLandingPage() {
     useDocumentTitle('Library');
-    const navigate = useNavigate();
     const { hasPermission, hasRole } = useAuth();
     const canAddContent = hasPermission('content.add');
     const isAdmin = hasRole(Role.Admin);
@@ -140,14 +139,11 @@ export function LibraryLandingPage() {
                                     </Button>
                                 )}
                                 {isAdmin && (
-                                    <Button
-                                        variant="secondary"
-                                        size="sm"
-                                        onClick={() => navigate('/admin/media-servers')}
-                                        data-action="connect-media-server"
-                                    >
-                                        <TelevisionIcon weight="duotone" aria-hidden="true" />
-                                        Connect a Media Server
+                                    <Button asChild variant="secondary" size="sm">
+                                        <Link to="/admin/media-servers" data-action="connect-media-server">
+                                            <TelevisionIcon weight="duotone" aria-hidden="true" />
+                                            Connect a Media Server
+                                        </Link>
                                     </Button>
                                 )}
                             </div>

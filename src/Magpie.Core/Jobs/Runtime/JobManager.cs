@@ -174,7 +174,8 @@ internal sealed class JobManager(
         JobSpec spec,
         IReadOnlyDictionary<string, string>? parameters,
         bool requireRequired = true,
-        bool useScheduleValidators = false)
+        bool useScheduleValidators = false,
+        bool useValueValidators = false)
     {
         foreach (var parameter in spec.Parameters)
         {
@@ -218,6 +219,11 @@ internal sealed class JobManager(
                 var typeName = parameter.Type.ToString().ToLowerInvariant();
                 throw new MagpieException($"Parameter {parameter.Name} must be a valid {typeName}.");
             }
+
+            if (useValueValidators && parameter.ValidateValue?.Invoke(value) is { } error)
+            {
+                throw new MagpieException($"Parameter {parameter.Name} {error}");
+            }
         }
     }
 
@@ -252,15 +258,13 @@ internal sealed class JobManager(
         return effective;
     }
 
-    private static void ValidateEventTriggerParameters(
-        JobSpec spec,
-        IReadOnlyDictionary<string, string> parameters)
+    private static void ValidateEventTriggerParameters(JobSpec spec, IReadOnlyDictionary<string, string> parameters)
     {
         var resolved = new Dictionary<string, string>(parameters.Count);
         foreach (var (name, expression) in parameters)
         {
             var type = spec.Parameters.FirstOrDefault(parameter => parameter.Name == name)?.Type ?? DataType.String;
-            resolved[name] = TransformEventParameter(expression, EventBindingValidationSample(type));
+            resolved[name] = TransformEventParameter(expression, _ => EventBindingValidationSample(type));
         }
 
         ValidateParameters(spec, resolved, requireRequired: false);
@@ -341,7 +345,7 @@ internal sealed class JobManager(
         _ => string.Empty,
     };
 
-    private static string TransformEventParameter(string expression, string replacement)
+    internal static string TransformEventParameter(string expression, Func<string, string> resolve)
     {
         var result = new StringBuilder(expression.Length);
         for (var index = 0; index < expression.Length;)
@@ -383,11 +387,32 @@ internal sealed class JobManager(
                 throw new MagpieException("Event binding is malformed.");
             }
 
-            result.Append(replacement);
+            result.Append(resolve(expression[keyStart..end]));
             index = end + 1;
         }
 
         return result.ToString();
+    }
+
+    internal static bool ContainsEventBinding(string expression)
+    {
+        var found = false;
+        try
+        {
+            TransformEventParameter(
+                expression,
+                _ =>
+                {
+                    found = true;
+                    return string.Empty;
+                });
+        }
+        catch (MagpieException)
+        {
+            return true;
+        }
+
+        return found;
     }
 
     private static Role GetRequiredRole(JobScopeKind scope)
@@ -454,7 +479,7 @@ internal sealed class JobManager(
 
         var missingTarget = spec.Parameters.Any(parameter => parameter.Required &&
             (!parameters.TryGetValue(parameter.Name, out var value) || string.IsNullOrWhiteSpace(value)));
-        if (missingTarget || parameters.Values.Any(value => value.Contains("${", StringComparison.Ordinal)))
+        if (missingTarget || parameters.Values.Any(ContainsEventBinding))
         {
             throw new MagpieException("A user trigger must target a specific item.");
         }
@@ -515,8 +540,11 @@ internal sealed class JobManager(
             }
             catch (Exception exception)
             {
-                logger.LogError(exception, "Validation failed for job {JobType} parameter {Parameter}",
-                    spec.JobType, parameter.Name);
+                logger.LogError(
+                    exception,
+                    "Validation failed for job {JobType} parameter {Parameter}",
+                    spec.JobType,
+                    parameter.Name);
                 throw new MagpieException($"Parameter {parameter.Name} could not be validated.");
             }
 
@@ -535,7 +563,7 @@ internal sealed class JobManager(
     {
         var spec = GetSpec(request.JobType);
         AuthorizeManualRun(spec, callerRole);
-        ValidateParameters(spec!, request.Parameters);
+        ValidateParameters(spec!, request.Parameters, useValueValidators: true);
 
         var authorized = request with { UserId = callerUserId, Mode = JobExecutionMode.Queue };
         return await ExecuteAsync(authorized, cancellationToken).ConfigureAwait(false);
@@ -549,7 +577,7 @@ internal sealed class JobManager(
     {
         var spec = GetSpec(request.JobType);
         AuthorizeManualRun(spec, callerRole);
-        ValidateParameters(spec!, request.Parameters);
+        ValidateParameters(spec!, request.Parameters, useValueValidators: true);
 
         if (!spec!.SupportsImmediate)
         {
@@ -753,9 +781,19 @@ internal sealed class JobManager(
         Role ownerRole,
         CancellationToken cancellationToken)
     {
+        if (string.IsNullOrWhiteSpace(create.JobType))
+        {
+            throw new MagpieException("Job type is required.");
+        }
+
         var spec = GetSpec(create.JobType);
         var parameters = create.Parameters ?? [];
         AuthorizeTriggerCreate(spec, JobTriggerMode.Schedule, create.Scope, ownerRole, parameters);
+        if (string.IsNullOrWhiteSpace(create.Name))
+        {
+            throw new MagpieException("Name is required.");
+        }
+
         ValidateScheduleParameters(spec!, parameters);
         if (!CronSchedule.TryParse(create.Schedule, out var schedule, out var error))
         {
@@ -787,47 +825,54 @@ internal sealed class JobManager(
         Role callerRole,
         CancellationToken cancellationToken)
     {
-        return await transactionManager.ExecuteWithTransactionAsync(async token =>
-        {
-            await scheduleTriggerRepository.LockAsync(triggerId, token).ConfigureAwait(false);
-            var trigger = await scheduleTriggerRepository.GetByIdAsync(triggerId, token).ConfigureAwait(false);
-            if (trigger is null)
+        return await transactionManager.ExecuteWithTransactionAsync(
+            async token =>
             {
-                return false;
-            }
-
-            var spec = GetSpec(trigger.JobType);
-            AuthorizeTriggerMutation(spec, trigger.Scope, trigger.CreatedByUserId, callerUserId, callerRole);
-            if (patch.Schedule is not null && !CronSchedule.TryParse(patch.Schedule.Value, out _, out var error))
-            {
-                throw new MagpieException(error!);
-            }
-
-            var effectiveEnabled = patch.Enabled?.Value ?? trigger.Enabled;
-            if (spec is not null && (patch.Parameters is not null || effectiveEnabled))
-            {
-                var effectiveParameters = ApplyParameterPatch(trigger.Parameters, patch.Parameters);
-                AuthorizeTriggerTarget(spec, callerRole, effectiveParameters);
-                ValidateScheduleParameters(spec, effectiveParameters);
-            }
-
-            ScalarPatch<DateTime?>? nextRunAt = null;
-            if (patch.Schedule is not null || patch.Enabled is not null)
-            {
-                var enabled = patch.Enabled?.Value ?? trigger.Enabled;
-                var cron = patch.Schedule?.Value ?? trigger.Schedule;
-                nextRunAt = new()
+                await scheduleTriggerRepository.LockAsync(triggerId, token).ConfigureAwait(false);
+                var trigger = await scheduleTriggerRepository.GetByIdAsync(triggerId, token).ConfigureAwait(false);
+                if (trigger is null)
                 {
-                    Value = enabled && CronSchedule.TryParse(cron, out var schedule, out _)
-                        ? schedule.NextOccurrence(timeProvider.GetUtcNow().UtcDateTime)
-                        : null
-                };
-            }
+                    return false;
+                }
 
-            return await scheduleTriggerRepository
-                .PatchAsync(patch with { Id = triggerId, NextRunAt = nextRunAt }, callerUserId, token)
-                .ConfigureAwait(false);
-        }, cancellationToken).ConfigureAwait(false);
+                var spec = GetSpec(trigger.JobType);
+                AuthorizeTriggerMutation(spec, trigger.Scope, trigger.CreatedByUserId, callerUserId, callerRole);
+                if (patch.Name is not null && string.IsNullOrWhiteSpace(patch.Name.Value))
+                {
+                    throw new MagpieException("Name is required.");
+                }
+
+                if (patch.Schedule is not null && !CronSchedule.TryParse(patch.Schedule.Value, out _, out var error))
+                {
+                    throw new MagpieException(error!);
+                }
+
+                var effectiveEnabled = patch.Enabled?.Value ?? trigger.Enabled;
+                if (spec is not null && (patch.Parameters is not null || effectiveEnabled))
+                {
+                    var effectiveParameters = ApplyParameterPatch(trigger.Parameters, patch.Parameters);
+                    AuthorizeTriggerTarget(spec, callerRole, effectiveParameters);
+                    ValidateScheduleParameters(spec, effectiveParameters);
+                }
+
+                ScalarPatch<DateTime?>? nextRunAt = null;
+                if (patch.Schedule is not null || patch.Enabled is not null)
+                {
+                    var enabled = patch.Enabled?.Value ?? trigger.Enabled;
+                    var cron = patch.Schedule?.Value ?? trigger.Schedule;
+                    nextRunAt = new()
+                    {
+                        Value = enabled && CronSchedule.TryParse(cron, out var schedule, out _)
+                            ? schedule.NextOccurrence(timeProvider.GetUtcNow().UtcDateTime)
+                            : null
+                    };
+                }
+
+                return await scheduleTriggerRepository
+                    .PatchAsync(patch with { Id = triggerId, NextRunAt = nextRunAt }, callerUserId, token)
+                    .ConfigureAwait(false);
+            },
+            cancellationToken).ConfigureAwait(false);
     }
 
     public async Task<bool> DeleteScheduleTriggerAsync(
@@ -935,7 +980,9 @@ internal sealed class JobManager(
         }
 
         return await eventTriggerRepository.PatchAsync(
-            patch with { Id = triggerId }, callerUserId, cancellationToken).ConfigureAwait(false);
+            patch with { Id = triggerId },
+            callerUserId,
+            cancellationToken).ConfigureAwait(false);
     }
 
     public async Task<bool> DeleteEventTriggerAsync(

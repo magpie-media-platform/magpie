@@ -1,49 +1,33 @@
-import { ApiError, isApiError } from './api';
-
-export const NETWORK_ERROR_STATUS = 0;
-
-export const HTTP_STATUS = {
-    BAD_REQUEST: 400,
-    UNAUTHORIZED: 401,
-    FORBIDDEN: 403,
-    NOT_FOUND: 404,
-    CONFLICT: 409,
-    UNPROCESSABLE_ENTITY: 422,
-    TOO_MANY_REQUESTS: 429,
-    INTERNAL_SERVER_ERROR: 500,
-    BAD_GATEWAY: 502,
-    SERVICE_UNAVAILABLE: 503,
-    GATEWAY_TIMEOUT: 504,
-} as const;
+import { isApiError } from './api';
 
 const STATUS_MESSAGES: Record<number, string> = {
-    [NETWORK_ERROR_STATUS]: 'Failed to connect to the server. Check the network connection.',
-    [HTTP_STATUS.BAD_REQUEST]: 'The request is invalid. Check the input.',
-    [HTTP_STATUS.UNAUTHORIZED]: 'The session expired. Sign in again.',
-    [HTTP_STATUS.FORBIDDEN]: 'You do not have permission to perform this action.',
-    [HTTP_STATUS.NOT_FOUND]: 'The requested resource does not exist.',
-    [HTTP_STATUS.CONFLICT]: 'The request conflicts with the current resource.',
-    [HTTP_STATUS.UNPROCESSABLE_ENTITY]: 'The request is not valid. Check the input.',
-    [HTTP_STATUS.TOO_MANY_REQUESTS]: 'Too many requests. Wait, then try again.',
-    [HTTP_STATUS.INTERNAL_SERVER_ERROR]: 'The server request failed. Try again later.',
-    [HTTP_STATUS.BAD_GATEWAY]: 'The server received an invalid response. Try again later.',
-    [HTTP_STATUS.SERVICE_UNAVAILABLE]: 'The service is temporarily unavailable. Try again later.',
-    [HTTP_STATUS.GATEWAY_TIMEOUT]: 'The server took too long to respond. Try again later.',
+    0: 'Failed to connect to the server. Check the network connection.',
+    400: 'The request is invalid. Check the input.',
+    401: 'The session expired. Sign in again.',
+    403: 'You do not have permission to perform this action.',
+    404: 'The requested resource does not exist.',
+    409: 'The request conflicts with the current resource.',
+    422: 'The request is not valid. Check the input.',
+    429: 'Too many requests. Wait, then try again.',
+    500: 'The server request failed. Try again later.',
+    502: 'The server received an invalid response. Try again later.',
+    503: 'The service is temporarily unavailable. Try again later.',
+    504: 'The server took too long to respond. Try again later.',
 };
 
 export function isNotFoundError(error: unknown): boolean {
-    return isApiError(error) && error.status === HTTP_STATUS.NOT_FOUND;
+    return isApiError(error) && error.status === 404;
 }
 
 export function isConflictError(error: unknown): boolean {
-    return isApiError(error) && error.status === HTTP_STATUS.CONFLICT;
+    return isApiError(error) && error.status === 409;
 }
 
 export function isValidationError(error: unknown): boolean {
     if (!isApiError(error)) {
         return false;
     }
-    return error.status === HTTP_STATUS.BAD_REQUEST || error.status === HTTP_STATUS.UNPROCESSABLE_ENTITY;
+    return error.status === 400 || error.status === 422;
 }
 
 export function getErrorMessage(error: unknown, fallback = 'The request failed.'): string {
@@ -116,10 +100,6 @@ export function getFieldError(error: unknown, fieldName: string): string | null 
     }
 
     return null;
-}
-
-export function createApiError(status: number, message: string, details?: unknown): ApiError {
-    return new ApiError(status, message, details);
 }
 
 export function candidateSearchErrorMessage(error: unknown): string {

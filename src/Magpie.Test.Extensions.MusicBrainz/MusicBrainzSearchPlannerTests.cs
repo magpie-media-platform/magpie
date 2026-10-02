@@ -1943,47 +1943,18 @@ public class MusicBrainzSearchPlannerTests
         }
     }
 
-    [TestCase("duration")]
-    [TestCase("production-status")]
-    [TestCase("publish-date")]
-    public void Plan_Result_WhenTargetDoesNotExposeRequiredScalar(string criterionName)
+    [TestCaseSource(nameof(TargetWithoutRequiredScalarCases))]
+    public void Plan_Result_WhenTargetDoesNotExposeRequiredScalar(
+        MetadataCriteria criteria,
+        int targetValue)
     {
         // Arrange
-        TemporalValue.TryParse("2020", out var publishDate);
-        var criteria = criterionName switch
-        {
-            "duration" => new MetadataCriteria
-            {
-                Duration = new CriteriaSet<PropertyCriterion<TimeSpan>>
-                {
-                    And = [new PropertyCriterion<TimeSpan> { Values = [TimeSpan.FromMinutes(30)] }]
-                }
-            },
-            "production-status" => new MetadataCriteria
-            {
-                ProductionStatus = new CriteriaSet<PropertyCriterion<string>>
-                {
-                    And = [new PropertyCriterion<string> { Values = ["released"] }]
-                }
-            },
-            "publish-date" => new MetadataCriteria
-            {
-                PublishDate = new CriteriaSet<PropertyCriterion<TemporalValue>>
-                {
-                    And = [new PropertyCriterion<TemporalValue> { Values = [publishDate!] }]
-                }
-            },
-            _ => throw new InvalidOperationException("criterion")
-        };
-        var target = criterionName is "publish-date" or "duration"
-            ? QueryTarget.Artist
-            : QueryTarget.Album;
         var planner = new QueryPlanner();
 
         // Act
         var plan = planner.Plan(new QueryRequest
         {
-            Target = target,
+            Target = (QueryTarget)targetValue,
             Criteria = criteria,
             RequestedPage = 1,
             Settings = new Settings()
@@ -1997,6 +1968,53 @@ public class MusicBrainzSearchPlannerTests
             Assert.That(((UnionPlanNode)plan.Root!).Children, Is.Empty);
             Assert.That(plan.Warnings, Is.Empty);
         }
+    }
+
+    private static IEnumerable<TestCaseData> TargetWithoutRequiredScalarCases()
+    {
+        yield return new TestCaseData(
+            new MetadataCriteria
+            {
+                Duration = new CriteriaSet<PropertyCriterion<TimeSpan>>
+                {
+                    And = [new PropertyCriterion<TimeSpan> { Values = [TimeSpan.FromMinutes(30)] }]
+                }
+            },
+            (int)QueryTarget.Artist)
+            .SetArgDisplayNames("duration");
+        yield return new TestCaseData(
+            new MetadataCriteria
+            {
+                ProductionStatus = new CriteriaSet<PropertyCriterion<string>>
+                {
+                    And = [new PropertyCriterion<string> { Values = ["released"] }]
+                }
+            },
+            (int)QueryTarget.Album)
+            .SetArgDisplayNames("production-status");
+        yield return new TestCaseData(
+            new MetadataCriteria
+            {
+                PublishDate = new CriteriaSet<PropertyCriterion<TemporalValue>>
+                {
+                    And =
+                    [
+                        new PropertyCriterion<TemporalValue>
+                        {
+                            Values =
+                            [
+                                new TemporalValue
+                                {
+                                    Value = new DateTime(2020, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+                                    Precision = TemporalPrecision.Year
+                                }
+                            ]
+                        }
+                    ]
+                }
+            },
+            (int)QueryTarget.Artist)
+            .SetArgDisplayNames("publish-date");
     }
 
     [Test]
@@ -3103,51 +3121,10 @@ public class MusicBrainzSearchPlannerTests
         }
     }
 
-    [TestCase("awards")]
-    [TestCase("previews")]
-    [TestCase("content-ratings")]
-    [TestCase("custom-metadata")]
-    public void Plan_Result_WhenProviderAbsentDataIsRequired(string criterionName)
+    [TestCaseSource(nameof(ProviderAbsentDataCases))]
+    public void Plan_Result_WhenProviderAbsentDataIsRequired(MetadataCriteria criteria)
     {
         // Arrange
-        var criteria = criterionName switch
-        {
-            "awards" => new MetadataCriteria
-            {
-                Awards = new CollectionCriteria<AwardCriteria> { Some = [[new AwardCriteria()]] }
-            },
-            "previews" => new MetadataCriteria
-            {
-                Previews = new CollectionCriteria<PreviewMetadataCriteria>
-                {
-                    Some = [[new PreviewMetadataCriteria()]]
-                }
-            },
-            "content-ratings" => new MetadataCriteria
-            {
-                ContentRatings = new CollectionCriteria<ContentRatingCriteria>
-                {
-                    Some = [[new ContentRatingCriteria()]]
-                }
-            },
-            "custom-metadata" => new MetadataCriteria
-            {
-                CustomMetadata = new CriteriaSet<DictionaryCriteria<PropertyCriterion<string>>>
-                {
-                    And =
-                    [
-                        new DictionaryCriteria<PropertyCriterion<string>>
-                        {
-                            Items = new Dictionary<string, PropertyCriterion<string>>
-                            {
-                                ["catalog"] = new() { Values = ["blue-note"] }
-                            }
-                        }
-                    ]
-                }
-            },
-            _ => throw new InvalidOperationException("criterion")
-        };
         var planner = new QueryPlanner();
 
         // Act
@@ -3168,6 +3145,52 @@ public class MusicBrainzSearchPlannerTests
             Assert.That(plan.Warnings, Is.Empty);
             Assert.That(((UnionPlanNode)plan.Root!).Children, Is.Empty);
         }
+    }
+
+    private static IEnumerable<TestCaseData> ProviderAbsentDataCases()
+    {
+        yield return new TestCaseData(
+            new MetadataCriteria
+            {
+                Awards = new CollectionCriteria<AwardCriteria> { Some = [[new AwardCriteria()]] }
+            })
+            .SetArgDisplayNames("awards");
+        yield return new TestCaseData(
+            new MetadataCriteria
+            {
+                Previews = new CollectionCriteria<PreviewMetadataCriteria>
+                {
+                    Some = [[new PreviewMetadataCriteria()]]
+                }
+            })
+            .SetArgDisplayNames("previews");
+        yield return new TestCaseData(
+            new MetadataCriteria
+            {
+                ContentRatings = new CollectionCriteria<ContentRatingCriteria>
+                {
+                    Some = [[new ContentRatingCriteria()]]
+                }
+            })
+            .SetArgDisplayNames("content-ratings");
+        yield return new TestCaseData(
+            new MetadataCriteria
+            {
+                CustomMetadata = new CriteriaSet<DictionaryCriteria<PropertyCriterion<string>>>
+                {
+                    And =
+                    [
+                        new DictionaryCriteria<PropertyCriterion<string>>
+                        {
+                            Items = new Dictionary<string, PropertyCriterion<string>>
+                            {
+                                ["catalog"] = new() { Values = ["blue-note"] }
+                            }
+                        }
+                    ]
+                }
+            })
+            .SetArgDisplayNames("custom-metadata");
     }
 
     [Test]
@@ -3308,67 +3331,10 @@ public class MusicBrainzSearchPlannerTests
         }
     }
 
-    [TestCase("awards")]
-    [TestCase("previews")]
-    [TestCase("content-ratings")]
-    public void Plan_Result_WhenProviderAbsentCollectionCannotMatchNestedNullCondition(string criterionName)
+    [TestCaseSource(nameof(ProviderAbsentNestedNullCases))]
+    public void Plan_Result_WhenProviderAbsentCollectionCannotMatchNestedNullCondition(MetadataCriteria criteria)
     {
         // Arrange
-        var criteria = criterionName switch
-        {
-            "awards" => new MetadataCriteria
-            {
-                Title = new CriteriaSet<PropertyCriterion<string>>
-                {
-                    And = [new PropertyCriterion<string> { Values = ["Kind of Blue"] }]
-                },
-                Awards = new CollectionCriteria<AwardCriteria>
-                {
-                    Some = [[new AwardCriteria
-                    {
-                        Name = new CriteriaSet<PropertyCriterion<string>>
-                        {
-                            And = [new PropertyCriterion<string> { Operator = CriteriaValueOperator.IsNull }]
-                        }
-                    }]]
-                }
-            },
-            "previews" => new MetadataCriteria
-            {
-                Title = new CriteriaSet<PropertyCriterion<string>>
-                {
-                    And = [new PropertyCriterion<string> { Values = ["Kind of Blue"] }]
-                },
-                Previews = new CollectionCriteria<PreviewMetadataCriteria>
-                {
-                    Some = [[new PreviewMetadataCriteria
-                    {
-                        Url = new CriteriaSet<PropertyCriterion<string>>
-                        {
-                            And = [new PropertyCriterion<string> { Operator = CriteriaValueOperator.IsNull }]
-                        }
-                    }]]
-                }
-            },
-            "content-ratings" => new MetadataCriteria
-            {
-                Title = new CriteriaSet<PropertyCriterion<string>>
-                {
-                    And = [new PropertyCriterion<string> { Values = ["Kind of Blue"] }]
-                },
-                ContentRatings = new CollectionCriteria<ContentRatingCriteria>
-                {
-                    Some = [[new ContentRatingCriteria
-                    {
-                        Rating = new CriteriaSet<PropertyCriterion<string>>
-                        {
-                            And = [new PropertyCriterion<string> { Operator = CriteriaValueOperator.IsNull }]
-                        }
-                    }]]
-                }
-            },
-            _ => throw new InvalidOperationException("criterion")
-        };
         var planner = new QueryPlanner();
 
         // Act
@@ -3389,6 +3355,67 @@ public class MusicBrainzSearchPlannerTests
             Assert.That(((UnionPlanNode)plan.Root!).Children, Is.Empty);
             Assert.That(plan.Warnings, Is.Empty);
         }
+    }
+
+    private static IEnumerable<TestCaseData> ProviderAbsentNestedNullCases()
+    {
+        yield return new TestCaseData(
+            new MetadataCriteria
+            {
+                Title = new CriteriaSet<PropertyCriterion<string>>
+                {
+                    And = [new PropertyCriterion<string> { Values = ["Kind of Blue"] }]
+                },
+                Awards = new CollectionCriteria<AwardCriteria>
+                {
+                    Some = [[new AwardCriteria
+                    {
+                        Name = new CriteriaSet<PropertyCriterion<string>>
+                        {
+                            And = [new PropertyCriterion<string> { Operator = CriteriaValueOperator.IsNull }]
+                        }
+                    }]]
+                }
+            })
+            .SetArgDisplayNames("awards");
+        yield return new TestCaseData(
+            new MetadataCriteria
+            {
+                Title = new CriteriaSet<PropertyCriterion<string>>
+                {
+                    And = [new PropertyCriterion<string> { Values = ["Kind of Blue"] }]
+                },
+                Previews = new CollectionCriteria<PreviewMetadataCriteria>
+                {
+                    Some = [[new PreviewMetadataCriteria
+                    {
+                        Url = new CriteriaSet<PropertyCriterion<string>>
+                        {
+                            And = [new PropertyCriterion<string> { Operator = CriteriaValueOperator.IsNull }]
+                        }
+                    }]]
+                }
+            })
+            .SetArgDisplayNames("previews");
+        yield return new TestCaseData(
+            new MetadataCriteria
+            {
+                Title = new CriteriaSet<PropertyCriterion<string>>
+                {
+                    And = [new PropertyCriterion<string> { Values = ["Kind of Blue"] }]
+                },
+                ContentRatings = new CollectionCriteria<ContentRatingCriteria>
+                {
+                    Some = [[new ContentRatingCriteria
+                    {
+                        Rating = new CriteriaSet<PropertyCriterion<string>>
+                        {
+                            And = [new PropertyCriterion<string> { Operator = CriteriaValueOperator.IsNull }]
+                        }
+                    }]]
+                }
+            })
+            .SetArgDisplayNames("content-ratings");
     }
 
     [Test]
@@ -4061,22 +4088,16 @@ public class MusicBrainzSearchPlannerTests
         Assert.That(jazz.Fingerprint, Is.Not.EqualTo(blues.Fingerprint));
     }
 
-    [TestCase(Constants.ProviderType, (int)ArtistCompositionEntity.ReleaseGroup)]
-    [TestCase(Constants.ProviderType, (int)ArtistCompositionEntity.Recording)]
-    [TestCase(Constants.ProviderType, (int)ArtistCompositionEntity.Work)]
+    [TestCase(Constants.ProviderType, (int)ArtistCompositionEntity.ReleaseGroup, Constants.AlbumLevelSlug)]
+    [TestCase(Constants.ProviderType, (int)ArtistCompositionEntity.Recording, Constants.TrackLevelSlug)]
+    [TestCase(Constants.ProviderType, (int)ArtistCompositionEntity.Work, Constants.WorkSubjectKind)]
     public void Plan_Result_WhenArtistRelationshipUsesDirectRelatedMbid(
         string source,
-        int expectedEntityValue)
+        int expectedEntityValue,
+        string targetKind)
     {
         // Arrange
         var expectedEntity = (ArtistCompositionEntity)expectedEntityValue;
-        var targetKind = expectedEntity switch
-        {
-            ArtistCompositionEntity.ReleaseGroup or ArtistCompositionEntity.Release =>
-                Constants.AlbumLevelSlug,
-            ArtistCompositionEntity.Recording => Constants.TrackLevelSlug,
-            _ => Constants.WorkSubjectKind
-        };
         var criteria = new MetadataCriteria
         {
             Relationships = new CollectionCriteria<RelationshipCriteria>

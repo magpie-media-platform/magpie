@@ -63,13 +63,6 @@ type TitleSearch = (filter: string, signal: AbortSignal) => Promise<unknown[]>;
 
 let titleSearch: TitleSearch;
 
-function titleSearchCalls() {
-    return vi
-        .mocked(apiGet)
-        .mock.calls.map(([path]) => path)
-        .filter((path) => path.startsWith('/content?'));
-}
-
 function LocationProbe() {
     const location = useLocation();
     return (
@@ -78,41 +71,6 @@ function LocationProbe() {
             {location.search}|{JSON.stringify(location.state)}
         </output>
     );
-}
-
-function renderSearch(role: Role = Role.Admin) {
-    return render(
-        <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
-            <MemoryRouter initialEntries={['/downloads']}>
-                <AuthProvider
-                    initialUser={{ id: 'user-1', username: 'user', role }}
-                    initialPermissions={testEffectivePermissions(role)}
-                >
-                    <TooltipProvider>
-                        <Routes>
-                            <Route
-                                path="*"
-                                element={
-                                    <>
-                                        <LibraryQuickSearch />
-                                        <CommandPalette />
-                                        <LocationProbe />
-                                    </>
-                                }
-                            />
-                        </Routes>
-                    </TooltipProvider>
-                </AuthProvider>
-            </MemoryRouter>
-        </QueryClientProvider>,
-    );
-}
-
-async function openAndType(text: string) {
-    const user = userEvent.setup();
-    await user.click(screen.getByRole('button', { name: 'Search library' }));
-    await user.type(screen.getByRole('combobox', { name: 'Library title' }), text);
-    return user;
 }
 
 describe('LibraryQuickSearch', () => {
@@ -136,7 +94,31 @@ describe('LibraryQuickSearch', () => {
 
     it('shows the empty-query state and sends no request when search opens', async () => {
         // Arrange
-        renderSearch();
+        render(
+            <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+                <MemoryRouter initialEntries={['/downloads']}>
+                    <AuthProvider
+                        initialUser={{ id: 'user-1', username: 'user', role: Role.Admin }}
+                        initialPermissions={testEffectivePermissions(Role.Admin)}
+                    >
+                        <TooltipProvider>
+                            <Routes>
+                                <Route
+                                    path="*"
+                                    element={
+                                        <>
+                                            <LibraryQuickSearch />
+                                            <CommandPalette />
+                                            <LocationProbe />
+                                        </>
+                                    }
+                                />
+                            </Routes>
+                        </TooltipProvider>
+                    </AuthProvider>
+                </MemoryRouter>
+            </QueryClientProvider>,
+        );
         const user = userEvent.setup();
 
         // Act
@@ -151,25 +133,80 @@ describe('LibraryQuickSearch', () => {
 
     it('sends one bounded title-sorted content query with the title filter at every level', async () => {
         // Arrange
-        renderSearch();
+        render(
+            <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+                <MemoryRouter initialEntries={['/downloads']}>
+                    <AuthProvider
+                        initialUser={{ id: 'user-1', username: 'user', role: Role.Admin }}
+                        initialPermissions={testEffectivePermissions(Role.Admin)}
+                    >
+                        <TooltipProvider>
+                            <Routes>
+                                <Route
+                                    path="*"
+                                    element={
+                                        <>
+                                            <LibraryQuickSearch />
+                                            <CommandPalette />
+                                            <LocationProbe />
+                                        </>
+                                    }
+                                />
+                            </Routes>
+                        </TooltipProvider>
+                    </AuthProvider>
+                </MemoryRouter>
+            </QueryClientProvider>,
+        );
 
         // Act
-        await openAndType('dark');
+        const user = userEvent.setup();
+        await user.click(screen.getByRole('button', { name: 'Search library' }));
+        await user.type(screen.getByRole('combobox', { name: 'Library title' }), 'dark');
 
         // Assert
         expect(screen.getByRole('status')).toHaveTextContent('Searching the library…');
         expect(await screen.findByRole('option', { name: /Darkness Falls/ })).toBeInTheDocument();
-        expect(titleSearchCalls()).toEqual([
-            '/content?filter=title+contains+%22dark%22&pageSize=8&sortBy=Name&sortDirection=Ascending',
-        ]);
+        expect(
+            vi
+                .mocked(apiGet)
+                .mock.calls.map(([path]) => path)
+                .filter((path) => path.startsWith('/content?')),
+        ).toEqual(['/content?filter=title+contains+%22dark%22&pageSize=8&sortBy=Name&sortDirection=Ascending']);
     });
 
     it('shows the level, the child ordinal and the year that identify each result', async () => {
         // Arrange
-        renderSearch();
+        render(
+            <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+                <MemoryRouter initialEntries={['/downloads']}>
+                    <AuthProvider
+                        initialUser={{ id: 'user-1', username: 'user', role: Role.Admin }}
+                        initialPermissions={testEffectivePermissions(Role.Admin)}
+                    >
+                        <TooltipProvider>
+                            <Routes>
+                                <Route
+                                    path="*"
+                                    element={
+                                        <>
+                                            <LibraryQuickSearch />
+                                            <CommandPalette />
+                                            <LocationProbe />
+                                        </>
+                                    }
+                                />
+                            </Routes>
+                        </TooltipProvider>
+                    </AuthProvider>
+                </MemoryRouter>
+            </QueryClientProvider>,
+        );
 
         // Act
-        await openAndType('dark');
+        const user = userEvent.setup();
+        await user.click(screen.getByRole('button', { name: 'Search library' }));
+        await user.type(screen.getByRole('combobox', { name: 'Library title' }), 'dark');
 
         // Assert
         const options = await screen.findAllByRole('option');
@@ -187,8 +224,34 @@ describe('LibraryQuickSearch', () => {
                 pending.set(query, { resolve, signal });
                 signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')));
             });
-        renderSearch();
-        const user = await openAndType('dark');
+        render(
+            <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+                <MemoryRouter initialEntries={['/downloads']}>
+                    <AuthProvider
+                        initialUser={{ id: 'user-1', username: 'user', role: Role.Admin }}
+                        initialPermissions={testEffectivePermissions(Role.Admin)}
+                    >
+                        <TooltipProvider>
+                            <Routes>
+                                <Route
+                                    path="*"
+                                    element={
+                                        <>
+                                            <LibraryQuickSearch />
+                                            <CommandPalette />
+                                            <LocationProbe />
+                                        </>
+                                    }
+                                />
+                            </Routes>
+                        </TooltipProvider>
+                    </AuthProvider>
+                </MemoryRouter>
+            </QueryClientProvider>,
+        );
+        const user = userEvent.setup();
+        await user.click(screen.getByRole('button', { name: 'Search library' }));
+        await user.type(screen.getByRole('combobox', { name: 'Library title' }), 'dark');
         await waitFor(() => expect(pending.has('title contains "dark"')).toBe(true));
 
         // Act
@@ -210,8 +273,34 @@ describe('LibraryQuickSearch', () => {
             signal = requestSignal;
             return new Promise(() => {});
         };
-        renderSearch();
-        const user = await openAndType('dark');
+        render(
+            <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+                <MemoryRouter initialEntries={['/downloads']}>
+                    <AuthProvider
+                        initialUser={{ id: 'user-1', username: 'user', role: Role.Admin }}
+                        initialPermissions={testEffectivePermissions(Role.Admin)}
+                    >
+                        <TooltipProvider>
+                            <Routes>
+                                <Route
+                                    path="*"
+                                    element={
+                                        <>
+                                            <LibraryQuickSearch />
+                                            <CommandPalette />
+                                            <LocationProbe />
+                                        </>
+                                    }
+                                />
+                            </Routes>
+                        </TooltipProvider>
+                    </AuthProvider>
+                </MemoryRouter>
+            </QueryClientProvider>,
+        );
+        const user = userEvent.setup();
+        await user.click(screen.getByRole('button', { name: 'Search library' }));
+        await user.type(screen.getByRole('combobox', { name: 'Library title' }), 'dark');
         await waitFor(() => expect(signal).toBeDefined());
 
         // Act
@@ -226,8 +315,34 @@ describe('LibraryQuickSearch', () => {
 
     it('clears the results on the first Escape and closes search on the second', async () => {
         // Arrange
-        renderSearch();
-        const user = await openAndType('dark');
+        render(
+            <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+                <MemoryRouter initialEntries={['/downloads']}>
+                    <AuthProvider
+                        initialUser={{ id: 'user-1', username: 'user', role: Role.Admin }}
+                        initialPermissions={testEffectivePermissions(Role.Admin)}
+                    >
+                        <TooltipProvider>
+                            <Routes>
+                                <Route
+                                    path="*"
+                                    element={
+                                        <>
+                                            <LibraryQuickSearch />
+                                            <CommandPalette />
+                                            <LocationProbe />
+                                        </>
+                                    }
+                                />
+                            </Routes>
+                        </TooltipProvider>
+                    </AuthProvider>
+                </MemoryRouter>
+            </QueryClientProvider>,
+        );
+        const user = userEvent.setup();
+        await user.click(screen.getByRole('button', { name: 'Search library' }));
+        await user.type(screen.getByRole('combobox', { name: 'Library title' }), 'dark');
         const input = screen.getByRole('combobox', { name: 'Library title' });
         await screen.findByRole('option', { name: /Darkness Falls/ });
         expect(input).toHaveAttribute('aria-expanded', 'true');
@@ -251,10 +366,36 @@ describe('LibraryQuickSearch', () => {
     it('shows a failed search as an error, not as an empty result', async () => {
         // Arrange
         titleSearch = () => Promise.reject(new Error('boom'));
-        renderSearch();
+        render(
+            <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+                <MemoryRouter initialEntries={['/downloads']}>
+                    <AuthProvider
+                        initialUser={{ id: 'user-1', username: 'user', role: Role.Admin }}
+                        initialPermissions={testEffectivePermissions(Role.Admin)}
+                    >
+                        <TooltipProvider>
+                            <Routes>
+                                <Route
+                                    path="*"
+                                    element={
+                                        <>
+                                            <LibraryQuickSearch />
+                                            <CommandPalette />
+                                            <LocationProbe />
+                                        </>
+                                    }
+                                />
+                            </Routes>
+                        </TooltipProvider>
+                    </AuthProvider>
+                </MemoryRouter>
+            </QueryClientProvider>,
+        );
 
         // Act
-        await openAndType('dark');
+        const user = userEvent.setup();
+        await user.click(screen.getByRole('button', { name: 'Search library' }));
+        await user.type(screen.getByRole('combobox', { name: 'Library title' }), 'dark');
 
         // Assert
         expect(await screen.findByText('The library search failed')).toBeInTheDocument();
@@ -265,10 +406,36 @@ describe('LibraryQuickSearch', () => {
     it('shows the no-match state without searching providers', async () => {
         // Arrange
         titleSearch = () => Promise.resolve([]);
-        renderSearch();
+        render(
+            <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+                <MemoryRouter initialEntries={['/downloads']}>
+                    <AuthProvider
+                        initialUser={{ id: 'user-1', username: 'user', role: Role.Admin }}
+                        initialPermissions={testEffectivePermissions(Role.Admin)}
+                    >
+                        <TooltipProvider>
+                            <Routes>
+                                <Route
+                                    path="*"
+                                    element={
+                                        <>
+                                            <LibraryQuickSearch />
+                                            <CommandPalette />
+                                            <LocationProbe />
+                                        </>
+                                    }
+                                />
+                            </Routes>
+                        </TooltipProvider>
+                    </AuthProvider>
+                </MemoryRouter>
+            </QueryClientProvider>,
+        );
 
         // Act
-        await openAndType('zzz');
+        const user = userEvent.setup();
+        await user.click(screen.getByRole('button', { name: 'Search library' }));
+        await user.type(screen.getByRole('combobox', { name: 'Library title' }), 'zzz');
 
         // Assert
         expect(await screen.findByText('No library titles match “zzz”.')).toBeInTheDocument();
@@ -277,8 +444,34 @@ describe('LibraryQuickSearch', () => {
 
     it('opens the shared preview from the keyboard and returns to the same results when it closes', async () => {
         // Arrange
-        renderSearch();
-        const user = await openAndType('dark');
+        render(
+            <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+                <MemoryRouter initialEntries={['/downloads']}>
+                    <AuthProvider
+                        initialUser={{ id: 'user-1', username: 'user', role: Role.Admin }}
+                        initialPermissions={testEffectivePermissions(Role.Admin)}
+                    >
+                        <TooltipProvider>
+                            <Routes>
+                                <Route
+                                    path="*"
+                                    element={
+                                        <>
+                                            <LibraryQuickSearch />
+                                            <CommandPalette />
+                                            <LocationProbe />
+                                        </>
+                                    }
+                                />
+                            </Routes>
+                        </TooltipProvider>
+                    </AuthProvider>
+                </MemoryRouter>
+            </QueryClientProvider>,
+        );
+        const user = userEvent.setup();
+        await user.click(screen.getByRole('button', { name: 'Search library' }));
+        await user.type(screen.getByRole('combobox', { name: 'Library title' }), 'dark');
         await screen.findByRole('option', { name: /Darkness Falls/ });
 
         // Act
@@ -294,13 +487,44 @@ describe('LibraryQuickSearch', () => {
         expect(screen.getByRole('option', { name: /Darkness Falls/ })).toHaveAttribute('aria-selected', 'true');
         expect(screen.getByTestId('location')).toHaveTextContent('/downloads|null');
         expect(apiGet).toHaveBeenCalledWith('/content/episode-20', expect.anything());
-        expect(titleSearchCalls()).toHaveLength(1);
+        expect(
+            vi
+                .mocked(apiGet)
+                .mock.calls.map(([path]) => path)
+                .filter((path) => path.startsWith('/content?')),
+        ).toHaveLength(1);
     });
 
     it('does not open an earlier result when Enter is pressed before the changed title settles', async () => {
         // Arrange
-        renderSearch();
-        const user = await openAndType('dark');
+        render(
+            <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+                <MemoryRouter initialEntries={['/downloads']}>
+                    <AuthProvider
+                        initialUser={{ id: 'user-1', username: 'user', role: Role.Admin }}
+                        initialPermissions={testEffectivePermissions(Role.Admin)}
+                    >
+                        <TooltipProvider>
+                            <Routes>
+                                <Route
+                                    path="*"
+                                    element={
+                                        <>
+                                            <LibraryQuickSearch />
+                                            <CommandPalette />
+                                            <LocationProbe />
+                                        </>
+                                    }
+                                />
+                            </Routes>
+                        </TooltipProvider>
+                    </AuthProvider>
+                </MemoryRouter>
+            </QueryClientProvider>,
+        );
+        const user = userEvent.setup();
+        await user.click(screen.getByRole('button', { name: 'Search library' }));
+        await user.type(screen.getByRole('combobox', { name: 'Library title' }), 'dark');
         await screen.findByRole('option', { name: /Darkness Falls/ });
 
         // Act
@@ -313,8 +537,34 @@ describe('LibraryQuickSearch', () => {
 
     it('returns focus to the clicked result when the preview closes', async () => {
         // Arrange
-        renderSearch();
-        const user = await openAndType('dark');
+        render(
+            <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+                <MemoryRouter initialEntries={['/downloads']}>
+                    <AuthProvider
+                        initialUser={{ id: 'user-1', username: 'user', role: Role.Admin }}
+                        initialPermissions={testEffectivePermissions(Role.Admin)}
+                    >
+                        <TooltipProvider>
+                            <Routes>
+                                <Route
+                                    path="*"
+                                    element={
+                                        <>
+                                            <LibraryQuickSearch />
+                                            <CommandPalette />
+                                            <LocationProbe />
+                                        </>
+                                    }
+                                />
+                            </Routes>
+                        </TooltipProvider>
+                    </AuthProvider>
+                </MemoryRouter>
+            </QueryClientProvider>,
+        );
+        const user = userEvent.setup();
+        await user.click(screen.getByRole('button', { name: 'Search library' }));
+        await user.type(screen.getByRole('combobox', { name: 'Library title' }), 'dark');
         const result = await screen.findByRole('option', { name: /Darkness Falls/ });
 
         // Act
@@ -329,10 +579,36 @@ describe('LibraryQuickSearch', () => {
 
     it('links all library results to the same title scope at every level', async () => {
         // Arrange
-        renderSearch();
+        render(
+            <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+                <MemoryRouter initialEntries={['/downloads']}>
+                    <AuthProvider
+                        initialUser={{ id: 'user-1', username: 'user', role: Role.Admin }}
+                        initialPermissions={testEffectivePermissions(Role.Admin)}
+                    >
+                        <TooltipProvider>
+                            <Routes>
+                                <Route
+                                    path="*"
+                                    element={
+                                        <>
+                                            <LibraryQuickSearch />
+                                            <CommandPalette />
+                                            <LocationProbe />
+                                        </>
+                                    }
+                                />
+                            </Routes>
+                        </TooltipProvider>
+                    </AuthProvider>
+                </MemoryRouter>
+            </QueryClientProvider>,
+        );
 
         // Act
-        await openAndType('dark "city"');
+        const user = userEvent.setup();
+        await user.click(screen.getByRole('button', { name: 'Search library' }));
+        await user.type(screen.getByRole('combobox', { name: 'Library title' }), 'dark "city"');
 
         // Assert
         expect(screen.getByRole('link', { name: 'All library results' })).toHaveAttribute(
@@ -342,29 +618,83 @@ describe('LibraryQuickSearch', () => {
     });
 
     it.each([
-        [Role.Viewer, true],
-        [Role.Requester, false],
-        [Role.Manager, false],
-    ])('gates the provider action on content.add for role %s', async (role, disabled) => {
+        [Role.Viewer, true, 'button'],
+        [Role.Requester, false, 'link'],
+        [Role.Manager, false, 'link'],
+    ])('gates the provider action on content.add for role %s', async (role, disabled, providerActionRole) => {
         // Arrange
-        renderSearch(role);
+        render(
+            <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+                <MemoryRouter initialEntries={['/downloads']}>
+                    <AuthProvider
+                        initialUser={{ id: 'user-1', username: 'user', role: role }}
+                        initialPermissions={testEffectivePermissions(role)}
+                    >
+                        <TooltipProvider>
+                            <Routes>
+                                <Route
+                                    path="*"
+                                    element={
+                                        <>
+                                            <LibraryQuickSearch />
+                                            <CommandPalette />
+                                            <LocationProbe />
+                                        </>
+                                    }
+                                />
+                            </Routes>
+                        </TooltipProvider>
+                    </AuthProvider>
+                </MemoryRouter>
+            </QueryClientProvider>,
+        );
 
         // Act
-        await openAndType('dark');
+        const user = userEvent.setup();
+        await user.click(screen.getByRole('button', { name: 'Search library' }));
+        await user.type(screen.getByRole('combobox', { name: 'Library title' }), 'dark');
 
         // Assert
-        expect(screen.getByRole('button', { name: 'Search providers' }).hasAttribute('disabled')).toBe(disabled);
+        expect(screen.getByRole(providerActionRole, { name: 'Search providers' }).hasAttribute('disabled')).toBe(
+            disabled,
+        );
     });
 
     it('passes the title to Add Content only when the provider action is chosen', async () => {
         // Arrange
-        renderSearch(Role.Requester);
-        const user = await openAndType('dark');
+        render(
+            <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+                <MemoryRouter initialEntries={['/downloads']}>
+                    <AuthProvider
+                        initialUser={{ id: 'user-1', username: 'user', role: Role.Requester }}
+                        initialPermissions={testEffectivePermissions(Role.Requester)}
+                    >
+                        <TooltipProvider>
+                            <Routes>
+                                <Route
+                                    path="*"
+                                    element={
+                                        <>
+                                            <LibraryQuickSearch />
+                                            <CommandPalette />
+                                            <LocationProbe />
+                                        </>
+                                    }
+                                />
+                            </Routes>
+                        </TooltipProvider>
+                    </AuthProvider>
+                </MemoryRouter>
+            </QueryClientProvider>,
+        );
+        const user = userEvent.setup();
+        await user.click(screen.getByRole('button', { name: 'Search library' }));
+        await user.type(screen.getByRole('combobox', { name: 'Library title' }), 'dark');
         await screen.findByRole('option', { name: /Darkness Falls/ });
         expect(vi.mocked(apiGet).mock.calls.some(([path]) => path.includes('content-search'))).toBe(false);
 
         // Act
-        await user.click(screen.getByRole('button', { name: 'Search providers' }));
+        await user.click(screen.getByRole('link', { name: 'Search providers' }));
 
         // Assert
         expect(screen.getByTestId('location')).toHaveTextContent(
@@ -375,10 +705,36 @@ describe('LibraryQuickSearch', () => {
 
     it('keeps the input and the close button together in the block that stays pinned', async () => {
         // Arrange
-        renderSearch();
+        render(
+            <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+                <MemoryRouter initialEntries={['/downloads']}>
+                    <AuthProvider
+                        initialUser={{ id: 'user-1', username: 'user', role: Role.Admin }}
+                        initialPermissions={testEffectivePermissions(Role.Admin)}
+                    >
+                        <TooltipProvider>
+                            <Routes>
+                                <Route
+                                    path="*"
+                                    element={
+                                        <>
+                                            <LibraryQuickSearch />
+                                            <CommandPalette />
+                                            <LocationProbe />
+                                        </>
+                                    }
+                                />
+                            </Routes>
+                        </TooltipProvider>
+                    </AuthProvider>
+                </MemoryRouter>
+            </QueryClientProvider>,
+        );
 
         // Act
-        await openAndType('dark');
+        const user = userEvent.setup();
+        await user.click(screen.getByRole('button', { name: 'Search library' }));
+        await user.type(screen.getByRole('combobox', { name: 'Library title' }), 'dark');
 
         // Assert
         const top = screen.getByRole('combobox', { name: 'Library title' }).closest('.library-quick-search__top');
@@ -458,7 +814,31 @@ describe('LibraryQuickSearch', () => {
 
     it('keeps the command palette shortcut', async () => {
         // Arrange
-        renderSearch();
+        render(
+            <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+                <MemoryRouter initialEntries={['/downloads']}>
+                    <AuthProvider
+                        initialUser={{ id: 'user-1', username: 'user', role: Role.Admin }}
+                        initialPermissions={testEffectivePermissions(Role.Admin)}
+                    >
+                        <TooltipProvider>
+                            <Routes>
+                                <Route
+                                    path="*"
+                                    element={
+                                        <>
+                                            <LibraryQuickSearch />
+                                            <CommandPalette />
+                                            <LocationProbe />
+                                        </>
+                                    }
+                                />
+                            </Routes>
+                        </TooltipProvider>
+                    </AuthProvider>
+                </MemoryRouter>
+            </QueryClientProvider>,
+        );
         const user = userEvent.setup();
 
         // Act

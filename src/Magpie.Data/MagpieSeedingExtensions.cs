@@ -285,7 +285,9 @@ public static class MagpieSeedingExtensions
 
             foreach (var rank in ranks)
             {
-                var tier = rank.QualityTier!;
+                rank.QualityTierListId = list.Id;
+                var tier = rank.QualityTier ??
+                    throw new InvalidOperationException("The quality tier catalog rank has no quality tier.");
                 rank.QualityTier = null;
                 if (!insertList)
                 {
@@ -317,13 +319,12 @@ public static class MagpieSeedingExtensions
             [
                 new()
                 {
-                    QualityTierListId = AnyQualityTierListId,
                     QualityTierId = AnyQualityTierId,
                     QualityTier = new()
                     {
                         Id = AnyQualityTierId,
                         Name = "Any",
-                        Criteria = new QualityTierCriteria(),
+                        Criteria = new(),
                         CreatedAt = DateTime.UnixEpoch
                     },
                     Ordinal = 0,
@@ -345,49 +346,42 @@ public static class MagpieSeedingExtensions
             },
             [
                 Rank(
-                    VideoHdTierListId,
                     new("083107aa-3d53-40fb-8c04-f30168bf4b6c"),
                     "1080p Remux",
                     ordinal: 0,
                     isCutoff: false,
                     Match(Resolution1080, SourceRemux)),
                 Rank(
-                    VideoHdTierListId,
                     new("21493027-98c8-47fc-83a3-9d799851f637"),
                     "1080p BluRay",
                     ordinal: 1,
                     isCutoff: true,
                     Match(Resolution1080, SourceBluRay)),
                 Rank(
-                    VideoHdTierListId,
                     new("a1f312b5-80a2-4e6e-8987-fc4807d2805f"),
                     "1080p WEB-DL",
                     ordinal: 2,
                     isCutoff: false,
                     Match(Resolution1080, SourceWebDl)),
                 Rank(
-                    VideoHdTierListId,
                     new("89f7f521-6bf5-4391-aed8-1e93697e828f"),
                     "1080p HDTV",
                     ordinal: 3,
                     isCutoff: false,
                     Match(Resolution1080, SourceHdtv)),
                 Rank(
-                    VideoHdTierListId,
                     new("c3a162f3-9395-458a-8566-faff6f6d08b9"),
                     "1080p",
                     ordinal: 4,
                     isCutoff: false,
                     Match(Resolution1080)),
                 Rank(
-                    VideoHdTierListId,
                     new("4de4039e-fdb6-4401-b0f3-8c2edd15fdc9"),
                     "720p",
                     ordinal: 5,
                     isCutoff: false,
                     Match(Resolution720)),
                 Rank(
-                    VideoHdTierListId,
                     new("690049d0-664c-4c17-b6d2-e45f5da33abb"),
                     "480p",
                     ordinal: 6,
@@ -407,28 +401,24 @@ public static class MagpieSeedingExtensions
             },
             [
                 Rank(
-                    Video4KTierListId,
                     new("df2b71de-2403-4582-8ee5-0b291a825492"),
                     "2160p Remux",
                     ordinal: 0,
                     isCutoff: false,
                     Match(Resolution2160, SourceRemux)),
                 Rank(
-                    Video4KTierListId,
                     new("755885ae-d08c-43d4-a29d-c5d4cf13f845"),
                     "2160p BluRay",
                     ordinal: 1,
                     isCutoff: true,
                     Match(Resolution2160, SourceBluRay)),
                 Rank(
-                    Video4KTierListId,
                     new("366349f1-a9fa-4c63-8c01-940d0b4bdffe"),
                     "2160p WEB-DL",
                     ordinal: 2,
                     isCutoff: false,
                     Match(Resolution2160, SourceWebDl)),
                 Rank(
-                    Video4KTierListId,
                     new("5fda62dd-0ed9-4eaa-bb86-3de35f834b46"),
                     "2160p",
                     ordinal: 3,
@@ -448,35 +438,30 @@ public static class MagpieSeedingExtensions
             },
             [
                 Rank(
-                    VideoSpaceTierListId,
                     new("eaa85ab8-e644-45a2-8b9c-b473303d10b1"),
                     "1080p AV1",
                     ordinal: 0,
                     isCutoff: false,
                     Match(Resolution1080, CodecAv1)),
                 Rank(
-                    VideoSpaceTierListId,
                     new("2618efaa-6fea-444e-8442-92a7fb5ceec3"),
                     "1080p HEVC",
                     ordinal: 1,
                     isCutoff: true,
                     Match(Resolution1080, CodecHevc)),
                 Rank(
-                    VideoSpaceTierListId,
                     new("91dba129-5794-48d3-b972-0a0a6f6760c0"),
                     "720p HEVC",
                     ordinal: 2,
                     isCutoff: false,
                     Match(Resolution720, CodecHevc)),
                 Rank(
-                    VideoSpaceTierListId,
                     new("acb33649-71c1-4765-a0e5-3c5c38a11681"),
                     "720p",
                     ordinal: 3,
                     isCutoff: false,
                     Match(Resolution720)),
                 Rank(
-                    VideoSpaceTierListId,
                     new("294a978e-5ea9-4b1f-934d-b6d6c6f630e5"),
                     "480p",
                     ordinal: 4,
@@ -496,49 +481,42 @@ public static class MagpieSeedingExtensions
             },
             [
                 Rank(
-                    AudioBalancedTierListId,
                     new("9ee483e1-e27a-4924-906e-e51b389ef485"),
                     "Lossless",
                     ordinal: 0,
                     isCutoff: false,
                     Match(FormatLossless)),
                 Rank(
-                    AudioBalancedTierListId,
                     new("7c4afa52-5135-4cbd-a6a3-60cb1478d889"),
                     "MP3 320 kbps",
                     ordinal: 1,
                     isCutoff: false,
                     Match(FormatMp3, Bitrate320)),
                 Rank(
-                    AudioBalancedTierListId,
                     new("bb2ae6c9-729b-4591-abc2-19ae2287bea2"),
                     "MP3 V0",
                     ordinal: 2,
                     isCutoff: true,
                     Match(FormatMp3, BitrateV0)),
                 Rank(
-                    AudioBalancedTierListId,
                     new("979eee78-ebc6-456f-826d-001cfabe506b"),
                     "MP3 V2",
                     ordinal: 3,
                     isCutoff: false,
                     Match(FormatMp3, BitrateV2)),
                 Rank(
-                    AudioBalancedTierListId,
                     new("cf994124-f8fd-40a8-98fe-f3a076022e96"),
                     "256 kbps",
                     ordinal: 4,
                     isCutoff: false,
                     Match(FormatMp3, Bitrate256)),
                 Rank(
-                    AudioBalancedTierListId,
                     new("8a1b88e2-f528-448c-b723-0def6a4e5c67"),
                     "192 kbps",
                     ordinal: 5,
                     isCutoff: false,
                     Match(FormatMp3, Bitrate192)),
                 Rank(
-                    AudioBalancedTierListId,
                     new("cd189bc0-b604-4a95-9ab1-39eaaeeae03a"),
                     "128 kbps",
                     ordinal: 6,
@@ -558,28 +536,24 @@ public static class MagpieSeedingExtensions
             },
             [
                 Rank(
-                    AudioLosslessTierListId,
                     new("04ebbec0-4cda-41f9-a442-c682beaa2f39"),
                     "24-bit FLAC/ALAC",
                     ordinal: 0,
                     isCutoff: false,
                     Match(FormatFlacAlac, BitDepth24)),
                 Rank(
-                    AudioLosslessTierListId,
                     new("7628f40b-b80a-4a83-86e0-be3c7081a344"),
                     "FLAC/ALAC",
                     ordinal: 1,
                     isCutoff: true,
                     Match(FormatFlacAlac)),
                 Rank(
-                    AudioLosslessTierListId,
                     new("708c47ef-9476-4c9d-8679-e46271be9cec"),
                     "WAV/APE",
                     ordinal: 2,
                     isCutoff: false,
                     Match(FormatWavApe)),
                 Rank(
-                    AudioLosslessTierListId,
                     new("8188c24c-2334-4de8-82b3-7433d81fbf41"),
                     "AIFF/WavPack",
                     ordinal: 3,
@@ -599,28 +573,24 @@ public static class MagpieSeedingExtensions
             },
             [
                 Rank(
-                    AudioCompactTierListId,
                     new("8b018a63-94f1-40d6-8070-1506768d86e0"),
                     "Opus 128 kbps",
                     ordinal: 0,
                     isCutoff: false,
                     Match(FormatOpus, Bitrate128)),
                 Rank(
-                    AudioCompactTierListId,
                     new("f2be00f5-8f30-4847-9417-4ec8eeb77db5"),
                     "AAC 128 kbps",
                     ordinal: 1,
                     isCutoff: true,
                     Match(FormatAacM4A, Bitrate128)),
                 Rank(
-                    AudioCompactTierListId,
                     new("bb3161aa-8e2a-4f0c-8a4c-c9d7e4487091"),
                     "MP3 128 kbps",
                     ordinal: 2,
                     isCutoff: false,
                     Match(FormatMp3, Bitrate128)),
                 Rank(
-                    AudioCompactTierListId,
                     new("b526ab33-1fa3-4033-89d2-eb74cc8ed761"),
                     "Opus/AAC 96 kbps",
                     ordinal: 3,
@@ -640,28 +610,24 @@ public static class MagpieSeedingExtensions
             },
             [
                 Rank(
-                    AudioSpokenTierListId,
                     new("c05c9039-d96f-439c-82c0-c2f74ff929a2"),
                     "M4B",
                     ordinal: 0,
                     isCutoff: false,
                     Match(FormatM4B)),
                 Rank(
-                    AudioSpokenTierListId,
                     new("cd081cbe-494d-4283-9203-645b2f4e497c"),
                     "Opus 96 kbps",
                     ordinal: 1,
                     isCutoff: true,
                     Match(FormatOpus, Bitrate96)),
                 Rank(
-                    AudioSpokenTierListId,
                     new("1e52db51-f4f5-40f7-9c56-4594d16774d2"),
                     "AAC/MP3 96 kbps",
                     ordinal: 2,
                     isCutoff: false,
                     Match(@"(?<![a-z0-9])(aac|m4a|mp3)(?![a-z0-9])", Bitrate96)),
                 Rank(
-                    AudioSpokenTierListId,
                     new("b0d31078-5ede-4970-b51d-fba5c6c39abf"),
                     "AAC/MP3 64 kbps",
                     ordinal: 3,
@@ -687,14 +653,12 @@ public static class MagpieSeedingExtensions
         };
 
     private static QualityTierListRank Rank(
-        Guid listId,
         Guid tierId,
         string name,
         int ordinal,
         bool isCutoff,
         QualityTierCriteria criteria) => new()
         {
-            QualityTierListId = listId,
             QualityTierId = tierId,
             Ordinal = ordinal,
             IsCutoff = isCutoff,
@@ -712,7 +676,7 @@ public static class MagpieSeedingExtensions
     {
         And = titlePatterns.Select(pattern => new DictionaryCriteria<PropertyCriterion<string>>
         {
-            Items = new Dictionary<string, PropertyCriterion<string>>(StringComparer.Ordinal)
+            Items = new(StringComparer.Ordinal)
             {
                 ["Title"] = new()
                 {

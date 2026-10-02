@@ -15,11 +15,9 @@ internal static class JobsTelemetry
         "magpie.jobs.execution_duration",
         unit: "ms");
 
-    internal static readonly Counter<long> FailuresTotal = Meter.CreateCounter<long>(
-        "magpie.jobs.failures_total");
+    internal static readonly Counter<long> FailuresTotal = Meter.CreateCounter<long>("magpie.jobs.failures_total");
 
-    internal static readonly Counter<long> RetriesTotal = Meter.CreateCounter<long>(
-        "magpie.jobs.retries_total");
+    internal static readonly Counter<long> RetriesTotal = Meter.CreateCounter<long>("magpie.jobs.retries_total");
 
     internal static readonly Counter<long> RetryAttemptsExhaustedTotal = Meter.CreateCounter<long>(
         "magpie.jobs.retry_attempts_exhausted_total");

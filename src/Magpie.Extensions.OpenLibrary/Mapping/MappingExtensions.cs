@@ -32,8 +32,6 @@ internal static class MappingExtensions
         "d MMM yyyy"
     ];
 
-    private static readonly string[] FinerThanYearFormats = [.. MonthFormats, .. DayFormats];
-
     internal static string? FindExternalId(this IEnumerable<MetadataContribution> contributions, string source)
     {
         var fallback = (string?)null;
@@ -105,7 +103,7 @@ internal static class MappingExtensions
             Languages = Distinct(document.Languages, normalize: value => value.NormalizeLanguage()),
             Subjects = Distinct(document.Subjects),
             SubjectKeys = Distinct(document.SubjectKeys),
-            Isbns = ValidIsbns(document.Isbns),
+            Isbns = Distinct(document.Isbns, normalize: value => value.NormalizeIsbn()),
             CoverId = document.CoverId is > 0 ? document.CoverId : null,
             CoverEditionOlid = document.CoverEditionKey.NormalizeOlid('M'),
             NumberOfPagesMedian = document.NumberOfPagesMedian is > 0 ? document.NumberOfPagesMedian : null,
@@ -166,7 +164,7 @@ internal static class MappingExtensions
         {
             Kind = "canonical",
             Source = Constants.ProviderType,
-            Url = new Uri(string.Format(
+            Url = new(string.Format(
                 CultureInfo.InvariantCulture,
                 "https://openlibrary.org/authors/{0}",
                 authorOlid)),
@@ -232,7 +230,7 @@ internal static class MappingExtensions
             {
                 Type = "photo",
                 Source = Constants.ProviderType,
-                Url = new Uri(string.Format(
+                Url = new(string.Format(
                     CultureInfo.InvariantCulture,
                     "https://covers.openlibrary.org/a/id/{0}-L.jpg?default=false",
                     photo)),
@@ -262,6 +260,7 @@ internal static class MappingExtensions
         EditionDto? edition = null)
     {
         var language = PreferredLanguage(hit.Languages, languagePreference);
+        var published = EditionRefinedPublishTemporal(hit, edition) ?? RefinedPublishTemporal(hit);
         var contribution = new MetadataContribution
         {
             ProviderType = Constants.ProviderType,
@@ -269,7 +268,8 @@ internal static class MappingExtensions
             Title = hit.Title,
             OriginalTitle = hit.Title,
             Overview = hit.Description.NormalizeHtmlToText(),
-            PublishDate = EditionRefinedPublishDate(hit, edition) ?? RefinedPublishDate(hit),
+            PublishDate = published?.Value,
+            PublishDatePrecision = published?.Precision,
             Language = language,
             DateLastRefreshed = utcNow
         };
@@ -330,7 +330,7 @@ internal static class MappingExtensions
         {
             Kind = "canonical",
             Source = Constants.ProviderType,
-            Url = new Uri(string.Format(
+            Url = new(string.Format(
                 CultureInfo.InvariantCulture,
                 "https://openlibrary.org/works/{0}",
                 hit.WorkOlid)),
@@ -358,7 +358,7 @@ internal static class MappingExtensions
             {
                 Type = "cover",
                 Source = Constants.ProviderType,
-                Url = new Uri(string.Format(
+                Url = new(string.Format(
                     CultureInfo.InvariantCulture,
                     "https://covers.openlibrary.org/b/id/{0}-L.jpg?default=false",
                     coverId)),
@@ -370,15 +370,15 @@ internal static class MappingExtensions
         return contribution;
     }
 
-    private static DateTime? EditionRefinedPublishDate(this WorkHit hit, EditionDto? edition)
+    private static TemporalValue? EditionRefinedPublishTemporal(this WorkHit hit, EditionDto? edition)
     {
         if (edition is null || hit.FirstPublishYear is not { } year)
         {
             return null;
         }
 
-        var parsed = ParseDateFinerThanYear(edition.PublishDate);
-        return parsed is { } date && date.Year == year ? date : null;
+        var parsed = ParseTemporalFinerThanYear(edition.PublishDate);
+        return parsed is not null && parsed.Value.Year == year ? parsed : null;
     }
 
     private static void AddEditionExternalIds(this MetadataContribution contribution, EditionDto edition)
@@ -610,27 +610,6 @@ internal static class MappingExtensions
         }
     }
 
-    private static IReadOnlyList<string> ValidIsbns(this IReadOnlyList<string>? candidates)
-    {
-        if (candidates is null)
-        {
-            return [];
-        }
-
-        var values = new List<string>();
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var candidate in candidates)
-        {
-            var isbn = candidate.NormalizeIsbn();
-            if (isbn is not null && seen.Add(isbn))
-            {
-                values.Add(isbn);
-            }
-        }
-
-        return values;
-    }
-
     internal static string? RepresentativeIsbn(this IReadOnlyList<string> isbns)
     {
         return isbns.FirstOrDefault(value => value.Length == 13)
@@ -833,7 +812,7 @@ internal static class MappingExtensions
             return start >= 1
                 ? new TemporalValue
                 {
-                    Value = new DateTime(start, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+                    Value = new(start, 1, 1, 0, 0, 0, DateTimeKind.Utc),
                     Precision = TemporalPrecision.Year
                 }
                 : null;
@@ -857,10 +836,22 @@ internal static class MappingExtensions
         return null;
     }
 
-    private static DateTime? ParseDateFinerThanYear(this string? value)
+    private static TemporalValue? ParseTemporalFinerThanYear(this string? value)
     {
         var text = value?.Trim();
-        return text is null ? null : ParseExact(text, FinerThanYearFormats);
+        if (text is null)
+        {
+            return null;
+        }
+
+        if (ParseExact(text, DayFormats) is { } day)
+        {
+            return new TemporalValue { Value = day, Precision = TemporalPrecision.Day };
+        }
+
+        return ParseExact(text, MonthFormats) is { } month
+            ? new TemporalValue { Value = month, Precision = TemporalPrecision.Month }
+            : null;
     }
 
     private static DateTime? ParseExact(this string text, string[] formats)

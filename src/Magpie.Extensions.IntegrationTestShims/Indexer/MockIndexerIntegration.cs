@@ -20,36 +20,9 @@ internal sealed class MockIndexerIntegration : IIndexerIntegration
     public const string ApiUrlSettingKey = "apiUrl";
     public const string ApiKeySettingKey = "apiKey";
 
-    private readonly ScenarioReader _scenarios;
-    private readonly AuditWriter _audit;
-    private readonly LatencyInjector _latency;
-
-    public MockIndexerIntegration()
-        : this(
-            new ScenarioReader(ProviderTypeName),
-            new AuditWriter(ProviderTypeName),
-            new LatencyInjector(ProviderTypeName))
-    {
-    }
-
-    internal MockIndexerIntegration(ScenarioReader scenarios, AuditWriter audit, LatencyInjector latency)
-    {
-        _scenarios = scenarios;
-        _audit = audit;
-        _latency = latency;
-        SearchFacets =
-        [
-            new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-            {
-                "imdbid",
-                "tmdbid",
-                "tvdbid",
-                "tvmazeid",
-                "traktid",
-            },
-        ];
-        SupportsKeywordSearch = true;
-    }
+    private readonly ScenarioReader _scenarios = new(ProviderTypeName);
+    private readonly AuditWriter _audit = new(ProviderTypeName);
+    private readonly LatencyInjector _latency = new(ProviderTypeName);
 
     public string ProviderType => ProviderTypeName;
 
@@ -77,9 +50,19 @@ internal sealed class MockIndexerIntegration : IIndexerIntegration
 
     public IReadOnlyList<string> SupportedContentTypes { get; } = [];
 
-    public IReadOnlyList<IReadOnlyCollection<string>> SearchFacets { get; }
+    public IReadOnlyList<IReadOnlyCollection<string>> SearchFacets { get; } =
+    [
+        new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "imdbid",
+            "tmdbid",
+            "tvdbid",
+            "tvmazeid",
+            "traktid",
+        },
+    ];
 
-    public bool SupportsKeywordSearch { get; }
+    public bool SupportsKeywordSearch { get; } = true;
 
     private string? ComputeSearchDiscriminator(ReleaseSearchRequest request)
     {

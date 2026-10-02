@@ -21,13 +21,7 @@ public sealed class MusicBrainzExtension : IExtension
     public Guid Id => Constants.ExtensionId;
 
     /// <inheritdoc />
-    public Version Version => new(1, 0, 0);
-
-    /// <inheritdoc />
     public string Name => "MusicBrainz";
-
-    /// <inheritdoc />
-    public string? TargetABI => "[1.0.0,)";
 
     /// <inheritdoc />
     public void RegisterServices(IServiceCollection services)

@@ -3171,7 +3171,6 @@ public class QueryExecutorTests
             PushedFilters = [],
             RequestedPage = 1,
             Fingerprint = "fetch",
-            TextFilters = [new TextFilter(TextField.Language, CriteriaValueOperator.In, false, ["en", "fr"])],
             PublishDateFilters =
             [
                 new TemporalFilter(
@@ -3220,12 +3219,10 @@ public class QueryExecutorTests
         // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(parameters, Does.Not.ContainKey("with_original_language"));
             Assert.That(parameters["primary_release_date.gte"], Is.EqualTo("2021-01-01"));
             Assert.That(parameters["primary_release_date.lte"], Is.EqualTo("2025-12-31"));
             Assert.That(parameters["with_runtime.gte"], Is.EqualTo("90"));
             Assert.That(parameters["with_runtime.lte"], Is.EqualTo("180"));
-            Assert.That(applied.AppliedTextFilters, Is.Empty);
             Assert.That(applied.AppliedPublishDateFilters, Is.EquivalentTo(fetch.PublishDateFilters));
             Assert.That(applied.AppliedDurationFilters, Is.EquivalentTo(fetch.DurationFilters));
         }

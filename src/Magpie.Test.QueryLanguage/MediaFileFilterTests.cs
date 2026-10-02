@@ -92,18 +92,17 @@ public sealed class MediaFileFilterTests
         }
     }
 
-    [TestCase("=", CriteriaValueOperator.Equals)]
-    [TestCase("!=", CriteriaValueOperator.NotEquals)]
-    [TestCase(">", CriteriaValueOperator.GreaterThan)]
-    [TestCase(">=", CriteriaValueOperator.GreaterThanOrEqual)]
-    [TestCase("<", CriteriaValueOperator.LessThan)]
-    [TestCase("<=", CriteriaValueOperator.LessThanOrEqual)]
+    [TestCase("mediaFiles has (fileSize = 5000000000)", CriteriaValueOperator.Equals)]
+    [TestCase("mediaFiles has (fileSize != 5000000000)", CriteriaValueOperator.NotEquals)]
+    [TestCase("mediaFiles has (fileSize > 5000000000)", CriteriaValueOperator.GreaterThan)]
+    [TestCase("mediaFiles has (fileSize >= 5000000000)", CriteriaValueOperator.GreaterThanOrEqual)]
+    [TestCase("mediaFiles has (fileSize < 5000000000)", CriteriaValueOperator.LessThan)]
+    [TestCase("mediaFiles has (fileSize <= 5000000000)", CriteriaValueOperator.LessThanOrEqual)]
     public void ParseContentFilter_ParsesNumericSize_WhenFileSizeUsesComparison(
-        string op,
+        string query,
         CriteriaValueOperator expected)
     {
         // Arrange
-        var query = $"mediaFiles has (fileSize {op} 5000000000)";
 
         // Act
         var result = query.ParseContentFilter();
@@ -136,9 +135,7 @@ public sealed class MediaFileFilterTests
     [TestCase("mimeType = \"video/mp4\"", "mimeType is a media file field. Use mediaFiles has (mimeType ...)")]
     [TestCase("filePath contains \"x\"", "filePath is a media file field. Use mediaFiles has (filePath ...)")]
     [TestCase("fileSize > 1", "fileSize is a media file field. Use mediaFiles has (fileSize ...)")]
-    public void ParseContentFilter_FailsWithCollectionHint_WhenMediaFileFieldIsTopLevel(
-        string query,
-        string expected)
+    public void ParseContentFilter_FailsWithCollectionHint_WhenMediaFileFieldIsTopLevel(string query, string expected)
     {
         // Arrange
 
@@ -162,9 +159,7 @@ public sealed class MediaFileFilterTests
     [TestCase(
         "monitoring = Monitored and mediaFiles !has (mimeType startswith \"text/\")",
         "Monitoring = Monitored and MediaFiles !has (MimeType startswith \"text/\")")]
-    public void FormatContentFilter_WritesMediaFileCollection_WhenCriteriaHaveMediaFiles(
-        string query,
-        string expected)
+    public void FormatContentFilter_WritesMediaFileCollection_WhenCriteriaHaveMediaFiles(string query, string expected)
     {
         // Arrange
         var criteria = query.ParseContentFilter().Value!;
@@ -187,8 +182,6 @@ public sealed class MediaFileFilterTests
         var exception = Assert.Throws<ArgumentException>(() => criteria.FormatContentFilter());
 
         // Assert
-        Assert.That(
-            exception!.Message,
-            Is.EqualTo("The filter uses the removed top-level media file criteria."));
+        Assert.That(exception!.Message, Is.EqualTo("The filter uses the removed top-level media file criteria."));
     }
 }

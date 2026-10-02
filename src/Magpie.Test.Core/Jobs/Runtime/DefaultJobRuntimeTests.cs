@@ -82,9 +82,6 @@ public sealed class DefaultJobRuntimeTests
             .Setup(provider => provider.GetService(typeof(IJobExecutionRepository)))
             .Returns(_executions.Object);
         serviceProvider
-            .Setup(provider => provider.GetService(typeof(IJobManager)))
-            .Returns(Mock.Of<IJobManager>());
-        serviceProvider
             .Setup(provider => provider.GetService(typeof(IJobRetryPolicy)))
             .Returns(Mock.Of<IJobRetryPolicy>());
         serviceProvider
@@ -145,9 +142,8 @@ public sealed class DefaultJobRuntimeTests
             hostEnvironment,
             Mock.Of<IEventBus>(),
             _shutdownSignal,
-            TimeProvider.System,
-            NullLogger<DefaultJobRuntime>.Instance,
-            TimeSpan.FromMilliseconds(25));
+            new FakeTimeProvider(),
+            NullLogger<DefaultJobRuntime>.Instance);
     }
 
     [TearDown]
@@ -661,9 +657,6 @@ public sealed class DefaultJobRuntimeTests
             .Setup(provider => provider.GetService(typeof(IJobRetryPolicy)))
             .Returns(retryPolicy.Object);
         serviceProvider
-            .Setup(provider => provider.GetService(typeof(IJobManager)))
-            .Returns(Mock.Of<IJobManager>());
-        serviceProvider
             .Setup(provider => provider.GetService(typeof(IAuditRecordRepository)))
             .Returns(Mock.Of<IAuditRecordRepository>());
         var transactionManager = new Mock<ITransactionManager>();
@@ -725,9 +718,8 @@ public sealed class DefaultJobRuntimeTests
             hostEnvironment,
             Mock.Of<IEventBus>(),
             _shutdownSignal,
-            TimeProvider.System,
-            NullLogger<DefaultJobRuntime>.Instance,
-            TimeSpan.FromMilliseconds(25));
+            new FakeTimeProvider(),
+            NullLogger<DefaultJobRuntime>.Instance);
 
         // Act
         await subject.ExecuteAsync(executionId).ConfigureAwait(false);

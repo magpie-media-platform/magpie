@@ -63,6 +63,9 @@ public sealed class DownloadCleanupJobTests
             .Setup(r => r.ListCleanupCandidatesAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync([]);
         _downloadRepository
+            .Setup(r => r.ListTransferAttemptsAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
+        _downloadRepository
             .Setup(r => r.StampClientRemovedAsync(
                 It.IsAny<Guid>(),
                 It.IsAny<string>(),
@@ -593,6 +596,169 @@ public sealed class DownloadCleanupJobTests
                 null,
                 It.IsAny<CancellationToken>()),
             Times.Once);
+    }
+
+    [TestCase(DownloadStatus.Imported, DownloadStatus.Downloaded, false)]
+    [TestCase(DownloadStatus.Imported, DownloadStatus.Importing, false)]
+    [TestCase(DownloadStatus.Faulted, DownloadStatus.Downloaded, false)]
+    [TestCase(DownloadStatus.Faulted, DownloadStatus.Imported, true)]
+    public async Task ExecuteAsync_KeepsTheTransfer_WhenAnotherAttemptOfItStillNeedsIt(
+        DownloadStatus candidateStatus,
+        DownloadStatus attemptStatus,
+        bool attemptHeld)
+    {
+        // Arrange
+        var candidate = new DownloadCleanupCandidate
+        {
+            DownloadId = Guid.Parse("87c2ffc2-bed5-412b-a1ae-20becf798c03"),
+            ExternalId = "shared-transfer",
+            Title = "Release",
+            Status = candidateStatus,
+            HeldByPolicy = false,
+            ProviderType = "torrent-client",
+            ClientName = "client",
+            Settings = new Dictionary<string, string>(),
+            CleanupDeleteFiles = true,
+            KeepFailedOnClient = false
+        };
+        _downloadRepository
+            .Setup(r => r.ListCleanupCandidatesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync([candidate]);
+        _downloadRepository
+            .Setup(r => r.ListTransferAttemptsAsync(candidate.DownloadId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(
+            [
+                new Download
+                {
+                    Id = Guid.Parse("87c2ffc2-bed5-412b-a1ae-20becf798c03"),
+                    ExternalId = "shared-transfer",
+                    Title = "Release",
+                    Status = candidateStatus
+                },
+                new Download
+                {
+                    Id = Guid.Parse("46e78af8-cb00-406b-9664-538f8938a6eb"),
+                    ExternalId = "shared-transfer",
+                    Title = "Release",
+                    Status = attemptStatus,
+                    HeldByPolicy = attemptHeld
+                }
+            ]);
+
+        // Act
+        await _subject.ExecuteAsync(_jobContext).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            _torrentIntegration.Verify(
+                i => i.RemoveDownloadAsync(
+                    It.IsAny<string>(),
+                    It.IsAny<bool>(),
+                    It.IsAny<IReadOnlyDictionary<string, string>>(),
+                    It.IsAny<CancellationToken>()),
+                Times.Never);
+            _downloadRepository.Verify(
+                r => r.StampClientRemovedAsync(
+                    It.IsAny<Guid>(),
+                    It.IsAny<string>(),
+                    It.IsAny<string>(),
+                    It.IsAny<string>(),
+                    It.IsAny<DateTime>(),
+                    It.IsAny<Guid?>(),
+                    It.IsAny<Guid?>(),
+                    It.IsAny<CancellationToken>()),
+                Times.Never);
+        }
+    }
+
+    [TestCase(DownloadStatus.Cancelled, false, "true", "client-released")]
+    [TestCase(DownloadStatus.Cancelled, true, "true", "client-released")]
+    [TestCase(DownloadStatus.Faulted, true, "true", "client-released")]
+    [TestCase(DownloadStatus.Imported, true, "false", "hold-policy-ignored")]
+    public async Task ExecuteAsync_StampsEveryAttemptOfTheTransfer_WhenNoAttemptStillNeedsIt(
+        DownloadStatus attemptStatus,
+        bool attemptHeld,
+        string honorClientHoldPolicy,
+        string trigger)
+    {
+        // Arrange
+        var candidate = new DownloadCleanupCandidate
+        {
+            DownloadId = Guid.Parse("d10a1108-c630-4c8b-99d3-483eea6b5918"),
+            ExternalId = "shared-transfer",
+            Title = "Manual grab",
+            Status = DownloadStatus.Imported,
+            HeldByPolicy = false,
+            ProviderType = "torrent-client",
+            ClientName = "client",
+            Settings = new Dictionary<string, string>
+            {
+                [DownloadClientSettingsKeys.HonorClientHoldPolicy] = honorClientHoldPolicy
+            },
+            CleanupDeleteFiles = true,
+            KeepFailedOnClient = false
+        };
+        _downloadRepository
+            .Setup(r => r.ListCleanupCandidatesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync([candidate]);
+        _downloadRepository
+            .Setup(r => r.ListTransferAttemptsAsync(candidate.DownloadId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(
+            [
+                new Download
+                {
+                    Id = Guid.Parse("d10a1108-c630-4c8b-99d3-483eea6b5918"),
+                    ExternalId = "shared-transfer",
+                    Title = "Manual grab",
+                    Status = DownloadStatus.Imported
+                },
+                new Download
+                {
+                    Id = Guid.Parse("325a0fb2-29e8-4515-8c61-bf16ea966aed"),
+                    ExternalId = "shared-transfer",
+                    Title = "Shotgun alias",
+                    Status = attemptStatus,
+                    HeldByPolicy = attemptHeld
+                }
+            ]);
+
+        // Act
+        await _subject.ExecuteAsync(_jobContext).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            _torrentIntegration.Verify(
+                i => i.RemoveDownloadAsync(
+                    "shared-transfer",
+                    true,
+                    It.IsAny<IReadOnlyDictionary<string, string>>(),
+                    It.IsAny<CancellationToken>()),
+                Times.Once);
+            _downloadRepository.Verify(
+                r => r.StampClientRemovedAsync(
+                    Guid.Parse("d10a1108-c630-4c8b-99d3-483eea6b5918"),
+                    "Manual grab",
+                    "client",
+                    trigger,
+                    _now,
+                    null,
+                    null,
+                    It.IsAny<CancellationToken>()),
+                Times.Once);
+            _downloadRepository.Verify(
+                r => r.StampClientRemovedAsync(
+                    Guid.Parse("325a0fb2-29e8-4515-8c61-bf16ea966aed"),
+                    "Shotgun alias",
+                    "client",
+                    trigger,
+                    _now,
+                    null,
+                    null,
+                    It.IsAny<CancellationToken>()),
+                Times.Once);
+        }
     }
 
     [Test]

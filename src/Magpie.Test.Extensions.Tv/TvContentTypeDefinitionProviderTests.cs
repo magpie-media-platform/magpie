@@ -26,7 +26,7 @@ public class TvContentTypeDefinitionProviderTests
     }
 
     [Test]
-    public void Definition_Result_WhenPathContributionsAreRead()
+    public void Definition_ReturnsSubfolderOnShowLevelOnly_WhenPathContributionsAreRead()
     {
         // Arrange
         // Act
@@ -41,7 +41,7 @@ public class TvContentTypeDefinitionProviderTests
     [TestCase("/media/An Alias/Season 4/s04e05.mkv", "season", 2, "episode", 5, true)]
     [TestCase("/media/An Alias/Season 4/s04e05.mkv", "show", 1, "season", 2, false)]
     [TestCase("/media/An Alias/Season 1/02.mkv", "season", 1, "episode", 2, true)]
-    public void ResolveFileChild_UsesConfirmedParent_WhenFileTitleOrProviderNumberingDiffers(
+    public void ResolveFileChildren_UsesConfirmedParent_WhenFileTitleOrProviderNumberingDiffers(
         string path, string parentLevel, int parentOrdinal, string childLevel, int childOrdinal, bool expectedMatch)
     {
         // Arrange
@@ -66,16 +66,120 @@ public class TvContentTypeDefinitionProviderTests
         var parsed = _subject.Parse(path, out _)!;
 
         // Act
-        var result = ((IFileRoutingContentTypeDefinitionProvider)_subject).ResolveFileChild(
+        var result = ((IFileRoutingContentTypeDefinitionProvider)_subject).ResolveFileChildren(
             parent, [child], parsed.ToDictionary(pair => pair.Key, pair => pair.Value.ToList()));
 
         // Assert
-        Assert.That(result.HasValue, Is.EqualTo(expectedMatch));
+        Assert.That(result.Any(), Is.EqualTo(expectedMatch));
+    }
+
+    [TestCase(
+        "/media/Show/Season 1/Show.S01E34-E36.mkv",
+        new[]
+        {
+            "00000000-0000-0000-0000-000000000034",
+            "00000000-0000-0000-0000-000000000035",
+            "00000000-0000-0000-0000-000000000036"
+        })]
+    [TestCase(
+        "/media/Show/Season 1/Show.S01E34-36.mkv",
+        new[]
+        {
+            "00000000-0000-0000-0000-000000000034",
+            "00000000-0000-0000-0000-000000000035",
+            "00000000-0000-0000-0000-000000000036"
+        })]
+    [TestCase(
+        "/media/Show/Season 2/Show.S02E55E56.mkv",
+        new[] { "00000000-0000-0000-0000-000000000055", "00000000-0000-0000-0000-000000000056" })]
+    [TestCase("/media/Show/Season 1/Show.S01E35.mkv", new[] { "00000000-0000-0000-0000-000000000035" })]
+    public void ResolveFileChildren_ReturnsEveryEpisodeInOrdinalOrder_WhenTheFileNamesEpisodes(
+        string path,
+        string[] expected)
+    {
+        // Arrange
+        var parent = new ContentHierarchyItem { ContentType = "tv", Level = "season", Name = "Season", Slug = "s" };
+        ContentHierarchyItem[] children =
+        [
+            new()
+            {
+                Id = new Guid("00000000-0000-0000-0000-000000000056"),
+                ContentType = "tv",
+                Level = "episode",
+                Name = "E56",
+                Slug = "e56",
+                Ordinal = 56
+            },
+            new()
+            {
+                Id = new Guid("00000000-0000-0000-0000-000000000036"),
+                ContentType = "tv",
+                Level = "episode",
+                Name = "E36",
+                Slug = "e36",
+                Ordinal = 36
+            },
+            new()
+            {
+                Id = new Guid("00000000-0000-0000-0000-000000000034"),
+                ContentType = "tv",
+                Level = "episode",
+                Name = "E34",
+                Slug = "e34",
+                Ordinal = 34
+            },
+            new()
+            {
+                Id = new Guid("00000000-0000-0000-0000-000000000055"),
+                ContentType = "tv",
+                Level = "episode",
+                Name = "E55",
+                Slug = "e55",
+                Ordinal = 55
+            },
+            new()
+            {
+                Id = new Guid("00000000-0000-0000-0000-000000000035"),
+                ContentType = "tv",
+                Level = "episode",
+                Name = "E35",
+                Slug = "e35",
+                Ordinal = 35
+            }
+        ];
+        var parsed = _subject.Parse(path, out _)!;
+
+        // Act
+        var result = ((IFileRoutingContentTypeDefinitionProvider)_subject).ResolveFileChildren(
+            parent, children, parsed.ToDictionary(pair => pair.Key, pair => pair.Value.ToList()));
+
+        // Assert
+        Assert.That(result, Is.EqualTo(expected.Select(Guid.Parse)));
+    }
+
+    [Test]
+    public void ResolveFileChildren_ReturnsUnresolved_WhenAnEpisodeThatTheFileNamesIsMissing()
+    {
+        // Arrange
+        var parent = new ContentHierarchyItem { ContentType = "tv", Level = "season", Name = "Season", Slug = "s" };
+        ContentHierarchyItem[] children =
+        [
+            new() { ContentType = "tv", Level = "episode", Name = "E34", Slug = "e34", Ordinal = 34 },
+            new() { ContentType = "tv", Level = "episode", Name = "E35", Slug = "e35", Ordinal = 35 }
+        ];
+        var parsed = _subject.Parse("/media/Show/Season 1/Show.S01E34-E36.mkv", out _)!;
+
+        // Act
+        var result = ((IFileRoutingContentTypeDefinitionProvider)_subject).ResolveFileChildren(
+            parent, children, parsed.ToDictionary(pair => pair.Key, pair => pair.Value.ToList()));
+
+        // Assert
+        Assert.That(result, Is.Empty);
     }
 
     [TestCase(false)]
     [TestCase(true)]
-    public void ResolveFileChild_ReturnsUnresolved_WhenChildIsMissingOrAmbiguous(bool duplicate)
+    public void ResolveFileChildren_ReturnsUnresolved_WhenChildIsMissingOrAmbiguous(bool duplicate)
     {
         // Arrange
         var parent = new ContentHierarchyItem { ContentType = "tv", Level = "show", Name = "Show", Slug = "show" };
@@ -91,15 +195,15 @@ public class TvContentTypeDefinitionProviderTests
         ContentHierarchyItem[] children = duplicate ? [first, second] : [];
 
         // Act
-        var result = ((IFileRoutingContentTypeDefinitionProvider)_subject).ResolveFileChild(
+        var result = ((IFileRoutingContentTypeDefinitionProvider)_subject).ResolveFileChildren(
             parent, children, new Dictionary<string, List<string>> { ["season"] = ["1"] });
 
         // Assert
-        Assert.That(result, Is.Null);
+        Assert.That(result, Is.Empty);
     }
 
     [Test]
-    public void BuildPath_Result_WhenEpisodeHasSeasonAndEpisodeNumbers()
+    public void BuildPath_ReturnsShowFolderAndEpisodeFileName_WhenEpisodeHasSeasonAndEpisodeNumbers()
     {
         // Arrange
         ContentHierarchyItem[] ancestors =
@@ -120,7 +224,7 @@ public class TvContentTypeDefinitionProviderTests
     }
 
     [Test]
-    public void BuildPathPlan_Result_WhenEpisodeHasSeasonAndEpisodeNumbers()
+    public void BuildPathPlan_ReturnsShowDirectory_WhenEpisodeHasSeasonAndEpisodeNumbers()
     {
         // Arrange
         ContentHierarchyItem[] ancestors =
@@ -147,7 +251,28 @@ public class TvContentTypeDefinitionProviderTests
     }
 
     [Test]
-    public void Parse_Result_WhenEpisodeFileIsProvided()
+    public void BuildPathPlan_KeepsTheOriginalName_WhenTheLineageEndsAtTheSeason()
+    {
+        // Arrange
+        ContentHierarchyItem[] ancestors =
+        [
+            new() { ContentType = "tv", Level = "show", Slug = "example", Name = "Example" },
+            new() { ContentType = "tv", Level = "season", Slug = "season-1", Name = "Season 1", Ordinal = 1 }
+        ];
+
+        // Act
+        var plan = ((IPathResolutionContentTypeDefinitionProvider)_subject).BuildPathPlan(
+            ancestors,
+            new Dictionary<Guid, IReadOnlyDictionary<string, IReadOnlyList<string>>>(),
+            "Example.S01E34-E36",
+            "mkv");
+
+        // Assert
+        Assert.That(plan!.FileName, Is.EqualTo("Example.S01E34-E36.mkv"));
+    }
+
+    [Test]
+    public void Parse_ReturnsShowSignals_WhenEpisodeFileIsProvided()
     {
         // Arrange
         // Act
@@ -164,8 +289,34 @@ public class TvContentTypeDefinitionProviderTests
         }
     }
 
+    [TestCase("/library/tv/Show/Season 1/Show.S01E34-E36.mkv", new[] { "34", "35", "36" })]
+    [TestCase("/library/tv/Show/Season 1/Show.S01E34-36.mkv", new[] { "34", "35", "36" })]
+    [TestCase("/library/tv/Show/Season 2/Show.S02E55E56.mkv", new[] { "55", "56" })]
+    [TestCase("/library/tv/Show/Season 3/Show 3x59-60.mkv", new[] { "59", "60" })]
+    [TestCase("/library/tv/Show/Season 1/Show.S01E05.mkv", new[] { "5" })]
+    [TestCase("/library/tv/Show/Season 1/Show.S01E05.2019.mkv", new[] { "5" })]
+    [TestCase("/library/tv/Show/Season 1/Show.S01E01.720p.WEB.mkv", new[] { "1" })]
+    [TestCase("/library/tv/Show/Season 1/Show.S01E01.1080p.x265.mkv", new[] { "1" })]
+    [TestCase("/library/tv/Show/Season 1/Show S01E01 2160p.mkv", new[] { "1" })]
+    [TestCase("/library/tv/Show/Season 1/Show.S01E01E02.mkv", new[] { "1", "2" })]
+    [TestCase("/library/tv/Show/Season 1/Show.S01E01-E03.mkv", new[] { "1", "2", "3" })]
+    [TestCase("/library/tv/Show/Season 1/Show.S01E01-E02-E03.mkv", new[] { "1", "2", "3" })]
+    [TestCase("/library/tv/Show/Season 1/Show.S01E01E02E03.mkv", new[] { "1", "2", "3" })]
+    [TestCase("/library/tv/Show/Season 1/Show - S01E01 - Title.mkv", new[] { "1" })]
+    [TestCase("/library/tv/Show/Season 1/Show - S01E01 - 100 Days.mkv", new[] { "1" })]
+    [TestCase("/library/tv/Show/Season 1/Show.S01E01.100.Days.720p.mkv", new[] { "1" })]
+    public void Parse_ReportsEveryEpisode_WhenTheFileNamesEpisodes(string path, string[] expected)
+    {
+        // Arrange
+        // Act
+        var signals = _subject.Parse(path, out _);
+
+        // Assert
+        Assert.That(signals!["episode"], Is.EqualTo(expected));
+    }
+
     [Test]
-    public void ResolveDirectoryLevelChain_Result_WhenEpisodeLevelIsGiven()
+    public void ResolveDirectoryLevelChain_ReturnsShow_WhenEpisodeLevelIsGiven()
     {
         // Arrange
         // Act
@@ -203,7 +354,7 @@ public class TvContentTypeDefinitionProviderTests
         1,
         true,
         ReleaseMatchResult.Confident)]
-    public void IsMatch_Result_WhenTvReleaseShapeIsEvaluated(
+    public void IsMatch_ReturnsExpectedMatch_WhenTvReleaseShapeIsEvaluated(
         string targetLevel,
         string releaseTitle,
         int seasonNumber,
@@ -289,6 +440,11 @@ public class TvContentTypeDefinitionProviderTests
             Metadata = new Dictionary<Guid, MaterializedMetadata>
             {
                 [showId] = new() { Title = "Phineas and Ferb" },
+                [episodeId] = new()
+                {
+                    Title = "Rollercoaster",
+                    PublishDate = new DateTime(2008, 2, 1, 0, 0, 0, DateTimeKind.Utc)
+                },
             },
         };
         IReadOnlyList<ContentFact> releaseFacts = useTitleFacts
@@ -319,7 +475,7 @@ public class TvContentTypeDefinitionProviderTests
     [TestCase("Bluey (2018 2019 TV series)", ReleaseMatchResult.Indeterminate)]
     [TestCase("Bluey 1976 Season 1 Complete", ReleaseMatchResult.NoMatch)]
     [TestCase("Bluey (1976) Season 1", ReleaseMatchResult.NoMatch)]
-    public void IsMatch_Result_WhenBlueySeasonReleaseIsEvaluated(
+    public void IsMatch_ReturnsExpectedMatch_WhenBlueySeasonReleaseIsEvaluated(
         string releaseTitle,
         ReleaseMatchResult expected)
     {
@@ -371,21 +527,25 @@ public class TvContentTypeDefinitionProviderTests
     }
 
     [TestCase("Show.S01.1080p-GRP", "2026-06-29", "2026-06-29", "2026-07-22", ReleaseMatchResult.Confident)]
+    [TestCase("Show.S01.1080p-GRP", "2026-07-22", "2026-06-29", "2026-07-22", ReleaseMatchResult.Confident)]
     [TestCase("Show.S01.1080p-GRP", "2026-07-23", "2026-06-29", "2026-07-22", ReleaseMatchResult.Confident)]
     [TestCase("Show.S01.1080p-GRP", "2026-07-24", "2026-06-29", "2026-07-22", ReleaseMatchResult.NoMatch)]
-    [TestCase("Show.S01.1080p-GRP", null, "2026-06-29", "2026-07-22", ReleaseMatchResult.NoMatch)]
-    [TestCase("Show.S01.1080p-GRP", null, null, "2026-07-22", ReleaseMatchResult.Confident)]
+    [TestCase("Show.S01.1080p-GRP", null, "2026-06-29", "2026-07-22", ReleaseMatchResult.Indeterminate)]
+    [TestCase("Show.S01.1080p-GRP", null, null, "2026-07-22", ReleaseMatchResult.Indeterminate)]
     [TestCase("Show.S01E40.1080p-GRP", null, "2026-06-29", "2026-07-22", ReleaseMatchResult.Confident)]
     [TestCase("Show.S01E40.1080p-GRP", "2026-07-24", "2026-06-29", "2026-07-22", ReleaseMatchResult.Confident)]
     [TestCase("Show.Complete.Series.1080p-GRP", "2026-06-29", "2026-06-29", "2026-07-22", ReleaseMatchResult.Confident)]
     [TestCase("Show.Complete.Series.1080p-GRP", "2026-07-24", "2026-06-29", "2026-07-22", ReleaseMatchResult.NoMatch)]
-    [TestCase("Show.Complete.Series.1080p-GRP", null, "2026-06-29", "2026-07-22", ReleaseMatchResult.NoMatch)]
-    [TestCase("Show.S01.1080p-GRP", null, "1988-01-02", "2026-07-22", ReleaseMatchResult.Confident)]
-    [TestCase("Show.S01.1080p-GRP", null, "2025-07-21", "2026-07-22", ReleaseMatchResult.Confident)]
-    [TestCase("Show.S01.1080p-GRP", null, "2025-07-22", "2026-07-22", ReleaseMatchResult.NoMatch)]
+    [TestCase("Show.Complete.Series.1080p-GRP", null, "2026-06-29", "2026-07-22", ReleaseMatchResult.Indeterminate)]
+    [TestCase("Show.S01.1080p-GRP", null, "1988-01-02", "2026-07-22", ReleaseMatchResult.Indeterminate)]
+    [TestCase("Show.S01.1080p-GRP", null, "2025-07-21", "2026-07-22", ReleaseMatchResult.Indeterminate)]
+    [TestCase("Show.S01.1080p-GRP", null, "2025-07-22", "2026-07-22", ReleaseMatchResult.Indeterminate)]
+    [TestCase("Show.S01.1080p-GRP", "1970-01-01", "1970-01-01", "2026-07-22", ReleaseMatchResult.Confident)]
+    [TestCase("Show.S01.1080p-GRP", "0001-01-01", "2026-06-29", "2026-07-22", ReleaseMatchResult.Indeterminate)]
     [TestCase("Show.S01.1080p-GRP", "2026-07-24", "2026-06-29", "0001-01-01", ReleaseMatchResult.Confident)]
-    [TestCase("Show.S01.1080p-GRP", null, "2026-06-29", "0001-01-01", ReleaseMatchResult.Confident)]
-    public void IsMatch_Result_WhenPackIsPublishedBeforeOrAfterTheEpisode(
+    [TestCase("Show.S01.1080p-GRP", "2026-07-24", "2026-06-29", "1970-01-01", ReleaseMatchResult.NoMatch)]
+    [TestCase("Show.S01.1080p-GRP", null, "2026-06-29", "0001-01-01", ReleaseMatchResult.Indeterminate)]
+    public void IsMatch_ReturnsExpectedMatch_WhenPackIsPublishedBeforeOrAfterTheEpisode(
         string releaseTitle,
         DateTime? episodePublishDate,
         DateTime? seasonPublishDate,
@@ -456,7 +616,7 @@ public class TvContentTypeDefinitionProviderTests
         ReleaseMatchResult.Confident)]
     [TestCase("The Office", 2005, "The Office US S01E01", ReleaseMatchResult.Indeterminate)]
     [TestCase("Bluey", 2018, "Bluey 2018 2024 S01E01", ReleaseMatchResult.Confident)]
-    public void IsMatch_Result_WhenDatedSeasonReleaseIsEvaluated(
+    public void IsMatch_ReturnsExpectedMatch_WhenDatedSeasonReleaseIsEvaluated(
         string targetTitle,
         int targetYear,
         string releaseTitle,
@@ -532,7 +692,21 @@ public class TvContentTypeDefinitionProviderTests
     [TestCase("Show.7.1.1080p.S01E01.mkv", "Show 7 1")]
     [TestCase("Show.DDP5.2.x264.S01E01.mkv", "Show DDP5 2")]
     [TestCase("Show.DDP5.1.Story.S01E01.mkv", "Show DDP5 1 Story")]
-    public void Parse_PreservesTitle_WhenWordsResembleReleaseTags(string path, string expectedTitle)
+    [TestCase("The.Show.DVD.S01E01.mkv", "The Show")]
+    [TestCase("The.Show.REPACK.S01E01.mkv", "The Show")]
+    [TestCase("The Show 1080p BluRay DDP5.1 x264 S01E01.mkv", "The Show")]
+    [TestCase("The.Show.1080p.BluRay.ddp5.1.x264.S01E01.mkv", "The Show")]
+    [TestCase("The.Show.1080p.BluRay.DD5.1.x264.S01E01.mkv", "The Show")]
+    [TestCase("The.Show.1080p.BluRay.5.1.x264.S01E01.mkv", "The Show")]
+    [TestCase("The.Show.1080p.BluRay.7.1.x264.S01E01.mkv", "The Show")]
+    [TestCase("Show.DDP5.1.S01E01.mkv", "Show")]
+    [TestCase("Show.DD5.1.S01E01.mkv", "Show")]
+    [TestCase("Show.AAC.5.1.S01E01.mkv", "Show")]
+    [TestCase("Show.DTS.7.1.S01E01.mkv", "Show")]
+    [TestCase("Show.1080p.DDP5.1/S01E01.mkv", "Show")]
+    [TestCase("Show.1080p.DD5.1/Season 1/01.mkv", "Show")]
+    [TestCase("Show.1080p.AAC.5.1/Specials/01.mkv", "Show")]
+    public void Parse_ReturnsTitle_WhenReleaseTagsSurroundIt(string path, string expectedTitle)
     {
         // Arrange
         // Act
@@ -566,29 +740,5 @@ public class TvContentTypeDefinitionProviderTests
 
         // Assert
         Assert.That(result, Is.Null);
-    }
-
-    [TestCase("The.Show.DVD.S01E01.mkv", "The Show")]
-    [TestCase("The.Show.REPACK.S01E01.mkv", "The Show")]
-    [TestCase("The Show 1080p BluRay DDP5.1 x264 S01E01.mkv", "The Show")]
-    [TestCase("The.Show.1080p.BluRay.ddp5.1.x264.S01E01.mkv", "The Show")]
-    [TestCase("The.Show.1080p.BluRay.DD5.1.x264.S01E01.mkv", "The Show")]
-    [TestCase("The.Show.1080p.BluRay.5.1.x264.S01E01.mkv", "The Show")]
-    [TestCase("The.Show.1080p.BluRay.7.1.x264.S01E01.mkv", "The Show")]
-    [TestCase("Show.DDP5.1.S01E01.mkv", "Show")]
-    [TestCase("Show.DD5.1.S01E01.mkv", "Show")]
-    [TestCase("Show.AAC.5.1.S01E01.mkv", "Show")]
-    [TestCase("Show.DTS.7.1.S01E01.mkv", "Show")]
-    [TestCase("Show.1080p.DDP5.1/S01E01.mkv", "Show")]
-    [TestCase("Show.1080p.DD5.1/Season 1/01.mkv", "Show")]
-    [TestCase("Show.1080p.AAC.5.1/Specials/01.mkv", "Show")]
-    public void Parse_StripsTrailingReleaseTags_WhenTheTagIsNotATitleWord(string path, string expectedTitle)
-    {
-        // Arrange
-        // Act
-        var result = _subject.Parse(path, out _);
-
-        // Assert
-        Assert.That(result?.GetFirstValue(ParsedFileSignalKeys.Title), Is.EqualTo(expectedTitle));
     }
 }

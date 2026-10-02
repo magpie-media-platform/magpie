@@ -77,12 +77,10 @@ public sealed class MediaServerRepositoryTests
 
         _userId = user.Id;
 
-        var loggerFactory = NullLoggerFactory.Instance;
-
         var auditRecordRepository = new AuditRecordRepository(
             _context,
             Mock.Of<IEventBus>(),
-            loggerFactory.CreateLogger<AuditRecordRepository>(),
+            NullLogger<AuditRecordRepository>.Instance,
             new TransactionManager(_context, NullLogger<TransactionManager>.Instance),
             Mock.Of<IJobExecutionScopeFactory>(),
             timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
@@ -109,7 +107,7 @@ public sealed class MediaServerRepositoryTests
             auditRecordRepository,
             transactionManager,
             Mock.Of<IEventBus>(),
-            loggerFactory.CreateLogger<MediaServerRepository>(),
+            NullLogger<MediaServerRepository>.Instance,
             protector,
             timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
     }
@@ -117,7 +115,6 @@ public sealed class MediaServerRepositoryTests
     [TearDown]
     public void TearDown()
     {
-        _context.Database.CloseConnection();
         _context.Dispose();
     }
 

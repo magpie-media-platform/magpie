@@ -19,11 +19,18 @@ namespace Magpie.Test.Extensions.Tvmaze;
 [TestFixture]
 public class SearchPlannerTests
 {
+    private SearchPlanner _planner = null!;
+
+    [SetUp]
+    public void SetUp()
+    {
+        _planner = new SearchPlanner(NullLogger<SearchPlanner>.Instance);
+    }
+
     [Test]
     public void Plan_TitleSearch_WhenProviderTypeAcceptsTvmaze()
     {
         // Arrange
-        var planner = new SearchPlanner(NullLogger<SearchPlanner>.Instance);
         var criteria = new MetadataCriteria
         {
             ProviderType = new CriteriaSet<PropertyCriterion<string>>
@@ -36,17 +43,23 @@ public class SearchPlannerTests
             },
         };
 
+        var query = new ContentHierarchyItemCriteria
+        {
+            Metadata = new CriteriaSet<MetadataCriteria> { And = [criteria] }
+        };
+
         // Act
-        var plan = planner.Compile(criteria);
+        var plan = _planner.Plan(query, maxResults: 25);
 
         // Assert
-        Assert.That(plan, Is.InstanceOf<SearchPlanNode.Seeded>());
-        var leaf = (SearchPlanNode.Seeded)plan;
+        Assert.That(plan.Root, Is.InstanceOf<FilterPlanNode>());
+        var filter = (FilterPlanNode)plan.Root;
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(leaf.Dispositions.Where(disposition =>
+            Assert.That(((FetchPlanNode)filter.Child).AnchorKind, Is.EqualTo(SearchAnchorKind.Title));
+            Assert.That(plan.Dispositions.Where(disposition =>
                 disposition.Disposition == "pass-through-residual"), Is.Empty);
-            Assert.That(leaf.HitFilters.Select(filter => filter.Kind), Is.EqualTo([LocalFilterKind.Title]));
+            Assert.That(filter.HitFilters.Select(hitFilter => hitFilter.Kind), Is.EqualTo([LocalFilterKind.Title]));
         }
     }
 
@@ -54,7 +67,6 @@ public class SearchPlannerTests
     public void Plan_KnownEmpty_WhenProviderTypeExcludesTvmaze()
     {
         // Arrange
-        var planner = new SearchPlanner(NullLogger<SearchPlanner>.Instance);
         var criteria = new MetadataCriteria
         {
             ProviderType = new CriteriaSet<PropertyCriterion<string>>
@@ -67,22 +79,26 @@ public class SearchPlannerTests
             },
         };
 
+        var query = new ContentHierarchyItemCriteria
+        {
+            Metadata = new CriteriaSet<MetadataCriteria> { And = [criteria] }
+        };
+
         // Act
-        var plan = planner.Compile(criteria);
+        var plan = _planner.Plan(query, maxResults: 25);
 
         // Assert
-        Assert.That(plan, Is.InstanceOf<SearchPlanNode.KnownEmpty>());
+        Assert.That(plan.Root.Contributes, Is.EqualTo("known-empty show candidates"));
     }
 
     [TestCase("book-publisher", true)]
     [TestCase("network", false)]
     [TestCase("cast", false)]
-    public void Plan_KnownEmpty_OnlyWhenARequiredRelationshipTypeCannotComeFromTvmaze(
+    public void Plan_KnownEmpty_WhenRequiredRelationshipTypeCannotComeFromTvmaze(
         string relationshipType,
         bool expectedKnownEmpty)
     {
         // Arrange
-        var planner = new SearchPlanner(NullLogger<SearchPlanner>.Instance);
         var criteria = new MetadataCriteria
         {
             Relationships = new CollectionCriteria<RelationshipCriteria>
@@ -120,18 +136,22 @@ public class SearchPlannerTests
             },
         };
 
+        var query = new ContentHierarchyItemCriteria
+        {
+            Metadata = new CriteriaSet<MetadataCriteria> { And = [criteria] }
+        };
+
         // Act
-        var plan = planner.Compile(criteria);
+        var plan = _planner.Plan(query, maxResults: 25);
 
         // Assert
-        Assert.That(plan is SearchPlanNode.KnownEmpty, Is.EqualTo(expectedKnownEmpty));
+        Assert.That(plan.Root.Contributes == "known-empty show candidates", Is.EqualTo(expectedKnownEmpty));
     }
 
     [Test]
     public void Plan_KnownEmpty_WhenProviderTypeNegationExcludesTvmaze()
     {
         // Arrange
-        var planner = new SearchPlanner(NullLogger<SearchPlanner>.Instance);
         var criteria = new MetadataCriteria
         {
             ProviderType = new CriteriaSet<PropertyCriterion<string>>
@@ -147,18 +167,22 @@ public class SearchPlannerTests
             },
         };
 
+        var query = new ContentHierarchyItemCriteria
+        {
+            Metadata = new CriteriaSet<MetadataCriteria> { And = [criteria] }
+        };
+
         // Act
-        var plan = planner.Compile(criteria);
+        var plan = _planner.Plan(query, maxResults: 25);
 
         // Assert
-        Assert.That(plan, Is.InstanceOf<SearchPlanNode.KnownEmpty>());
+        Assert.That(plan.Root.Contributes, Is.EqualTo("known-empty show candidates"));
     }
 
     [Test]
     public void Plan_TitleSearch_WhenProviderTypeNegationTargetsAnotherProvider()
     {
         // Arrange
-        var planner = new SearchPlanner(NullLogger<SearchPlanner>.Instance);
         var criteria = new MetadataCriteria
         {
             ProviderType = new CriteriaSet<PropertyCriterion<string>>
@@ -178,17 +202,23 @@ public class SearchPlannerTests
             },
         };
 
+        var query = new ContentHierarchyItemCriteria
+        {
+            Metadata = new CriteriaSet<MetadataCriteria> { And = [criteria] }
+        };
+
         // Act
-        var plan = planner.Compile(criteria);
+        var plan = _planner.Plan(query, maxResults: 25);
 
         // Assert
-        Assert.That(plan, Is.InstanceOf<SearchPlanNode.Seeded>());
-        var leaf = (SearchPlanNode.Seeded)plan;
+        Assert.That(plan.Root, Is.InstanceOf<FilterPlanNode>());
+        var filter = (FilterPlanNode)plan.Root;
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(leaf.Dispositions.Where(disposition =>
+            Assert.That(((FetchPlanNode)filter.Child).AnchorKind, Is.EqualTo(SearchAnchorKind.Title));
+            Assert.That(plan.Dispositions.Where(disposition =>
                 disposition.Disposition == "pass-through-residual"), Is.Empty);
-            Assert.That(leaf.HitFilters.Select(filter => filter.Kind), Is.EqualTo([LocalFilterKind.Title]));
+            Assert.That(filter.HitFilters.Select(hitFilter => hitFilter.Kind), Is.EqualTo([LocalFilterKind.Title]));
         }
     }
 
@@ -196,7 +226,6 @@ public class SearchPlannerTests
     public void Plan_HandlesProviderTypeNullChecksAsSelfIdentity_WhenTheProviderTypeCriterionIsANullCheck()
     {
         // Arrange
-        var planner = new SearchPlanner(NullLogger<SearchPlanner>.Instance);
         var title = new CriteriaSet<PropertyCriterion<string>>
         {
             And = [new PropertyCriterion<string> { Operator = CriteriaValueOperator.Equals, Values = ["lost"] }],
@@ -218,16 +247,29 @@ public class SearchPlannerTests
             Title = title,
         };
 
+        var isNullQuery = new ContentHierarchyItemCriteria
+        {
+            Metadata = new CriteriaSet<MetadataCriteria> { And = [isNull] }
+        };
+
+        var isNotNullQuery = new ContentHierarchyItemCriteria
+        {
+            Metadata = new CriteriaSet<MetadataCriteria> { And = [isNotNull] }
+        };
+
         // Act
-        var nullPlan = planner.Compile(isNull);
-        var notNullPlan = planner.Compile(isNotNull);
+        var nullPlan = _planner.Plan(isNullQuery, maxResults: 25);
+        var notNullPlan = _planner.Plan(isNotNullQuery, maxResults: 25);
 
         // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(nullPlan, Is.InstanceOf<SearchPlanNode.KnownEmpty>());
-            Assert.That(notNullPlan, Is.InstanceOf<SearchPlanNode.Seeded>());
-            Assert.That(((SearchPlanNode.Seeded)notNullPlan).Dispositions.Where(disposition =>
+            Assert.That(nullPlan.Root.Contributes, Is.EqualTo("known-empty show candidates"));
+            Assert.That(notNullPlan.Root, Is.InstanceOf<FilterPlanNode>());
+            Assert.That(
+                notNullPlan.Dispositions.Select(disposition => disposition.Disposition),
+                Does.Not.Contain("browse-anchor"));
+            Assert.That(notNullPlan.Dispositions.Where(disposition =>
                 disposition.Disposition == "pass-through-residual"), Is.Empty);
         }
     }
@@ -236,7 +278,6 @@ public class SearchPlannerTests
     public void Plan_KnownEmpty_WhenSourceCannotMatchAnyShowSourceKey()
     {
         // Arrange
-        var planner = new SearchPlanner(NullLogger<SearchPlanner>.Instance);
         var criteria = new MetadataCriteria
         {
             Source = new CriteriaSet<PropertyCriterion<string>>
@@ -256,18 +297,22 @@ public class SearchPlannerTests
             },
         };
 
+        var query = new ContentHierarchyItemCriteria
+        {
+            Metadata = new CriteriaSet<MetadataCriteria> { And = [criteria] }
+        };
+
         // Act
-        var plan = planner.Compile(criteria);
+        var plan = _planner.Plan(query, maxResults: 25);
 
         // Assert
-        Assert.That(plan, Is.InstanceOf<SearchPlanNode.KnownEmpty>());
+        Assert.That(plan.Root.Contributes, Is.EqualTo("known-empty show candidates"));
     }
 
     [Test]
     public void Plan_SourceFilter_WhenSourceTargetsOneShowSourceKey()
     {
         // Arrange
-        var planner = new SearchPlanner(NullLogger<SearchPlanner>.Instance);
         var criteria = new MetadataCriteria
         {
             Source = new CriteriaSet<PropertyCriterion<string>>
@@ -287,17 +332,25 @@ public class SearchPlannerTests
             },
         };
 
+        var query = new ContentHierarchyItemCriteria
+        {
+            Metadata = new CriteriaSet<MetadataCriteria> { And = [criteria] }
+        };
+
         // Act
-        var plan = planner.Compile(criteria);
+        var plan = _planner.Plan(query, maxResults: 25);
 
         // Assert
-        Assert.That(plan, Is.InstanceOf<SearchPlanNode.Seeded>());
-        var leaf = (SearchPlanNode.Seeded)plan;
+        Assert.That(plan.Root, Is.InstanceOf<FilterPlanNode>());
+        var filter = (FilterPlanNode)plan.Root;
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(leaf.Dispositions.Where(disposition =>
+            Assert.That(
+                plan.Dispositions.Select(disposition => disposition.Disposition),
+                Does.Not.Contain("browse-anchor"));
+            Assert.That(plan.Dispositions.Where(disposition =>
                 disposition.Disposition == "pass-through-residual"), Is.Empty);
-            Assert.That(leaf.HitFilters.Any(filter => filter.Kind == LocalFilterKind.Source), Is.True);
+            Assert.That(filter.HitFilters.Any(hitFilter => hitFilter.Kind == LocalFilterKind.Source), Is.True);
         }
     }
 
@@ -305,7 +358,6 @@ public class SearchPlannerTests
     public void Plan_KnownEmpty_WhenSourceNegationExcludesEveryShowSourceKey()
     {
         // Arrange
-        var planner = new SearchPlanner(NullLogger<SearchPlanner>.Instance);
         var criteria = new MetadataCriteria
         {
             Source = new CriteriaSet<PropertyCriterion<string>>
@@ -325,18 +377,22 @@ public class SearchPlannerTests
             },
         };
 
+        var query = new ContentHierarchyItemCriteria
+        {
+            Metadata = new CriteriaSet<MetadataCriteria> { And = [criteria] }
+        };
+
         // Act
-        var plan = planner.Compile(criteria);
+        var plan = _planner.Plan(query, maxResults: 25);
 
         // Assert
-        Assert.That(plan, Is.InstanceOf<SearchPlanNode.KnownEmpty>());
+        Assert.That(plan.Root.Contributes, Is.EqualTo("known-empty show candidates"));
     }
 
     [Test]
     public void Plan_ApplyEmptyCollectionSemantics_WhenAbsentTags()
     {
         // Arrange
-        var planner = new SearchPlanner(NullLogger<SearchPlanner>.Instance);
         var positive = new MetadataCriteria
         {
             Title = new CriteriaSet<PropertyCriterion<string>>
@@ -394,19 +450,32 @@ public class SearchPlannerTests
             },
         };
 
+        var positiveQuery = new ContentHierarchyItemCriteria
+        {
+            Metadata = new CriteriaSet<MetadataCriteria> { And = [positive] }
+        };
+
+        var excludedQuery = new ContentHierarchyItemCriteria
+        {
+            Metadata = new CriteriaSet<MetadataCriteria> { And = [excluded] }
+        };
+
         // Act
-        var positivePlan = planner.Compile(positive);
-        var excludedPlan = planner.Compile(excluded);
+        var positivePlan = _planner.Plan(positiveQuery, maxResults: 25);
+        var excludedPlan = _planner.Plan(excludedQuery, maxResults: 25);
 
         // Assert
-        var leaf = (SearchPlanNode.Seeded)excludedPlan;
+        var filter = (FilterPlanNode)excludedPlan.Root;
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(positivePlan, Is.InstanceOf<SearchPlanNode.KnownEmpty>());
-            Assert.That(excludedPlan, Is.InstanceOf<SearchPlanNode.Seeded>());
-            Assert.That(leaf.Dispositions.Where(disposition =>
+            Assert.That(positivePlan.Root.Contributes, Is.EqualTo("known-empty show candidates"));
+            Assert.That(excludedPlan.Root, Is.InstanceOf<FilterPlanNode>());
+            Assert.That(
+                excludedPlan.Dispositions.Select(disposition => disposition.Disposition),
+                Does.Not.Contain("browse-anchor"));
+            Assert.That(excludedPlan.Dispositions.Where(disposition =>
                 disposition.Disposition == "pass-through-residual"), Is.Empty);
-            Assert.That(leaf.HitFilters.Select(filter => filter.Kind), Is.EqualTo([LocalFilterKind.Title]));
+            Assert.That(filter.HitFilters.Select(hitFilter => hitFilter.Kind), Is.EqualTo([LocalFilterKind.Title]));
         }
     }
 
@@ -414,7 +483,6 @@ public class SearchPlannerTests
     public void Plan_EvaluatesPersonDatesAsAbsentConcepts_WhenBirthOrDeathDateCriteriaArePresent()
     {
         // Arrange
-        var planner = new SearchPlanner(NullLogger<SearchPlanner>.Instance);
         var title = new CriteriaSet<PropertyCriterion<string>>
         {
             And = [new PropertyCriterion<string> { Operator = CriteriaValueOperator.Equals, Values = ["lost"] }],
@@ -471,23 +539,49 @@ public class SearchPlannerTests
             },
         };
 
+        var positiveQuery = new ContentHierarchyItemCriteria
+        {
+            Metadata = new CriteriaSet<MetadataCriteria> { And = [positive] }
+        };
+
+        var negatedQuery = new ContentHierarchyItemCriteria
+        {
+            Metadata = new CriteriaSet<MetadataCriteria> { And = [negated] }
+        };
+
+        var isNullQuery = new ContentHierarchyItemCriteria
+        {
+            Metadata = new CriteriaSet<MetadataCriteria> { And = [isNull] }
+        };
+
+        var isNotNullQuery = new ContentHierarchyItemCriteria
+        {
+            Metadata = new CriteriaSet<MetadataCriteria> { And = [isNotNull] }
+        };
+
         // Act
-        var positivePlan = planner.Compile(positive);
-        var negatedPlan = planner.Compile(negated);
-        var isNullPlan = planner.Compile(isNull);
-        var isNotNullPlan = planner.Compile(isNotNull);
+        var positivePlan = _planner.Plan(positiveQuery, maxResults: 25);
+        var negatedPlan = _planner.Plan(negatedQuery, maxResults: 25);
+        var isNullPlan = _planner.Plan(isNullQuery, maxResults: 25);
+        var isNotNullPlan = _planner.Plan(isNotNullQuery, maxResults: 25);
 
         // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(positivePlan, Is.InstanceOf<SearchPlanNode.KnownEmpty>());
-            Assert.That(negatedPlan, Is.InstanceOf<SearchPlanNode.Seeded>());
-            Assert.That(((SearchPlanNode.Seeded)negatedPlan).Dispositions.Where(disposition =>
+            Assert.That(positivePlan.Root.Contributes, Is.EqualTo("known-empty show candidates"));
+            Assert.That(negatedPlan.Root, Is.InstanceOf<FilterPlanNode>());
+            Assert.That(
+                negatedPlan.Dispositions.Select(disposition => disposition.Disposition),
+                Does.Not.Contain("browse-anchor"));
+            Assert.That(negatedPlan.Dispositions.Where(disposition =>
                 disposition.Disposition == "pass-through-residual"), Is.Empty);
-            Assert.That(isNullPlan, Is.InstanceOf<SearchPlanNode.Seeded>());
-            Assert.That(((SearchPlanNode.Seeded)isNullPlan).Dispositions.Where(disposition =>
+            Assert.That(isNullPlan.Root, Is.InstanceOf<FilterPlanNode>());
+            Assert.That(
+                isNullPlan.Dispositions.Select(disposition => disposition.Disposition),
+                Does.Not.Contain("browse-anchor"));
+            Assert.That(isNullPlan.Dispositions.Where(disposition =>
                 disposition.Disposition == "pass-through-residual"), Is.Empty);
-            Assert.That(isNotNullPlan, Is.InstanceOf<SearchPlanNode.KnownEmpty>());
+            Assert.That(isNotNullPlan.Root.Contributes, Is.EqualTo("known-empty show candidates"));
         }
     }
 
@@ -495,7 +589,6 @@ public class SearchPlannerTests
     public void Plan_KnownEmpty_WhenAbsentCollectionsAreRequired()
     {
         // Arrange
-        var planner = new SearchPlanner(NullLogger<SearchPlanner>.Instance);
         var title = new CriteriaSet<PropertyCriterion<string>>
         {
             And = [new PropertyCriterion<string> { Operator = CriteriaValueOperator.Equals, Values = ["lost"] }],
@@ -534,17 +627,32 @@ public class SearchPlannerTests
             },
         };
 
+        var awardsQuery = new ContentHierarchyItemCriteria
+        {
+            Metadata = new CriteriaSet<MetadataCriteria> { And = [awards] }
+        };
+
+        var contentRatingsQuery = new ContentHierarchyItemCriteria
+        {
+            Metadata = new CriteriaSet<MetadataCriteria> { And = [contentRatings] }
+        };
+
+        var previewsQuery = new ContentHierarchyItemCriteria
+        {
+            Metadata = new CriteriaSet<MetadataCriteria> { And = [previews] }
+        };
+
         // Act
-        var awardsPlan = planner.Compile(awards);
-        var contentRatingsPlan = planner.Compile(contentRatings);
-        var previewsPlan = planner.Compile(previews);
+        var awardsPlan = _planner.Plan(awardsQuery, maxResults: 25);
+        var contentRatingsPlan = _planner.Plan(contentRatingsQuery, maxResults: 25);
+        var previewsPlan = _planner.Plan(previewsQuery, maxResults: 25);
 
         // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(awardsPlan, Is.InstanceOf<SearchPlanNode.KnownEmpty>());
-            Assert.That(contentRatingsPlan, Is.InstanceOf<SearchPlanNode.KnownEmpty>());
-            Assert.That(previewsPlan, Is.InstanceOf<SearchPlanNode.KnownEmpty>());
+            Assert.That(awardsPlan.Root.Contributes, Is.EqualTo("known-empty show candidates"));
+            Assert.That(contentRatingsPlan.Root.Contributes, Is.EqualTo("known-empty show candidates"));
+            Assert.That(previewsPlan.Root.Contributes, Is.EqualTo("known-empty show candidates"));
         }
     }
 
@@ -552,7 +660,6 @@ public class SearchPlannerTests
     public void Plan_TitleSearch_WhenAbsentCollectionsAreExcluded()
     {
         // Arrange
-        var planner = new SearchPlanner(NullLogger<SearchPlanner>.Instance);
         var criteria = new MetadataCriteria
         {
             Title = new CriteriaSet<PropertyCriterion<string>>
@@ -564,17 +671,23 @@ public class SearchPlannerTests
             Previews = new CollectionCriteria<PreviewMetadataCriteria> { None = [new PreviewMetadataCriteria()] },
         };
 
+        var query = new ContentHierarchyItemCriteria
+        {
+            Metadata = new CriteriaSet<MetadataCriteria> { And = [criteria] }
+        };
+
         // Act
-        var plan = planner.Compile(criteria);
+        var plan = _planner.Plan(query, maxResults: 25);
 
         // Assert
-        Assert.That(plan, Is.InstanceOf<SearchPlanNode.Seeded>());
-        var leaf = (SearchPlanNode.Seeded)plan;
+        Assert.That(plan.Root, Is.InstanceOf<FilterPlanNode>());
+        var filter = (FilterPlanNode)plan.Root;
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(leaf.Dispositions.Where(disposition =>
+            Assert.That(((FetchPlanNode)filter.Child).AnchorKind, Is.EqualTo(SearchAnchorKind.Title));
+            Assert.That(plan.Dispositions.Where(disposition =>
                 disposition.Disposition == "pass-through-residual"), Is.Empty);
-            Assert.That(leaf.HitFilters.Select(filter => filter.Kind), Is.EqualTo([LocalFilterKind.Title]));
+            Assert.That(filter.HitFilters.Select(hitFilter => hitFilter.Kind), Is.EqualTo([LocalFilterKind.Title]));
         }
     }
 
@@ -582,7 +695,6 @@ public class SearchPlannerTests
     public void Plan_EvaluatesCustomMetadataAsAbsentConcepts_WhenCustomMetadataCriteriaArePresent()
     {
         // Arrange
-        var planner = new SearchPlanner(NullLogger<SearchPlanner>.Instance);
         var title = new CriteriaSet<PropertyCriterion<string>>
         {
             And = [new PropertyCriterion<string> { Operator = CriteriaValueOperator.Equals, Values = ["lost"] }],
@@ -630,16 +742,29 @@ public class SearchPlannerTests
             },
         };
 
+        var positiveQuery = new ContentHierarchyItemCriteria
+        {
+            Metadata = new CriteriaSet<MetadataCriteria> { And = [positive] }
+        };
+
+        var negatedQuery = new ContentHierarchyItemCriteria
+        {
+            Metadata = new CriteriaSet<MetadataCriteria> { And = [negated] }
+        };
+
         // Act
-        var positivePlan = planner.Compile(positive);
-        var negatedPlan = planner.Compile(negated);
+        var positivePlan = _planner.Plan(positiveQuery, maxResults: 25);
+        var negatedPlan = _planner.Plan(negatedQuery, maxResults: 25);
 
         // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(positivePlan, Is.InstanceOf<SearchPlanNode.KnownEmpty>());
-            Assert.That(negatedPlan, Is.InstanceOf<SearchPlanNode.Seeded>());
-            Assert.That(((SearchPlanNode.Seeded)negatedPlan).Dispositions.Where(disposition =>
+            Assert.That(positivePlan.Root.Contributes, Is.EqualTo("known-empty show candidates"));
+            Assert.That(negatedPlan.Root, Is.InstanceOf<FilterPlanNode>());
+            Assert.That(
+                negatedPlan.Dispositions.Select(disposition => disposition.Disposition),
+                Does.Not.Contain("browse-anchor"));
+            Assert.That(negatedPlan.Dispositions.Where(disposition =>
                 disposition.Disposition == "pass-through-residual"), Is.Empty);
         }
     }
@@ -648,7 +773,6 @@ public class SearchPlannerTests
     public void Plan_CompileAsResiduals_WhenRelationshipAndImageCriteria()
     {
         // Arrange
-        var planner = new SearchPlanner(NullLogger<SearchPlanner>.Instance);
         var criteria = new MetadataCriteria
         {
             Title = new CriteriaSet<PropertyCriterion<string>>
@@ -665,22 +789,30 @@ public class SearchPlannerTests
             Images = new CollectionCriteria<ImageCriteria> { None = [new ImageCriteria()] },
         };
 
+        var query = new ContentHierarchyItemCriteria
+        {
+            Metadata = new CriteriaSet<MetadataCriteria> { And = [criteria] }
+        };
+
         // Act
-        var plan = planner.Compile(criteria);
+        var plan = _planner.Plan(query, maxResults: 25);
 
         // Assert
-        Assert.That(plan, Is.InstanceOf<SearchPlanNode.Seeded>());
-        var leaf = (SearchPlanNode.Seeded)plan;
+        Assert.That(plan.Root, Is.InstanceOf<FilterPlanNode>());
+        var filter = (FilterPlanNode)plan.Root;
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(leaf.HitFilters.Select(filter => filter.Kind), Is.EqualTo([LocalFilterKind.Title]));
-            Assert.That(leaf.RelationshipResiduals, Has.Count.EqualTo(1));
-            Assert.That(leaf.ImageResiduals, Has.Count.EqualTo(1));
-            Assert.That(leaf.ImageResiduals.Single().Negate, Is.True);
             Assert.That(
-                leaf.ImageResiduals.Single().Alternatives.Single().Kind,
+                plan.Dispositions.Select(disposition => disposition.Disposition),
+                Does.Not.Contain("browse-anchor"));
+            Assert.That(filter.HitFilters.Select(hitFilter => hitFilter.Kind), Is.EqualTo([LocalFilterKind.Title]));
+            Assert.That(filter.RelationshipResiduals, Has.Count.EqualTo(1));
+            Assert.That(filter.ImageResiduals, Has.Count.EqualTo(1));
+            Assert.That(filter.ImageResiduals.Single().Negate, Is.True);
+            Assert.That(
+                filter.ImageResiduals.Single().Alternatives.Single().Kind,
                 Is.EqualTo(ImageCriteriaResidual.EvaluationKind.Presence));
-            Assert.That(leaf.Dispositions.Count(disposition =>
+            Assert.That(plan.Dispositions.Count(disposition =>
                 disposition.Source == "Relationships.Some[1]" &&
                 disposition.Disposition == "pass-through-residual"), Is.EqualTo(1));
         }
@@ -690,7 +822,6 @@ public class SearchPlannerTests
     public void Plan_SplitPresenceAndGalleryResiduals_WhenImageCriteria()
     {
         // Arrange
-        var planner = new SearchPlanner(NullLogger<SearchPlanner>.Instance);
         var criteria = new MetadataCriteria
         {
             Title = new CriteriaSet<PropertyCriterion<string>>
@@ -731,15 +862,24 @@ public class SearchPlannerTests
             },
         };
 
+        var query = new ContentHierarchyItemCriteria
+        {
+            Metadata = new CriteriaSet<MetadataCriteria> { And = [criteria] }
+        };
+
         // Act
-        var plan = (SearchPlanNode.Seeded)planner.Compile(criteria);
+        var plan = _planner.Plan(query, maxResults: 25);
 
         // Assert
+        var filter = (FilterPlanNode)plan.Root;
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(plan.ImageResiduals, Has.Count.EqualTo(3));
             Assert.That(
-                plan.ImageResiduals.Select(residual => residual.Alternatives.Single().Kind),
+                plan.Dispositions.Select(disposition => disposition.Disposition),
+                Does.Not.Contain("browse-anchor"));
+            Assert.That(filter.ImageResiduals, Has.Count.EqualTo(3));
+            Assert.That(
+                filter.ImageResiduals.Select(residual => residual.Alternatives.Single().Kind),
                 Is.EqualTo(
                     [
                         ImageCriteriaResidual.EvaluationKind.Presence,
@@ -755,7 +895,6 @@ public class SearchPlannerTests
     public void Plan_KnownEmpty_WhenRequiredImageFieldMustBeNull()
     {
         // Arrange
-        var planner = new SearchPlanner(NullLogger<SearchPlanner>.Instance);
         var criteria = new MetadataCriteria
         {
             Title = new CriteriaSet<PropertyCriterion<string>>
@@ -779,11 +918,16 @@ public class SearchPlannerTests
             },
         };
 
+        var query = new ContentHierarchyItemCriteria
+        {
+            Metadata = new CriteriaSet<MetadataCriteria> { And = [criteria] }
+        };
+
         // Act
-        var plan = planner.Compile(criteria);
+        var plan = _planner.Plan(query, maxResults: 25);
 
         // Assert
-        Assert.That(plan, Is.InstanceOf<SearchPlanNode.KnownEmpty>());
+        Assert.That(plan.Root.Contributes, Is.EqualTo("known-empty show candidates"));
     }
 
     [TestCase(CriteriaValueOperator.Equals, false, "still")]
@@ -795,7 +939,6 @@ public class SearchPlannerTests
         params string[] values)
     {
         // Arrange
-        var planner = new SearchPlanner(NullLogger<SearchPlanner>.Instance);
         var criteria = new MetadataCriteria
         {
             Title = new CriteriaSet<PropertyCriterion<string>>
@@ -827,12 +970,18 @@ public class SearchPlannerTests
             },
         };
 
+        var query = new ContentHierarchyItemCriteria
+        {
+            Metadata = new CriteriaSet<MetadataCriteria> { And = [criteria] }
+        };
+
         // Act
-        var plan = (SearchPlanNode.KnownEmpty)planner.Compile(criteria);
+        var plan = _planner.Plan(query, maxResults: 25);
 
         // Assert
         using (Assert.EnterMultipleScope())
         {
+            Assert.That(plan.Root.Contributes, Is.EqualTo("known-empty show candidates"));
             Assert.That(
                 plan.Dispositions.Any(disposition =>
                     disposition.Source == "Images.Some[1].Alternative[1]" &&
@@ -850,7 +999,6 @@ public class SearchPlannerTests
     public void Plan_KnownEmpty_WhenImageSourceCannotMatchMappedDomain(CriteriaValueOperator op, string value)
     {
         // Arrange
-        var planner = new SearchPlanner(NullLogger<SearchPlanner>.Instance);
         var criteria = new MetadataCriteria
         {
             Title = new CriteriaSet<PropertyCriterion<string>>
@@ -874,18 +1022,22 @@ public class SearchPlannerTests
             },
         };
 
+        var query = new ContentHierarchyItemCriteria
+        {
+            Metadata = new CriteriaSet<MetadataCriteria> { And = [criteria] }
+        };
+
         // Act
-        var plan = planner.Compile(criteria);
+        var plan = _planner.Plan(query, maxResults: 25);
 
         // Assert
-        Assert.That(plan, Is.InstanceOf<SearchPlanNode.KnownEmpty>());
+        Assert.That(plan.Root.Contributes, Is.EqualTo("known-empty show candidates"));
     }
 
     [Test]
     public void Plan_KnownEmpty_WhenImageTypeConstraintsContradict()
     {
         // Arrange
-        var planner = new SearchPlanner(NullLogger<SearchPlanner>.Instance);
         var criteria = new MetadataCriteria
         {
             Title = new CriteriaSet<PropertyCriterion<string>>
@@ -921,18 +1073,22 @@ public class SearchPlannerTests
             },
         };
 
+        var query = new ContentHierarchyItemCriteria
+        {
+            Metadata = new CriteriaSet<MetadataCriteria> { And = [criteria] }
+        };
+
         // Act
-        var plan = planner.Compile(criteria);
+        var plan = _planner.Plan(query, maxResults: 25);
 
         // Assert
-        Assert.That(plan, Is.InstanceOf<SearchPlanNode.KnownEmpty>());
+        Assert.That(plan.Root.Contributes, Is.EqualTo("known-empty show candidates"));
     }
 
     [Test]
     public void Plan_ImageResidual_WhenNegationLeavesMappedTypes()
     {
         // Arrange
-        var planner = new SearchPlanner(NullLogger<SearchPlanner>.Instance);
         var criteria = new MetadataCriteria
         {
             Title = new CriteriaSet<PropertyCriterion<string>>
@@ -964,13 +1120,22 @@ public class SearchPlannerTests
             },
         };
 
+        var query = new ContentHierarchyItemCriteria
+        {
+            Metadata = new CriteriaSet<MetadataCriteria> { And = [criteria] }
+        };
+
         // Act
-        var plan = (SearchPlanNode.Seeded)planner.Compile(criteria);
+        var plan = _planner.Plan(query, maxResults: 25);
 
         // Assert
+        var filter = (FilterPlanNode)plan.Root;
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(plan.ImageResiduals, Has.Count.EqualTo(1));
+            Assert.That(
+                plan.Dispositions.Select(disposition => disposition.Disposition),
+                Does.Not.Contain("browse-anchor"));
+            Assert.That(filter.ImageResiduals, Has.Count.EqualTo(1));
             Assert.That(plan.Dispositions.Where(disposition =>
                 disposition.Disposition == "pass-through-residual"), Is.Empty);
         }
@@ -980,7 +1145,6 @@ public class SearchPlannerTests
     public void Plan_ImageResidual_WhenPositiveGroupHasPossibleAlternative()
     {
         // Arrange
-        var planner = new SearchPlanner(NullLogger<SearchPlanner>.Instance);
         var impossible = new ImageCriteria
         {
             Type = new CriteriaSet<PropertyCriterion<string>>
@@ -1010,14 +1174,23 @@ public class SearchPlannerTests
             },
         };
 
+        var query = new ContentHierarchyItemCriteria
+        {
+            Metadata = new CriteriaSet<MetadataCriteria> { And = [criteria] }
+        };
+
         // Act
-        var plan = (SearchPlanNode.Seeded)planner.Compile(criteria);
+        var plan = _planner.Plan(query, maxResults: 25);
 
         // Assert
+        var filter = (FilterPlanNode)plan.Root;
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(plan.ImageResiduals.Single().Alternatives, Has.Count.EqualTo(1));
-            Assert.That(plan.ImageResiduals.Single().Alternatives.Single().Criteria, Is.SameAs(possible));
+            Assert.That(
+                plan.Dispositions.Select(disposition => disposition.Disposition),
+                Does.Not.Contain("browse-anchor"));
+            Assert.That(filter.ImageResiduals.Single().Alternatives, Has.Count.EqualTo(1));
+            Assert.That(filter.ImageResiduals.Single().Alternatives.Single().Criteria, Is.SameAs(possible));
             Assert.That(
                 plan.Dispositions.Any(disposition =>
                     disposition.Source == "Images.Some[1].Alternative[1]" &&
@@ -1030,7 +1203,6 @@ public class SearchPlannerTests
     public void Plan_OmitsImageExclusion_WhenAlternativeCannotMatchMappedDomain()
     {
         // Arrange
-        var planner = new SearchPlanner(NullLogger<SearchPlanner>.Instance);
         var criteria = new MetadataCriteria
         {
             Title = new CriteriaSet<PropertyCriterion<string>>
@@ -1059,13 +1231,22 @@ public class SearchPlannerTests
             },
         };
 
+        var query = new ContentHierarchyItemCriteria
+        {
+            Metadata = new CriteriaSet<MetadataCriteria> { And = [criteria] }
+        };
+
         // Act
-        var plan = (SearchPlanNode.Seeded)planner.Compile(criteria);
+        var plan = _planner.Plan(query, maxResults: 25);
 
         // Assert
+        var filter = (FilterPlanNode)plan.Root;
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(plan.ImageResiduals, Is.Empty);
+            Assert.That(
+                plan.Dispositions.Select(disposition => disposition.Disposition),
+                Does.Not.Contain("browse-anchor"));
+            Assert.That(filter.ImageResiduals, Is.Empty);
             Assert.That(plan.Dispositions.Where(disposition =>
                 disposition.Disposition == "pass-through-residual"), Is.Empty);
             Assert.That(
@@ -1081,7 +1262,6 @@ public class SearchPlannerTests
     public void Plan_GalleryResiduals_WhenImageMimeTypeOrLanguageIsConstrained()
     {
         // Arrange
-        var planner = new SearchPlanner(NullLogger<SearchPlanner>.Instance);
         var criteria = new MetadataCriteria
         {
             Title = new CriteriaSet<PropertyCriterion<string>>
@@ -1143,20 +1323,29 @@ public class SearchPlannerTests
             },
         };
 
+        var query = new ContentHierarchyItemCriteria
+        {
+            Metadata = new CriteriaSet<MetadataCriteria> { And = [criteria] }
+        };
+
         // Act
-        var plan = (SearchPlanNode.Seeded)planner.Compile(criteria);
+        var plan = _planner.Plan(query, maxResults: 25);
 
         // Assert
+        var filter = (FilterPlanNode)plan.Root;
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(plan.ImageResiduals, Has.Count.EqualTo(2));
             Assert.That(
-                plan.ImageResiduals[0].Alternatives.Select(alternative => alternative.Kind),
+                plan.Dispositions.Select(disposition => disposition.Disposition),
+                Does.Not.Contain("browse-anchor"));
+            Assert.That(filter.ImageResiduals, Has.Count.EqualTo(2));
+            Assert.That(
+                filter.ImageResiduals[0].Alternatives.Select(alternative => alternative.Kind),
                 Is.EqualTo(
                     [ImageCriteriaResidual.EvaluationKind.Gallery, ImageCriteriaResidual.EvaluationKind.Gallery]));
-            Assert.That(plan.ImageResiduals[1].Negate, Is.True);
+            Assert.That(filter.ImageResiduals[1].Negate, Is.True);
             Assert.That(
-                plan.ImageResiduals[1].Alternatives.Single().Kind,
+                filter.ImageResiduals[1].Alternatives.Single().Kind,
                 Is.EqualTo(ImageCriteriaResidual.EvaluationKind.Gallery));
             Assert.That(plan.Dispositions.Where(disposition =>
                 disposition.Disposition == "pass-through-residual"), Is.Empty);
@@ -1167,7 +1356,6 @@ public class SearchPlannerTests
     public void Plan_PreservesResidual_WhenTitleUsesRegex()
     {
         // Arrange
-        var planner = new SearchPlanner(NullLogger<SearchPlanner>.Instance);
         var criteria = new MetadataCriteria
         {
             Title = new CriteriaSet<PropertyCriterion<string>>
@@ -1183,18 +1371,24 @@ public class SearchPlannerTests
             },
         };
 
+        var query = new ContentHierarchyItemCriteria
+        {
+            Metadata = new CriteriaSet<MetadataCriteria> { And = [criteria] }
+        };
+
         // Act
-        var plan = planner.Compile(criteria);
+        var plan = _planner.Plan(query, maxResults: 25);
 
         // Assert
-        Assert.That(plan, Is.InstanceOf<SearchPlanNode.Browse>());
-        var node = (SearchPlanNode.Browse)plan;
+        Assert.That(plan.Root, Is.InstanceOf<FilterPlanNode>());
+        var filter = (FilterPlanNode)plan.Root;
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(node.Dispositions.Where(disposition =>
+            Assert.That(((FetchPlanNode)filter.Child).AnchorKind, Is.EqualTo(SearchAnchorKind.Browse));
+            Assert.That(plan.Dispositions.Where(disposition =>
                 disposition.Source == "Title" && disposition.Disposition == "pass-through-residual"),
                 Is.Not.Empty);
-            Assert.That(node.Dispositions.Select(disposition => disposition.Disposition),
+            Assert.That(plan.Dispositions.Select(disposition => disposition.Disposition),
                 Does.Not.Contain("unbounded-refusal"));
         }
     }
@@ -1203,7 +1397,6 @@ public class SearchPlannerTests
     public void Plan_CompilesEveryTitleCriterionAsLocalFilter_WhenTwoTitleEqualityCriteriaAreAnded()
     {
         // Arrange
-        var planner = new SearchPlanner(NullLogger<SearchPlanner>.Instance);
         var criteria = new MetadataCriteria
         {
             Title = new CriteriaSet<PropertyCriterion<string>>
@@ -1216,16 +1409,21 @@ public class SearchPlannerTests
             },
         };
 
+        var query = new ContentHierarchyItemCriteria
+        {
+            Metadata = new CriteriaSet<MetadataCriteria> { And = [criteria] }
+        };
+
         // Act
-        var plan = planner.Compile(criteria);
+        var plan = _planner.Plan(query, maxResults: 25);
 
         // Assert
-        Assert.That(plan, Is.InstanceOf<SearchPlanNode.Seeded>());
-        var leaf = (SearchPlanNode.Seeded)plan;
+        Assert.That(plan.Root, Is.InstanceOf<FilterPlanNode>());
+        var filter = (FilterPlanNode)plan.Root;
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(((SearchSeed.FuzzyShow)leaf.Seed).Terms, Is.EqualTo(["first"]));
-            Assert.That(leaf.HitFilters.Count(filter => filter.Kind == LocalFilterKind.Title), Is.EqualTo(2));
+            Assert.That(((SearchSeed.FuzzyShow)((FetchPlanNode)filter.Child).Seed).Terms, Is.EqualTo(["first"]));
+            Assert.That(filter.HitFilters.Count(hitFilter => hitFilter.Kind == LocalFilterKind.Title), Is.EqualTo(2));
         }
     }
 
@@ -1233,7 +1431,6 @@ public class SearchPlannerTests
     public void Plan_KnownEmpty_WhenExternalIdSourcesArePinnedToForeignProviders()
     {
         // Arrange
-        var planner = new SearchPlanner(NullLogger<SearchPlanner>.Instance);
         var criteria = new MetadataCriteria
         {
             Title = new CriteriaSet<PropertyCriterion<string>>
@@ -1275,18 +1472,22 @@ public class SearchPlannerTests
             },
         };
 
+        var query = new ContentHierarchyItemCriteria
+        {
+            Metadata = new CriteriaSet<MetadataCriteria> { And = [criteria] }
+        };
+
         // Act
-        var plan = planner.Compile(criteria);
+        var plan = _planner.Plan(query, maxResults: 25);
 
         // Assert
-        Assert.That(plan, Is.InstanceOf<SearchPlanNode.KnownEmpty>());
+        Assert.That(plan.Root.Contributes, Is.EqualTo("known-empty show candidates"));
     }
 
     [Test]
     public void Plan_IdLookup_WhenExternalIdAndTitleCanSeed()
     {
         // Arrange
-        var planner = new SearchPlanner(NullLogger<SearchPlanner>.Instance);
         var criteria = new MetadataCriteria
         {
             Title = new CriteriaSet<PropertyCriterion<string>>
@@ -1328,20 +1529,28 @@ public class SearchPlannerTests
             },
         };
 
+        var query = new ContentHierarchyItemCriteria
+        {
+            Metadata = new CriteriaSet<MetadataCriteria> { And = [criteria] }
+        };
+
         // Act
-        var plan = (SearchPlanNode.Seeded)planner.Compile(criteria);
+        var plan = _planner.Plan(query, maxResults: 25);
 
         // Assert
-        Assert.That(plan.Seed, Is.InstanceOf<SearchSeed.IdLookup>());
-        var seed = (SearchSeed.IdLookup)plan.Seed;
+        var filter = (FilterPlanNode)plan.Root;
+        Assert.That(filter.Child, Is.InstanceOf<FetchPlanNode>());
+        var fetch = (FetchPlanNode)filter.Child;
+        var seed = (SearchSeed.IdLookup)fetch.Seed;
         using (Assert.EnterMultipleScope())
         {
+            Assert.That(fetch.AnchorKind, Is.EqualTo(SearchAnchorKind.ExternalId));
             Assert.That(seed.Lookups, Has.Count.EqualTo(1));
             Assert.That(seed.Lookups[0].Source, Is.EqualTo("imdb"));
             Assert.That(seed.Lookups[0].Value, Is.EqualTo("tt0411008"));
             Assert.That(seed.Lookups[0].ShowId, Is.Null);
             Assert.That(
-                plan.HitFilters.Select(filter => filter.Kind),
+                filter.HitFilters.Select(hitFilter => hitFilter.Kind),
                 Is.EqualTo([LocalFilterKind.Title, LocalFilterKind.ExternalId]));
         }
     }
@@ -1350,7 +1559,6 @@ public class SearchPlannerTests
     public void Plan_IdLookup_WhenTvrageExternalIdCanSeed()
     {
         // Arrange
-        var planner = new SearchPlanner(NullLogger<SearchPlanner>.Instance);
         var criteria = new MetadataCriteria
         {
             ExternalIds = new CollectionCriteria<ExternalIdCriteria>
@@ -1388,11 +1596,18 @@ public class SearchPlannerTests
             },
         };
 
+        var query = new ContentHierarchyItemCriteria
+        {
+            Metadata = new CriteriaSet<MetadataCriteria> { And = [criteria] }
+        };
+
         // Act
-        var plan = (SearchPlanNode.Seeded)planner.Compile(criteria);
+        var plan = _planner.Plan(query, maxResults: 25);
 
         // Assert
-        var lookup = ((SearchSeed.IdLookup)plan.Seed).Lookups.Single();
+        var filter = (FilterPlanNode)plan.Root;
+        Assert.That(filter.Child, Is.InstanceOf<FetchPlanNode>());
+        var lookup = ((SearchSeed.IdLookup)((FetchPlanNode)filter.Child).Seed).Lookups.Single();
         using (Assert.EnterMultipleScope())
         {
             Assert.That(lookup.Source, Is.EqualTo("tvrage"));
@@ -1405,7 +1620,6 @@ public class SearchPlannerTests
     public void Plan_DirectIdLookup_WhenExternalIdGroupContainsTvmazeAlternative()
     {
         // Arrange
-        var planner = new SearchPlanner(NullLogger<SearchPlanner>.Instance);
         var criteria = new MetadataCriteria
         {
             Title = new CriteriaSet<PropertyCriterion<string>>
@@ -1472,15 +1686,24 @@ public class SearchPlannerTests
             },
         };
 
+        var query = new ContentHierarchyItemCriteria
+        {
+            Metadata = new CriteriaSet<MetadataCriteria> { And = [criteria] }
+        };
+
         // Act
-        var plan = (SearchPlanNode.Seeded)planner.Compile(criteria);
+        var plan = _planner.Plan(query, maxResults: 25);
 
         // Assert
-        Assert.That(plan.Seed, Is.InstanceOf<SearchSeed.IdLookup>());
-        var lookups = ((SearchSeed.IdLookup)plan.Seed).Lookups;
+        var filter = (FilterPlanNode)plan.Root;
+        Assert.That(filter.Child, Is.InstanceOf<UnionPlanNode>());
+        var lookups = ((UnionPlanNode)filter.Child).Children
+            .Cast<FetchPlanNode>()
+            .Select(child => ((SearchSeed.IdLookup)child.Seed).Lookups.Single())
+            .ToArray();
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(lookups, Has.Count.EqualTo(2));
+            Assert.That(lookups, Has.Length.EqualTo(2));
             Assert.That(lookups[0].Source, Is.EqualTo("imdb"));
             Assert.That(lookups[0].Value, Is.EqualTo("tt0411008"));
             Assert.That(lookups[0].ShowId, Is.Null);
@@ -1488,7 +1711,7 @@ public class SearchPlannerTests
             Assert.That(lookups[1].Value, Is.EqualTo("82"));
             Assert.That(lookups[1].ShowId, Is.EqualTo(82));
             Assert.That(
-                plan.HitFilters.Select(filter => filter.Kind),
+                filter.HitFilters.Select(hitFilter => hitFilter.Kind),
                 Is.EqualTo([LocalFilterKind.Title, LocalFilterKind.ExternalId]));
         }
     }
@@ -1497,7 +1720,6 @@ public class SearchPlannerTests
     public void Plan_DirectIdLookup_WhenSourceCanSeed()
     {
         // Arrange
-        var planner = new SearchPlanner(NullLogger<SearchPlanner>.Instance);
         var criteria = new MetadataCriteria
         {
             Source = new CriteriaSet<PropertyCriterion<string>>
@@ -1513,18 +1735,24 @@ public class SearchPlannerTests
             },
         };
 
+        var query = new ContentHierarchyItemCriteria
+        {
+            Metadata = new CriteriaSet<MetadataCriteria> { And = [criteria] }
+        };
+
         // Act
-        var plan = (SearchPlanNode.Seeded)planner.Compile(criteria);
+        var plan = _planner.Plan(query, maxResults: 25);
 
         // Assert
-        Assert.That(plan.Seed, Is.InstanceOf<SearchSeed.IdLookup>());
-        var lookup = ((SearchSeed.IdLookup)plan.Seed).Lookups.Single();
+        var filter = (FilterPlanNode)plan.Root;
+        Assert.That(filter.Child, Is.InstanceOf<FetchPlanNode>());
+        var lookup = ((SearchSeed.IdLookup)((FetchPlanNode)filter.Child).Seed).Lookups.Single();
         using (Assert.EnterMultipleScope())
         {
             Assert.That(lookup.Source, Is.EqualTo("tvmaze"));
             Assert.That(lookup.Value, Is.EqualTo("82"));
             Assert.That(lookup.ShowId, Is.EqualTo(82));
-            Assert.That(plan.HitFilters.Single().Kind, Is.EqualTo(LocalFilterKind.Source));
+            Assert.That(filter.HitFilters.Single().Kind, Is.EqualTo(LocalFilterKind.Source));
         }
     }
 
@@ -1532,7 +1760,6 @@ public class SearchPlannerTests
     public void Plan_PersonSeed_WhenTitleAkaAndPersonCanSeed()
     {
         // Arrange
-        var planner = new SearchPlanner(NullLogger<SearchPlanner>.Instance);
         var criteria = new MetadataCriteria
         {
             Title = new CriteriaSet<PropertyCriterion<string>>
@@ -1592,16 +1819,22 @@ public class SearchPlannerTests
             },
         };
 
+        var query = new ContentHierarchyItemCriteria
+        {
+            Metadata = new CriteriaSet<MetadataCriteria> { And = [criteria] }
+        };
+
         // Act
-        var plan = (SearchPlanNode.Seeded)planner.Compile(criteria);
+        var plan = _planner.Plan(query, maxResults: 25);
 
         // Assert
-        Assert.That(plan.Seed, Is.InstanceOf<SearchSeed.PersonChain>());
+        var filter = (FilterPlanNode)plan.Root;
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(plan.HitFilters.Single().Kind, Is.EqualTo(LocalFilterKind.Title));
-            Assert.That(plan.AkaFilters.Single().Kind, Is.EqualTo(LocalFilterKind.OriginalTitle));
-            Assert.That(plan.RelationshipResiduals, Is.Empty);
+            Assert.That(((FetchPlanNode)filter.Child).AnchorKind, Is.EqualTo(SearchAnchorKind.Person));
+            Assert.That(filter.HitFilters.Single().Kind, Is.EqualTo(LocalFilterKind.Title));
+            Assert.That(filter.AkaFilters.Single().Kind, Is.EqualTo(LocalFilterKind.OriginalTitle));
+            Assert.That(filter.RelationshipResiduals, Is.Empty);
             Assert.That(plan.Dispositions.Where(disposition =>
                 disposition.Disposition == "pass-through-residual"), Is.Empty);
         }
@@ -1611,7 +1844,6 @@ public class SearchPlannerTests
     public void Plan_PersonSeed_WhenOriginalTitleAndPersonCanSeed()
     {
         // Arrange
-        var planner = new SearchPlanner(NullLogger<SearchPlanner>.Instance);
         var criteria = new MetadataCriteria
         {
             OriginalTitle = new CriteriaSet<PropertyCriterion<string>>
@@ -1667,17 +1899,23 @@ public class SearchPlannerTests
             },
         };
 
+        var query = new ContentHierarchyItemCriteria
+        {
+            Metadata = new CriteriaSet<MetadataCriteria> { And = [criteria] }
+        };
+
         // Act
-        var plan = (SearchPlanNode.Seeded)planner.Compile(criteria);
+        var plan = _planner.Plan(query, maxResults: 25);
 
         // Assert
-        Assert.That(plan.Seed, Is.InstanceOf<SearchSeed.PersonChain>());
+        var filter = (FilterPlanNode)plan.Root;
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(plan.AkaFilters.Single().Kind, Is.EqualTo(LocalFilterKind.OriginalTitle));
+            Assert.That(((FetchPlanNode)filter.Child).AnchorKind, Is.EqualTo(SearchAnchorKind.Person));
+            Assert.That(filter.AkaFilters.Single().Kind, Is.EqualTo(LocalFilterKind.OriginalTitle));
             Assert.That(plan.Dispositions.Where(disposition =>
                 disposition.Disposition == "pass-through-residual"), Is.Empty);
-            Assert.That(plan.RelationshipResiduals, Is.Empty);
+            Assert.That(filter.RelationshipResiduals, Is.Empty);
         }
     }
 
@@ -1685,7 +1923,6 @@ public class SearchPlannerTests
     public void Plan_AkaSeed_WhenAlternateTextCanSeed()
     {
         // Arrange
-        var planner = new SearchPlanner(NullLogger<SearchPlanner>.Instance);
         var criteria = new MetadataCriteria
         {
             AlternateTexts = new CollectionCriteria<AlternateTextCriteria>
@@ -1712,16 +1949,23 @@ public class SearchPlannerTests
             },
         };
 
+        var query = new ContentHierarchyItemCriteria
+        {
+            Metadata = new CriteriaSet<MetadataCriteria> { And = [criteria] }
+        };
+
         // Act
-        var plan = (SearchPlanNode.Seeded)planner.Compile(criteria);
+        var plan = _planner.Plan(query, maxResults: 25);
 
         // Assert
-        var seed = (SearchSeed.FuzzyShow)plan.Seed;
+        var filter = (FilterPlanNode)plan.Root;
+        Assert.That(filter.Child, Is.InstanceOf<FetchPlanNode>());
+        var seed = (SearchSeed.FuzzyShow)((FetchPlanNode)filter.Child).Seed;
         using (Assert.EnterMultipleScope())
         {
             Assert.That(seed.Terms, Is.EqualTo(["Perdidos"]));
             Assert.That(seed.IsAka, Is.True);
-            Assert.That(plan.AkaFilters.Single().Kind, Is.EqualTo(LocalFilterKind.AlternateText));
+            Assert.That(filter.AkaFilters.Single().Kind, Is.EqualTo(LocalFilterKind.AlternateText));
         }
     }
 
@@ -1729,7 +1973,6 @@ public class SearchPlannerTests
     public void Plan_AkaSeed_WhenAlternateTextGroupHasMultipleAlternatives()
     {
         // Arrange
-        var planner = new SearchPlanner(NullLogger<SearchPlanner>.Instance);
         var criteria = new MetadataCriteria
         {
             AlternateTexts = new CollectionCriteria<AlternateTextCriteria>
@@ -1770,16 +2013,26 @@ public class SearchPlannerTests
             },
         };
 
+        var query = new ContentHierarchyItemCriteria
+        {
+            Metadata = new CriteriaSet<MetadataCriteria> { And = [criteria] }
+        };
+
         // Act
-        var plan = (SearchPlanNode.Seeded)planner.Compile(criteria);
+        var plan = _planner.Plan(query, maxResults: 25);
 
         // Assert
-        var seed = (SearchSeed.FuzzyShow)plan.Seed;
+        var filter = (FilterPlanNode)plan.Root;
+        Assert.That(filter.Child, Is.InstanceOf<UnionPlanNode>());
+        var seeds = ((UnionPlanNode)filter.Child).Children
+            .Cast<FetchPlanNode>()
+            .Select(child => (SearchSeed.FuzzyShow)child.Seed)
+            .ToArray();
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(seed.Terms, Is.EqualTo(["Perdidos", "Desaparecidos"]));
-            Assert.That(seed.IsAka, Is.True);
-            Assert.That(plan.AkaFilters.Single().AlternateTextAlternatives, Has.Count.EqualTo(2));
+            Assert.That(seeds.Select(seed => seed.Terms.Single()), Is.EqualTo(["Perdidos", "Desaparecidos"]));
+            Assert.That(seeds.Select(seed => seed.IsAka), Is.All.True);
+            Assert.That(filter.AkaFilters.Single().AlternateTextAlternatives, Has.Count.EqualTo(2));
         }
     }
 
@@ -1787,7 +2040,6 @@ public class SearchPlannerTests
     public void Plan_PersonChain_WhenDirectorRelationshipCanSeed()
     {
         // Arrange
-        var planner = new SearchPlanner(NullLogger<SearchPlanner>.Instance);
         var criteria = new MetadataCriteria
         {
             Relationships = new CollectionCriteria<RelationshipCriteria>
@@ -1836,14 +2088,22 @@ public class SearchPlannerTests
             },
         };
 
+        var query = new ContentHierarchyItemCriteria
+        {
+            Metadata = new CriteriaSet<MetadataCriteria> { And = [criteria] }
+        };
+
         // Act
-        var plan = (SearchPlanNode.Seeded)planner.Compile(criteria);
+        var plan = _planner.Plan(query, maxResults: 25);
 
         // Assert
-        Assert.That(plan.Seed, Is.InstanceOf<SearchSeed.PersonChain>());
-        var alternative = ((SearchSeed.PersonChain)plan.Seed).Alternatives.Single();
+        var filter = (FilterPlanNode)plan.Root;
+        Assert.That(filter.Child, Is.InstanceOf<FetchPlanNode>());
+        var fetch = (FetchPlanNode)filter.Child;
+        var alternative = ((SearchSeed.PersonChain)fetch.Seed).Alternatives.Single();
         using (Assert.EnterMultipleScope())
         {
+            Assert.That(fetch.AnchorKind, Is.EqualTo(SearchAnchorKind.Person));
             Assert.That(alternative.Names, Is.EqualTo(["Mimi Leder"]));
             Assert.That(alternative.IncludeCast, Is.False);
             Assert.That(alternative.IncludeCrew, Is.True);
@@ -1857,7 +2117,6 @@ public class SearchPlannerTests
     public void Plan_SettledPersonChain_WhenTvmazePersonIdCanSeed()
     {
         // Arrange
-        var planner = new SearchPlanner(NullLogger<SearchPlanner>.Instance);
         var criteria = new MetadataCriteria
         {
             Relationships = new CollectionCriteria<RelationshipCriteria>
@@ -1928,17 +2187,25 @@ public class SearchPlannerTests
             },
         };
 
+        var query = new ContentHierarchyItemCriteria
+        {
+            Metadata = new CriteriaSet<MetadataCriteria> { And = [criteria] }
+        };
+
         // Act
-        var plan = (SearchPlanNode.Seeded)planner.Compile(criteria);
+        var plan = _planner.Plan(query, maxResults: 25);
 
         // Assert
-        var alternative = ((SearchSeed.PersonChain)plan.Seed).Alternatives.Single();
+        var filter = (FilterPlanNode)plan.Root;
+        Assert.That(filter.Child, Is.InstanceOf<FetchPlanNode>());
+        var fetch = (FetchPlanNode)filter.Child;
+        var alternative = ((SearchSeed.PersonChain)fetch.Seed).Alternatives.Single();
         using (Assert.EnterMultipleScope())
         {
             Assert.That(alternative.Names, Is.Empty);
             Assert.That(alternative.PersonIds, Is.EqualTo([14072L]));
             Assert.That(alternative.IncludeCast, Is.True);
-            Assert.That(plan.RelationshipResiduals, Is.Empty);
+            Assert.That(filter.RelationshipResiduals, Is.Empty);
             Assert.That(plan.Dispositions.Where(disposition =>
                 disposition.Disposition == "pass-through-residual"), Is.Empty);
         }
@@ -1948,7 +2215,6 @@ public class SearchPlannerTests
     public void Plan_Browse_WhenPersonIdAlternativeIncludesUnsupportedSource()
     {
         // Arrange
-        var planner = new SearchPlanner(NullLogger<SearchPlanner>.Instance);
         var criteria = new MetadataCriteria
         {
             Relationships = new CollectionCriteria<RelationshipCriteria>
@@ -2044,18 +2310,24 @@ public class SearchPlannerTests
             },
         };
 
+        var query = new ContentHierarchyItemCriteria
+        {
+            Metadata = new CriteriaSet<MetadataCriteria> { And = [criteria] }
+        };
+
         // Act
-        var plan = planner.Compile(criteria);
+        var plan = _planner.Plan(query, maxResults: 25);
 
         // Assert
-        Assert.That(plan, Is.InstanceOf<SearchPlanNode.Browse>());
+        Assert.That(plan.Root, Is.InstanceOf<FilterPlanNode>());
+        var filter = (FilterPlanNode)plan.Root;
+        Assert.That(((FetchPlanNode)filter.Child).AnchorKind, Is.EqualTo(SearchAnchorKind.Browse));
     }
 
     [Test]
     public void Plan_CheapestPersonChain_WhenLaterRelationshipGroupCostsLess()
     {
         // Arrange
-        var planner = new SearchPlanner(NullLogger<SearchPlanner>.Instance);
         var expensive = new RelationshipCriteria
         {
             Subject = new CriteriaSet<PropertyCriterion<string>>
@@ -2113,17 +2385,24 @@ public class SearchPlannerTests
             },
         };
 
+        var query = new ContentHierarchyItemCriteria
+        {
+            Metadata = new CriteriaSet<MetadataCriteria> { And = [criteria] }
+        };
+
         // Act
-        var plan = (SearchPlanNode.Seeded)planner.Compile(criteria);
+        var plan = _planner.Plan(query, maxResults: 25);
 
         // Assert
-        var alternative = ((SearchSeed.PersonChain)plan.Seed).Alternatives.Single();
+        var filter = (FilterPlanNode)plan.Root;
+        Assert.That(filter.Child, Is.InstanceOf<FetchPlanNode>());
+        var alternative = ((SearchSeed.PersonChain)((FetchPlanNode)filter.Child).Seed).Alternatives.Single();
         using (Assert.EnterMultipleScope())
         {
             Assert.That(alternative.Names, Is.EqualTo(["Solo Person"]));
             Assert.That(alternative.IncludeCast, Is.True);
             Assert.That(alternative.IncludeCrew, Is.False);
-            Assert.That(plan.RelationshipResiduals, Has.Count.EqualTo(1));
+            Assert.That(filter.RelationshipResiduals, Has.Count.EqualTo(1));
         }
     }
 
@@ -2131,7 +2410,6 @@ public class SearchPlannerTests
     public void Plan_Browse_WhenNoCriterionCanSeed()
     {
         // Arrange
-        var planner = new SearchPlanner(NullLogger<SearchPlanner>.Instance);
         var criteria = new MetadataCriteria
         {
             Language = new CriteriaSet<PropertyCriterion<string>>
@@ -2147,14 +2425,20 @@ public class SearchPlannerTests
             },
         };
 
+        var query = new ContentHierarchyItemCriteria
+        {
+            Metadata = new CriteriaSet<MetadataCriteria> { And = [criteria] }
+        };
+
         // Act
-        var plan = planner.Compile(criteria);
+        var plan = _planner.Plan(query, maxResults: 25);
 
         // Assert
+        var filter = (FilterPlanNode)plan.Root;
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(plan, Is.InstanceOf<SearchPlanNode.Browse>());
-            Assert.That(((SearchPlanNode.Browse)plan).Dispositions.Select(disposition => disposition.Disposition),
+            Assert.That(((FetchPlanNode)filter.Child).AnchorKind, Is.EqualTo(SearchAnchorKind.Browse));
+            Assert.That(plan.Dispositions.Select(disposition => disposition.Disposition),
                 Does.Not.Contain("unbounded-refusal"));
         }
     }
@@ -2163,7 +2447,6 @@ public class SearchPlannerTests
     public void Plan_RecordsCriterionDispositions_WhenEveryPlanNode()
     {
         // Arrange
-        var planner = new SearchPlanner(NullLogger<SearchPlanner>.Instance);
         var seededCriteria = new MetadataCriteria
         {
             Title = new CriteriaSet<PropertyCriterion<string>>
@@ -2200,19 +2483,38 @@ public class SearchPlannerTests
             },
         };
 
+        var seededQuery = new ContentHierarchyItemCriteria
+        {
+            Metadata = new CriteriaSet<MetadataCriteria> { And = [seededCriteria] }
+        };
+
+        var knownEmptyQuery = new ContentHierarchyItemCriteria
+        {
+            Metadata = new CriteriaSet<MetadataCriteria> { And = [knownEmptyCriteria] }
+        };
+
+        var browseQuery = new ContentHierarchyItemCriteria
+        {
+            Metadata = new CriteriaSet<MetadataCriteria> { And = [browseCriteria] }
+        };
+
         // Act
-        var seeded = (SearchPlanNode.Seeded)planner.Compile(seededCriteria);
-        var knownEmpty = (SearchPlanNode.KnownEmpty)planner.Compile(knownEmptyCriteria);
-        var browse = (SearchPlanNode.Browse)planner.Compile(browseCriteria);
+        var seeded = _planner.Plan(seededQuery, maxResults: 25);
+        var knownEmpty = _planner.Plan(knownEmptyQuery, maxResults: 25);
+        var browse = _planner.Plan(browseQuery, maxResults: 25);
 
         // Assert
+        var browseFilter = (FilterPlanNode)browse.Root;
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(seeded.SeedReason, Is.Not.Empty);
+            Assert.That(
+                seeded.Dispositions.Select(disposition => disposition.Disposition),
+                Does.Not.Contain("browse-anchor"));
             Assert.That(
                 seeded.Dispositions.Any(disposition =>
                     disposition.Source == "Title" && disposition.Disposition == "hit-filter"),
                 Is.True);
+            Assert.That(knownEmpty.Root.Contributes, Is.EqualTo("known-empty show candidates"));
             Assert.That(
                 knownEmpty.Dispositions.Any(disposition =>
                     disposition.Source == MetadataField.Awards.ToString() && disposition.Disposition == "known-empty"),
@@ -2227,7 +2529,7 @@ public class SearchPlannerTests
                     disposition.Disposition == "hit-filter"),
                 Is.True);
             Assert.That(
-                browse.HitFilters.Select(filter => filter.Kind),
+                browseFilter.HitFilters.Select(hitFilter => hitFilter.Kind),
                 Is.EqualTo([LocalFilterKind.Language]));
         }
     }
@@ -2236,7 +2538,6 @@ public class SearchPlannerTests
     public void Plan_PersonChainWithResidual_WhenPersonRelationshipHasQualifier()
     {
         // Arrange
-        var planner = new SearchPlanner(NullLogger<SearchPlanner>.Instance);
         var relationship = new RelationshipCriteria
         {
             Subject = new CriteriaSet<PropertyCriterion<string>>
@@ -2283,17 +2584,22 @@ public class SearchPlannerTests
             },
         };
 
+        var query = new ContentHierarchyItemCriteria
+        {
+            Metadata = new CriteriaSet<MetadataCriteria> { And = [criteria] }
+        };
+
         // Act
-        var plan = planner.Compile(criteria);
+        var plan = _planner.Plan(query, maxResults: 25);
 
         // Assert
-        Assert.That(plan, Is.InstanceOf<SearchPlanNode.Seeded>());
-        var seeded = (SearchPlanNode.Seeded)plan;
+        Assert.That(plan.Root, Is.InstanceOf<FilterPlanNode>());
+        var filter = (FilterPlanNode)plan.Root;
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(seeded.Seed, Is.InstanceOf<SearchSeed.PersonChain>());
-            Assert.That(seeded.RelationshipResiduals, Has.Count.EqualTo(1));
-            Assert.That(seeded.Dispositions.Select(disposition => disposition.Disposition),
+            Assert.That(((FetchPlanNode)filter.Child).AnchorKind, Is.EqualTo(SearchAnchorKind.Person));
+            Assert.That(filter.RelationshipResiduals, Has.Count.EqualTo(1));
+            Assert.That(plan.Dispositions.Select(disposition => disposition.Disposition),
                 Does.Not.Contain("unbounded-refusal"));
         }
     }
@@ -2302,7 +2608,6 @@ public class SearchPlannerTests
     public void Plan_KnownEmpty_WhenAbsentCollectionAndIdentifierCanSeed()
     {
         // Arrange
-        var planner = new SearchPlanner(NullLogger<SearchPlanner>.Instance);
         var criteria = new MetadataCriteria
         {
             Source = new CriteriaSet<PropertyCriterion<string>>
@@ -2325,18 +2630,22 @@ public class SearchPlannerTests
             },
         };
 
+        var query = new ContentHierarchyItemCriteria
+        {
+            Metadata = new CriteriaSet<MetadataCriteria> { And = [criteria] }
+        };
+
         // Act
-        var plan = planner.Compile(criteria);
+        var plan = _planner.Plan(query, maxResults: 25);
 
         // Assert
-        Assert.That(plan, Is.InstanceOf<SearchPlanNode.KnownEmpty>());
+        Assert.That(plan.Root.Contributes, Is.EqualTo("known-empty show candidates"));
     }
 
     [Test]
     public void Plan_PreservesIdentifierAlternatives_WhenMultipleIdentifiersAreProvided()
     {
         // Arrange
-        var planner = new SearchPlanner(NullLogger<SearchPlanner>.Instance);
         var ids = Enumerable.Range(1, 11).Select(value => $"tt{value:0000000}").ToArray();
         var criteria = new MetadataCriteria
         {
@@ -2375,13 +2684,20 @@ public class SearchPlannerTests
             },
         };
 
+        var query = new ContentHierarchyItemCriteria
+        {
+            Metadata = new CriteriaSet<MetadataCriteria> { And = [criteria] }
+        };
+
         // Act
-        var plan = (SearchPlanNode.Seeded)planner.Compile(criteria);
+        var plan = _planner.Plan(query, maxResults: 25);
 
         // Assert
+        var filter = (FilterPlanNode)plan.Root;
+        Assert.That(filter.Child, Is.InstanceOf<UnionPlanNode>());
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(((SearchSeed.IdLookup)plan.Seed).Lookups, Has.Count.EqualTo(11));
+            Assert.That(((UnionPlanNode)filter.Child).Children, Has.Count.EqualTo(11));
             Assert.That(plan.Dispositions.Where(disposition =>
                 disposition.Disposition == "pass-through-residual"), Is.Empty);
         }
@@ -2391,7 +2707,6 @@ public class SearchPlannerTests
     public void Plan_NetworkResidual_WhenTitleAndNetworkRelationshipArePresent()
     {
         // Arrange
-        var planner = new SearchPlanner(NullLogger<SearchPlanner>.Instance);
         var criteria = new MetadataCriteria
         {
             Title = new CriteriaSet<PropertyCriterion<string>>
@@ -2433,13 +2748,22 @@ public class SearchPlannerTests
             },
         };
 
+        var query = new ContentHierarchyItemCriteria
+        {
+            Metadata = new CriteriaSet<MetadataCriteria> { And = [criteria] }
+        };
+
         // Act
-        var plan = (SearchPlanNode.Seeded)planner.Compile(criteria);
+        var plan = _planner.Plan(query, maxResults: 25);
 
         // Assert
-        var alternative = plan.RelationshipResiduals.Single().Alternatives.Single();
+        var filter = (FilterPlanNode)plan.Root;
+        var alternative = filter.RelationshipResiduals.Single().Alternatives.Single();
         using (Assert.EnterMultipleScope())
         {
+            Assert.That(
+                plan.Dispositions.Select(disposition => disposition.Disposition),
+                Does.Not.Contain("browse-anchor"));
             Assert.That(alternative.MatchesNetwork, Is.True);
             Assert.That(alternative.MatchesPerson, Is.False);
             Assert.That(alternative.PassThrough, Is.False);
@@ -2452,7 +2776,6 @@ public class SearchPlannerTests
     public void Plan_HybridResidual_WhenTitleAndBareSubjectArePresent()
     {
         // Arrange
-        var planner = new SearchPlanner(NullLogger<SearchPlanner>.Instance);
         var criteria = new MetadataCriteria
         {
             Title = new CriteriaSet<PropertyCriterion<string>>
@@ -2483,16 +2806,22 @@ public class SearchPlannerTests
             },
         };
 
+        var query = new ContentHierarchyItemCriteria
+        {
+            Metadata = new CriteriaSet<MetadataCriteria> { And = [criteria] }
+        };
+
         // Act
-        var plan = (SearchPlanNode.Seeded)planner.Compile(criteria);
+        var plan = _planner.Plan(query, maxResults: 25);
 
         // Assert
-        var alternative = plan.RelationshipResiduals.Single().Alternatives.Single();
+        var filter = (FilterPlanNode)plan.Root;
+        var alternative = filter.RelationshipResiduals.Single().Alternatives.Single();
         using (Assert.EnterMultipleScope())
         {
             Assert.That(alternative.MatchesNetwork, Is.True);
             Assert.That(alternative.MatchesPerson, Is.True);
-            Assert.That(plan.Seed, Is.InstanceOf<SearchSeed.FuzzyShow>());
+            Assert.That(((FetchPlanNode)filter.Child).Seed, Is.InstanceOf<SearchSeed.FuzzyShow>());
         }
     }
 
@@ -2500,7 +2829,6 @@ public class SearchPlannerTests
     public void Plan_SkipsEmptyRelationshipGroup_WhenTitleProvidesSeed()
     {
         // Arrange
-        var planner = new SearchPlanner(NullLogger<SearchPlanner>.Instance);
         var criteria = new MetadataCriteria
         {
             Title = new CriteriaSet<PropertyCriterion<string>>
@@ -2516,13 +2844,22 @@ public class SearchPlannerTests
             },
         };
 
+        var query = new ContentHierarchyItemCriteria
+        {
+            Metadata = new CriteriaSet<MetadataCriteria> { And = [criteria] }
+        };
+
         // Act
-        var plan = (SearchPlanNode.Seeded)planner.Compile(criteria);
+        var plan = _planner.Plan(query, maxResults: 25);
 
         // Assert
+        var filter = (FilterPlanNode)plan.Root;
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(plan.RelationshipResiduals, Is.Empty);
+            Assert.That(
+                plan.Dispositions.Select(disposition => disposition.Disposition),
+                Does.Not.Contain("browse-anchor"));
+            Assert.That(filter.RelationshipResiduals, Is.Empty);
             Assert.That(plan.Dispositions.Where(disposition =>
                 disposition.Disposition == "pass-through-residual"), Is.Empty);
         }
@@ -2532,7 +2869,6 @@ public class SearchPlannerTests
     public void Plan_PassesThroughPositiveGroup_WhenOneAlternativeTargetsUnknownRelationshipData()
     {
         // Arrange
-        var planner = new SearchPlanner(NullLogger<SearchPlanner>.Instance);
         var criteria = new MetadataCriteria
         {
             Title = new CriteriaSet<PropertyCriterion<string>>
@@ -2599,13 +2935,22 @@ public class SearchPlannerTests
             },
         };
 
+        var query = new ContentHierarchyItemCriteria
+        {
+            Metadata = new CriteriaSet<MetadataCriteria> { And = [criteria] }
+        };
+
         // Act
-        var plan = (SearchPlanNode.Seeded)planner.Compile(criteria);
+        var plan = _planner.Plan(query, maxResults: 25);
 
         // Assert
-        var alternatives = plan.RelationshipResiduals.Single().Alternatives;
+        var filter = (FilterPlanNode)plan.Root;
+        var alternatives = filter.RelationshipResiduals.Single().Alternatives;
         using (Assert.EnterMultipleScope())
         {
+            Assert.That(
+                plan.Dispositions.Select(disposition => disposition.Disposition),
+                Does.Not.Contain("browse-anchor"));
             Assert.That(alternatives, Has.Count.EqualTo(2));
             Assert.That(alternatives.Count(alternative => alternative.PassThrough), Is.EqualTo(1));
             Assert.That(plan.Dispositions.Where(disposition =>
@@ -2618,7 +2963,6 @@ public class SearchPlannerTests
     public void Plan_Browse_WhenBareSubjectIsTheOnlyPossibleSeed()
     {
         // Arrange
-        var planner = new SearchPlanner(NullLogger<SearchPlanner>.Instance);
         var criteria = new MetadataCriteria
         {
             Relationships = new CollectionCriteria<RelationshipCriteria>
@@ -2645,18 +2989,24 @@ public class SearchPlannerTests
             },
         };
 
+        var query = new ContentHierarchyItemCriteria
+        {
+            Metadata = new CriteriaSet<MetadataCriteria> { And = [criteria] }
+        };
+
         // Act
-        var plan = planner.Compile(criteria);
+        var plan = _planner.Plan(query, maxResults: 25);
 
         // Assert
-        Assert.That(plan, Is.InstanceOf<SearchPlanNode.Browse>());
+        Assert.That(plan.Root, Is.InstanceOf<FilterPlanNode>());
+        var filter = (FilterPlanNode)plan.Root;
+        Assert.That(((FetchPlanNode)filter.Child).AnchorKind, Is.EqualTo(SearchAnchorKind.Browse));
     }
 
     [Test]
     public void Plan_SettlesPersonSeed_WhenOnlyContainerIdRemainsForCore()
     {
         // Arrange
-        var planner = new SearchPlanner(NullLogger<SearchPlanner>.Instance);
         var relationship = new RelationshipCriteria
         {
             Subject = new CriteriaSet<PropertyCriterion<string>>
@@ -2696,14 +3046,20 @@ public class SearchPlannerTests
             },
         };
 
+        var query = new ContentHierarchyItemCriteria
+        {
+            Metadata = new CriteriaSet<MetadataCriteria> { And = [criteria] }
+        };
+
         // Act
-        var plan = (SearchPlanNode.Seeded)planner.Compile(criteria);
+        var plan = _planner.Plan(query, maxResults: 25);
 
         // Assert
+        var filter = (FilterPlanNode)plan.Root;
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(plan.Seed, Is.InstanceOf<SearchSeed.PersonChain>());
-            Assert.That(plan.RelationshipResiduals, Is.Empty);
+            Assert.That(((FetchPlanNode)filter.Child).AnchorKind, Is.EqualTo(SearchAnchorKind.Person));
+            Assert.That(filter.RelationshipResiduals, Is.Empty);
         }
     }
 
@@ -2711,7 +3067,6 @@ public class SearchPlannerTests
     public void Plan_LeavesNegatedContainerRelationshipForCore_WhenProviderFacetsAreAlsoPresent()
     {
         // Arrange
-        var planner = new SearchPlanner(NullLogger<SearchPlanner>.Instance);
         var relationship = new RelationshipCriteria
         {
             Subject = new CriteriaSet<PropertyCriterion<string>>
@@ -2749,13 +3104,22 @@ public class SearchPlannerTests
             Relationships = new CollectionCriteria<RelationshipCriteria> { None = [relationship] },
         };
 
+        var query = new ContentHierarchyItemCriteria
+        {
+            Metadata = new CriteriaSet<MetadataCriteria> { And = [criteria] }
+        };
+
         // Act
-        var plan = (SearchPlanNode.Seeded)planner.Compile(criteria);
+        var plan = _planner.Plan(query, maxResults: 25);
 
         // Assert
+        var filter = (FilterPlanNode)plan.Root;
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(plan.RelationshipResiduals, Is.Empty);
+            Assert.That(
+                plan.Dispositions.Select(disposition => disposition.Disposition),
+                Does.Not.Contain("browse-anchor"));
+            Assert.That(filter.RelationshipResiduals, Is.Empty);
             Assert.That(plan.Dispositions.Where(disposition =>
                 disposition.Disposition == "pass-through-residual"), Is.Empty);
         }
@@ -2765,7 +3129,6 @@ public class SearchPlannerTests
     public void Plan_NegatedPersonResidual_WhenTitleAndRelationshipExclusionArePresent()
     {
         // Arrange
-        var planner = new SearchPlanner(NullLogger<SearchPlanner>.Instance);
         var criteria = new MetadataCriteria
         {
             Title = new CriteriaSet<PropertyCriterion<string>>
@@ -2816,13 +3179,22 @@ public class SearchPlannerTests
             },
         };
 
+        var query = new ContentHierarchyItemCriteria
+        {
+            Metadata = new CriteriaSet<MetadataCriteria> { And = [criteria] }
+        };
+
         // Act
-        var plan = (SearchPlanNode.Seeded)planner.Compile(criteria);
+        var plan = _planner.Plan(query, maxResults: 25);
 
         // Assert
-        var residual = plan.RelationshipResiduals.Single();
+        var filter = (FilterPlanNode)plan.Root;
+        var residual = filter.RelationshipResiduals.Single();
         using (Assert.EnterMultipleScope())
         {
+            Assert.That(
+                plan.Dispositions.Select(disposition => disposition.Disposition),
+                Does.Not.Contain("browse-anchor"));
             Assert.That(residual.Negate, Is.True);
             Assert.That(residual.Alternatives.Single().MatchesPerson, Is.True);
             Assert.That(residual.Alternatives.Single().MatchesNetwork, Is.False);
@@ -2833,7 +3205,6 @@ public class SearchPlannerTests
     public void Plan_PreservesSafeSuperset_WhenRelationshipsCannotBeEvaluated()
     {
         // Arrange
-        var planner = new SearchPlanner(NullLogger<SearchPlanner>.Instance);
         var unsupportedPositive = new RelationshipCriteria
         {
             Subject = new CriteriaSet<PropertyCriterion<string>>
@@ -2901,13 +3272,22 @@ public class SearchPlannerTests
             },
         };
 
+        var query = new ContentHierarchyItemCriteria
+        {
+            Metadata = new CriteriaSet<MetadataCriteria> { And = [criteria] }
+        };
+
         // Act
-        var plan = (SearchPlanNode.Seeded)planner.Compile(criteria);
+        var plan = _planner.Plan(query, maxResults: 25);
 
         // Assert
+        var filter = (FilterPlanNode)plan.Root;
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(plan.RelationshipResiduals.Single().Alternatives.Single().PassThrough, Is.True);
+            Assert.That(
+                plan.Dispositions.Select(disposition => disposition.Disposition),
+                Does.Not.Contain("browse-anchor"));
+            Assert.That(filter.RelationshipResiduals.Single().Alternatives.Single().PassThrough, Is.True);
             Assert.That(plan.Dispositions.Where(disposition =>
                 disposition.Source == "Relationships.Some[1]" && disposition.Disposition == "pass-through-residual"),
                 Is.Not.Empty);
@@ -2921,7 +3301,6 @@ public class SearchPlannerTests
     public void Plan_PreservesSafeSuperset_WhenRelationshipExternalIdExclusionUsesUnknownSource()
     {
         // Arrange
-        var planner = new SearchPlanner(NullLogger<SearchPlanner>.Instance);
         var relationship = new RelationshipCriteria
         {
             Subject = new CriteriaSet<PropertyCriterion<string>>
@@ -2993,13 +3372,22 @@ public class SearchPlannerTests
             },
         };
 
+        var query = new ContentHierarchyItemCriteria
+        {
+            Metadata = new CriteriaSet<MetadataCriteria> { And = [criteria] }
+        };
+
         // Act
-        var plan = (SearchPlanNode.Seeded)planner.Compile(criteria);
+        var plan = _planner.Plan(query, maxResults: 25);
 
         // Assert
+        var filter = (FilterPlanNode)plan.Root;
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(plan.RelationshipResiduals.Single().Alternatives.Single().PassThrough, Is.True);
+            Assert.That(
+                plan.Dispositions.Select(disposition => disposition.Disposition),
+                Does.Not.Contain("browse-anchor"));
+            Assert.That(filter.RelationshipResiduals.Single().Alternatives.Single().PassThrough, Is.True);
             Assert.That(plan.Dispositions.Where(disposition =>
                 disposition.Source == "Relationships.Some[1]" && disposition.Disposition == "pass-through-residual"),
                 Is.Not.Empty);
@@ -3013,7 +3401,6 @@ public class SearchPlannerTests
     public void Plan_WarnsWithoutDurationFilter_WhenDurationHasNoUsableValue()
     {
         // Arrange
-        var planner = new SearchPlanner(NullLogger<SearchPlanner>.Instance);
         var criteria = new MetadataCriteria
         {
             Title = new CriteriaSet<PropertyCriterion<string>>
@@ -3026,13 +3413,22 @@ public class SearchPlannerTests
             },
         };
 
+        var query = new ContentHierarchyItemCriteria
+        {
+            Metadata = new CriteriaSet<MetadataCriteria> { And = [criteria] }
+        };
+
         // Act
-        var plan = (SearchPlanNode.Seeded)planner.Compile(criteria);
+        var plan = _planner.Plan(query, maxResults: 25);
 
         // Assert
+        var filter = (FilterPlanNode)plan.Root;
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(plan.HitFilters.Select(filter => filter.Kind), Is.EqualTo([LocalFilterKind.Title]));
+            Assert.That(
+                plan.Dispositions.Select(disposition => disposition.Disposition),
+                Does.Not.Contain("browse-anchor"));
+            Assert.That(filter.HitFilters.Select(hitFilter => hitFilter.Kind), Is.EqualTo([LocalFilterKind.Title]));
             Assert.That(plan.Dispositions.Where(disposition =>
                 disposition.Source == "Duration" && disposition.Disposition == "pass-through-residual"),
                 Is.Not.Empty);
@@ -3043,7 +3439,6 @@ public class SearchPlannerTests
     public void Plan_TitleSearch_WhenNegativeOperatorIsDoubleNegated()
     {
         // Arrange
-        var planner = new SearchPlanner(NullLogger<SearchPlanner>.Instance);
         var criteria = new MetadataCriteria
         {
             Title = new CriteriaSet<PropertyCriterion<string>>
@@ -3061,16 +3456,26 @@ public class SearchPlannerTests
             }
         };
 
+        var query = new ContentHierarchyItemCriteria
+        {
+            Metadata = new CriteriaSet<MetadataCriteria> { And = [criteria] }
+        };
+
         // Act
-        var plan = planner.Compile(criteria);
+        var plan = _planner.Plan(query, maxResults: 25);
 
         // Assert
-        Assert.That(plan, Is.InstanceOf<SearchPlanNode.Seeded>());
-        var leaf = (SearchPlanNode.Seeded)plan;
+        Assert.That(plan.Root, Is.InstanceOf<FilterPlanNode>());
+        var filter = (FilterPlanNode)plan.Root;
+        Assert.That(filter.Child, Is.InstanceOf<UnionPlanNode>());
+        var seeds = ((UnionPlanNode)filter.Child).Children
+            .Cast<FetchPlanNode>()
+            .Select(child => (SearchSeed.FuzzyShow)child.Seed)
+            .ToArray();
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(((SearchSeed.FuzzyShow)leaf.Seed).Terms, Is.EqualTo(["Game of Thrones", "Game"]));
-            Assert.That(leaf.Dispositions.Where(disposition =>
+            Assert.That(seeds.Select(seed => seed.Terms.Single()), Is.EqualTo(["Game of Thrones", "Game"]));
+            Assert.That(plan.Dispositions.Where(disposition =>
                 disposition.Disposition == "pass-through-residual"), Is.Empty);
         }
     }
@@ -3079,7 +3484,6 @@ public class SearchPlannerTests
     public void Plan_ReportsOnlyTheSearchTermUnitAsApplied_WhenTitleCriteriaRepeat()
     {
         // Arrange
-        var planner = new SearchPlanner(NullLogger<SearchPlanner>.Instance);
         var criteria = new MetadataCriteria
         {
             Title = new CriteriaSet<PropertyCriterion<string>>
@@ -3092,20 +3496,23 @@ public class SearchPlannerTests
             }
         };
 
+        var query = new ContentHierarchyItemCriteria
+        {
+            Metadata = new CriteriaSet<MetadataCriteria> { And = [criteria] }
+        };
+
         // Act
-        var plan = planner.Compile(criteria);
+        var plan = _planner.Plan(query, maxResults: 25);
 
         // Assert
-        Assert.That(plan, Is.InstanceOf<SearchPlanNode.Seeded>());
-        var leaf = (SearchPlanNode.Seeded)plan;
-        Assert.That(((SearchSeed.FuzzyShow)leaf.Seed).Terms, Is.EqualTo(["first"]));
+        var filter = (FilterPlanNode)plan.Root;
+        Assert.That(((SearchSeed.FuzzyShow)((FetchPlanNode)filter.Child).Seed).Terms, Is.EqualTo(["first"]));
     }
 
     [Test]
     public void Plan_BrowseAnchorAndNormalizedMaximum_WhenNoPositiveAnchor()
     {
         // Arrange
-        var planner = new SearchPlanner(NullLogger<SearchPlanner>.Instance);
         var query = new ContentHierarchyItemCriteria
         {
             ContentType = new CriteriaSet<PropertyCriterion<string>>
@@ -3196,7 +3603,7 @@ public class SearchPlannerTests
         };
 
         // Act
-        var plan = planner.Plan(query, maxResults: 0);
+        var plan = _planner.Plan(query, maxResults: 0);
 
         // Assert
         Assert.That(plan.Root, Is.InstanceOf<FilterPlanNode>());
@@ -3248,7 +3655,6 @@ public class SearchPlannerTests
     public void Plan_SafeSuperset_WhenContentTypeOperatorIsUnsupported(bool negate)
     {
         // Arrange
-        var planner = new SearchPlanner(NullLogger<SearchPlanner>.Instance);
         var criterion = new PropertyCriterion<string>
         {
             Operator = CriteriaValueOperator.Regex,
@@ -3281,7 +3687,7 @@ public class SearchPlannerTests
         };
 
         // Act
-        var plan = planner.Plan(query, maxResults: 25);
+        var plan = _planner.Plan(query, maxResults: 25);
 
         // Assert
         var filter = (FilterPlanNode)plan.Root;
@@ -3302,7 +3708,6 @@ public class SearchPlannerTests
     public void Plan_KeepsTitleAnchorWithoutWarning_WhenTitleSeedIsUsable()
     {
         // Arrange
-        var planner = new SearchPlanner(NullLogger<SearchPlanner>.Instance);
         var query = new ContentHierarchyItemCriteria
         {
             Metadata = new CriteriaSet<MetadataCriteria>
@@ -3328,7 +3733,7 @@ public class SearchPlannerTests
         };
 
         // Act
-        var plan = planner.Plan(query, maxResults: 25);
+        var plan = _planner.Plan(query, maxResults: 25);
 
         // Assert
         Assert.That(plan.Dispositions.Where(disposition =>
@@ -3339,7 +3744,6 @@ public class SearchPlannerTests
     public void Plan_SafeSuperset_WhenLevelValueListIsEmpty()
     {
         // Arrange
-        var planner = new SearchPlanner(NullLogger<SearchPlanner>.Instance);
         var criterion = new PropertyCriterion<string> { Operator = CriteriaValueOperator.In, Values = [] };
         var query = new ContentHierarchyItemCriteria
         {
@@ -3367,7 +3771,7 @@ public class SearchPlannerTests
         };
 
         // Act
-        var plan = planner.Plan(query, maxResults: 25);
+        var plan = _planner.Plan(query, maxResults: 25);
 
         // Assert
         var filter = (FilterPlanNode)plan.Root;
@@ -3388,7 +3792,6 @@ public class SearchPlannerTests
     public void Plan_KnownEmpty_WhenLevelExcludesShow()
     {
         // Arrange
-        var planner = new SearchPlanner(NullLogger<SearchPlanner>.Instance);
         var query = new ContentHierarchyItemCriteria
         {
             Level = new CriteriaSet<PropertyCriterion<string>>
@@ -3398,7 +3801,7 @@ public class SearchPlannerTests
         };
 
         // Act
-        var plan = planner.Plan(query, maxResults: 25);
+        var plan = _planner.Plan(query, maxResults: 25);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -3412,7 +3815,6 @@ public class SearchPlannerTests
     public void Plan_IntersectsPersonGroupsFirst_WhenTitleIsAlsoPresent()
     {
         // Arrange
-        var planner = new SearchPlanner(NullLogger<SearchPlanner>.Instance);
         var query = new ContentHierarchyItemCriteria
         {
             Metadata = new CriteriaSet<MetadataCriteria>
@@ -3509,7 +3911,7 @@ public class SearchPlannerTests
         };
 
         // Act
-        var plan = planner.Plan(query, maxResults: 25);
+        var plan = _planner.Plan(query, maxResults: 25);
 
         // Assert
         var filter = (FilterPlanNode)plan.Root;
@@ -3544,7 +3946,6 @@ public class SearchPlannerTests
     public void Plan_OmitsNestedLocalRelationshipAndImageCriteriaPayloads_WhenTheResultIsSerialized()
     {
         // Arrange
-        var planner = new SearchPlanner(NullLogger<SearchPlanner>.Instance);
         var query = new ContentHierarchyItemCriteria
         {
             Metadata = new CriteriaSet<MetadataCriteria>
@@ -3652,7 +4053,7 @@ public class SearchPlannerTests
         };
 
         // Act
-        var plan = planner.Plan(query, maxResults: 10);
+        var plan = _planner.Plan(query, maxResults: 10);
 
         // Assert
         var json = JsonSerializer.Serialize(

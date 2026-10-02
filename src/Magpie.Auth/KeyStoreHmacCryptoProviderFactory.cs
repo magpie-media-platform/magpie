@@ -13,11 +13,6 @@ internal sealed class KeyStoreHmacCryptoProviderFactory : CryptoProviderFactory
     {
         ArgumentNullException.ThrowIfNull(key);
 
-        if (string.IsNullOrWhiteSpace(algorithm))
-        {
-            throw new ArgumentException("Algorithm cannot be empty", nameof(algorithm));
-        }
-
         if (key is not KeyStoreHmacSecurityKey hmacKey || !IsSupportedHmacAlgorithm(algorithm))
         {
             throw new NotSupportedException("The key and algorithm combination is not supported");
@@ -32,19 +27,9 @@ internal sealed class KeyStoreHmacCryptoProviderFactory : CryptoProviderFactory
             string.Equals(algorithm, SecurityAlgorithms.HmacSha256Signature, StringComparison.Ordinal);
     }
 
-    public override SignatureProvider CreateForSigning(SecurityKey key, string algorithm)
-    {
-        return CreateProvider(key, algorithm, willCreateSignatures: true);
-    }
-
     public override SignatureProvider CreateForSigning(SecurityKey key, string algorithm, bool cacheProvider)
     {
         return CreateProvider(key, algorithm, willCreateSignatures: true);
-    }
-
-    public override SignatureProvider CreateForVerifying(SecurityKey key, string algorithm)
-    {
-        return CreateProvider(key, algorithm, willCreateSignatures: false);
     }
 
     public override SignatureProvider CreateForVerifying(SecurityKey key, string algorithm, bool cacheProvider)

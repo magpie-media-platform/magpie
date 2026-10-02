@@ -1,3 +1,5 @@
+using System.Collections.Generic;
+
 namespace Magpie.Extensions.Tv.Parsing;
 
 internal sealed record ParsedTvFile
@@ -8,5 +10,5 @@ internal sealed record ParsedTvFile
 
     public int? Season { get; init; }
 
-    public int? Episode { get; init; }
+    public required IReadOnlyList<int> Episodes { get; init; }
 }

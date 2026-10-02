@@ -21,13 +21,7 @@ import { PullToRefresh } from '@/components/ui/PullToRefresh';
 import { IntegrationEmptyState } from '@/components/integrations/IntegrationEmptyState';
 import { IntegrationRowActions } from '@/components/integrations/IntegrationRowActions';
 import { useToast } from '@/components/ui/Toast';
-import {
-    useMediaServers,
-    type ApiMediaServer,
-    type MediaServerStatusValue,
-    mediaServerStatusLabels,
-    mediaServerStatusVariants,
-} from '@/hooks/useMediaServers';
+import { useMediaServers, type ApiMediaServer, type MediaServerStatusValue } from '@/hooks/useMediaServers';
 import {
     useTestMediaServer,
     useTestMediaServerSettings,
@@ -179,7 +173,7 @@ export function MediaServersPage() {
     const providerOptions = useMemo(() => [...new Set(servers.map((s) => s.provider))].sort(), [servers]);
     const statusOptions = useMemo<FacetOption[]>(() => {
         const present = [...new Set(servers.map((s) => s.status))];
-        return present.map((s) => ({ value: s, label: mediaServerStatusLabels[s] }));
+        return present.map((s) => ({ value: s, label: s }));
     }, [servers]);
 
     const setMulti = useCallback(
@@ -484,10 +478,10 @@ export function MediaServersPage() {
                 meta: { headerLabel: 'Status', mobileRole: 'header' },
                 size: 140,
                 cell: ({ row }) => {
-                    const variant = mediaServerStatusVariants[row.original.status];
+                    const variant = row.original.status.toLowerCase();
                     return (
                         <Badge variant={variant as Parameters<typeof Badge>[0]['variant']} size="sm" dot>
-                            {mediaServerStatusLabels[row.original.status]}
+                            {row.original.status}
                         </Badge>
                     );
                 },

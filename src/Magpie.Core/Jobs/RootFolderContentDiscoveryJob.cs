@@ -49,10 +49,7 @@ internal sealed class RootFolderContentDiscoveryJob(
 
     private sealed record ScanPlan(string BasePath, IReadOnlyList<string> AcceptedFileTypes, bool GroupingEnabled);
 
-    private sealed record PlannedFile(
-        ScanPlan Plan,
-        string FilePath,
-        Dictionary<string, List<string>> Signals);
+    private sealed record PlannedFile(ScanPlan Plan, string FilePath, Dictionary<string, List<string>> Signals);
 
     public static readonly JobSpec Spec = new()
     {
@@ -67,6 +64,7 @@ internal sealed class RootFolderContentDiscoveryJob(
         SupportedTriggerModes = [JobTriggerMode.Manual, JobTriggerMode.Schedule, JobTriggerMode.Event],
         ConcurrencyScope = ConcurrencyScope.PerTypeAndTarget,
         LockPartitionFields = [MagpieJobs.Parameters.RootFolderId],
+        CoalesceWideningFields = [MagpieJobs.Parameters.ContentHierarchyItemId],
         LockPartitionEventContextKeys = new Dictionary<string, string>
         {
             [MagpieJobs.Parameters.RootFolderId] = MagpieEvents.Keys.RootFolderId
@@ -93,9 +91,12 @@ internal sealed class RootFolderContentDiscoveryJob(
                 ValidateValue = value => string.IsNullOrWhiteSpace(value) || Guid.TryParse(value, out _)
                     ? null : "must be a valid GUID."
             },
-            new(MagpieJobs.Parameters.RecoveryInactivityMinutes,
+            new(
+                MagpieJobs.Parameters.RecoveryInactivityMinutes,
                 "Minutes without candidate activity before recovery checks for an inactive import execution.",
-                DataType.Number, false, "60")
+                DataType.Number,
+                false,
+                "60")
             {
                 ValidateValue = value =>
                     int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var minutes) &&
@@ -398,7 +399,10 @@ internal sealed class RootFolderContentDiscoveryJob(
             .ToList();
 
         await libraryImportCandidateRepository
-            .DeleteByRootFolderAsync(rootFolderId, [.. replaced.Select(candidate => candidate.Id)], userId,
+            .DeleteByRootFolderAsync(
+                rootFolderId,
+                [.. replaced.Select(candidate => candidate.Id)],
+                userId,
                 cancellationToken)
             .ConfigureAwait(false);
 
@@ -474,9 +478,7 @@ internal sealed class RootFolderContentDiscoveryJob(
             .ConfigureAwait(false);
 
         var selected = new List<PlannedFile>(planned.Count);
-        foreach (var group in planned.GroupBy(
-                     file => ComputeReleaseKey(file.Plan, file.FilePath),
-                     PathComparer))
+        foreach (var group in planned.GroupBy(file => ComputeReleaseKey(file.Plan, file.FilePath), PathComparer))
         {
             var releaseSignals = ToSignalDictionary(provider.Parse(group.Key ?? string.Empty, out _));
             var matched = group.Where(file => HasMatchingTitle(file.Signals, releaseSignals)).ToList();
@@ -576,7 +578,10 @@ internal sealed class RootFolderContentDiscoveryJob(
     }
 
     private async Task ReclaimStrandedImportsAsync(
-        Guid rootFolderId, DateTime cutoff, Guid? userId, CancellationToken cancellationToken)
+        Guid rootFolderId,
+        DateTime cutoff,
+        Guid? userId,
+        CancellationToken cancellationToken)
     {
         var inFlight = await libraryImportCandidateRepository.QueryAllAsync(
             new LibraryImportCandidateQuery
@@ -595,11 +600,7 @@ internal sealed class RootFolderContentDiscoveryJob(
             }
 
             var reclaimed = await libraryImportCandidateRepository
-                .TryReclaimInactiveImportAsync(
-                    candidate.Id,
-                    cutoff,
-                    userId,
-                    cancellationToken)
+                .TryReclaimInactiveImportAsync(candidate.Id, cutoff, userId, cancellationToken)
                 .ConfigureAwait(false);
             if (reclaimed)
             {
@@ -658,7 +659,7 @@ internal sealed class RootFolderContentDiscoveryJob(
         }
         catch (Exception ex)
         {
-            logger.LogWarning(ex, "The scan failed to refresh the library items of kept matches.");
+            logger.LogWarning(ex, "The scan failed to refresh the library items of kept matches");
         }
     }
 
@@ -816,7 +817,7 @@ internal sealed class RootFolderContentDiscoveryJob(
                     CorrelationId = correlationId,
                 },
                 cancellationToken).ConfigureAwait(false);
-            logger.LogInformation("The scan queued a library import match resolution run.");
+            logger.LogInformation("The scan queued a library import match resolution run");
         }
         catch (OperationCanceledException)
         {
@@ -824,7 +825,7 @@ internal sealed class RootFolderContentDiscoveryJob(
         }
         catch (Exception ex)
         {
-            logger.LogWarning(ex, "The scan failed to queue a library import match resolution run.");
+            logger.LogWarning(ex, "The scan failed to queue a library import match resolution run");
         }
     }
 

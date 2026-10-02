@@ -23,9 +23,6 @@ internal sealed record ArtistDto
     [JsonPropertyName("type")]
     public string? Type { get; init; }
 
-    [JsonPropertyName("score")]
-    public int? Score { get; init; }
-
     [JsonPropertyName("life-span")]
     public LifeSpanDto? LifeSpan { get; init; }
 

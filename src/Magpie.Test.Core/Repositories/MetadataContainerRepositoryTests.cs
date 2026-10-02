@@ -11,6 +11,7 @@ using Magpie.Data;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
+using Magpie.Models.Filtering;
 using Magpie.Sdk.Services;
 
 using Microsoft.Data.Sqlite;
@@ -75,12 +76,10 @@ public sealed class MetadataContainerRepositoryTests
 
         _userId = user.Id;
 
-        var loggerFactory = NullLoggerFactory.Instance;
-
         var auditRecordRepository = new AuditRecordRepository(
             _context,
             Mock.Of<IEventBus>(),
-            loggerFactory.CreateLogger<AuditRecordRepository>(),
+            NullLogger<AuditRecordRepository>.Instance,
             new TransactionManager(_context, NullLogger<TransactionManager>.Instance),
             Mock.Of<IJobExecutionScopeFactory>(),
             timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
@@ -94,17 +93,16 @@ public sealed class MetadataContainerRepositoryTests
             auditRecordRepository,
             subjectRepository,
             transactionManager,
-            loggerFactory.CreateLogger<MetadataContainerRepository>(),
+            NullLogger<MetadataContainerRepository>.Instance,
             timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
         _materializedMetadata = new MaterializedMetadataRepository(
             _context,
-            loggerFactory.CreateLogger<MaterializedMetadataRepository>());
+            NullLogger<MaterializedMetadataRepository>.Instance);
     }
 
     [TearDown]
     public void TearDown()
     {
-        _context.Database.CloseConnection();
         _context.Dispose();
     }
 
@@ -386,6 +384,41 @@ public sealed class MetadataContainerRepositoryTests
                     ("birthplace", "Australia"),
                     ("astrology", "Capricorn")
                 ]));
+        }
+    }
+
+    [Test]
+    public async Task UpdateContributionAsync_ReplacesThePublishDatePrecision_WhenTheProviderRefreshesTheDate()
+    {
+        // Arrange
+        var container = new MetadataContainer { CreatedAt = DateTime.UtcNow };
+        _context.MetadataContainers.Add(container);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        var existing = new MetadataContribution
+        {
+            ProviderType = "provider-a",
+            PublishDate = new DateTime(1975, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+            PublishDatePrecision = TemporalPrecision.Year
+        };
+        var added = await _subject.AddContributionAsync(container.Id, existing, _userId).ConfigureAwait(false);
+
+        var incoming = new MetadataContribution
+        {
+            ProviderType = "provider-a",
+            PublishDate = new DateTime(1975, 3, 21, 0, 0, 0, DateTimeKind.Utc),
+            PublishDatePrecision = TemporalPrecision.Day
+        };
+
+        // Act
+        await _subject.UpdateContributionAsync(container.Id, added.Id, incoming, _userId).ConfigureAwait(false);
+        var refreshed = (await _subject.GetByIdAsync(container.Id).ConfigureAwait(false))!.Contributions.Single();
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(refreshed.PublishDate, Is.EqualTo(new DateTime(1975, 3, 21, 0, 0, 0, DateTimeKind.Utc)));
+            Assert.That(refreshed.PublishDatePrecision, Is.EqualTo(TemporalPrecision.Day));
         }
     }
 

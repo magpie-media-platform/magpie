@@ -76,19 +76,12 @@ internal sealed class DownloadClientService(
                 ? await pending.WaitAsync(limit, cancellationToken).ConfigureAwait(false)
                 : await pending.ConfigureAwait(false);
         }
-        catch (TimeoutException) when (timeout is not null)
+        catch (Exception ex) when ((ex is TimeoutException && timeout is not null) ||
+            (ex is OperationCanceledException &&
+                !cancellationToken.IsCancellationRequested &&
+                timeoutSource is { IsCancellationRequested: true }))
         {
-            return new ConfigurationTestResult
-            {
-                Success = false,
-                Message = "Connection test timed out.",
-                FailureKind = ConfigurationFailureKind.Transient
-            };
-        }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested &&
-            timeoutSource is { IsCancellationRequested: true })
-        {
-            return new ConfigurationTestResult
+            return new()
             {
                 Success = false,
                 Message = "Connection test timed out.",
@@ -101,7 +94,7 @@ internal sealed class DownloadClientService(
         }
         catch (Exception ex)
         {
-            return new ConfigurationTestResult
+            return new()
             {
                 Success = false,
                 Message = ex.Message,
@@ -148,6 +141,15 @@ internal sealed class DownloadClientService(
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(client);
+        if (string.IsNullOrWhiteSpace(client.Name))
+        {
+            throw new ArgumentException("Name is required.");
+        }
+
+        if (string.IsNullOrWhiteSpace(client.ProviderType))
+        {
+            throw new ArgumentException("Provider type is required.");
+        }
 
         return await downloadClientRepository.CreateAsync(client, actingUserId, cancellationToken)
             .ConfigureAwait(false);
@@ -160,6 +162,10 @@ internal sealed class DownloadClientService(
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(patch);
+        if (patch.Name is not null && string.IsNullOrWhiteSpace(patch.Name.Value))
+        {
+            throw new ArgumentException("Name is required.");
+        }
 
         var previousStatus = patch.Status is null
             ? null
@@ -173,7 +179,10 @@ internal sealed class DownloadClientService(
         {
             await eventBus.PublishAsync(
                 IntegrationEventBuilder.BuildIntegrationHealthChangedEvent(
-                    id, "downloadClient", fromStatus.ToString(), toStatus.ToString()),
+                    id,
+                    "downloadClient",
+                    fromStatus.ToString(),
+                    toStatus.ToString()),
                 cancellationToken).ConfigureAwait(false);
         }
 
@@ -203,7 +212,7 @@ internal sealed class DownloadClientService(
             ? null
             : downloadClientIntegrations.LastOrDefault(
                 candidate => string.Equals(candidate.ProviderType, resolvedType, StringComparison.Ordinal));
-        if (integration is null)
+        if (resolvedType is null || integration is null)
         {
             return Unresolved(resolvedType);
         }
@@ -219,8 +228,8 @@ internal sealed class DownloadClientService(
         }
 
         var transient = existing is not null
-            ? existing with { ProviderType = resolvedType!, Settings = merged }
-            : new DownloadClient { ProviderType = resolvedType!, Name = "Connection test", Settings = merged };
+            ? existing with { ProviderType = resolvedType, Settings = merged }
+            : new DownloadClient { ProviderType = resolvedType, Name = "Connection test", Settings = merged };
 
         return await TestDownloadClientCoreAsync(transient, null, cancellationToken).ConfigureAwait(false);
     }
@@ -230,10 +239,7 @@ internal sealed class DownloadClientService(
         return TestSavedAsync(id, null, cancellationToken);
     }
 
-    public Task<ConfigurationTestResult> TestAsync(
-        Guid id,
-        TimeSpan timeout,
-        CancellationToken cancellationToken)
+    public Task<ConfigurationTestResult> TestAsync(Guid id, TimeSpan timeout, CancellationToken cancellationToken)
     {
         return TestSavedAsync(id, timeout, cancellationToken);
     }
@@ -246,7 +252,7 @@ internal sealed class DownloadClientService(
         var client = await downloadClientRepository.GetByIdAsync(id, cancellationToken).ConfigureAwait(false);
         if (client is null)
         {
-            return new ConfigurationTestResult
+            return new()
             {
                 Success = false,
                 Message = $"Download client {id} does not exist.",

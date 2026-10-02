@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Text.Json.Serialization;
 
 namespace Magpie.Models.Data;
@@ -90,4 +91,9 @@ public record MediaFile
     /// The id of the user who last changed the record.
     /// </summary>
     public Guid? ModifiedByUserId { get; set; }
+
+    /// <summary>
+    /// The items, other than the owner, that the file also covers.
+    /// </summary>
+    public ICollection<MediaFileCoverage> Coverage { get; } = [];
 }

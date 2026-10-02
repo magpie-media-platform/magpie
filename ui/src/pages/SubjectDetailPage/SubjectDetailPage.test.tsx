@@ -24,7 +24,6 @@ vi.mock('@/auth', async () => {
             },
             getRequiredRole: (permission: import('@/auth/types').Permission) => TEST_PERMISSION_CATALOG[permission],
             hasRole: (minRole: number) => mockCurrentRole.current >= minRole,
-            signIn: vi.fn(),
             signOut: vi.fn(),
             login: vi.fn(),
         }),
@@ -1483,9 +1482,9 @@ describe('SubjectDetailPage', () => {
 
             const cards = document.querySelectorAll('[data-relationship-id]');
             expect(cards).toHaveLength(3);
-            for (const card of cards) {
-                expect(within(card as HTMLElement).queryByRole('img')).toBeNull();
-            }
+            expect(Array.from(cards).map((card) => within(card as HTMLElement).queryAllByRole('img').length)).toEqual([
+                0, 0, 0,
+            ]);
         });
     });
 

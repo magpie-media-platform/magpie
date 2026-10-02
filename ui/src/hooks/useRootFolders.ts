@@ -1,3 +1,4 @@
+import type { MonitoringMode } from '@/types';
 import type { ScalarPatch } from '@/types/patch';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 
@@ -23,7 +24,7 @@ export interface ApiRootFolder {
 
     isDefault: boolean;
 
-    defaultMonitoring: boolean | null;
+    defaultMonitoring: MonitoringMode | null;
 
     renameTemplate?: string | null;
 
@@ -51,7 +52,7 @@ interface RootFolderCreate {
 
     isDefault?: boolean;
 
-    defaultMonitoring?: boolean | null;
+    defaultMonitoring?: MonitoringMode | null;
 
     renameTemplate?: string | null;
 
@@ -71,7 +72,7 @@ interface RootFolderPatch {
 
     isDefault?: ScalarPatch<boolean>;
 
-    defaultMonitoring?: ScalarPatch<boolean | null>;
+    defaultMonitoring?: ScalarPatch<MonitoringMode | null>;
 
     renameTemplate?: ScalarPatch<string | null>;
 
@@ -106,7 +107,7 @@ export function useRootFolders() {
     useInvalidateQueriesOnEvents(
         ['library.rootFolder.created', 'library.rootFolder.updated', 'library.rootFolder.deleted'],
         [rootFolderQueryKeys.list()],
-        { exact: true, owner: 'root-folders' },
+        { exact: true },
     );
     const queryClient = useQueryClient();
 

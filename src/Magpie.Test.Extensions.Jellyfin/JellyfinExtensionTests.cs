@@ -24,8 +24,6 @@ public class JellyfinExtensionTests
         {
             Assert.That(extension.Id, Is.EqualTo(ExpectedExtensionId));
             Assert.That(extension.Name, Is.EqualTo("Jellyfin"));
-            Assert.That(extension.Version, Is.EqualTo(new Version(1, 0, 0)));
-            Assert.That(extension.TargetABI, Is.EqualTo("[1.0.0,)"));
         }
     }
 }

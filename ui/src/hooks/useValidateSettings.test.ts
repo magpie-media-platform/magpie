@@ -49,34 +49,45 @@ describe('validateIntegrationSettings', () => {
     });
 
     it.each([
-        ['1,234.50', true],
-        ['.5', true],
-        ['12-', true],
-        ['-12', true],
-        ['79228162514264337593543950335', true],
-        ['-79228162514264337593543950335', true],
-        ['000079228162514264337593543950335.0000', true],
-        ['79,228,162,514,264,337,593,543,950,335 -', true],
-        ['79228162514264337593543950335.4999999999', true],
-        ['79228162514264337593543950335.5', false],
-        ['79228162514264337593543950336', false],
-        ['-79228162514264337593543950336', false],
-        ['99999999999999999999999999999999999999', false],
-        ['0.123456789012345678901234567890', true],
-        ['0.0000000000000000000000000000000000001', true],
-        ['NaN', false],
-        ['Infinity', false],
-        ['1e3', false],
-        ['--12', false],
-        ['1.2.3', false],
-    ])('checks invariant decimal shape and range: %s', (value, isValid) => {
+        ['1,234.50'],
+        ['.5'],
+        ['12-'],
+        ['-12'],
+        ['79228162514264337593543950335'],
+        ['-79228162514264337593543950335'],
+        ['000079228162514264337593543950335.0000'],
+        ['79,228,162,514,264,337,593,543,950,335 -'],
+        ['79228162514264337593543950335.4999999999'],
+        ['0.123456789012345678901234567890'],
+        ['0.0000000000000000000000000000000000001'],
+    ])('accepts the invariant decimal %s', (value) => {
         // Arrange
         const numberSchema: IntegrationSettingDefinition[] = [{ key: 'number', type: SchemaDataType.Number }];
         // Act
         const result = validateIntegrationSettings(numberSchema, { number: value }, false);
         // Assert
-        expect(result.isValid).toBe(isValid);
-        expect(result.issues).toEqual(isValid ? [] : [{ key: 'number', message: 'number must be a number.' }]);
+        expect(result.isValid).toBe(true);
+        expect(result.issues).toEqual([]);
+    });
+
+    it.each([
+        ['79228162514264337593543950335.5'],
+        ['79228162514264337593543950336'],
+        ['-79228162514264337593543950336'],
+        ['99999999999999999999999999999999999999'],
+        ['NaN'],
+        ['Infinity'],
+        ['1e3'],
+        ['--12'],
+        ['1.2.3'],
+    ])('rejects the invalid decimal %s', (value) => {
+        // Arrange
+        const numberSchema: IntegrationSettingDefinition[] = [{ key: 'number', type: SchemaDataType.Number }];
+        // Act
+        const result = validateIntegrationSettings(numberSchema, { number: value }, false);
+        // Assert
+        expect(result.isValid).toBe(false);
+        expect(result.issues).toEqual([{ key: 'number', message: 'number must be a number.' }]);
     });
 
     it('reports required schema settings using their display names', () => {

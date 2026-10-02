@@ -195,8 +195,10 @@ internal sealed class MediaServerRepository(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "The media server repository failed to create media server " +
-                "{MediaServerName}.", model.Name);
+            logger.LogError(
+                ex,
+                "The media server repository failed to create media server {MediaServerName}.",
+                model.Name);
             throw;
         }
     }
@@ -265,7 +267,8 @@ internal sealed class MediaServerRepository(
                     {
                         await transactionManager.OnCommittedAsync(
                             token => eventBus.PublishAsync(
-                                IntegrationEventBuilder.BuildMediaServerUpdatedEvent(model.Id, changedFields), token),
+                                IntegrationEventBuilder.BuildMediaServerUpdatedEvent(model.Id, changedFields),
+                                token),
                             cancellationToken).ConfigureAwait(false);
                     }
 
@@ -536,7 +539,8 @@ internal sealed class MediaServerRepository(
             {
                 await transactionManager.OnCommittedAsync(
                     token => eventBus.PublishAsync(
-                        IntegrationEventBuilder.BuildMediaServerUpdatedEvent(patch.Id, ChangedFields(patch)), token),
+                        IntegrationEventBuilder.BuildMediaServerUpdatedEvent(patch.Id, ChangedFields(patch)),
+                        token),
                     cancellationToken).ConfigureAwait(false);
             }
 

@@ -49,6 +49,7 @@ internal sealed class SQLiteDatabaseManagementProvider(
     private static readonly JsonSerializerOptions MarkerJsonOptions = new()
     {
         WriteIndented = true,
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
         Converters = { new JsonStringEnumConverter() }
     };
 
@@ -114,7 +115,7 @@ internal sealed class SQLiteDatabaseManagementProvider(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "The provider failed to validate the SQLite database lock.");
+            logger.LogError(ex, "SQLite database lock validation failed.");
 
             return new(false, $"The SQLite database failed to initialize: {ex.Message}");
         }
@@ -171,32 +172,21 @@ internal sealed class SQLiteDatabaseManagementProvider(
         sourceConnection.BackupDatabase(destinationConnection);
     }
 
-    private static async Task WriteMarkerAsync(
-        string markerPath,
-        RestorePendingMarker marker,
-        CancellationToken cancellationToken)
+    private static async Task WriteJsonAsync<T>(string path, T value, CancellationToken cancellationToken)
     {
-        var json = JsonSerializer.Serialize(marker, MarkerJsonOptions);
-        var tempPath = markerPath + ".tmp";
-        await File.WriteAllTextAsync(tempPath, json, cancellationToken).ConfigureAwait(false);
-        File.Move(tempPath, markerPath, overwrite: true);
+        await File.WriteAllTextAsync(
+            path + ".tmp",
+            JsonSerializer.Serialize(value, MarkerJsonOptions),
+            cancellationToken).ConfigureAwait(false);
+        File.Move(path + ".tmp", path, overwrite: true);
     }
 
     private static void DeleteRollbackTempFiles(string rollbackPath)
     {
-        var mainTempPath = rollbackPath + RollbackTempSuffix;
-        if (File.Exists(mainTempPath))
-        {
-            File.Delete(mainTempPath);
-        }
-
+        File.Delete(rollbackPath + RollbackTempSuffix);
         foreach (var suffix in SidecarSuffixes)
         {
-            var sidecarTempPath = rollbackPath + suffix + RollbackTempSuffix;
-            if (File.Exists(sidecarTempPath))
-            {
-                File.Delete(sidecarTempPath);
-            }
+            File.Delete(rollbackPath + suffix + RollbackTempSuffix);
         }
     }
 
@@ -276,11 +266,7 @@ internal sealed class SQLiteDatabaseManagementProvider(
     {
         foreach (var suffix in SidecarSuffixes)
         {
-            var sidecar = databasePath + suffix;
-            if (File.Exists(sidecar))
-            {
-                File.Delete(sidecar);
-            }
+            File.Delete(databasePath + suffix);
         }
     }
 
@@ -297,22 +283,6 @@ internal sealed class SQLiteDatabaseManagementProvider(
         }
     }
 
-    private static async Task RecordOptimizedAsync(
-        string dataDirectory,
-        DateTime optimizedAtUtc,
-        CancellationToken cancellationToken)
-    {
-        var marker = new OptimizationMarker
-        {
-            OptimizedAtUtc = optimizedAtUtc
-        };
-        var json = JsonSerializer.Serialize(marker, MarkerJsonOptions);
-        var path = GetOptimizationMarkerPath(dataDirectory);
-        var tempPath = path + ".tmp";
-        await File.WriteAllTextAsync(tempPath, json, cancellationToken).ConfigureAwait(false);
-        File.Move(tempPath, path, overwrite: true);
-    }
-
     private static void CleanStaging(string dataDirectory)
     {
         var stagingDirectory = Path.Combine(dataDirectory, RestoreStagingDirectoryName);
@@ -324,12 +294,7 @@ internal sealed class SQLiteDatabaseManagementProvider(
 
     private static void ClearMarkerAndStaging(string dataDirectory)
     {
-        var markerPath = GetMarkerPath(dataDirectory);
-        if (File.Exists(markerPath))
-        {
-            File.Delete(markerPath);
-        }
-
+        File.Delete(GetMarkerPath(dataDirectory));
         CleanStaging(dataDirectory);
     }
 
@@ -341,28 +306,6 @@ internal sealed class SQLiteDatabaseManagementProvider(
             Kind = BackupKind.Manual,
             CreatedAtUtc = createdAtUtc
         };
-    }
-
-    private static async Task WriteBackupMetadataAsync(
-        string backupPath,
-        BackupMetadata metadata,
-        CancellationToken cancellationToken)
-    {
-        var metadataPath = GetBackupMetadataPath(backupPath);
-        var temporaryPath = $"{metadataPath}.tmp";
-        var json = JsonSerializer.Serialize(metadata, MarkerJsonOptions);
-
-        await File.WriteAllTextAsync(temporaryPath, json, cancellationToken).ConfigureAwait(false);
-        File.Move(temporaryPath, metadataPath, overwrite: true);
-    }
-
-    private static void DeleteBackupMetadata(string backupPath)
-    {
-        var metadataPath = GetBackupMetadataPath(backupPath);
-        if (File.Exists(metadataPath))
-        {
-            File.Delete(metadataPath);
-        }
     }
 
     private static string GetBackupMetadataPath(string backupPath)
@@ -471,7 +414,6 @@ internal sealed class SQLiteDatabaseManagementProvider(
     {
         ArgumentNullException.ThrowIfNull(options);
 
-        var connectionString = CreatePoolingDisabledConnectionString();
         var backupDirectory = await GetBackupDirectoryAsync(cancellationToken).ConfigureAwait(false);
 
         Directory.CreateDirectory(backupDirectory);
@@ -499,20 +441,7 @@ internal sealed class SQLiteDatabaseManagementProvider(
             : $"{backupId}{NameSeparator}{sanitizedName}.db";
         var backupPath = Path.Combine(backupDirectory, backupFileName);
 
-        var backupConnectionString = new SqliteConnectionStringBuilder
-        {
-            DataSource = backupPath,
-            Pooling = false
-        };
-
-        using (var sourceConnection = new SqliteConnection(connectionString))
-        using (var backupConnection = new SqliteConnection(backupConnectionString.ConnectionString))
-        {
-            await sourceConnection.OpenAsync(cancellationToken).ConfigureAwait(false);
-            await backupConnection.OpenAsync(cancellationToken).ConfigureAwait(false);
-
-            sourceConnection.BackupDatabase(backupConnection);
-        }
+        await CopyDatabaseAsync(GetLiveDatabasePath(), backupPath, cancellationToken).ConfigureAwait(false);
 
         var metadata = new BackupMetadata
         {
@@ -521,7 +450,7 @@ internal sealed class SQLiteDatabaseManagementProvider(
             CreatedAtUtc = now
         };
 
-        await WriteBackupMetadataAsync(backupPath, metadata, cancellationToken).ConfigureAwait(false);
+        await WriteJsonAsync(GetBackupMetadataPath(backupPath), metadata, cancellationToken).ConfigureAwait(false);
 
         return backupId;
     }
@@ -552,7 +481,7 @@ internal sealed class SQLiteDatabaseManagementProvider(
             {
                 logger.LogError(
                     ex,
-                    "The provider failed to delete the restore staging directory {StagingDirectory}.",
+                    "Deleting restore staging directory {StagingDirectory} failed.",
                     stagingDirectory);
                 throw new InvalidOperationException(
                     "The provider failed to clear the restore staging directory.",
@@ -562,7 +491,7 @@ internal sealed class SQLiteDatabaseManagementProvider(
             {
                 logger.LogError(
                     ex,
-                    "The provider failed to delete the restore staging directory {StagingDirectory}.",
+                    "Deleting restore staging directory {StagingDirectory} failed.",
                     stagingDirectory);
                 throw new InvalidOperationException(
                     "The restore staging directory could not be cleared due to an access error.",
@@ -584,9 +513,9 @@ internal sealed class SQLiteDatabaseManagementProvider(
             Attempt = 0
         };
 
-        await WriteMarkerAsync(GetMarkerPath(dataDirectory), marker, cancellationToken).ConfigureAwait(false);
+        await WriteJsonAsync(GetMarkerPath(dataDirectory), marker, cancellationToken).ConfigureAwait(false);
 
-        logger.LogInformation("The provider staged backup {BackupId} for restore at the next host startup.", backupId);
+        logger.LogInformation("Staged backup {BackupId} for restore at next host startup.", backupId);
 
         return true;
     }
@@ -606,8 +535,7 @@ internal sealed class SQLiteDatabaseManagementProvider(
         if (marker is null)
         {
             logger.LogError(
-                "The restore marker at {MarkerPath} was not usable, so the provider stopped the " +
-                "restore and deleted the marker.",
+                "Restore marker {MarkerPath} unusable; restore stopped and marker deleted.",
                 markerPath);
             await RecordRestoreFailedAsync(
                 dataDirectory,
@@ -622,13 +550,12 @@ internal sealed class SQLiteDatabaseManagementProvider(
         var rollbackPath = Path.Combine(stagingDirectory, RollbackDatabaseFileName);
 
         var attempted = marker with { Attempt = marker.Attempt + 1 };
-        await WriteMarkerAsync(markerPath, attempted, cancellationToken).ConfigureAwait(false);
+        await WriteJsonAsync(markerPath, attempted, cancellationToken).ConfigureAwait(false);
 
         if (attempted.Attempt > MaxRestoreAttempts)
         {
             logger.LogError(
-                "The restore of backup {BackupId} exceeded {MaxAttempts} attempts, so the host " +
-                "starts with the original database.",
+                "Restore of backup {BackupId} exceeded {MaxAttempts} attempts; host starts with original database.",
                 attempted.BackupId,
                 MaxRestoreAttempts);
 
@@ -649,8 +576,7 @@ internal sealed class SQLiteDatabaseManagementProvider(
         if (!attempted.SwapCommitted && !File.Exists(attempted.StagedFilePath))
         {
             logger.LogError(
-                "The staged database {StagedPath} for the restore of backup {BackupId} does not exist, " +
-                "so the restore stops.",
+                "Staged database {StagedPath} for restore of backup {BackupId} does not exist; restore stopped.",
                 attempted.StagedFilePath,
                 attempted.BackupId);
             await RecordRestoreFailedAsync(
@@ -665,8 +591,7 @@ internal sealed class SQLiteDatabaseManagementProvider(
         if (!attempted.SwapCommitted)
         {
             logger.LogInformation(
-                "The provider will apply the restore of backup {BackupId} (attempt {Attempt}) and will " +
-                "swap the database.",
+                "Applying restore of backup {BackupId} (attempt {Attempt}).",
                 attempted.BackupId,
                 attempted.Attempt);
 
@@ -674,13 +599,12 @@ internal sealed class SQLiteDatabaseManagementProvider(
             SwapDatabaseIntoPlace(attempted.StagedFilePath, liveDatabasePath);
 
             attempted = attempted with { SwapCommitted = true };
-            await WriteMarkerAsync(markerPath, attempted, cancellationToken).ConfigureAwait(false);
+            await WriteJsonAsync(markerPath, attempted, cancellationToken).ConfigureAwait(false);
         }
         else
         {
             logger.LogInformation(
-                "The provider will continue the restore of backup {BackupId} (attempt {Attempt}) " +
-                "because the database swap is already complete.",
+                "Continuing restore of backup {BackupId} (attempt {Attempt}); database swap already complete.",
                 attempted.BackupId,
                 attempted.Attempt);
         }
@@ -689,7 +613,7 @@ internal sealed class SQLiteDatabaseManagementProvider(
         {
             ValidateSwappedDatabase(liveDatabasePath);
 
-            logger.LogInformation("The provider applied the restore of backup {BackupId}.", attempted.BackupId);
+            logger.LogInformation("Applied restore of backup {BackupId}.", attempted.BackupId);
 
             await RecordRestoreAppliedAsync(
                 dataDirectory,
@@ -704,8 +628,7 @@ internal sealed class SQLiteDatabaseManagementProvider(
         {
             logger.LogError(
                 ex,
-                "The restore of backup {BackupId} failed validation, so the provider rolls back to the " +
-                "original database.",
+                "Restore of backup {BackupId} failed validation; rolling back to original database.",
                 attempted.BackupId);
 
             RollBackDatabase(rollbackPath, liveDatabasePath);
@@ -753,7 +676,7 @@ internal sealed class SQLiteDatabaseManagementProvider(
         }
 
         File.Delete(backupPath);
-        DeleteBackupMetadata(backupPath);
+        File.Delete(GetBackupMetadataPath(backupPath));
 
         return true;
     }
@@ -784,8 +707,10 @@ internal sealed class SQLiteDatabaseManagementProvider(
         }
         catch (JsonException ex)
         {
-            logger.LogWarning(ex, "The provider failed to read the optimization marker {MarkerPath}, " +
-                "so the provider reported no optimization date.", markerPath);
+            logger.LogWarning(
+                ex,
+                "Reading optimization marker {MarkerPath} failed; reporting no optimization date.",
+                markerPath);
             return null;
         }
     }
@@ -802,9 +727,13 @@ internal sealed class SQLiteDatabaseManagementProvider(
         command.CommandText = "VACUUM; PRAGMA wal_checkpoint(TRUNCATE);";
 
         await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
-        await RecordOptimizedAsync(
-            GetDataDirectory(liveDatabasePath),
-            timeProvider.GetUtcNow().UtcDateTime,
+        var marker = new OptimizationMarker
+        {
+            OptimizedAtUtc = timeProvider.GetUtcNow().UtcDateTime
+        };
+        await WriteJsonAsync(
+            GetOptimizationMarkerPath(GetDataDirectory(liveDatabasePath)),
+            marker,
             cancellationToken).ConfigureAwait(false);
     }
 
@@ -820,9 +749,10 @@ internal sealed class SQLiteDatabaseManagementProvider(
             Reason = reason,
             FailedAtUtc = timeProvider.GetUtcNow().UtcDateTime
         };
-        var json = JsonSerializer.Serialize(marker, MarkerJsonOptions);
-        var path = Path.Combine(dataDirectory, RestoreFailedFileName);
-        await File.WriteAllTextAsync(path, json, cancellationToken).ConfigureAwait(false);
+        await WriteJsonAsync(
+            Path.Combine(dataDirectory, RestoreFailedFileName),
+            marker,
+            cancellationToken).ConfigureAwait(false);
     }
 
     private string GetLiveDatabasePath()
@@ -861,7 +791,7 @@ internal sealed class SQLiteDatabaseManagementProvider(
         }
         catch (JsonException ex)
         {
-            logger.LogError(ex, "The provider failed to read the restore marker at {MarkerPath}.", markerPath);
+            logger.LogError(ex, "Reading restore marker {MarkerPath} failed.", markerPath);
             return null;
         }
     }
@@ -876,7 +806,7 @@ internal sealed class SQLiteDatabaseManagementProvider(
         if (!File.Exists(liveDatabasePath))
         {
             logger.LogInformation(
-                "No database exists at {LiveDatabasePath}, so the restore continues without a rollback copy.",
+                "No database at {LiveDatabasePath}; restore continues without rollback copy.",
                 liveDatabasePath);
             return;
         }
@@ -928,12 +858,13 @@ internal sealed class SQLiteDatabaseManagementProvider(
             BackupId = backupId,
             AppliedAtUtc = appliedAtUtc
         };
-        var json = JsonSerializer.Serialize(marker, MarkerJsonOptions);
-        var path = Path.Combine(dataDirectory, RestoreAppliedFileName);
-        await File.WriteAllTextAsync(path, json, cancellationToken).ConfigureAwait(false);
+        await WriteJsonAsync(
+            Path.Combine(dataDirectory, RestoreAppliedFileName),
+            marker,
+            cancellationToken).ConfigureAwait(false);
 
         logger.LogInformation(
-            "The provider recorded the restore-applied marker for backup {BackupId} at {AppliedAtUtc}.",
+            "Recorded restore-applied marker for backup {BackupId} at {AppliedAtUtc}.",
             backupId,
             appliedAtUtc);
     }
@@ -944,12 +875,9 @@ internal sealed class SQLiteDatabaseManagementProvider(
             new SettingsGroupLookupKey(null, SettingsGroupName),
             cancellationToken).ConfigureAwait(false);
 
-        var settings = settingsGroup?.Settings.ToDictionary(s => s.Key, s => s.Value, StringComparer.Ordinal)
-
-            ?? new Dictionary<string, string>();
-        var backupFolder = settings.TryGetValue(BackupDirectorySettingKey, out var value)
-            ? value
-            : DefaultBackupDirectory;
+        var backupFolder = settingsGroup?.Settings
+            .FirstOrDefault(s => s.Key == BackupDirectorySettingKey)?.Value
+            ?? DefaultBackupDirectory;
 
         if (!Path.IsPathRooted(backupFolder))
         {
@@ -995,8 +923,7 @@ internal sealed class SQLiteDatabaseManagementProvider(
                 metadata.CreatedAtUtc == default)
             {
                 logger.LogWarning(
-                    "The backup metadata {MetadataPath} is invalid, so the provider marks backup " +
-                    "{BackupId} as manual.",
+                    "Backup metadata {MetadataPath} is invalid; marking backup {BackupId} as manual.",
                     metadataPath,
                     backupId);
                 return CreateFallbackBackupMetadata(backupId, fallbackCreatedAtUtc);
@@ -1011,8 +938,7 @@ internal sealed class SQLiteDatabaseManagementProvider(
         {
             logger.LogWarning(
                 ex,
-                "The provider cannot read the backup metadata {MetadataPath}, so it marks backup " +
-                "{BackupId} as manual.",
+                "Reading backup metadata {MetadataPath} failed; marking backup {BackupId} as manual.",
                 metadataPath,
                 backupId);
             return CreateFallbackBackupMetadata(backupId, fallbackCreatedAtUtc);
@@ -1021,58 +947,44 @@ internal sealed class SQLiteDatabaseManagementProvider(
 
     private sealed record RestoreAppliedMarker
     {
-        [JsonPropertyName("backupId")]
         public string? BackupId { get; init; }
 
-        [JsonPropertyName("appliedAtUtc")]
         public required DateTime AppliedAtUtc { get; init; }
     }
 
     private sealed record RestoreFailedMarker
     {
-        [JsonPropertyName("backupId")]
         public string? BackupId { get; init; }
 
-        [JsonPropertyName("reason")]
         public required string Reason { get; init; }
 
-        [JsonPropertyName("failedAtUtc")]
         public required DateTime FailedAtUtc { get; init; }
     }
 
     private sealed record RestorePendingMarker
     {
-        [JsonPropertyName("stagedFilePath")]
         public required string StagedFilePath { get; init; }
 
-        [JsonPropertyName("backupId")]
         public required string BackupId { get; init; }
 
-        [JsonPropertyName("requestedAtUtc")]
         public required DateTime RequestedAtUtc { get; init; }
 
-        [JsonPropertyName("attempt")]
         public int Attempt { get; init; }
 
-        [JsonPropertyName("swapCommitted")]
         public bool SwapCommitted { get; init; }
     }
 
     private sealed record BackupMetadata
     {
-        [JsonPropertyName("backupId")]
         public required string BackupId { get; init; }
 
-        [JsonPropertyName("kind")]
         public BackupKind Kind { get; init; } = BackupKind.Manual;
 
-        [JsonPropertyName("createdAtUtc")]
         public required DateTime CreatedAtUtc { get; init; }
     }
 
     private sealed record OptimizationMarker
     {
-        [JsonPropertyName("optimizedAtUtc")]
         public required DateTime OptimizedAtUtc { get; init; }
     }
 }

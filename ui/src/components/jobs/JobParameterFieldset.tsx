@@ -14,12 +14,12 @@ import { Label } from '@/components/ui/Label';
 import { Switch } from '@/components/ui/Switch';
 import { Badge } from '@/components/ui/Badge';
 import type { JobParameterDefinition } from '@/hooks/useJobs';
+import { SchemaDataType } from '@/hooks/useProviderSchema';
 
 import {
     defaultJobParameterValue,
     getEventBindingKind,
     getJobParameterInputType,
-    JOB_PARAMETER_DATA_TYPE_BOOLEAN,
     jobParameterErrorKey,
     type JobParameterValues,
 } from './jobParameters';
@@ -41,7 +41,6 @@ interface JobParameterFieldsetProps {
     idPrefix: string;
     classNames: JobParameterFieldsetClassNames;
     dataField?: string;
-    showBooleanDescription?: boolean;
     eventBindingKeys?: readonly string[];
     eventBoundParameters?: ReadonlySet<string>;
     onEventBindingChange?: (name: string, enabled: boolean) => void;
@@ -58,7 +57,6 @@ export function JobParameterFieldset({
     idPrefix,
     classNames,
     dataField,
-    showBooleanDescription = true,
     eventBindingKeys,
     eventBoundParameters,
     onEventBindingChange,
@@ -100,7 +98,6 @@ export function JobParameterFieldset({
                         disabled={disabled}
                         idPrefix={idPrefix}
                         classNames={classNames}
-                        showBooleanDescription={showBooleanDescription}
                         eventBindingListId={eventBindingKeys ? `${idPrefix}-event-bindings` : undefined}
                         eventBindingEnabled={eventBoundParameters?.has(parameter.name) ?? false}
                         onEventBindingChange={handleEventBindingChange}
@@ -145,7 +142,6 @@ interface JobParameterFieldProps {
     disabled: boolean;
     idPrefix: string;
     classNames: JobParameterFieldsetClassNames;
-    showBooleanDescription: boolean;
     eventBindingListId?: string;
     eventBindingEnabled: boolean;
     onEventBindingChange?: (name: string, enabled: boolean) => void;
@@ -159,7 +155,6 @@ function JobParameterField({
     disabled,
     idPrefix,
     classNames,
-    showBooleanDescription,
     eventBindingListId,
     eventBindingEnabled,
     onEventBindingChange,
@@ -207,9 +202,8 @@ function JobParameterField({
         </>
     );
 
-    if (parameter.type === JOB_PARAMETER_DATA_TYPE_BOOLEAN && !eventBindingEnabled) {
-        const describedBy =
-            [showBooleanDescription ? helpId : undefined, errorId].filter(Boolean).join(' ') || undefined;
+    if (parameter.type === SchemaDataType.Boolean && !eventBindingEnabled) {
+        const describedBy = [helpId, errorId].filter(Boolean).join(' ') || undefined;
         const control = (
             <>
                 <Switch
@@ -239,7 +233,7 @@ function JobParameterField({
                 ) : (
                     control
                 )}
-                {showBooleanDescription && parameter.description && (
+                {parameter.description && (
                     <p id={helpId} className={classNames.help}>
                         {parameter.description}
                     </p>

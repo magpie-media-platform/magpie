@@ -88,12 +88,10 @@ public sealed class ReleaseRepositoryTests
         _userId = user.Id;
         _indexerId = indexer.Id;
 
-        var loggerFactory = NullLoggerFactory.Instance;
-
         var auditRecordRepository = new AuditRecordRepository(
             _context,
             Mock.Of<IEventBus>(),
-            loggerFactory.CreateLogger<AuditRecordRepository>(),
+            NullLogger<AuditRecordRepository>.Instance,
             new TransactionManager(_context, NullLogger<TransactionManager>.Instance),
             Mock.Of<IJobExecutionScopeFactory>(),
             timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
@@ -104,14 +102,13 @@ public sealed class ReleaseRepositoryTests
             _context,
             auditRecordRepository,
             transactionManager,
-            loggerFactory.CreateLogger<ReleaseRepository>(),
+            NullLogger<ReleaseRepository>.Instance,
             timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
     }
 
     [TearDown]
     public void TearDown()
     {
-        _context.Database.CloseConnection();
         _context.Dispose();
     }
 
@@ -586,7 +583,7 @@ public sealed class ReleaseRepositoryTests
 
     [TestCase(false, 0)]
     [TestCase(true, 1)]
-    public async Task QueryAsync_ReturnsTheUnmatchedRelease_OnlyWhenIncludeUnmatchedIsSet(
+    public async Task QueryAsync_ReturnsTheUnmatchedRelease_WhenIncludeUnmatchedIsSet(
         bool includeUnmatched,
         int expectedCount)
     {
@@ -1137,6 +1134,109 @@ public sealed class ReleaseRepositoryTests
             Assert.That(keys, Has.Count.EqualTo(1));
             Assert.That(keys[0].Authority, Is.EqualTo("provider"));
             Assert.That(keys[0].Value, Is.EqualTo("opaque"));
+        }
+    }
+
+    [Test]
+    public async Task CreateAsync_StoresOnlyTheAuthorityAndValue_WhenAPostedIdentityKeyNamesADownload()
+    {
+        // Arrange
+        var now = DateTime.UtcNow;
+        var downloadClient = new DownloadClient
+        {
+            ProviderType = "test",
+            Name = "Client",
+            Enabled = true,
+            CreatedAt = now
+        };
+        _context.DownloadClients.Add(downloadClient);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        var download = new Download
+        {
+            DownloadClientId = downloadClient.Id,
+            ExternalId = "download-1",
+            Title = "Other",
+            Status = DownloadStatus.Downloading,
+            CreatedAt = now
+        };
+        _context.Downloads.Add(download);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.ChangeTracker.Clear();
+        var postedKeyId = Guid.NewGuid();
+        var release = new Release
+        {
+            IndexerId = _indexerId,
+            Protocol = "torrent",
+            ExternalId = "indexer-release-1",
+            Title = "Release",
+            PublishDate = now
+        };
+        release.IdentityKeys.Add(new ReleaseIdentityKey
+        {
+            Id = postedKeyId,
+            DownloadId = download.Id,
+            Authority = "btih",
+            Value = "0123456789abcdef0123456789abcdef01234567",
+            Ordinal = 0
+        });
+
+        // Act
+        var result = await _subject.CreateAsync(release, _userId).ConfigureAwait(false);
+
+        // Assert
+        var keys = await _context.ReleaseIdentityKeys
+            .AsNoTracking()
+            .Where(k => k.ReleaseId == result.Id)
+            .ToListAsync()
+            .ConfigureAwait(false);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(keys, Has.Count.EqualTo(1));
+            Assert.That(keys[0].Id, Is.Not.EqualTo(postedKeyId));
+            Assert.That(keys[0].DownloadId, Is.Null);
+            Assert.That(
+                await _context.ReleaseIdentityKeys.CountAsync(k => k.DownloadId == download.Id).ConfigureAwait(false),
+                Is.Zero);
+        }
+    }
+
+    [Test]
+    public async Task CreateAsync_StoresOnlyTheValuesOfAPostedExternalId_WhenItNamesOtherRows()
+    {
+        // Arrange
+        var postedExternalId = Guid.NewGuid();
+        var release = new Release
+        {
+            IndexerId = _indexerId,
+            Protocol = "torrent",
+            ExternalId = "indexer-release-1",
+            Title = "Release",
+            PublishDate = DateTime.UtcNow
+        };
+        release.ExternalIds.Add(new ExternalId
+        {
+            Id = postedExternalId,
+            MetadataContributionId = Guid.NewGuid(),
+            Source = "imdb",
+            Value = "tt0000001",
+            Ordinal = 0
+        });
+
+        // Act
+        var result = await _subject.CreateAsync(release, _userId).ConfigureAwait(false);
+
+        // Assert
+        var externalIds = await _context.ExternalIds
+            .AsNoTracking()
+            .Where(id => id.ReleaseId == result.Id)
+            .ToListAsync()
+            .ConfigureAwait(false);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(externalIds, Has.Count.EqualTo(1));
+            Assert.That(externalIds[0].Id, Is.Not.EqualTo(postedExternalId));
+            Assert.That(externalIds[0].MetadataContributionId, Is.Null);
+            Assert.That(externalIds[0].Value, Is.EqualTo("tt0000001"));
         }
     }
 
@@ -1769,19 +1869,16 @@ public sealed class ReleaseRepositoryTests
         await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
-        var deleted = 0;
-        foreach (var releaseId in new[] { failedBacked.Id, cancelledBacked.Id, importedBacked.Id })
-        {
-            if (await _subject.DeleteAsync(releaseId, null).ConfigureAwait(false))
-            {
-                deleted++;
-            }
-        }
+        var deletedFailed = await _subject.DeleteAsync(failedBacked.Id, null).ConfigureAwait(false);
+        var deletedCancelled = await _subject.DeleteAsync(cancelledBacked.Id, null).ConfigureAwait(false);
+        var deletedImported = await _subject.DeleteAsync(importedBacked.Id, null).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(deleted, Is.EqualTo(3));
+            Assert.That(deletedFailed, Is.True);
+            Assert.That(deletedCancelled, Is.True);
+            Assert.That(deletedImported, Is.True);
             Assert.That(await _context.Releases.AnyAsync(r => r.Id == failedBacked.Id).ConfigureAwait(false), Is.False);
             Assert.That(
                 await _context.Releases.AnyAsync(r => r.Id == cancelledBacked.Id).ConfigureAwait(false),

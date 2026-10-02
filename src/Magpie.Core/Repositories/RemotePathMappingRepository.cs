@@ -97,8 +97,10 @@ internal sealed class RemotePathMappingRepository(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "The remote path mapping repository failed to read remote path mapping " +
-                "{RemotePathMappingId}.", id);
+            logger.LogError(
+                ex,
+                "The remote path mapping repository failed to read remote path mapping {RemotePathMappingId}.",
+                id);
             throw;
         }
     }
@@ -148,8 +150,10 @@ internal sealed class RemotePathMappingRepository(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "The remote path mapping repository failed to create a remote path mapping for host " +
-                "{Host}.", model.Host);
+            logger.LogError(
+                ex,
+                "The remote path mapping repository failed to create a remote path mapping for host {Host}.",
+                model.Host);
             throw;
         }
     }
@@ -212,7 +216,8 @@ internal sealed class RemotePathMappingRepository(
             {
                 await transactionManager.OnCommittedAsync(
                     token => eventBus.PublishAsync(
-                        DownloadEventBuilder.BuildRemotePathMappingUpdatedEvent(model.Id, changedFields), token),
+                        DownloadEventBuilder.BuildRemotePathMappingUpdatedEvent(model.Id, changedFields),
+                        token),
                     cancellationToken).ConfigureAwait(false);
             }
 
@@ -220,8 +225,10 @@ internal sealed class RemotePathMappingRepository(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "The remote path mapping repository failed to update remote path mapping " +
-                "{RemotePathMappingId}.", model.Id);
+            logger.LogError(
+                ex,
+                "The remote path mapping repository failed to update remote path mapping {RemotePathMappingId}.",
+                model.Id);
             throw;
         }
     }
@@ -298,8 +305,10 @@ internal sealed class RemotePathMappingRepository(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "The remote path mapping repository failed to patch remote path mapping " +
-                "{RemotePathMappingId}.", patch.Id);
+            logger.LogError(
+                ex,
+                "The remote path mapping repository failed to patch remote path mapping {RemotePathMappingId}.",
+                patch.Id);
             throw;
         }
     }
@@ -359,8 +368,10 @@ internal sealed class RemotePathMappingRepository(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "The remote path mapping repository failed to delete remote path mapping " +
-                "{RemotePathMappingId}.", id);
+            logger.LogError(
+                ex,
+                "The remote path mapping repository failed to delete remote path mapping {RemotePathMappingId}.",
+                id);
             throw;
         }
     }

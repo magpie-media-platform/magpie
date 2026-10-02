@@ -70,7 +70,7 @@ internal sealed class DownloadImportScanJob(
             new DownloadQuery
             {
                 Statuses = [DownloadStatus.Downloaded, DownloadStatus.Importing],
-                LastChangedAt = new Range<DateTime>(null, cutoff)
+                LastChangedAt = new(null, cutoff)
             },
             new()
             {
@@ -79,12 +79,14 @@ internal sealed class DownloadImportScanJob(
             },
             cancellationToken).ConfigureAwait(false);
 
-        var committedRecovery = await downloadRepository.QueryAllAsync(new DownloadQuery
-        {
-            Status = DownloadStatus.Imported,
-            HasImportRecoveryState = true,
-            LastChangedAt = new Range<DateTime>(null, cutoff)
-        }, cancellationToken: cancellationToken).ConfigureAwait(false);
+        var committedRecovery = await downloadRepository.QueryAllAsync(
+            new DownloadQuery
+            {
+                Status = DownloadStatus.Imported,
+                HasImportRecoveryState = true,
+                LastChangedAt = new(null, cutoff)
+            },
+            cancellationToken: cancellationToken).ConfigureAwait(false);
         downloads = downloads.Concat(committedRecovery).DistinctBy(download => download.Id).ToList();
 
         if (downloads.Count == 0)
@@ -126,10 +128,12 @@ internal sealed class DownloadImportScanJob(
                         JobType = MagpieJobs.Types.DownloadImportItem,
                         Statuses =
                         [
-                            JobExecutionStatus.Queued, JobExecutionStatus.Running,
+                            JobExecutionStatus.Queued,
+                            JobExecutionStatus.Running,
                             JobExecutionStatus.CancellationRequested
                         ]
-                    }, cancellationToken: cancellationToken).ConfigureAwait(false);
+                    },
+                    cancellationToken: cancellationToken).ConfigureAwait(false);
                 if (active.Any(execution =>
                     execution.Status is JobExecutionStatus.Queued or JobExecutionStatus.Running or
                         JobExecutionStatus.CancellationRequested && ResolveDownloadId(execution) == download.Id))
@@ -151,7 +155,8 @@ internal sealed class DownloadImportScanJob(
                     parameters[MagpieJobs.Parameters.CollisionMode] = storedMode.ToString();
                 }
                 else if (previous is not null && previous.Parameters.TryGetValue(
-                    MagpieJobs.Parameters.CollisionMode, out var collisionMode) &&
+                    MagpieJobs.Parameters.CollisionMode,
+                    out var collisionMode) &&
                     !string.IsNullOrWhiteSpace(collisionMode))
                 {
                     parameters[MagpieJobs.Parameters.CollisionMode] = collisionMode;

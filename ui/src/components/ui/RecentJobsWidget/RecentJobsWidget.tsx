@@ -38,8 +38,6 @@ export interface RecentJobsWidgetProps extends HTMLAttributes<HTMLDivElement> {
     getJobUrl?: (job: JobExecution) => string;
 
     viewAllUrl?: string;
-
-    headingLevel?: 2 | 3;
 }
 
 const statusLabelMap: Record<JobStatus, string> = {
@@ -132,7 +130,6 @@ const RecentJobsWidgetBase = forwardRef<HTMLDivElement, RecentJobsWidgetProps>(
             onRetry,
             getJobUrl,
             viewAllUrl,
-            headingLevel = 2,
             className,
             ...props
         },
@@ -141,7 +138,6 @@ const RecentJobsWidgetBase = forwardRef<HTMLDivElement, RecentJobsWidgetProps>(
         const classes = ['recent-jobs-widget', className].filter(Boolean).join(' ');
         const displayedJobs = jobs.slice(0, maxItems);
         const failedCount = jobs.filter((j) => j.status === 'failed').length;
-        const HeadingTag = `h${headingLevel}` as const;
 
         return (
             <div ref={ref} className={classes} data-component="recent-jobs-widget" {...props}>
@@ -151,7 +147,7 @@ const RecentJobsWidgetBase = forwardRef<HTMLDivElement, RecentJobsWidgetProps>(
                             {icon}
                         </span>
                     )}
-                    <HeadingTag className="recent-jobs-widget__title">{heading}</HeadingTag>
+                    <h2 className="recent-jobs-widget__title">{heading}</h2>
                     {failedCount > 0 && !loading && (
                         <span
                             className="recent-jobs-widget__failed-badge"

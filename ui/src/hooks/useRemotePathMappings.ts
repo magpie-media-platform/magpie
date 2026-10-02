@@ -81,7 +81,7 @@ export function useRemotePathMappings() {
     useInvalidateQueriesOnEvents(
         ['remotePathMapping.created', 'remotePathMapping.updated', 'remotePathMapping.deleted'],
         [remotePathMappingQueryKeys.list()],
-        { exact: true, owner: 'remote-path-mappings' },
+        { exact: true },
     );
     const queryClient = useQueryClient();
 

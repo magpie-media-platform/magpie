@@ -526,6 +526,30 @@ public sealed class CardigannIndexerIntegrationTests
         Assert.That(exception!.Message, Is.EqualTo("Cardigann search method 'put' is not supported."));
     }
 
+    [TestCase("/tracker")]
+    [TestCase("file:///tracker")]
+    public void SearchAsync_Throws_WhenTheBaseUrlSettingIsNotAnHttpUrl(string baseUrl)
+    {
+        // Arrange
+        var integration = new CardigannIndexerIntegration(
+            Guid.Empty,
+            _definition,
+            _parser.Object,
+            _sessions.Object,
+            NullLogger<CardigannIndexerIntegration>.Instance);
+
+        // Act
+        var exception = Assert.ThrowsAsync<ArgumentException>(() => integration.SearchAsync(
+            new ReleaseSearchRequest { Title = "cool" },
+            new Dictionary<string, string> { [CardigannIndexerIntegration.BaseUrlSettingKey] = baseUrl },
+            default));
+
+        // Assert
+        Assert.That(
+            exception!.Message,
+            Is.EqualTo($"Setting baseUrl is not an http or https URL: {baseUrl}. (Parameter 'settings')"));
+    }
+
     [Test]
     public async Task SearchAsync_PassesTheConfiguredCookieToTheSessionManager_WhenACookieSettingExists()
     {

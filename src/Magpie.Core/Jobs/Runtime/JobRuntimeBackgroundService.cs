@@ -16,7 +16,6 @@ using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
 using Magpie.Models.Jobs;
-using Magpie.Models.Paging;
 using Magpie.Sdk.Events;
 using Magpie.Sdk.Jobs;
 using Magpie.Sdk.Services;
@@ -40,9 +39,7 @@ internal sealed class JobRuntimeBackgroundService(
     TimeProvider timeProvider,
     DatabaseMigrationState databaseMigration) : BackgroundService
 {
-    private readonly record struct StuckSchedulerJobsHealResult(
-        int HealedCount,
-        TimeSpan? NextSchedulerHealCheck);
+    private readonly record struct StuckSchedulerJobsHealResult(int HealedCount, TimeSpan? NextSchedulerHealCheck);
 
     private sealed record SchedulerEligibility(bool Eligible, DateTimeOffset CheckedAt);
 
@@ -77,26 +74,9 @@ internal sealed class JobRuntimeBackgroundService(
         DateTime asOfUtc,
         CancellationToken cancellationToken)
     {
-        var enabled = new List<ScheduleTrigger>();
-        var pageNumber = 1;
-        while (true)
-        {
-            var page = await scheduleTriggers
-                .QueryAsync(
-                    new ScheduleTriggerQuery { Enabled = true },
-                    new PagingParameter { PageNumber = pageNumber, PageSize = 500 },
-                    sort: null,
-                    cancellationToken)
-                .ConfigureAwait(false);
-
-            enabled.AddRange(page.Items);
-            if (enabled.Count >= page.TotalItems || !page.Items.Any())
-            {
-                break;
-            }
-
-            pageNumber++;
-        }
+        var enabled = await scheduleTriggers.QueryAllAsync(
+            new ScheduleTriggerQuery { Enabled = true },
+            cancellationToken: cancellationToken).ConfigureAwait(false);
 
         var nextSchedulerHealCheck = GetNextSchedulerHealCheck(enabled);
         var healed = 0;
@@ -177,9 +157,7 @@ internal sealed class JobRuntimeBackgroundService(
         ownerNodeId = string.Empty;
         if (magpieEvent is null ||
             !string.Equals(magpieEvent.Name, "job.cancellation.requested", StringComparison.Ordinal) ||
-            !magpieEvent.Context.TryGetValue(
-                MagpieEvents.Keys.ExecutionId,
-                out var rawExecutionId) ||
+            !magpieEvent.Context.TryGetValue(MagpieEvents.Keys.ExecutionId, out var rawExecutionId) ||
             !Guid.TryParse(rawExecutionId, out executionId) ||
             !magpieEvent.Context.TryGetValue("execution.ownerNodeId", out var rawOwnerNodeId))
         {
@@ -632,7 +610,7 @@ internal sealed class JobRuntimeBackgroundService(
 
     private async Task StaleCleanupLoopAsync(CancellationToken stoppingToken)
     {
-        logger.LogDebug("The stale job cleanup started");
+        logger.LogDebug("The stale job execution cleanup started");
 
         while (!stoppingToken.IsCancellationRequested)
         {
@@ -665,7 +643,6 @@ internal sealed class JobRuntimeBackgroundService(
         await using var scopeHandle = scope.ConfigureAwait(false);
         var jobExecutionRepository = scope.ServiceProvider.GetRequiredService<IJobExecutionRepository>();
         var transactionManager = scope.ServiceProvider.GetRequiredService<ITransactionManager>();
-        var jobManager = scope.ServiceProvider.GetRequiredService<IJobManager>();
         var retryPolicy = scope.ServiceProvider.GetRequiredService<IJobRetryPolicy>();
 
         foreach (var status in StaleCandidateStatuses)
@@ -687,7 +664,6 @@ internal sealed class JobRuntimeBackgroundService(
                     await TransitionStaleJobAsync(
                         jobExecutionRepository,
                         transactionManager,
-                        jobManager,
                         retryPolicy,
                         job,
                         cancellationToken)
@@ -707,7 +683,6 @@ internal sealed class JobRuntimeBackgroundService(
     private async Task TransitionStaleJobAsync(
         IJobExecutionRepository repository,
         ITransactionManager transactionManager,
-        IJobManager jobManager,
         IJobRetryPolicy retryPolicy,
         JobExecution job,
         CancellationToken cancellationToken)
@@ -715,14 +690,7 @@ internal sealed class JobRuntimeBackgroundService(
         if (job.Status is JobExecutionStatus.Running)
         {
             var reason = $"Node crash detected: last heartbeat at {job.LastHeartbeat:O}";
-            await ReclaimAsync(
-                repository,
-                transactionManager,
-                jobManager,
-                retryPolicy,
-                job,
-                reason,
-                reclaimKind: "stale_heartbeat")
+            await ReclaimAsync(repository, transactionManager, retryPolicy, job, reason, reclaimKind: "stale_heartbeat")
                 .ConfigureAwait(false);
             return;
         }
@@ -735,10 +703,7 @@ internal sealed class JobRuntimeBackgroundService(
                 job.Id,
                 job.LastHeartbeat);
             await repository
-                .TryRecoverInactiveAsync(
-                    job,
-                    "Cancellation not acknowledged before node crash",
-                    cancellationToken)
+                .TryRecoverInactiveAsync(job, "Cancellation not acknowledged before node crash", cancellationToken)
                 .ConfigureAwait(false);
         }
     }
@@ -749,9 +714,10 @@ internal sealed class JobRuntimeBackgroundService(
 
         try
         {
-            using var listener = eventBus is EventBus bus
-                ? bus.CreateListener("job.cancellation.requested", localOnly: false, callSite: "cancellation")
-                : eventBus.CreateListener("job.cancellation.requested");
+            using var listener = eventBus.CreateListener(
+                "job.cancellation.requested",
+                localOnly: false,
+                callSite: "cancellation");
             await foreach (var magpieEvent in listener.ReadAllAsync(stoppingToken).ConfigureAwait(false))
             {
                 if (!TryGetJobCancellationRequest(magpieEvent, out var executionId, out var ownerNodeId))
@@ -805,7 +771,6 @@ internal sealed class JobRuntimeBackgroundService(
             await using var scopeHandle = scope.ConfigureAwait(false);
             var executions = scope.ServiceProvider.GetRequiredService<IJobExecutionRepository>();
             var transactionManager = scope.ServiceProvider.GetRequiredService<ITransactionManager>();
-            var jobManager = scope.ServiceProvider.GetRequiredService<IJobManager>();
             var retryPolicy = scope.ServiceProvider.GetRequiredService<IJobRetryPolicy>();
 
             var orphans = await executions.QueryAllAsync(
@@ -844,7 +809,6 @@ internal sealed class JobRuntimeBackgroundService(
                     await ReclaimAsync(
                         executions,
                         transactionManager,
-                        jobManager,
                         retryPolicy,
                         orphan,
                         reason,
@@ -873,14 +837,12 @@ internal sealed class JobRuntimeBackgroundService(
     private static async Task<JobFailureTransitionResult> TransitionRunningToFailureAsync(
         IJobExecutionRepository executions,
         ITransactionManager transactionManager,
-        IJobManager jobManager,
         IJobRetryPolicy retryPolicy,
         JobExecution failed,
-        JobSpec? spec,
         JobFailurePolicy policy,
         string reason)
     {
-        var result = new JobFailureTransitionResult(false, false, null);
+        var result = new JobFailureTransitionResult(false, null);
         await transactionManager.ExecuteWithTransactionAsync(
             async transactionToken =>
             {
@@ -895,21 +857,19 @@ internal sealed class JobRuntimeBackgroundService(
                 if (policy is JobFailurePolicy.Fail ||
                     (policy is JobFailurePolicy.Retry && failed.ExecutionMode is JobExecutionMode.Immediate))
                 {
-                    result = new(true, PublishFailure: true, Retry: null);
+                    result = new(true, null);
                     return;
                 }
 
                 var retry = await retryPolicy.BuildRetryAsync(failed, transactionToken).ConfigureAwait(false);
                 if (retry is null)
                 {
-                    result = new(true, PublishFailure: true, Retry: null);
+                    result = new(true, null);
                     return;
                 }
 
-                retry.LockPartition = failed.LockPartition
-                    ?? jobManager.ResolveLockPartition(failed.JobType, BuildLockPartitionParameters(failed, spec));
                 await executions.CreateAsync(retry, failed.CreatedByUserId, transactionToken).ConfigureAwait(false);
-                result = new(true, PublishFailure: false, retry);
+                result = new(true, retry);
             },
             default).ConfigureAwait(false);
 
@@ -919,7 +879,6 @@ internal sealed class JobRuntimeBackgroundService(
     private async Task ReclaimAsync(
         IJobExecutionRepository executions,
         ITransactionManager transactionManager,
-        IJobManager jobManager,
         IJobRetryPolicy retryPolicy,
         JobExecution orphan,
         string reason,
@@ -933,10 +892,8 @@ internal sealed class JobRuntimeBackgroundService(
         var result = await TransitionRunningToFailureAsync(
             executions,
             transactionManager,
-            jobManager,
             retryPolicy,
             orphan,
-            spec,
             policy,
             reason).ConfigureAwait(false);
         if (!result.Transitioned)
@@ -978,7 +935,7 @@ internal sealed class JobRuntimeBackgroundService(
                 retry.Attempt,
                 retry.NotBeforeAt);
         }
-        else if (result.PublishFailure)
+        else
         {
             await eventBus.PublishAsync(
                 JobEventBuilder.BuildJobExecutionFailedEvent(orphan.Id, orphan.JobType, reason) with
@@ -1014,35 +971,5 @@ internal sealed class JobRuntimeBackgroundService(
         catch (OperationCanceledException)
         {
         }
-    }
-
-    private static Dictionary<string, string?> BuildLockPartitionParameters(JobExecution execution, JobSpec? spec)
-    {
-        var parameters = new Dictionary<string, string?>(StringComparer.Ordinal);
-        foreach (var parameter in execution.Parameters)
-        {
-            parameters[parameter.Key] = parameter.Value;
-        }
-
-        if (spec is null || spec.LockPartitionEventContextKeys.Count == 0)
-        {
-            return parameters;
-        }
-
-        foreach (var (field, eventContextKey) in spec.LockPartitionEventContextKeys)
-        {
-            if (parameters.TryGetValue(field, out var existing) && !string.IsNullOrWhiteSpace(existing))
-            {
-                continue;
-            }
-
-            if (execution.TriggerContext.TryGetValue(eventContextKey.ToEventContextKey(), out var value) &&
-                !string.IsNullOrWhiteSpace(value))
-            {
-                parameters[field] = value;
-            }
-        }
-
-        return parameters;
     }
 }

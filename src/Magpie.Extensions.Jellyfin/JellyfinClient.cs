@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Text.Json;
@@ -25,6 +26,15 @@ internal sealed class JellyfinClient(
     private const string LibraryRefreshPath = "Library/Refresh";
     private const string VirtualFoldersPath = "Library/VirtualFolders";
     private const string ItemsPath = "Items";
+    private const string MusicBrainzSource = "musicbrainz";
+
+    // An item also holds the MusicBrainz ids of its artists and album. Only the keys for its type identify the item.
+    private static readonly Dictionary<string, string[]> MusicBrainzProviderKeys = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["MusicArtist"] = ["MusicBrainzArtist"],
+        ["MusicAlbum"] = ["MusicBrainzReleaseGroup"],
+        ["Audio"] = ["MusicBrainzRecording", "MusicBrainzTrack"]
+    };
 
     public const string ApiKeyHeader = "X-Emby-Token";
 
@@ -36,6 +46,18 @@ internal sealed class JellyfinClient(
         var request = new HttpRequestMessage(method, new Uri(settings.Host, path));
         request.Headers.Add(ApiKeyHeader, settings.ApiKey);
         return request;
+    }
+
+    private static bool IsProviderKey(string source, string? itemType, string providerKey)
+    {
+        if (!string.Equals(source, MusicBrainzSource, StringComparison.OrdinalIgnoreCase))
+        {
+            return string.Equals(source, providerKey, StringComparison.OrdinalIgnoreCase);
+        }
+
+        return itemType is not null &&
+            MusicBrainzProviderKeys.TryGetValue(itemType, out var keys) &&
+            keys.Contains(providerKey, StringComparer.OrdinalIgnoreCase);
     }
 
     private static bool ProviderIdValuesMatch(string expected, string actual)
@@ -166,7 +188,7 @@ internal sealed class JellyfinClient(
 
         if (!string.IsNullOrWhiteSpace(parentLibraryId))
         {
-            query += "&parentId=" + Uri.EscapeDataString(parentLibraryId!);
+            query += "&parentId=" + Uri.EscapeDataString(parentLibraryId);
         }
 
         var path = ItemsPath + query;
@@ -179,10 +201,7 @@ internal sealed class JellyfinClient(
         }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
         {
-            _logger.LogDebug(
-                ex,
-                "The Jellyfin /Items search for {Title} failed.",
-                title);
+            _logger.LogDebug(ex, "The Jellyfin /Items search for {Title} failed.", title);
             return new DeepLinkLookupResult(null, DeepLinkLookupStatus.LookupError);
         }
 
@@ -210,10 +229,7 @@ internal sealed class JellyfinClient(
             }
             catch (JsonException ex)
             {
-                _logger.LogDebug(
-                    ex,
-                    "The Jellyfin /Items search for {Title} returned invalid JSON.",
-                    title);
+                _logger.LogDebug(ex, "The Jellyfin /Items search for {Title} returned invalid JSON.", title);
                 return new DeepLinkLookupResult(null, DeepLinkLookupStatus.LookupError);
             }
 
@@ -240,7 +256,7 @@ internal sealed class JellyfinClient(
 
                     foreach (var candidate in expected)
                     {
-                        if (string.Equals(candidate.Key, providerEntry.Key, StringComparison.OrdinalIgnoreCase) &&
+                        if (IsProviderKey(candidate.Key, item.Type, providerEntry.Key) &&
                             ProviderIdValuesMatch(candidate.Value, providerEntry.Value))
                         {
                             return new DeepLinkLookupResult(item.Id, DeepLinkLookupStatus.Resolved);
@@ -271,10 +287,7 @@ internal sealed class JellyfinClient(
 
         if (code is >= 400 and < 500)
         {
-            _logger.LogInformation(
-                "The Jellyfin request {Description} returned HTTP {Status}.",
-                description,
-                code);
+            _logger.LogInformation("The Jellyfin request {Description} returned HTTP {Status}.", description, code);
             return false;
         }
 

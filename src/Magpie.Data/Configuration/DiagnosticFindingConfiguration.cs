@@ -14,7 +14,6 @@ internal sealed class DiagnosticFindingConfiguration : IEntityTypeConfiguration<
         builder.Property(e => e.Id).ValueGeneratedNever();
         builder.Property(e => e.DiagnosticCheckId).IsRequired().HasMaxLength(255);
         builder.Property(e => e.Title).IsRequired().HasMaxLength(512);
-        builder.Property(e => e.Detail).IsRequired();
         builder.Property(e => e.AffectedEntity).HasMaxLength(512);
         builder.Property(e => e.RepairId).HasMaxLength(255);
         builder.HasIndex(e => e.DiagnosticCheckId);

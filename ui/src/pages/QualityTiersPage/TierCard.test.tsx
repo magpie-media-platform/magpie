@@ -95,6 +95,48 @@ describe('TierCard', () => {
         expect(screen.getByText('Cutoff')).toBeInTheDocument();
     });
 
+    it('shows the shared badge and the other lists that use the tier', () => {
+        render(
+            <TestWrapper>
+                <TierCard
+                    tier={createTier()}
+                    priority={1}
+                    totalTiers={1}
+                    isDeleting={false}
+                    isCloning={false}
+                    canManage
+                    sharedWith={['Video - HD', 'Video - SD']}
+                    {...reorderState}
+                    {...noopHandlers}
+                />
+            </TestWrapper>,
+        );
+
+        expect(screen.getByText('Shared')).toBeInTheDocument();
+        expect(screen.getByTestId('tier-shared-lists')).toHaveTextContent('Also in "Video - HD", "Video - SD"');
+    });
+
+    it('shows no sharing when no other list uses the tier', () => {
+        render(
+            <TestWrapper>
+                <TierCard
+                    tier={createTier()}
+                    priority={1}
+                    totalTiers={1}
+                    isDeleting={false}
+                    isCloning={false}
+                    canManage
+                    sharedWith={[]}
+                    {...reorderState}
+                    {...noopHandlers}
+                />
+            </TestWrapper>,
+        );
+
+        expect(screen.queryByText('Shared')).not.toBeInTheDocument();
+        expect(screen.queryByTestId('tier-shared-lists')).not.toBeInTheDocument();
+    });
+
     it('invokes action callbacks when management buttons are clicked', async () => {
         const onEdit = vi.fn();
         const onDelete = vi.fn();

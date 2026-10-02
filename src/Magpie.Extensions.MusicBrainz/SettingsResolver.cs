@@ -39,7 +39,7 @@ internal sealed class SettingsResolver(ISettingsService settingsService) : ISett
             ?.Value;
         var environmentContact = Environment.GetEnvironmentVariable(EnvContactVariable);
         var contact = string.IsNullOrWhiteSpace(environmentContact) ? storedContact : environmentContact;
-        return new Settings { Contact = string.IsNullOrWhiteSpace(contact) ? null : contact!.Trim() };
+        return new Settings { Contact = string.IsNullOrWhiteSpace(contact) ? null : contact.Trim() };
     }
 
     public void Dispose()

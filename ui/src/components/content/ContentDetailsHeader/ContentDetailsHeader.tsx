@@ -12,6 +12,7 @@ import { Badge } from '@/components/ui/Badge';
 import { CdnPhosphorIcon } from '@/components/ui/CdnPhosphorIcon';
 import { AwardsPanel } from '@/components/ui/AwardsPanel';
 import type { AwardGroup } from '@/lib/materializedMetadataDisplay';
+import type { TemporalPrecision } from '@/types/contentMetadata';
 import { PreviewPlayer, type PreviewClip } from '@/components/ui/PreviewPlayer';
 import { useLibraryTypes, useTypeIconName } from '@/hooks/useLibraryTypes';
 import { isUnrecognizedContentLevel, resolveContentTypeLabel } from '@/lib/contentTypeDisplay';
@@ -53,6 +54,8 @@ export interface ContentDetailItem {
     year?: number;
 
     publishDate?: string;
+
+    publishDatePrecision?: TemporalPrecision;
 
     overview?: string;
 }

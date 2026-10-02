@@ -313,18 +313,6 @@ describe('FilterBar', () => {
     });
 
     describe('header actions', () => {
-        it('shows saved filters dropdown when savedFilters prop is provided', () => {
-            const savedFilters = [
-                { id: '1', name: 'Action Movies', query: 'genre = "Action"' },
-                { id: '2', name: 'Recent', query: 'year >= 2020' },
-            ];
-
-            render(<FilterBar value="" onChange={mockOnChange} savedFilters={savedFilters} />);
-
-            const savedTrigger = document.querySelector('[data-action="apply-saved-filter"]');
-            expect(savedTrigger).toBeInTheDocument();
-        });
-
         it('shows clear button when value is non-empty', () => {
             render(<FilterBar value='genre = "Action"' onChange={mockOnChange} />);
 

@@ -79,7 +79,6 @@ public sealed class DownloadScopeRepositoryTests
     [TearDown]
     public void TearDown()
     {
-        _context.Database.CloseConnection();
         _context.Dispose();
     }
 

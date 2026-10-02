@@ -53,9 +53,7 @@ public class RelationshipContainerIdQueryTests
         Assert.That(result, Is.EqualTo(Query));
     }
 
-    [TestCase(
-        "Relationships has (Kind >= \"x\")",
-        "Operator GreaterThanOrEqual is not supported for field Kind")]
+    [TestCase("Relationships has (Kind >= \"x\")", "Operator GreaterThanOrEqual is not supported for field Kind")]
     [TestCase(
         "Relationships has (RelatedMetadataContainerId contains \"3f2a1c4e-5b6d-47a8-9c10-2d3e4f5a6b7c\")",
         "Operator Contains is not supported for field RelatedMetadataContainerId")]

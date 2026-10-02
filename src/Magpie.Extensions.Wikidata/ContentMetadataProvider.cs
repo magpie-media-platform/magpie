@@ -179,7 +179,7 @@ internal sealed class ContentMetadataProvider(
                 StringComparison.OrdinalIgnoreCase)
             let value = external.Value?.Trim()
             where !string.IsNullOrWhiteSpace(value)
-            select value!;
+            select value;
         return [.. qids.Distinct(StringComparer.OrdinalIgnoreCase)];
     }
 
@@ -241,8 +241,7 @@ internal sealed class ContentMetadataProvider(
         if (hierarchy.Truncated)
         {
             logger.LogWarning(
-                "The Wikidata hierarchy for {Qid} exceeded the limit of {ChildLimit} children, so the " +
-                "query executor dropped the rest.",
+                "Wikidata hierarchy for {Qid} exceeded {ChildLimit} children; the rest were dropped",
                 qid,
                 SparqlQueryBuilder.HierarchyLimit);
         }

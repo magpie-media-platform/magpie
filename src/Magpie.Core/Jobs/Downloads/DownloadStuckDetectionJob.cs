@@ -68,7 +68,9 @@ internal sealed class DownloadStuckDetectionJob(
     private const int DefaultStalledMinutes = 90;
 
     private static string? ValidateMinutes(
-        string? value, IReadOnlyDictionary<string, string> parameters, DateTime utcNow) =>
+        string? value,
+        IReadOnlyDictionary<string, string> parameters,
+        DateTime utcNow) =>
         int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var minutes) &&
         minutes > utcNow.Ticks / TimeSpan.TicksPerMinute
             ? "exceeds the supported date range." : null;

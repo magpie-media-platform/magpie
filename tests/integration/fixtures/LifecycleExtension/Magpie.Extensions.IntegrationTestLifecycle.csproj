@@ -16,6 +16,10 @@
     <PackageTags>magpie integration-test</PackageTags>
   </PropertyGroup>
 
+  <ItemGroup Condition="'$(TargetAbi)' != ''">
+    <AssemblyMetadata Include="TargetABI" Value="$(TargetAbi)" />
+  </ItemGroup>
+
   <ItemGroup>
     <ProjectReference Include="..\..\..\..\src\Magpie.Sdk\Magpie.Sdk.csproj" />
   </ItemGroup>

@@ -20,12 +20,16 @@ export interface MonitoringToggleProps<T extends MonitoringValue = boolean | nul
 
     'aria-label'?: string;
 
+    'aria-labelledby'?: string;
+
     'data-field'?: string;
 
     testIdPrefix?: string;
     filter?: boolean;
-    /** Offers the Inherit, Unmonitored, Monitored, and Shotgun choices. */
+    /** Offers the Unmonitored, Monitored, and Shotgun choices. */
     shotgun?: boolean;
+    /** Offers the Inherit choice. */
+    inherit?: boolean;
 }
 
 interface MonitoringOption {
@@ -98,10 +102,12 @@ export function MonitoringToggle<T extends MonitoringValue = boolean | null>({
     disabled = false,
     id,
     'aria-label': ariaLabel = 'Monitoring override',
+    'aria-labelledby': ariaLabelledBy,
     'data-field': dataField,
     testIdPrefix,
     filter = false,
     shotgun = false,
+    inherit = true,
 }: MonitoringToggleProps<T>) {
     const optionRefs = useRef<(HTMLButtonElement | null)[]>([]);
     const options: MonitoringOption[] = filter
@@ -127,16 +133,15 @@ export function MonitoringToggle<T extends MonitoringValue = boolean | null>({
                   : []),
               { value: null, key: 'any', label: 'Any', icon: FunnelIcon, tooltip: 'Do not restrict monitoring' },
           ]
-        : shotgun
-          ? SHOTGUN_OPTIONS
-          : OPTIONS;
+        : (shotgun ? SHOTGUN_OPTIONS : OPTIONS).filter((option) => inherit || option.value !== null);
 
     return (
         <div
             id={id}
             className="monitoring-toggle__segments"
             role="radiogroup"
-            aria-label={ariaLabel}
+            aria-label={ariaLabelledBy ? undefined : ariaLabel}
+            aria-labelledby={ariaLabelledBy}
             data-monitoring={options.find((option) => option.value === value)?.key}
             data-component="monitoring-toggle"
             data-field={dataField}

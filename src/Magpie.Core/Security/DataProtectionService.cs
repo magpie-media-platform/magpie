@@ -11,14 +11,12 @@ internal sealed class DataProtectionService(IDataProtectionProvider dataProtecti
 {
     private const string EnvelopeKey = "__magpieSecret";
 
-    public string ActiveKeyId => dataProtectionProvider.ActiveKeyId;
-
     public Dictionary<string, string> Protect(IReadOnlyDictionary<string, string> settings)
     {
         ArgumentNullException.ThrowIfNull(settings);
 
         var plaintext = JsonSerializer.Serialize(settings, JsonSerializerOptions.Default);
-        return new Dictionary<string, string> { [EnvelopeKey] = dataProtectionProvider.Protect(plaintext) };
+        return new() { [EnvelopeKey] = dataProtectionProvider.Protect(plaintext) };
     }
 
     public Dictionary<string, string> Unprotect(IReadOnlyDictionary<string, string> stored)

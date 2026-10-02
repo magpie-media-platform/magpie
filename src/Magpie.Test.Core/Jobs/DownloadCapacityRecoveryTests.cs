@@ -14,14 +14,19 @@ using Magpie.Abstractions.Repositories;
 using Magpie.Abstractions.Security;
 using Magpie.Core;
 using Magpie.Core.Jobs;
+using Magpie.Core.Jobs.Downloads;
+using Magpie.Core.Releases;
 using Magpie.Core.Repositories;
 using Magpie.Data;
 using Magpie.Models;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
+using Magpie.Models.Jobs;
+using Magpie.Models.Paging;
 using Magpie.Models.Releases;
 using Magpie.Models.Storage;
+using Magpie.Sdk.Integrations;
 using Magpie.Sdk.Jobs;
 using Magpie.Sdk.Releases;
 using Magpie.Sdk.Services;
@@ -46,6 +51,7 @@ public sealed class DownloadCapacityRecoveryTests
     private DownloadImportItemJob _import = null!;
     private Mock<IFileSystem> _files = null!;
     private Mock<IJobManager> _jobs = null!;
+    private Mock<IJobExecutionRepository> _executions = null!;
     private DownloadImportScanJob _scan = null!;
     private FakeTimeProvider _time = null!;
     private Download _download = null!;
@@ -54,6 +60,14 @@ public sealed class DownloadCapacityRecoveryTests
     private string _destination = null!;
     private Mock<IContentFileService> _rename = null!;
     private ContentHierarchyItem _node = null!;
+    private ContentItem _content = null!;
+    private Mock<IContentRepository> _contents = null!;
+    private Mock<IReleaseEvaluationService> _evaluation = null!;
+    private IMediaFileRepository _media = null!;
+    private Mock<IReleaseRepository> _releases = null!;
+    private Mock<IContentHierarchyItemRepository> _nodes = null!;
+    private Mock<IContentService> _contentService = null!;
+    private Mock<IRootFolderRepository> _roots = null!;
 
     [OneTimeSetUp]
     public void CreateTemplate()
@@ -85,8 +99,16 @@ public sealed class DownloadCapacityRecoveryTests
         var events = Mock.Of<IEventBus>();
         var audits = new AuditRecordRepository(_context, events, NullLogger<AuditRecordRepository>.Instance,
             transactions, Mock.Of<IJobExecutionScopeFactory>(), _time);
-        _downloads = new DownloadRepository(_context, audits, transactions, events,
-            NullLogger<DownloadRepository>.Instance, Mock.Of<IDataProtectionService>(), _time);
+        _downloads = new DownloadRepository(
+            _context,
+            audits,
+            transactions,
+            events,
+            NullLogger<DownloadRepository>.Instance,
+            Mock.Of<IDataProtectionService>(protector =>
+                protector.Unprotect(It.IsAny<IReadOnlyDictionary<string, string>>()) ==
+                new Dictionary<string, string>()),
+            _time);
         var root = new RootFolder { Name = "Library", Path = "/library", ContentType = "movie" };
         var metadata = new MetadataContainer();
         var client = new DownloadClient { Name = "Client", ProviderType = "test", Enabled = true };
@@ -106,6 +128,7 @@ public sealed class DownloadCapacityRecoveryTests
         _context.Add(node);
         _context.SaveChanges();
         var content = new ContentItem { ContentHierarchyItemId = node.Id, Fulfillment = FulfillmentStatus.Missing };
+        _content = content;
         _download = new Download
         {
             Title = "Film",
@@ -123,21 +146,27 @@ public sealed class DownloadCapacityRecoveryTests
         _context.SaveChanges();
         _context.ChangeTracker.Clear();
         var roots = new Mock<IRootFolderRepository>();
+        _roots = roots;
         roots.Setup(repository => repository.GetByIdAsync(root.Id, It.IsAny<CancellationToken>())).ReturnsAsync(root);
         var nodes = new Mock<IContentHierarchyItemRepository>();
+        _nodes = nodes;
         nodes.Setup(repository => repository.GetLineageAsync(node.Id, It.IsAny<CancellationToken>()))
             .ReturnsAsync([node]);
         var releases = new Mock<IReleaseRepository>();
+        _releases = releases;
         releases.Setup(repository => repository.GetByIdAsync(_release.Id, It.IsAny<CancellationToken>()))
             .ReturnsAsync(_release);
         var contents = new Mock<IContentRepository> { CallBase = true };
+        _contents = contents;
         var contentService = new Mock<IContentService>();
+        _contentService = contentService;
         contentService.Setup(service => service.GetOrCreateContentItemAsync(node.Id, It.IsAny<DateTime>(),
             It.IsAny<Guid?>(), null, It.IsAny<CancellationToken>())).ReturnsAsync(content);
         var scopes = new DownloadScopeRepository(_context, transactions, audits,
             NullLogger<DownloadScopeRepository>.Instance, _time);
         var media = new MediaFileRepository(_context, NullLogger<MediaFileRepository>.Instance, transactions,
             contents.Object, nodes.Object, events);
+        _media = media;
         var blocked = new Mock<IBlockedFileTypeRepository>();
         blocked.Setup(repository => repository.ListAllAsync(It.IsAny<CancellationToken>())).ReturnsAsync([]);
         var mappings = new Mock<IRemotePathMappingRepository>();
@@ -170,17 +199,26 @@ public sealed class DownloadCapacityRecoveryTests
                 Item = node
             });
         var evaluation = new Mock<IReleaseEvaluationService>();
+        _evaluation = evaluation;
         evaluation.Setup(service => service.ResolveScopeAsync(_release, It.IsAny<IReadOnlyList<ContentFact>>(),
             node.Id, It.IsAny<CancellationToken>())).ReturnsAsync(new ReleaseScopeResolution([], []));
+        evaluation.Setup(service => service.AssignFilesToLeavesAsync(
+                _release,
+                It.IsAny<ContentHierarchyItem>(),
+                It.IsAny<IReadOnlyList<ContentHierarchyItem>>(),
+                It.IsAny<IReadOnlyList<ReleaseFileRef>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
         var executions = new Mock<IJobExecutionRepository> { CallBase = true };
+        _executions = executions;
         executions.Setup(repository => repository.QueryAsync(It.IsAny<JobExecutionQuery>(),
-                It.IsAny<Magpie.Models.Paging.PagingParameter>(), It.IsAny<Magpie.Models.Paging.SortParameter?>(),
-                It.IsAny<CancellationToken>())).ReturnsAsync(new Magpie.Models.Paging.PagedList<JobExecution>());
+                It.IsAny<PagingParameter>(), It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>())).ReturnsAsync(new PagedList<JobExecution>());
         _jobs = new Mock<IJobManager>();
         _scan = new DownloadImportScanJob(_downloads, executions.Object, _jobs.Object, _time,
             NullLogger<DownloadImportScanJob>.Instance, Mock.Of<IProgressReporter>());
         _import = new DownloadImportItemJob(audits, _downloads, roots.Object, nodes.Object, media, releases.Object,
-            Mock.Of<IReleaseScopeRepository>(), scopes, executions.Object, _files.Object,
+            Mock.Of<IReleaseScopeRepository>(), scopes, executions.Object, _jobs.Object, _files.Object,
             Mock.Of<IContentTypeRegistry>(), rename.Object, blocked.Object, mappings.Object,
             Mock.Of<IDownloadClientRepository>(), Mock.Of<IRemotePathMappingService>(), transactions,
             Mock.Of<IQualityService>(), contents.Object, contentService.Object,
@@ -192,6 +230,471 @@ public sealed class DownloadCapacityRecoveryTests
 
     [TearDown]
     public void TearDown() => _context.Dispose();
+
+    [Test]
+    public async Task ExecuteAsync_CancelsWithoutFailure_WhenAnotherAttemptOfTheTransferImportedTheFile()
+    {
+        // Arrange
+        var imported = new Download
+        {
+            Title = "Film",
+            ExternalId = "original-client-transfer",
+            DownloadClientId = _download.DownloadClientId,
+            ReleaseId = _release.Id,
+            Status = DownloadStatus.Imported,
+            OutputPath = "/downloads/film.mkv",
+            DateCompleted = _time.GetUtcNow().UtcDateTime,
+            CreatedAt = _time.GetUtcNow().UtcDateTime
+        };
+        _context.Add(imported);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.Add(new DownloadScope { DownloadId = imported.Id, ContentHierarchyItemId = _node.Id });
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        await _media.CreateAsync(
+            new MediaFile
+            {
+                ContentItemId = _content.Id,
+                FilePath = _destination,
+                FileKind = "Video",
+                DownloadId = imported.Id,
+                CreatedAt = _time.GetUtcNow().UtcDateTime
+            },
+            null).ConfigureAwait(false);
+        _context.ChangeTracker.Clear();
+        _files.Setup(files => files.FileExists(_destination)).Returns(true);
+        _files.Setup(files => files.GetStorageCapacity(It.IsAny<string>()))
+            .Returns(new StorageCapacity { VolumeId = "library-volume", AvailableBytes = 1000 });
+        _contents.Setup(repository => repository.QueryAsync(
+                It.IsAny<ContentItemQuery>(),
+                It.IsAny<PagingParameter>(),
+                null,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<ContentItem> { Items = [_content] });
+        _evaluation.Setup(service => service.AssessForContentAsync(
+                _release,
+                It.IsAny<IReadOnlyList<ContentFact>>(),
+                _node.Id,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ReleaseAssessment { MatchResult = ReleaseMatchResult.Confident, IsAcceptable = false });
+
+        // Act
+        await _import.ExecuteAsync(_job).ConfigureAwait(false);
+        var stored = await _downloads.GetByIdAsync(_download.Id).ConfigureAwait(false);
+        var cleanup = await _downloads.ListCleanupCandidatesAsync().ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(stored!.Status, Is.EqualTo(DownloadStatus.Cancelled));
+            Assert.That(stored.StatusReason, Is.EqualTo("Content fulfilled"));
+            Assert.That(stored.FailureReason, Is.Null);
+            Assert.That(stored.ClientRemovedAt, Is.Null);
+            Assert.That(cleanup.Select(candidate => candidate.DownloadId), Does.Not.Contain(_download.Id));
+            _files.Verify(files => files.TransferToOwnedPathAsync(It.IsAny<string>(), It.IsAny<string>(),
+                It.IsAny<ImportMode>(), It.IsAny<Func<string, Task>>(), It.IsAny<CancellationToken>()), Times.Never);
+        }
+    }
+
+    [Test]
+    public async Task ExecuteAsync_KeepsTheTransferForTheWaitingAttempt_WhenTheCleanupRunsBeforeItsHandOver()
+    {
+        // Arrange
+        var imported = new Download
+        {
+            Title = "Film",
+            ExternalId = "original-client-transfer",
+            DownloadClientId = _download.DownloadClientId,
+            ReleaseId = _release.Id,
+            Status = DownloadStatus.Imported,
+            OutputPath = "/downloads/film.mkv",
+            DateCompleted = _time.GetUtcNow().UtcDateTime,
+            CreatedAt = _time.GetUtcNow().UtcDateTime
+        };
+        _context.Add(imported);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.Add(new DownloadScope { DownloadId = imported.Id, ContentHierarchyItemId = _node.Id });
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        await _media.CreateAsync(
+            new MediaFile
+            {
+                ContentItemId = _content.Id,
+                FilePath = _destination,
+                FileKind = "Video",
+                DownloadId = imported.Id,
+                CreatedAt = _time.GetUtcNow().UtcDateTime
+            },
+            null).ConfigureAwait(false);
+        _context.ChangeTracker.Clear();
+        _files.Setup(files => files.FileExists(_destination)).Returns(true);
+        _files.Setup(files => files.GetStorageCapacity(It.IsAny<string>()))
+            .Returns(new StorageCapacity { VolumeId = "library-volume", AvailableBytes = 1000 });
+        _contents.Setup(repository => repository.QueryAsync(
+                It.IsAny<ContentItemQuery>(),
+                It.IsAny<PagingParameter>(),
+                null,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<ContentItem> { Items = [_content] });
+        _evaluation.Setup(service => service.AssessForContentAsync(
+                _release,
+                It.IsAny<IReadOnlyList<ContentFact>>(),
+                _node.Id,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ReleaseAssessment { MatchResult = ReleaseMatchResult.Confident, IsAcceptable = false });
+        var client = new Mock<IDownloadClientIntegration>();
+        client.SetupGet(integration => integration.ProviderType).Returns("test");
+        client.Setup(integration => integration.RemoveDownloadAsync(
+                "original-client-transfer",
+                true,
+                It.IsAny<IReadOnlyDictionary<string, string>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        var cleanup = new DownloadCleanupJob(
+            [client.Object],
+            _downloads,
+            NullLogger<DownloadCleanupJob>.Instance,
+            _time,
+            Mock.Of<IProgressReporter>());
+
+        // Act
+        await cleanup.ExecuteAsync(_job).ConfigureAwait(false);
+        var kept = await _downloads.GetByIdAsync(imported.Id).ConfigureAwait(false);
+        await _import.ExecuteAsync(_job).ConfigureAwait(false);
+        await cleanup.ExecuteAsync(_job).ConfigureAwait(false);
+        var first = await _downloads.GetByIdAsync(imported.Id).ConfigureAwait(false);
+        var second = await _downloads.GetByIdAsync(_download.Id).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(kept!.ClientRemovedAt, Is.Null);
+            Assert.That(second!.Status, Is.EqualTo(DownloadStatus.Cancelled));
+            Assert.That(second.StatusReason, Is.EqualTo("Content fulfilled"));
+            Assert.That(second.FailureReason, Is.Null);
+            Assert.That(first!.ClientRemovedAt, Is.EqualTo(new DateTime(2026, 9, 22, 12, 0, 0, DateTimeKind.Utc)));
+            Assert.That(second.ClientRemovedAt, Is.EqualTo(new DateTime(2026, 9, 22, 12, 0, 0, DateTimeKind.Utc)));
+            client.Verify(integration => integration.RemoveDownloadAsync(
+                "original-client-transfer",
+                true,
+                It.IsAny<IReadOnlyDictionary<string, string>>(),
+                It.IsAny<CancellationToken>()), Times.Once);
+            _jobs.Verify(jobs => jobs.ExecuteAsync(
+                It.Is<JobEnqueueRequest>(request => request.JobType == "DownloadCleanup"),
+                It.IsAny<CancellationToken>()), Times.Once);
+        }
+    }
+
+    [Test]
+    public async Task ExecuteAsync_LeavesItDownloadedWithoutQueueing_WhenAnotherAttemptOfTheTransferIsImporting()
+    {
+        // Arrange
+        var importing = new Download
+        {
+            Title = "Film",
+            ExternalId = "original-client-transfer",
+            DownloadClientId = _download.DownloadClientId,
+            ReleaseId = _release.Id,
+            Status = DownloadStatus.Importing,
+            OutputPath = "/downloads/film.mkv",
+            DateCompleted = _time.GetUtcNow().UtcDateTime,
+            CreatedAt = _time.GetUtcNow().UtcDateTime
+        };
+        _context.Add(importing);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.ChangeTracker.Clear();
+
+        // Act
+        await _import.ExecuteAsync(_job).ConfigureAwait(false);
+        var stored = await _downloads.GetByIdAsync(_download.Id).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(stored!.Status, Is.EqualTo(DownloadStatus.Downloaded));
+            Assert.That(stored.FailureReason, Is.Null);
+            _jobs.Verify(jobs => jobs.ExecuteAsync(
+                It.IsAny<JobEnqueueRequest>(),
+                It.IsAny<CancellationToken>()), Times.Never);
+            _files.Verify(files => files.TransferToOwnedPathAsync(It.IsAny<string>(), It.IsAny<string>(),
+                It.IsAny<ImportMode>(), It.IsAny<Func<string, Task>>(), It.IsAny<CancellationToken>()), Times.Never);
+        }
+    }
+
+    [Test]
+    public async Task ExecuteAsync_HandsTheTransferToItsWaitingAttempt_WhenItsImportSucceeds()
+    {
+        // Arrange
+        var waiting = new Download
+        {
+            Title = "Film",
+            ExternalId = "original-client-transfer",
+            DownloadClientId = _download.DownloadClientId,
+            ReleaseId = _release.Id,
+            Status = DownloadStatus.Downloaded,
+            OutputPath = "/downloads/film.mkv",
+            DateCompleted = _time.GetUtcNow().UtcDateTime,
+            CreatedAt = _time.GetUtcNow().UtcDateTime
+        };
+        _context.Add(waiting);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.Add(new DownloadScope { DownloadId = waiting.Id, ContentHierarchyItemId = _node.Id });
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.ChangeTracker.Clear();
+        _files.Setup(files => files.GetStorageCapacity(It.IsAny<string>()))
+            .Returns(new StorageCapacity { VolumeId = "library-volume", AvailableBytes = 1000 });
+        var waitingUserId = Guid.Parse("7a3c1e52-9d84-4b0f-a6e2-5c1f8b9d3e40");
+        _executions.Setup(repository => repository.QueryAsync(
+                It.IsAny<JobExecutionQuery>(),
+                It.IsAny<PagingParameter>(),
+                It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<JobExecution>
+            {
+                Items =
+                [
+                    new JobExecution
+                    {
+                        JobType = "DownloadImportItem",
+                        Status = JobExecutionStatus.Completed,
+                        Parameters = new Dictionary<string, string>
+                        {
+                            ["downloadId"] = waiting.Id.ToString("D"),
+                            ["collisionMode"] = "Replace"
+                        },
+                        CreatedByUserId = waitingUserId,
+                        CreatedAt = _time.GetUtcNow().UtcDateTime
+                    }
+                ],
+                TotalItems = 1
+            });
+
+        // Act
+        await _import.ExecuteAsync(_job).ConfigureAwait(false);
+        _files.Setup(files => files.FileExists(_destination)).Returns(true);
+        await _import.ExecuteAsync(_job with
+        {
+            Parameters = new Dictionary<string, string> { ["downloadId"] = waiting.Id.ToString("D") }
+        }).ConfigureAwait(false);
+        var first = await _downloads.GetByIdAsync(_download.Id).ConfigureAwait(false);
+        var second = await _downloads.GetByIdAsync(waiting.Id).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(first!.Status, Is.EqualTo(DownloadStatus.Imported));
+            Assert.That(second!.Status, Is.EqualTo(DownloadStatus.Cancelled));
+            Assert.That(second.StatusReason, Is.EqualTo("Content fulfilled"));
+            _jobs.Verify(jobs => jobs.ExecuteAsync(
+                It.Is<JobEnqueueRequest>(request =>
+                    request.JobType == "DownloadImportItem" &&
+                    request.Parameters!["downloadId"] == waiting.Id.ToString("D") &&
+                    request.Parameters["collisionMode"] == "Replace" &&
+                    request.UserId == waitingUserId &&
+                    !request.OnlyIfInactive &&
+                    request.NotBeforeAt == null),
+                It.IsAny<CancellationToken>()), Times.Once);
+            _files.Verify(files => files.TransferToOwnedPathAsync(It.IsAny<string>(), It.IsAny<string>(),
+                It.IsAny<ImportMode>(), It.IsAny<Func<string, Task>>(), It.IsAny<CancellationToken>()), Times.Once);
+        }
+    }
+
+    [Test]
+    public async Task ExecuteAsync_HandsTheTransferToItsWaitingAttempt_WhenItsImportFails()
+    {
+        // Arrange
+        var waiting = new Download
+        {
+            Title = "Film",
+            ExternalId = "original-client-transfer",
+            DownloadClientId = _download.DownloadClientId,
+            ReleaseId = _release.Id,
+            Status = DownloadStatus.Downloaded,
+            OutputPath = "/downloads/film.mkv",
+            DateCompleted = _time.GetUtcNow().UtcDateTime,
+            CreatedAt = _time.GetUtcNow().UtcDateTime
+        };
+        _context.Add(waiting);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.Add(new DownloadScope { DownloadId = waiting.Id, ContentHierarchyItemId = _node.Id });
+        await _context.Downloads.Where(download => download.Id == _download.Id)
+            .ExecuteUpdateAsync(setters => setters.SetProperty(download => download.ReleaseId, (Guid?)null))
+            .ConfigureAwait(false);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.ChangeTracker.Clear();
+        _files.Setup(files => files.GetStorageCapacity(It.IsAny<string>()))
+            .Returns(new StorageCapacity { VolumeId = "library-volume", AvailableBytes = 1000 });
+
+        // Act
+        Assert.CatchAsync(() => _import.ExecuteAsync(_job));
+        await _import.ExecuteAsync(_job with
+        {
+            Parameters = new Dictionary<string, string> { ["downloadId"] = waiting.Id.ToString("D") }
+        }).ConfigureAwait(false);
+        var first = await _downloads.GetByIdAsync(_download.Id).ConfigureAwait(false);
+        var second = await _downloads.GetByIdAsync(waiting.Id).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(first!.Status, Is.EqualTo(DownloadStatus.Failed));
+            Assert.That(second!.Status, Is.EqualTo(DownloadStatus.Imported));
+            _jobs.Verify(jobs => jobs.ExecuteAsync(
+                It.Is<JobEnqueueRequest>(request =>
+                    request.JobType == "DownloadImportItem" &&
+                    request.Parameters!["downloadId"] == waiting.Id.ToString("D") &&
+                    !request.OnlyIfInactive &&
+                    request.NotBeforeAt == null),
+                It.IsAny<CancellationToken>()), Times.Once);
+            _files.Verify(files => files.TransferToOwnedPathAsync(It.IsAny<string>(), It.IsAny<string>(),
+                It.IsAny<ImportMode>(), It.IsAny<Func<string, Task>>(), It.IsAny<CancellationToken>()), Times.Once);
+        }
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task ExecuteAsync_DoesNotHandOverTheTransfer_WhenItsImportHasNotEnded(bool dryRun)
+    {
+        // Arrange
+        var waiting = new Download
+        {
+            Title = "Film",
+            ExternalId = "original-client-transfer",
+            DownloadClientId = _download.DownloadClientId,
+            ReleaseId = _release.Id,
+            Status = DownloadStatus.Downloaded,
+            OutputPath = "/downloads/film.mkv",
+            DateCompleted = _time.GetUtcNow().UtcDateTime,
+            CreatedAt = _time.GetUtcNow().UtcDateTime
+        };
+        _context.Add(waiting);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.ChangeTracker.Clear();
+        var job = _job with
+        {
+            Parameters = new Dictionary<string, string>(_job.Parameters) { ["dryRun"] = dryRun ? "true" : "false" }
+        };
+
+        // Act
+        await _import.ExecuteAsync(job).ConfigureAwait(false);
+        var first = await _downloads.GetByIdAsync(_download.Id).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(first!.Status, Is.EqualTo(dryRun ? DownloadStatus.Downloaded : DownloadStatus.Importing));
+            _jobs.Verify(jobs => jobs.ExecuteAsync(
+                It.IsAny<JobEnqueueRequest>(),
+                It.IsAny<CancellationToken>()), Times.Never);
+        }
+    }
+
+    [TestCase(DownloadStatus.Failed)]
+    [TestCase(DownloadStatus.Faulted)]
+    [TestCase(DownloadStatus.Cancelled)]
+    public async Task ExecuteAsync_DoesNotHandOverTheTransfer_WhenItsOtherAttemptHasEnded(DownloadStatus status)
+    {
+        // Arrange
+        var ended = new Download
+        {
+            Title = "Film",
+            ExternalId = "original-client-transfer",
+            DownloadClientId = _download.DownloadClientId,
+            ReleaseId = _release.Id,
+            Status = status,
+            OutputPath = "/downloads/film.mkv",
+            DateCompleted = _time.GetUtcNow().UtcDateTime,
+            CreatedAt = _time.GetUtcNow().UtcDateTime
+        };
+        _context.Add(ended);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.ChangeTracker.Clear();
+        _files.Setup(files => files.GetStorageCapacity(It.IsAny<string>()))
+            .Returns(new StorageCapacity { VolumeId = "library-volume", AvailableBytes = 1000 });
+
+        // Act
+        await _import.ExecuteAsync(_job).ConfigureAwait(false);
+        var first = await _downloads.GetByIdAsync(_download.Id).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(first!.Status, Is.EqualTo(DownloadStatus.Imported));
+            _jobs.Verify(jobs => jobs.ExecuteAsync(
+                It.Is<JobEnqueueRequest>(request =>
+                    request.JobType == "DownloadImportItem" &&
+                    request.Parameters!["downloadId"] == ended.Id.ToString("D")),
+                It.IsAny<CancellationToken>()), Times.Never);
+        }
+    }
+
+    [TestCase(DownloadStatus.Imported, false)]
+    [TestCase(DownloadStatus.Faulted, true)]
+    public async Task ExecuteAsync_FailsOnTheCollision_WhenNoImportedAttemptOfTheTransferPlacedTheFile(
+        DownloadStatus siblingStatus,
+        bool placedBySibling)
+    {
+        // Arrange
+        var sibling = new Download
+        {
+            Title = "Film",
+            ExternalId = "original-client-transfer",
+            DownloadClientId = _download.DownloadClientId,
+            ReleaseId = _release.Id,
+            Status = siblingStatus,
+            OutputPath = "/downloads/film.mkv",
+            DateCompleted = _time.GetUtcNow().UtcDateTime,
+            CreatedAt = _time.GetUtcNow().UtcDateTime
+        };
+        var unrelated = new Download
+        {
+            Title = "Film",
+            ExternalId = "other-client-transfer",
+            DownloadClientId = _download.DownloadClientId,
+            ReleaseId = _release.Id,
+            Status = DownloadStatus.Imported,
+            OutputPath = "/downloads/other/film.mkv",
+            DateCompleted = _time.GetUtcNow().UtcDateTime,
+            CreatedAt = _time.GetUtcNow().UtcDateTime
+        };
+        _context.AddRange(sibling, unrelated);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        await _media.CreateAsync(
+            new MediaFile
+            {
+                ContentItemId = _content.Id,
+                FilePath = _destination,
+                FileKind = "Video",
+                DownloadId = placedBySibling ? sibling.Id : unrelated.Id,
+                CreatedAt = _time.GetUtcNow().UtcDateTime
+            },
+            null).ConfigureAwait(false);
+        _context.ChangeTracker.Clear();
+        _files.Setup(files => files.FileExists(_destination)).Returns(true);
+        _files.Setup(files => files.GetStorageCapacity(It.IsAny<string>()))
+            .Returns(new StorageCapacity { VolumeId = "library-volume", AvailableBytes = 1000 });
+        _contents.Setup(repository => repository.QueryAsync(
+                It.IsAny<ContentItemQuery>(),
+                It.IsAny<PagingParameter>(),
+                null,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<ContentItem> { Items = [_content] });
+        _evaluation.Setup(service => service.AssessForContentAsync(
+                _release,
+                It.IsAny<IReadOnlyList<ContentFact>>(),
+                _node.Id,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ReleaseAssessment { MatchResult = ReleaseMatchResult.Confident, IsAcceptable = false });
+
+        // Act
+        Assert.CatchAsync(() => _import.ExecuteAsync(_job));
+        var stored = await _downloads.GetByIdAsync(_download.Id).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(stored!.Status, Is.EqualTo(DownloadStatus.Faulted));
+            Assert.That(stored.FailureReason, Is.EqualTo(DownloadFailureReason.ImportFailed));
+        }
+    }
 
     [TestCase(unchecked((int)0x80070070),
         "Waiting for destination capacity: file coordination reported insufficient space.")]
@@ -262,7 +765,7 @@ public sealed class DownloadCapacityRecoveryTests
             _files.Verify(files => files.TransferToOwnedPathAsync("/downloads/film.mkv", It.IsAny<string>(),
                 ImportMode.Copy, It.IsAny<Func<string, Task>>(), It.IsAny<CancellationToken>()), Times.Once);
             _files.Verify(files => files.DeleteFile(It.IsAny<string>()), Times.Never);
-            _jobs.Verify(jobs => jobs.ExecuteAsync(It.Is<Magpie.Models.Jobs.JobEnqueueRequest>(request =>
+            _jobs.Verify(jobs => jobs.ExecuteAsync(It.Is<JobEnqueueRequest>(request =>
                 request.JobType == "DownloadImportItem" && request.OnlyIfInactive), It.IsAny<CancellationToken>()),
                 Times.Once);
         }
@@ -377,6 +880,132 @@ public sealed class DownloadCapacityRecoveryTests
     }
 
     [Test]
+    public async Task ExecuteAsync_FailsTheDownloadAndBlocksTheRelease_WhenTheDownloadHasNoScope()
+    {
+        // Arrange
+        await _context.DownloadScopes.ExecuteDeleteAsync().ConfigureAwait(false);
+
+        // Act
+        Assert.CatchAsync(() => _import.ExecuteAsync(_job));
+        var stored = await _downloads.GetByIdAsync(_download.Id).ConfigureAwait(false);
+        var statuses = await new ReleaseBlockList(_downloads).ResolveStatusesAsync([_release], _node.Id, default)
+            .ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(stored!.Status, Is.EqualTo(DownloadStatus.Failed));
+            Assert.That(stored.FailureReason, Is.EqualTo(DownloadFailureReason.ImportFailed));
+            Assert.That(ReleaseBlockList.Blocked(statuses), Does.Contain(_release.Id));
+        }
+    }
+
+    [Test]
+    public async Task ExecuteAsync_FailsTheDownloadAndBlocksTheRelease_WhenTheReleaseIsMissing()
+    {
+        // Arrange
+        _releases.Setup(repository => repository.GetByIdAsync(_release.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((Release?)null);
+
+        // Act
+        Assert.CatchAsync(() => _import.ExecuteAsync(_job));
+        var stored = await _downloads.GetByIdAsync(_download.Id).ConfigureAwait(false);
+        var statuses = await new ReleaseBlockList(_downloads).ResolveStatusesAsync([_release], _node.Id, default)
+            .ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(stored!.Status, Is.EqualTo(DownloadStatus.Failed));
+            Assert.That(stored.FailureReason, Is.EqualTo(DownloadFailureReason.ImportFailed));
+            Assert.That(ReleaseBlockList.Blocked(statuses), Does.Contain(_release.Id));
+        }
+    }
+
+    [Test]
+    public async Task ExecuteAsync_FailsTheDownloadAndBlocksTheRelease_WhenTheHierarchyItemIsMissing()
+    {
+        // Arrange
+        var missingItemId = Guid.Parse("41374bf4-f8a6-4f25-b6e4-12c6f0ddaf8c");
+        _contentService
+            .Setup(service => service.GetOrCreateContentItemAsync(
+                _node.Id,
+                It.IsAny<DateTime>(),
+                It.IsAny<Guid?>(),
+                null,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ContentItem
+            {
+                ContentHierarchyItemId = missingItemId,
+                Fulfillment = FulfillmentStatus.Missing
+            });
+        _nodes.Setup(repository => repository.GetLineageAsync(missingItemId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
+
+        // Act
+        Assert.CatchAsync(() => _import.ExecuteAsync(_job));
+        var stored = await _downloads.GetByIdAsync(_download.Id).ConfigureAwait(false);
+        var statuses = await new ReleaseBlockList(_downloads).ResolveStatusesAsync([_release], _node.Id, default)
+            .ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(stored!.Status, Is.EqualTo(DownloadStatus.Failed));
+            Assert.That(stored.FailureReason, Is.EqualTo(DownloadFailureReason.ImportFailed));
+            Assert.That(ReleaseBlockList.Blocked(statuses), Does.Contain(_release.Id));
+        }
+    }
+
+    [Test]
+    public async Task ExecuteAsync_FailsTheDownloadAndBlocksTheRelease_WhenTheRootFolderIsMissing()
+    {
+        // Arrange
+        _roots.Setup(repository => repository.GetByIdAsync(_node.EffectiveRootFolderId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((RootFolder?)null);
+
+        // Act
+        Assert.CatchAsync(() => _import.ExecuteAsync(_job));
+        var stored = await _downloads.GetByIdAsync(_download.Id).ConfigureAwait(false);
+        var statuses = await new ReleaseBlockList(_downloads).ResolveStatusesAsync([_release], _node.Id, default)
+            .ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(stored!.Status, Is.EqualTo(DownloadStatus.Failed));
+            Assert.That(stored.FailureReason, Is.EqualTo(DownloadFailureReason.ImportFailed));
+            Assert.That(ReleaseBlockList.Blocked(statuses), Does.Contain(_release.Id));
+        }
+    }
+
+    [Test]
+    public async Task ExecuteAsync_FaultsTheDownloadAndLeavesTheReleaseUnblocked_WhenTheTransferHasAnIOError()
+    {
+        // Arrange
+        _files.Setup(files => files.GetStorageCapacity(It.IsAny<string>()))
+            .Returns(new StorageCapacity { VolumeId = "library-volume", AvailableBytes = 100 });
+        _files.Setup(files => files.GetFileSize(_destination)).Throws<FileNotFoundException>();
+        _files.Setup(files => files.TransferToOwnedPathAsync("/downloads/film.mkv", It.IsAny<string>(),
+                ImportMode.Copy, It.IsAny<Func<string, Task>>(), It.IsAny<CancellationToken>()))
+            .Throws(new IOException("Synthetic sharing violation.", unchecked((int)0x80070020)));
+
+        // Act
+        Assert.CatchAsync(() => _import.ExecuteAsync(_job));
+        var stored = await _downloads.GetByIdAsync(_download.Id).ConfigureAwait(false);
+        var statuses = await new ReleaseBlockList(_downloads).ResolveStatusesAsync([_release], _node.Id, default)
+            .ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(stored!.Status, Is.EqualTo(DownloadStatus.Faulted));
+            Assert.That(stored.FailureReason, Is.EqualTo(DownloadFailureReason.ImportFailed));
+            Assert.That(ReleaseBlockList.Blocked(statuses), Does.Not.Contain(_release.Id));
+        }
+    }
+
+    [Test]
     public async Task ExecuteAsync_DoesNotReportCapacityWaiting_WhenTransferIsCancelled()
     {
         // Arrange
@@ -447,7 +1076,7 @@ public sealed class DownloadCapacityRecoveryTests
         }
         else
         {
-            _files.Setup(files => files.GetStorageCapacity(It.IsAny<string>())).Throws<IOException>();
+            _files.Setup(files => files.GetStorageCapacity(It.IsAny<string>())).Returns((StorageCapacity?)null);
         }
 
         // Act

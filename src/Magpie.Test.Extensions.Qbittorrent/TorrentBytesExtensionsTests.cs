@@ -1,7 +1,6 @@
 using System;
 using System.IO;
 using System.Linq;
-using System.Security.Cryptography;
 using System.Text;
 
 using Magpie.Extensions.Qbittorrent;
@@ -33,10 +32,7 @@ public class TorrentBytesExtensionsTests
         var hash = torrent.ComputeInfoHash();
 
         // Assert
-        using var sha = SHA1.Create();
-        var expected = Convert.ToHexString(sha.ComputeHash(infoDict)).ToLowerInvariant();
-        Assert.That(hash, Is.EqualTo(expected));
-        Assert.That(hash, Has.Length.EqualTo(40));
+        Assert.That(hash, Is.EqualTo("dcd89105f2f989da3ec97b02f7a151c2444eeaf0"));
     }
 
     [Test]
@@ -60,9 +56,7 @@ public class TorrentBytesExtensionsTests
         var hash = torrent.ComputeInfoHash();
 
         // Assert
-        using var sha = SHA1.Create();
-        var expected = Convert.ToHexString(sha.ComputeHash(infoDict)).ToLowerInvariant();
-        Assert.That(hash, Is.EqualTo(expected));
+        Assert.That(hash, Is.EqualTo("a80e0c559f3481f10ff32b21c4e3c4bca0d8b91e"));
     }
 
     [Test]
@@ -88,9 +82,7 @@ public class TorrentBytesExtensionsTests
         var hash = torrent.ComputeInfoHash();
 
         // Assert
-        using var sha = SHA1.Create();
-        var expected = Convert.ToHexString(sha.ComputeHash(infoDict)).ToLowerInvariant();
-        Assert.That(hash, Is.EqualTo(expected));
+        Assert.That(hash, Is.EqualTo("96481cdfec2ad80455bdb73855d344e60625b9fd"));
     }
 
     [Test]
@@ -165,8 +157,6 @@ public class TorrentBytesExtensionsTests
         var hash = torrent.ComputeInfoHash();
 
         // Assert
-        using var sha = SHA1.Create();
-        var expected = Convert.ToHexString(sha.ComputeHash(infoDict)).ToLowerInvariant();
-        Assert.That(hash, Is.EqualTo(expected));
+        Assert.That(hash, Is.EqualTo("0a691bbfad34728ea96f6d13595afeba697756e0"));
     }
 }

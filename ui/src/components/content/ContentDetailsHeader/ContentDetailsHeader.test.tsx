@@ -98,7 +98,10 @@ describe('ContentDetailsHeader', () => {
             expect(screen.getByTestId('content-details-header__poster--preview')).toBeInTheDocument();
             const facade = screen.getByTestId('preview-player-facade');
             expect(facade).toBeInTheDocument();
-            expect(facade.querySelector('img')).toHaveAttribute('src', mockContent.posterUrl);
+            expect(screen.getByTestId('preview-player-poster-stage').querySelector('img')).toHaveAttribute(
+                'src',
+                mockContent.posterUrl,
+            );
             expect(facade.closest('[data-component="preview-player"]')).toHaveAttribute('data-fit', 'poster');
         });
 

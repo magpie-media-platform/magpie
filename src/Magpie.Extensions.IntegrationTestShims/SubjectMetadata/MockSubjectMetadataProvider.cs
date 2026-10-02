@@ -17,24 +17,9 @@ internal sealed class MockSubjectMetadataProvider : ISubjectMetadataProvider
 
     private static readonly string[] SupportedSubjectKindValues = ["*"];
 
-    private readonly AuditWriter _audit;
-    private readonly LatencyInjector _latency;
-    private readonly ScenarioReader _scenarios;
-
-    public MockSubjectMetadataProvider()
-        : this(
-            new AuditWriter(ProviderTypeName),
-            new LatencyInjector(ProviderTypeName),
-            new ScenarioReader(ProviderTypeName))
-    {
-    }
-
-    internal MockSubjectMetadataProvider(AuditWriter audit, LatencyInjector latency, ScenarioReader scenarios)
-    {
-        _audit = audit;
-        _latency = latency;
-        _scenarios = scenarios;
-    }
+    private readonly AuditWriter _audit = new(ProviderTypeName);
+    private readonly LatencyInjector _latency = new(ProviderTypeName);
+    private readonly ScenarioReader _scenarios = new(ProviderTypeName);
 
     public IEnumerable<string> SupportedSubjectKinds => SupportedSubjectKindValues;
 

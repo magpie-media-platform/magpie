@@ -1,5 +1,5 @@
 using System;
-using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -15,33 +15,14 @@ internal static class SettingsServiceExtensions
         this ISettingsService settingsService,
         CancellationToken cancellationToken)
     {
-        var resolved = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        var envContact = Environment.GetEnvironmentVariable(EnvContactVariable);
-        if (!string.IsNullOrWhiteSpace(envContact))
-        {
-            resolved[ProviderSettings.ContactKey] = envContact!;
-        }
-
         var detail = await settingsService
             .GetExtensionGroupAsync(Constants.ExtensionId, ProviderSettings.GroupName, cancellationToken)
             .ConfigureAwait(false);
-        if (detail is not null)
-        {
-            foreach (var setting in detail.Group.Settings)
-            {
-                if (!string.IsNullOrWhiteSpace(setting.Value))
-                {
-                    resolved[setting.Key] = setting.Value;
-                }
-            }
-        }
-
-        return resolved.ToProviderSettings();
-    }
-
-    private static ProviderSettings ToProviderSettings(this IReadOnlyDictionary<string, string> settings)
-    {
-        settings.TryGetValue(ProviderSettings.ContactKey, out var contact);
-        return new ProviderSettings { Contact = string.IsNullOrWhiteSpace(contact) ? null : contact!.Trim() };
+        var contact = detail?.Group.Settings
+            .Where(setting => setting.Key.Equals(ProviderSettings.ContactKey, StringComparison.OrdinalIgnoreCase))
+            .Select(setting => setting.Value)
+            .LastOrDefault(value => !string.IsNullOrWhiteSpace(value))
+            ?? Environment.GetEnvironmentVariable(EnvContactVariable);
+        return new ProviderSettings { Contact = string.IsNullOrWhiteSpace(contact) ? null : contact.Trim() };
     }
 }

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -28,6 +29,7 @@ using Magpie.Sdk.Integrations;
 using Magpie.Sdk.Jobs;
 using Magpie.Sdk.Services;
 
+using Microsoft.AspNetCore.Builder;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -50,13 +52,17 @@ public sealed class ReleaseCapacityStatusTests
     private Mock<IFileSystem> _files = null!;
     private Mock<IDownloadService> _client = null!;
     private Mock<IReleaseRepository> _releases = null!;
+    private ReleaseRepository _storedReleases = null!;
     private FakeTimeProvider _time = null!;
     private Release _release = null!;
     private ContentHierarchyItem _node = null!;
+    private JsonSerializerOptions _bindingOptions = null!;
 
     [OneTimeSetUp]
     public void CreateTemplate()
     {
+        _bindingOptions = new JsonSerializerOptions(JsonSerializerOptions.Web);
+        MagpieHostBuilderExtensions.ConfigureApiJsonOptions(_bindingOptions);
         _template = new SqliteConnection("Data Source=:memory:");
         _template.Open();
         var options = new DbContextOptionsBuilder<MagpieDbContext>();
@@ -138,14 +144,14 @@ public sealed class ReleaseCapacityStatusTests
                 It.IsAny<PagingParameter>(), It.IsAny<SortParameter?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new PagedList<ContentHierarchyItem>());
         _releases = new Mock<IReleaseRepository> { CallBase = true };
-        var storedReleases = new ReleaseRepository(_context, audits, transactions,
+        _storedReleases = new ReleaseRepository(_context, audits, transactions,
             NullLogger<ReleaseRepository>.Instance, _time);
-        _releases.Setup(value => value.GetByIdAsync(_release.Id, It.IsAny<CancellationToken>()))
-            .Returns((Guid id, CancellationToken token) => storedReleases.GetByIdAsync(id, token));
+        _releases.Setup(value => value.GetByIdAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .Returns((Guid id, CancellationToken token) => _storedReleases.GetByIdAsync(id, token));
         _releases.Setup(value => value.QueryAsync(It.IsAny<ReleaseQuery>(), It.IsAny<PagingParameter>(),
                 It.IsAny<SortParameter?>(), It.IsAny<CancellationToken>()))
             .Returns((ReleaseQuery query, PagingParameter paging, SortParameter? sort, CancellationToken token) =>
-                storedReleases.QueryAsync(query, paging, sort, token));
+                _storedReleases.QueryAsync(query, paging, sort, token));
         var releaseScopes = new Mock<IReleaseScopeRepository> { CallBase = true };
         releaseScopes.Setup(value => value.QueryAsync(It.IsAny<ReleaseScopeQuery>(), It.IsAny<PagingParameter>(),
                 It.IsAny<SortParameter?>(), It.IsAny<CancellationToken>()))
@@ -181,17 +187,260 @@ public sealed class ReleaseCapacityStatusTests
                 Status = DownloadStatus.Downloading
             }));
         _subject = new ReleaseService(hierarchy.Object, indexers.Object, _releases.Object, releaseScopes.Object,
-            downloadScopes, _downloads, new ReleaseBlockList(_downloads), clients.Object,
-            [integration.Object], _client.Object, roots.Object, _files.Object, audits, jobs, _executions,
-            transactions, events, evaluation.Object, [], _time, NullLogger<ReleaseService>.Instance);
+            downloadScopes, _downloads, new ReleaseBlockList(_downloads), Mock.Of<ISettingsRepository>(),
+            clients.Object, [integration.Object], _client.Object, roots.Object, _files.Object, audits, jobs,
+            _executions, transactions, events, evaluation.Object, [], _time, NullLogger<ReleaseService>.Instance);
     }
 
     [TearDown]
     public void TearDown() => _context.Dispose();
 
-    [TestCase(100, 99, "insufficient free space. Required: 100 bytes. Available: 99 bytes.")]
-    [TestCase(null, 99, "the capacity check is unavailable. Required: unknown. Available: 99 bytes.")]
-    [TestCase(100, null, "the capacity check is unavailable. Required: 100 bytes. Available: unknown.")]
+    [Test]
+    public async Task ResolveStatusesAsync_BlocksTheRelease_WhenTheGrabOfItsPostedBodyFailed()
+    {
+        // Arrange
+        var body = """
+            {"title":"Film","protocol":"torrent","size":10,
+            "identityKeys":[{"authority":"btih","value":"0123456789abcdef0123456789abcdef01234567","ordinal":0}]}
+            """;
+        var posted = await _storedReleases.CreateAsync(
+            JsonSerializer.Deserialize<Release>(body, _bindingOptions)!,
+            null,
+            default).ConfigureAwait(false);
+        _client.Setup(value => value.GrabAsync(It.IsAny<Release>(), It.IsAny<DownloadClient>(),
+                It.IsAny<IReadOnlyDictionary<string, string>>(), It.IsAny<string?>(), It.IsAny<bool>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new GrabResult { Success = false, ErrorMessage = "The client rejected the release." });
+        var searched = new Release { Id = Guid.NewGuid(), Title = "Film", Protocol = "torrent" };
+        searched.IdentityKeys.Add(new ReleaseIdentityKey
+        {
+            Authority = "btih",
+            Value = "0123456789abcdef0123456789abcdef01234567"
+        });
+
+        // Act
+        Assert.CatchAsync(() => _subject.AcquireAsync(posted.Id, null, grabTargetContentHierarchyItemId: _node.Id));
+        var statuses = await new ReleaseBlockList(_downloads).ResolveStatusesAsync([searched], _node.Id, default)
+            .ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(statuses.GetValueOrDefault(searched.Id).Status, Is.EqualTo(DownloadStatus.Failed));
+            Assert.That(ReleaseBlockList.Blocked(statuses), Does.Contain(searched.Id));
+        }
+    }
+
+    [Test]
+    public async Task ResolveStatusesAsync_BlocksTheRelease_WhenTheGrabOfTheKeylessReleaseFailed()
+    {
+        // Arrange
+        var keyless = await _storedReleases.CreateAsync(
+            new Release { Title = "Film", Protocol = "torrent", Size = 10 },
+            null,
+            default).ConfigureAwait(false);
+        _client
+            .Setup(value => value.GrabAsync(
+                It.IsAny<Release>(),
+                It.IsAny<DownloadClient>(),
+                It.IsAny<IReadOnlyDictionary<string, string>>(),
+                It.IsAny<string?>(),
+                It.IsAny<bool>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new GrabResult { Success = false, ErrorMessage = "The client rejected the release." });
+
+        // Act
+        Assert.CatchAsync(() => _subject.AcquireAsync(keyless.Id, null, grabTargetContentHierarchyItemId: _node.Id));
+        var statuses = await new ReleaseBlockList(_downloads).ResolveStatusesAsync([keyless], _node.Id, default)
+            .ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(
+                statuses.GetValueOrDefault(keyless.Id),
+                Is.EqualTo((DownloadStatus.Failed, (DownloadFailureReason?)DownloadFailureReason.ClientRejected)));
+            Assert.That(ReleaseBlockList.Blocked(statuses), Does.Contain(keyless.Id));
+        }
+    }
+
+    [TestCase(
+        false,
+        DownloadStatus.Failed,
+        true,
+        "Previous attempt ended Failed 0.0s ago on client Client; backoff requires 10.0s.")]
+    [TestCase(
+        true,
+        DownloadStatus.Faulted,
+        false,
+        "Previous attempt ended Faulted 0.0s ago on client Client; backoff requires 10.0s.")]
+    public async Task AcquireAsync_BlocksOnlyAPermanentRejection_WhenTheClientRejectsThePayload(
+        bool transient,
+        DownloadStatus expectedStatus,
+        bool expectedBlocked,
+        string expectedRetryMessage)
+    {
+        // Arrange
+        var rejected = await _storedReleases.CreateAsync(
+            new Release { Title = "Film", Protocol = "torrent", Size = 10 },
+            null,
+            default).ConfigureAwait(false);
+        var integration = new Mock<IDownloadClientIntegration>();
+        integration.SetupGet(value => value.ProviderType).Returns("test");
+        integration
+            .Setup(value => value.DownloadReleaseAsync(
+                It.IsAny<Release>(),
+                It.IsAny<ReleaseGrabContext>(),
+                It.IsAny<IReadOnlyDictionary<string, string>>(),
+                It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new ReleasePayloadRejectedException(
+                "The indexer returned an HTML page instead of a .torrent file (HTTP 200, text/html).",
+                transient));
+        var downloadService = new DownloadService(
+            [integration.Object],
+            Mock.Of<IDownloadClientRepository>(),
+            _downloads,
+            Mock.Of<IJobManager>(),
+            Mock.Of<ITransactionManager>(),
+            _time,
+            NullLogger<DownloadService>.Instance);
+        _client
+            .Setup(value => value.GrabAsync(
+                It.IsAny<Release>(),
+                It.IsAny<DownloadClient>(),
+                It.IsAny<IReadOnlyDictionary<string, string>>(),
+                It.IsAny<string?>(),
+                It.IsAny<bool>(),
+                It.IsAny<CancellationToken>()))
+            .Returns((
+                Release release,
+                DownloadClient source,
+                IReadOnlyDictionary<string, string> settings,
+                string? contentType,
+                bool interactive,
+                CancellationToken token) =>
+                downloadService.GrabAsync(release, source, settings, contentType, interactive, token));
+
+        // Act
+        Assert.CatchAsync(() => _subject.AcquireAsync(rejected.Id, null, grabTargetContentHierarchyItemId: _node.Id));
+        var retry = Assert.CatchAsync(
+            () => _subject.AcquireAsync(rejected.Id, null, grabTargetContentHierarchyItemId: _node.Id));
+        var statuses = await new ReleaseBlockList(_downloads).ResolveStatusesAsync([rejected], _node.Id, default)
+            .ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(
+                statuses.GetValueOrDefault(rejected.Id),
+                Is.EqualTo((expectedStatus, (DownloadFailureReason?)DownloadFailureReason.ClientRejected)));
+            Assert.That(ReleaseBlockList.Blocked(statuses).Contains(rejected.Id), Is.EqualTo(expectedBlocked));
+            Assert.That(retry!.Message, Is.EqualTo(expectedRetryMessage));
+        }
+    }
+
+    [TestCase(false, true, 0)]
+    [TestCase(true, false, 1)]
+    public async Task GrabAsync_AppliesTheTaint_WhenAGrabOfTheKeylessReleaseFailedOnTheClient(
+        bool interactive,
+        bool expectedTainted,
+        int expectedDispatches)
+    {
+        // Arrange
+        var keyless = await _storedReleases.CreateAsync(
+            new Release { Title = "Film", Protocol = "torrent", Size = 10 },
+            null,
+            default).ConfigureAwait(false);
+        var client = await _context.DownloadClients.AsNoTracking().SingleAsync().ConfigureAwait(false);
+        await _downloads.CreateAsync(
+            new Download
+            {
+                ReleaseId = keyless.Id,
+                DownloadClientId = client.Id,
+                ExternalId = string.Empty,
+                Title = "Film",
+                Status = DownloadStatus.Failed,
+                FailureReason = DownloadFailureReason.ClientRejected
+            },
+            null,
+            default).ConfigureAwait(false);
+        var integration = new Mock<IDownloadClientIntegration>();
+        integration.SetupGet(value => value.ProviderType).Returns("test");
+        integration
+            .Setup(value => value.DownloadReleaseAsync(
+                It.IsAny<Release>(),
+                It.IsAny<ReleaseGrabContext>(),
+                It.IsAny<IReadOnlyDictionary<string, string>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new DownloadInfo { ExternalId = "regrab", Status = DownloadStatus.Queued });
+        var downloadService = new DownloadService(
+            [integration.Object],
+            Mock.Of<IDownloadClientRepository>(),
+            _downloads,
+            Mock.Of<IJobManager>(),
+            Mock.Of<ITransactionManager>(),
+            _time,
+            NullLogger<DownloadService>.Instance);
+
+        // Act
+        var result = await downloadService
+            .GrabAsync(keyless, client, client.Settings, interactive: interactive)
+            .ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.AlreadyTainted, Is.EqualTo(expectedTainted));
+            integration.Verify(
+                value => value.DownloadReleaseAsync(
+                    It.IsAny<Release>(),
+                    It.IsAny<ReleaseGrabContext>(),
+                    It.IsAny<IReadOnlyDictionary<string, string>>(),
+                    It.IsAny<CancellationToken>()),
+                Times.Exactly(expectedDispatches));
+        }
+    }
+
+    [Test]
+    public async Task CreateAsync_StoresTheReleaseWithoutKeysOrExternalIds_WhenTheBodyPostsThemAsNull()
+    {
+        // Arrange
+        var body = """{"title":"Film","protocol":"torrent","size":10,"identityKeys":null,"externalIds":null}""";
+
+        // Act
+        var posted = await _storedReleases.CreateAsync(
+            JsonSerializer.Deserialize<Release>(body, _bindingOptions)!,
+            null,
+            default).ConfigureAwait(false);
+        _context.ChangeTracker.Clear();
+        var stored = await _context.Releases
+            .AsNoTracking()
+            .Include(value => value.IdentityKeys)
+            .Include(value => value.ExternalIds)
+            .SingleAsync(value => value.Id == posted.Id)
+            .ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(stored.IdentityKeys, Is.Empty);
+            Assert.That(stored.ExternalIds, Is.Empty);
+        }
+    }
+
+    [TestCase(
+        100,
+        99,
+        "Waiting for destination capacity: insufficient free space. Required: 100 bytes. Available: 99 bytes.")]
+    [TestCase(
+        null,
+        99,
+        "Waiting for destination capacity: the capacity check is unavailable. Required: unknown. Available: 99 bytes.")]
+    [TestCase(
+        100,
+        null,
+        "Waiting for destination capacity: the capacity check is unavailable. " +
+        "Required: 100 bytes. Available: unknown.")]
     public async Task GetReleaseViewAsync_RetainsCapacityReason_WhenStoredRetryIsReloaded(
         long? size, long? available, string expected)
     {
@@ -213,8 +462,8 @@ public sealed class ReleaseCapacityStatusTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(stored.Status, Is.EqualTo(JobExecutionStatus.Queued));
-            Assert.That(stored.StatusMessage, Is.EqualTo("Waiting for destination capacity: " + expected));
-            Assert.That(view![0].AcquisitionWaitingReason, Is.EqualTo("Waiting for destination capacity: " + expected));
+            Assert.That(stored.StatusMessage, Is.EqualTo(expected));
+            Assert.That(view![0].AcquisitionWaitingReason, Is.EqualTo(expected));
             Assert.That(view[0].AcquisitionStatus, Is.Null);
             Assert.That(view[0].FailureReason, Is.Null);
             Assert.That(await _context.Downloads.CountAsync().ConfigureAwait(false), Is.Zero);
@@ -442,7 +691,6 @@ public sealed class ReleaseCapacityStatusTests
 
     [TestCase(DownloadStatus.Failed)]
     [TestCase(DownloadStatus.Cancelled)]
-    [TestCase(DownloadStatus.Imported)]
     public async Task GetReleaseViewAsync_ShowsNewCapacityWait_WhenAnOlderTransferIsTerminal(DownloadStatus status)
     {
         // Arrange
@@ -468,6 +716,37 @@ public sealed class ReleaseCapacityStatusTests
         {
             Assert.That(view![0].AcquisitionWaitingReason, Is.EqualTo("Waiting for destination capacity: " +
                 "insufficient free space. Required: 100 bytes. Available: 99 bytes."));
+            Assert.That(await _context.Downloads.CountAsync().ConfigureAwait(false), Is.EqualTo(1));
+            _client.VerifyNoOtherCalls();
+        }
+    }
+
+    [Test]
+    public async Task AcquireAsync_StopsBeforeTheCapacityWait_WhenAnOlderTransferOfTheKeylessReleaseWasImported()
+    {
+        // Arrange
+        var client = await _context.DownloadClients.AsNoTracking().SingleAsync().ConfigureAwait(false);
+        await _downloads.CreateAsync(new Download
+        {
+            Title = "Old transfer",
+            ExternalId = "old-transfer",
+            ReleaseId = _release.Id,
+            DownloadClientId = client.Id,
+            Status = DownloadStatus.Imported
+        }, null).ConfigureAwait(false);
+        _time.Advance(TimeSpan.FromMinutes(1));
+
+        // Act
+        var download = await _subject.AcquireAsync(_release.Id, null, grabTargetContentHierarchyItemId: _node.Id)
+            .ConfigureAwait(false);
+        _context.ChangeTracker.Clear();
+        var view = await _subject.GetReleaseViewAsync(_node.Id).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(download, Is.Null);
+            Assert.That(view![0].AcquisitionWaitingReason, Is.Null);
             Assert.That(await _context.Downloads.CountAsync().ConfigureAwait(false), Is.EqualTo(1));
             _client.VerifyNoOtherCalls();
         }

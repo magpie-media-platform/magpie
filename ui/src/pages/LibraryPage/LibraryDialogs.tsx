@@ -11,7 +11,7 @@ import { DeleteConfirmDialog } from '@/components/ui/DeleteConfirmDialog/DeleteC
 import { SaveFilterDialog } from '@/components/ui/SaveFilterDialog';
 import { ContentLineageTitle } from '@/components/content/ContentLineageTitle';
 
-import type { SavedFilterReference } from './useLibraryPage';
+import type { SavedFilterReference } from './libraryPageConstants';
 
 interface LibraryDialogsProps {
     bulkTagsOpen: boolean;

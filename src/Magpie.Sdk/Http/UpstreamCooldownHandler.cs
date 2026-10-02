@@ -13,7 +13,8 @@ internal sealed class UpstreamCooldownHandler(
     bool followRedirects) : DelegatingHandler
 {
     /// <inheritdoc />
-    protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request,
+    protected override async Task<HttpResponseMessage> SendAsync(
+        HttpRequestMessage request,
         CancellationToken cancellationToken)
     {
         var current = request;
@@ -22,8 +23,11 @@ internal sealed class UpstreamCooldownHandler(
         {
             for (var count = 0; ; count++)
             {
-                var response = await cooldown.SendAsync(current, authenticationScope?.Invoke(current),
-                    token => base.SendAsync(current, token), cancellationToken).ConfigureAwait(false);
+                var response = await cooldown.SendAsync(
+                    current,
+                    authenticationScope?.Invoke(current),
+                    token => base.SendAsync(current, token),
+                    cancellationToken).ConfigureAwait(false);
                 var location = response.Headers.Location;
                 if (!followRedirects || count >= 50 || location is null ||
                     response.StatusCode is not (HttpStatusCode.MovedPermanently or HttpStatusCode.Redirect or

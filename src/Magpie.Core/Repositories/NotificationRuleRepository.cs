@@ -34,9 +34,7 @@ internal sealed class NotificationRuleRepository(
 {
     private readonly TimeProvider _time = timeProvider;
 
-    internal static void ApplyPatch(
-        IDictionary<string, string> values,
-        DictionaryPatch<string, string?, string?> patch)
+    private static void ApplyPatch(IDictionary<string, string> values, DictionaryPatch<string, string?, string?> patch)
     {
         if (patch.Add is not null)
         {
@@ -199,11 +197,6 @@ internal sealed class NotificationRuleRepository(
         {
             var rules = context.NotificationRules.AsNoTracking().AsQueryable();
 
-            if (query.OwnerUserIds is { Count: > 0 } ownerUserIds)
-            {
-                rules = rules.Where(r => r.OwnerUserId != null && ownerUserIds.Contains(r.OwnerUserId!.Value));
-            }
-
             if (query.Enabled is not null)
             {
                 rules = rules.Where(r => r.Enabled == query.Enabled);
@@ -303,8 +296,10 @@ internal sealed class NotificationRuleRepository(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "The notification rule repository failed to create notification rule " +
-                "{RuleName}.", model.Name);
+            logger.LogError(
+                ex,
+                "The notification rule repository failed to create notification rule {RuleName}.",
+                model.Name);
             throw;
         }
     }
@@ -373,7 +368,8 @@ internal sealed class NotificationRuleRepository(
             {
                 await transactionManager.OnCommittedAsync(
                     token => eventBus.PublishAsync(
-                        NotificationEventBuilder.BuildNotificationRuleUpdatedEvent(model.Id, changedFields), token),
+                        NotificationEventBuilder.BuildNotificationRuleUpdatedEvent(model.Id, changedFields),
+                        token),
                     cancellationToken).ConfigureAwait(false);
             }
 
@@ -381,8 +377,10 @@ internal sealed class NotificationRuleRepository(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "The notification rule repository failed to update notification rule " +
-                "{RuleId}.", model.Id);
+            logger.LogError(
+                ex,
+                "The notification rule repository failed to update notification rule {RuleId}.",
+                model.Id);
             throw;
         }
     }
@@ -467,8 +465,10 @@ internal sealed class NotificationRuleRepository(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "The notification rule repository failed to patch notification rule " +
-                "{RuleId}.", patch.Id);
+            logger.LogError(
+                ex,
+                "The notification rule repository failed to patch notification rule {RuleId}.",
+                patch.Id);
             throw;
         }
     }

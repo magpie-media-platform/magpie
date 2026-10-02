@@ -10,13 +10,22 @@ internal sealed class ContentItemConfiguration : IEntityTypeConfiguration<Conten
     public void Configure(EntityTypeBuilder<ContentItem> builder)
     {
         builder.ToTable("content_item");
-        builder.HasKey(e => e.Id);
-        builder.Property(e => e.Id).ValueGeneratedOnAdd();
         builder.HasOne<ContentHierarchyItem>()
             .WithOne(e => e.ContentItem)
             .HasForeignKey<ContentItem>(e => e.ContentHierarchyItemId)
             .IsRequired()
             .OnDelete(DeleteBehavior.Restrict);
+        builder.HasMany(e => e.CoveringMediaFiles)
+            .WithMany()
+            .UsingEntity<MediaFileCoverage>(
+                r => r.HasOne<MediaFile>()
+                    .WithMany(e => e.Coverage)
+                    .HasForeignKey(e => e.MediaFileId)
+                    .OnDelete(DeleteBehavior.Cascade),
+                l => l.HasOne<ContentItem>()
+                    .WithMany()
+                    .HasForeignKey(e => e.ContentItemId)
+                    .OnDelete(DeleteBehavior.Cascade));
         builder.HasIndex(e => e.ContentHierarchyItemId).IsUnique();
         builder.HasIndex(e => e.Fulfillment);
         builder.HasIndex(e => e.ActiveAcquisitionStatus);

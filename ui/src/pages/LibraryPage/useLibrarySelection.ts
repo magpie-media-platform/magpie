@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from 'react';
+import { useMemo } from 'react';
 
 import { useBulkSelection } from '@/hooks/useBulkSelection';
 import { type ContentListItem } from '@/types';
@@ -12,9 +12,6 @@ interface UseLibrarySelectionArgs {
 
 export function useLibrarySelection({ pageRowIds, totalItems, contentItems, resetKey }: UseLibrarySelectionArgs) {
     const selection = useBulkSelection({ pageRowIds, totalCount: totalItems, resetKey });
-
-    const selectedCount = selection.selectedCount;
-    const hasSelection = selection.hasSelection;
 
     const selectedRecords = useMemo(
         () => contentItems.filter((item) => selection.isRowChecked(item.id)),
@@ -32,15 +29,8 @@ export function useLibrarySelection({ pageRowIds, totalItems, contentItems, rese
         [selectedRecords],
     );
 
-    const handleClearSelection = useCallback(() => {
-        selection.clear();
-    }, [selection]);
-
     return {
         selection,
         selectedItems,
-        selectedCount,
-        hasSelection,
-        handleClearSelection,
     };
 }

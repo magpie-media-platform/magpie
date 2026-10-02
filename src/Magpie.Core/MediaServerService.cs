@@ -86,19 +86,12 @@ internal sealed class MediaServerService(
                 ? await pending.WaitAsync(limit, cancellationToken).ConfigureAwait(false)
                 : await pending.ConfigureAwait(false);
         }
-        catch (TimeoutException) when (timeout is not null)
+        catch (Exception ex) when ((ex is TimeoutException && timeout is not null) ||
+            (ex is OperationCanceledException &&
+                !cancellationToken.IsCancellationRequested &&
+                timeoutSource is { IsCancellationRequested: true }))
         {
-            return new ConfigurationTestResult
-            {
-                Success = false,
-                Message = "Connection test timed out.",
-                FailureKind = ConfigurationFailureKind.Transient
-            };
-        }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested &&
-            timeoutSource is { IsCancellationRequested: true })
-        {
-            return new ConfigurationTestResult
+            return new()
             {
                 Success = false,
                 Message = "Connection test timed out.",
@@ -111,7 +104,7 @@ internal sealed class MediaServerService(
         }
         catch (Exception ex)
         {
-            return new ConfigurationTestResult
+            return new()
             {
                 Success = false,
                 Message = ex.Message,
@@ -282,7 +275,7 @@ internal sealed class MediaServerService(
 
         var resolvedType = providerType ?? existing?.ProviderType;
         var integration = ResolveIntegration(resolvedType);
-        if (integration is null)
+        if (resolvedType is null || integration is null)
         {
             return Unresolved(resolvedType);
         }
@@ -298,8 +291,8 @@ internal sealed class MediaServerService(
         }
 
         var transient = existing is not null
-            ? existing with { ProviderType = resolvedType!, Settings = merged }
-            : new MediaServer { ProviderType = resolvedType!, Name = "Connection test", Settings = merged };
+            ? existing with { ProviderType = resolvedType, Settings = merged }
+            : new MediaServer { ProviderType = resolvedType, Name = "Connection test", Settings = merged };
 
         return await TestMediaServerCoreAsync(transient, null, cancellationToken).ConfigureAwait(false);
     }
@@ -323,10 +316,7 @@ internal sealed class MediaServerService(
         return TestSavedAsync(id, null, cancellationToken);
     }
 
-    public Task<ConfigurationTestResult> TestAsync(
-        Guid id,
-        TimeSpan timeout,
-        CancellationToken cancellationToken)
+    public Task<ConfigurationTestResult> TestAsync(Guid id, TimeSpan timeout, CancellationToken cancellationToken)
     {
         return TestSavedAsync(id, timeout, cancellationToken);
     }
@@ -339,7 +329,7 @@ internal sealed class MediaServerService(
         var server = await mediaServerRepository.GetByIdAsync(id, cancellationToken).ConfigureAwait(false);
         if (server is null)
         {
-            return new ConfigurationTestResult
+            return new()
             {
                 Success = false,
                 Message = $"Media server {id} does not exist.",
@@ -394,7 +384,7 @@ internal sealed class MediaServerService(
             .GetByIdAsync(hierarchy.EffectiveRootFolderId, cancellationToken)
             .ConfigureAwait(false);
         var rootFolderPath = rootFolder?.Path ?? string.Empty;
-        var title = !string.IsNullOrWhiteSpace(metadata?.Title) ? metadata!.Title! : hierarchy.Name;
+        var title = !string.IsNullOrWhiteSpace(metadata?.Title) ? metadata.Title : hierarchy.Name;
 
         var enabledServers = (await mediaServerRepository.ListAllAsync(cancellationToken).ConfigureAwait(false))
             .Where(server => server.Enabled)

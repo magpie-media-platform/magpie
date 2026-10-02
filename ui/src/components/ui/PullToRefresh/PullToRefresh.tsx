@@ -76,11 +76,7 @@ export const PullToRefresh = forwardRef<PullToRefreshRef, PullToRefreshProps>(
                 return container.closest<HTMLElement>('[data-scroll-container]') ?? container;
             }
 
-            return (
-                container.closest<HTMLElement>(
-                    '[data-component="app-shell-main-wrapper"], [data-component="admin-shell-main-wrapper"]',
-                ) ?? container
-            );
+            return container.closest<HTMLElement>('[data-component="app-shell-main-wrapper"]') ?? container;
         }, [mainOwnsScroll]);
 
         const refresh = useCallback(async () => {

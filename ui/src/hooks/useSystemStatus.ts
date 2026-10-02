@@ -99,7 +99,7 @@ function useDiskSpaceQuery(isAuthenticated: boolean) {
             'library.rootFolder.deleted',
         ],
         [systemStatusQueryKeys.diskSpace],
-        { debounceMs: 1000, exact: true, maxWaitMs: 3000, owner: 'system-status:disk-space' },
+        { debounceMs: 1000, exact: true, maxWaitMs: 3000 },
     );
     return useQuery({
         queryKey: systemStatusQueryKeys.diskSpace,

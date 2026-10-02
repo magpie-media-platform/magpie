@@ -910,15 +910,15 @@ public sealed class QueryExecutorTests
         Assert.That(result.Hits.Select(hit => hit.WorkOlid), Is.EqualTo(["OL1W"]));
     }
 
-    [TestCase(CriteriaValueOperator.ContainsString, "obb", true)]
-    [TestCase(CriteriaValueOperator.ContainsWord, "hob", false)]
-    [TestCase(CriteriaValueOperator.ContainsWord, "hobbit", true)]
-    [TestCase(CriteriaValueOperator.StartsWithString, "the ho", true)]
-    [TestCase(CriteriaValueOperator.EndsWithString, "bbit", true)]
+    [TestCase(CriteriaValueOperator.ContainsString, "obb", 1)]
+    [TestCase(CriteriaValueOperator.ContainsWord, "hob", 0)]
+    [TestCase(CriteriaValueOperator.ContainsWord, "hobbit", 1)]
+    [TestCase(CriteriaValueOperator.StartsWithString, "the ho", 1)]
+    [TestCase(CriteriaValueOperator.EndsWithString, "bbit", 1)]
     public async Task ExecuteSearchAsync_AppliesExactLocalSemantics_WhenTitleOperatorVaries(
         CriteriaValueOperator op,
         string text,
-        bool expectedMatch)
+        int expectedHitCount)
     {
         // Arrange
         _client
@@ -977,7 +977,7 @@ public sealed class QueryExecutorTests
         var result = await _subject.ExecuteSearchAsync(plan, default).ConfigureAwait(false);
 
         // Assert
-        Assert.That(result.Hits, expectedMatch ? Is.Not.Empty : Is.Empty);
+        Assert.That(result.Hits, Has.Count.EqualTo(expectedHitCount));
     }
 
     [Test]
@@ -1115,20 +1115,20 @@ public sealed class QueryExecutorTests
         Assert.That(result.Hits.Select(hit => hit.WorkOlid), Is.EqualTo(["OL1W"]));
     }
 
-    [TestCase(CriteriaValueOperator.Equals, 2020, 10, 1, TemporalPrecision.Day, true)]
-    [TestCase(CriteriaValueOperator.Equals, 2020, 10, 2, TemporalPrecision.Day, false)]
-    [TestCase(CriteriaValueOperator.In, 2020, 10, 1, TemporalPrecision.Day, true)]
-    [TestCase(CriteriaValueOperator.GreaterThan, 2020, 7, 1, TemporalPrecision.Day, true)]
-    [TestCase(CriteriaValueOperator.GreaterThanOrEqual, 2020, 10, 1, TemporalPrecision.Day, true)]
-    [TestCase(CriteriaValueOperator.LessThan, 2020, 11, 1, TemporalPrecision.Month, true)]
-    [TestCase(CriteriaValueOperator.LessThanOrEqual, 2020, 9, 1, TemporalPrecision.Month, false)]
+    [TestCase(CriteriaValueOperator.Equals, 2020, 10, 1, TemporalPrecision.Day, 1)]
+    [TestCase(CriteriaValueOperator.Equals, 2020, 10, 2, TemporalPrecision.Day, 0)]
+    [TestCase(CriteriaValueOperator.In, 2020, 10, 1, TemporalPrecision.Day, 1)]
+    [TestCase(CriteriaValueOperator.GreaterThan, 2020, 7, 1, TemporalPrecision.Day, 1)]
+    [TestCase(CriteriaValueOperator.GreaterThanOrEqual, 2020, 10, 1, TemporalPrecision.Day, 1)]
+    [TestCase(CriteriaValueOperator.LessThan, 2020, 11, 1, TemporalPrecision.Month, 1)]
+    [TestCase(CriteriaValueOperator.LessThanOrEqual, 2020, 9, 1, TemporalPrecision.Month, 0)]
     public async Task ExecuteSearchAsync_UsesRefinedDayCandidate_WhenPublishDateOperatorVaries(
         CriteriaValueOperator operation,
         int year,
         int month,
         int day,
         TemporalPrecision precision,
-        bool expectedMatch)
+        int expectedHitCount)
     {
         // Arrange
         _client
@@ -1196,7 +1196,7 @@ public sealed class QueryExecutorTests
         var result = await _subject.ExecuteSearchAsync(plan, default).ConfigureAwait(false);
 
         // Assert
-        Assert.That(result.Hits, expectedMatch ? Is.Not.Empty : Is.Empty);
+        Assert.That(result.Hits, Has.Count.EqualTo(expectedHitCount));
     }
 
     [Test]
@@ -1343,11 +1343,11 @@ public sealed class QueryExecutorTests
         Assert.That(result.Hits.Select(hit => hit.WorkOlid), Is.EqualTo(["OL1W"]));
     }
 
-    [TestCase(CriteriaValueOperator.IsNotNull, true)]
-    [TestCase(CriteriaValueOperator.IsNull, false)]
+    [TestCase(CriteriaValueOperator.IsNotNull, 1)]
+    [TestCase(CriteriaValueOperator.IsNull, 0)]
     public async Task ExecuteSearchAsync_RecognizesAnyNonblankAggregateCode_WhenLanguagePresenceIsTested(
         CriteriaValueOperator op,
-        bool expectedMatch)
+        int expectedHitCount)
     {
         // Arrange
         _client
@@ -1399,7 +1399,7 @@ public sealed class QueryExecutorTests
         var result = await _subject.ExecuteSearchAsync(plan, default).ConfigureAwait(false);
 
         // Assert
-        Assert.That(result.Hits, expectedMatch ? Is.Not.Empty : Is.Empty);
+        Assert.That(result.Hits, Has.Count.EqualTo(expectedHitCount));
     }
 
     [Test]
@@ -1643,11 +1643,11 @@ public sealed class QueryExecutorTests
         Assert.That(result.Hits, Is.Empty);
     }
 
-    [TestCase("Canonical title", true)]
-    [TestCase("Translated title", false)]
+    [TestCase("Canonical title", 1)]
+    [TestCase("Translated title", 0)]
     public async Task ExecuteSearchAsync_UsesCanonicalWorkTitleOnly_WhenOriginalTitleIsFiltered(
         string title,
-        bool expectedMatch)
+        int expectedHitCount)
     {
         // Arrange
         _client
@@ -1707,7 +1707,7 @@ public sealed class QueryExecutorTests
         var result = await _subject.ExecuteSearchAsync(plan, default).ConfigureAwait(false);
 
         // Assert
-        Assert.That(result.Hits, expectedMatch ? Is.Not.Empty : Is.Empty);
+        Assert.That(result.Hits, Has.Count.EqualTo(expectedHitCount));
     }
 
     [Test]
@@ -1779,11 +1779,11 @@ public sealed class QueryExecutorTests
         Assert.That(result.Hits.Select(hit => hit.WorkOlid), Is.EqualTo(["OL1W"]));
     }
 
-    [TestCase(false, true)]
-    [TestCase(true, false)]
+    [TestCase(false, 1)]
+    [TestCase(true, 0)]
     public async Task ExecuteSearchAsync_AppliesOrInsideSomeOrNoneGroup_WhenRelationshipAlternativesVary(
         bool negate,
-        bool expectedMatch)
+        int expectedHitCount)
     {
         // Arrange
         _client
@@ -1875,7 +1875,7 @@ public sealed class QueryExecutorTests
         var result = await _subject.ExecuteSearchAsync(plan, default).ConfigureAwait(false);
 
         // Assert
-        Assert.That(result.Hits, expectedMatch ? Is.Not.Empty : Is.Empty);
+        Assert.That(result.Hits, Has.Count.EqualTo(expectedHitCount));
     }
 
     [Test]

@@ -48,19 +48,15 @@ internal sealed class ReleaseDownloadItemJob(
                 DataType.Date,
                 false,
                 null),
-            new(
-                MagpieJobs.Parameters.ReleaseId,
-                "The release id to acquire.",
-                DataType.String,
-                true,
-                null)
+            new(MagpieJobs.Parameters.ReleaseId, "The release id to acquire.", DataType.String, true, null)
             {
                 ValidateValue = value => string.IsNullOrWhiteSpace(value) || Guid.TryParse(value, out _)
                     ? null : "must be a valid GUID."
             },
             new(
                 MagpieJobs.Parameters.Interactive,
-                "When true, the acquisition is interactive and prior Failed or Imported downloads do not suppress it.",
+                "When true, the acquisition is interactive and prior Failed or Imported downloads do not suppress " +
+                    "it. The backoff after a Failed or Faulted attempt applies to it too.",
                 DataType.Boolean,
                 false,
                 null),
@@ -90,9 +86,7 @@ internal sealed class ReleaseDownloadItemJob(
             throw new ArgumentException("The release ID has an invalid format.");
         }
 
-        var interactive = context.Parameters.TryGetValue(
-            MagpieJobs.Parameters.Interactive,
-            out var rawInteractive) &&
+        var interactive = context.Parameters.TryGetValue(MagpieJobs.Parameters.Interactive, out var rawInteractive) &&
             bool.TryParse(rawInteractive, out var parsedInteractive) &&
             parsedInteractive;
 
@@ -109,7 +103,10 @@ internal sealed class ReleaseDownloadItemJob(
         }
 
         if (context.Parameters.TryGetValue(CapacityDeferredAt, out var rawDeferredAt) &&
-            DateTime.TryParse(rawDeferredAt, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind,
+            DateTime.TryParse(
+                rawDeferredAt,
+                CultureInfo.InvariantCulture,
+                DateTimeStyles.RoundtripKind,
                 out var deferredAt))
         {
             var downloads = await downloadRepository.QueryAllAsync(new DownloadQuery { ReleaseId = releaseId },

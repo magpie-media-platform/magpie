@@ -428,13 +428,13 @@ test.describe.serial('Journey 7: set it and forget it', () => {
                     'the second automatic download to fail',
                     async () => {
                         const current = await api.get<Download>(`/api/downloads/${failedDownload.id}`);
-                        return current.status === 'Failed' ? current : undefined;
+                        return current.status === 'Faulted' ? current : undefined;
                     },
                     30_000,
                     250,
                 );
                 expect(failed).toMatchObject({
-                    status: 'Failed',
+                    status: 'Faulted',
                     failureReason: 'DownloadErrored',
                     progress: 40,
                 });
@@ -509,7 +509,7 @@ test.describe.serial('Journey 7: set it and forget it', () => {
                 };
                 await mocks.indexer.armSearch(movies[0]!.title, [strayRelease]);
                 await mocks.indexer.armSearchFallback([strayRelease]);
-                const candidates = await api.post<InteractiveCandidate[]>(
+                const { candidates } = await api.post<{ candidates: InteractiveCandidate[] }>(
                     `/api/interactive-search/${contentByExternalId.get(movies[0]!.externalId)!.id}`,
                 );
                 const candidate = candidates.find((item) => item.release.externalId === strayRelease.externalId);

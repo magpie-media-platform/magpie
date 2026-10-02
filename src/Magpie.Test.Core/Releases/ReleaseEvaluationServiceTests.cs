@@ -288,15 +288,18 @@ public sealed class ReleaseEvaluationServiceTests
         _ = await _subject.CreateEvaluationContextAsync(_show.Id).ConfigureAwait(false);
 
         // Assert
-        _contentFactProvider.Verify(
-            provider => provider.CanProvideFacts(
-                It.Is<ContentTarget>(target => target.Item.Id == _show.Id)),
-            Times.Once);
-        _contentFactProvider.Verify(
-            provider => provider.GetFactsAsync(
-                It.IsAny<ContentTarget>(),
-                It.IsAny<CancellationToken>()),
-            Times.Never);
+        using (Assert.EnterMultipleScope())
+        {
+            _contentFactProvider.Verify(
+                provider => provider.CanProvideFacts(
+                    It.Is<ContentTarget>(target => target.Item.Id == _show.Id)),
+                Times.Once);
+            _contentFactProvider.Verify(
+                provider => provider.GetFactsAsync(
+                    It.IsAny<ContentTarget>(),
+                    It.IsAny<CancellationToken>()),
+                Times.Never);
+        }
     }
 
     [Test]
@@ -314,9 +317,12 @@ public sealed class ReleaseEvaluationServiceTests
         var result = await _subject.CreateEvaluationContextAsync(_show.Id).ConfigureAwait(false);
 
         // Assert
-        Assert.That(result.CurrentFileQualityRank, Is.EqualTo(4));
-        _downloads.Verify(repository => repository.QueryAsync(It.IsAny<DownloadQuery>(),
-            It.IsAny<PagingParameter>(), It.IsAny<SortParameter?>(), It.IsAny<CancellationToken>()), Times.Never);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.CurrentFileQualityRank, Is.EqualTo(4));
+            _downloads.Verify(repository => repository.QueryAsync(It.IsAny<DownloadQuery>(),
+                It.IsAny<PagingParameter>(), It.IsAny<SortParameter?>(), It.IsAny<CancellationToken>()), Times.Never);
+        }
     }
 
     [TestCase(720, true)]
@@ -370,9 +376,12 @@ public sealed class ReleaseEvaluationServiceTests
         var result = await _subject.ScoreFileForContentAsync(file, _show.Id).ConfigureAwait(false);
 
         // Assert
-        Assert.That(result!.IsAcceptable, Is.EqualTo(expected));
-        _downloads.Verify(repository => repository.QueryAsync(It.IsAny<DownloadQuery>(),
-            It.IsAny<PagingParameter>(), It.IsAny<SortParameter?>(), It.IsAny<CancellationToken>()), Times.Never);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result!.IsAcceptable, Is.EqualTo(expected));
+            _downloads.Verify(repository => repository.QueryAsync(It.IsAny<DownloadQuery>(),
+                It.IsAny<PagingParameter>(), It.IsAny<SortParameter?>(), It.IsAny<CancellationToken>()), Times.Never);
+        }
     }
 
     [TestCase("/media/Show S01E01.mkv", true, true, true, "Show S01E01 1080p WEB-DL-GRP", 1, true, false, 1)]
@@ -498,22 +507,127 @@ public sealed class ReleaseEvaluationServiceTests
             Times.Exactly(expectedDownloadReads));
     }
 
-    [Test]
-    public async Task CreateEvaluationContextAsync_UsesLinkedImportGroup_WhenReconciledFileHasNoQuality()
+    [TestCase(true, "Show S01E01 1080p WEB-DL-GRP", "Show S01E01-GRP", 1, true)]
+    [TestCase(true, "Show S01E01-GRP", "Show S01E01 1080p WEB-DL-GRP", null, false)]
+    [TestCase(false, null, "Show S01E01 2160p WEB-DL-GRP", 0, true)]
+    [TestCase(false, null, "Show S01E01-GRP", null, null)]
+    [TestCase(false, null, "Show S01E01 CAM-GRP", null, null)]
+    public async Task ScoreDownloadForContentAsync_ScoresTheStoredReleaseOrTheTitleAlone_WhenTheReleaseIsStoredOrNot(
+        bool releaseStored,
+        string? releaseTitle,
+        string downloadTitle,
+        int? expectedRank,
+        bool? expectedAcceptable)
+    {
+        // Arrange
+        var listId = Guid.NewGuid();
+        var releaseId = Guid.NewGuid();
+        _show.EffectiveQualityTierListId = listId;
+        _qualityTierLists.Setup(repository => repository.GetByIdAsync(listId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new QualityTierList
+            {
+                Id = listId,
+                Name = "Download",
+                Rules =
+                [
+                    new()
+                    {
+                        Kind = RuleKind.Exclude, Criteria = new QualityTierCriteria
+                        {
+                            And = [new DictionaryCriteria<PropertyCriterion<string>>
+                            {
+                                Items = new Dictionary<string, PropertyCriterion<string>>
+                                {
+                                    ["Title"] = new() { Operator = CriteriaValueOperator.ContainsWord, Value = "CAM" }
+                                }
+                            }]
+                        }
+                    }
+                ],
+                QualityTierRanks =
+                [
+                    new()
+                    {
+                        Ordinal = 0, QualityTier = new QualityTier
+                        {
+                            Name = "2160p", Criteria = new QualityTierCriteria
+                            {
+                                And = [new DictionaryCriteria<PropertyCriterion<string>>
+                                {
+                                    Items = new Dictionary<string, PropertyCriterion<string>>
+                                    {
+                                        ["Title"] = new()
+                                        {
+                                            Operator = CriteriaValueOperator.ContainsString, Value = "2160p"
+                                        }
+                                    }
+                                }]
+                            }
+                        }
+                    },
+                    new()
+                    {
+                        Ordinal = 1, IsCutoff = true, QualityTier = new QualityTier
+                        {
+                            Name = "1080p", Criteria = new QualityTierCriteria
+                            {
+                                And = [new DictionaryCriteria<PropertyCriterion<string>>
+                                {
+                                    Items = new Dictionary<string, PropertyCriterion<string>>
+                                    {
+                                        ["Title"] = new()
+                                        {
+                                            Operator = CriteriaValueOperator.ContainsString, Value = "1080p"
+                                        }
+                                    }
+                                }]
+                            }
+                        }
+                    }
+                ]
+            });
+        _releases.Setup(repository => repository.GetByIdAsync(releaseId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(releaseStored
+                ? new Release { Id = releaseId, Title = releaseTitle!, Protocol = "torrent" }
+                : null);
+        var download = new Download
+        {
+            ReleaseId = releaseId,
+            ExternalId = "imported",
+            Title = downloadTitle,
+            Status = DownloadStatus.Imported
+        };
+
+        // Act
+        var result = await _subject.ScoreDownloadForContentAsync(download, _show.Id).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result?.MatchedRankOrdinal, Is.EqualTo(expectedRank));
+            Assert.That(result?.IsAcceptable, Is.EqualTo(expectedAcceptable));
+        }
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task CreateEvaluationContextAsync_UsesLinkedImportGroup_WhenReconciledFileHasNoQuality(
+        bool coveringFile)
     {
         // Arrange
         var listId = Guid.NewGuid();
         var downloadId = Guid.NewGuid();
         var releaseId = Guid.NewGuid();
+        var file = new MediaFile { FilePath = "Show S01E01.mkv", FileKind = "Video", DownloadId = downloadId };
         _show.EffectiveQualityTierListId = listId;
         _show.ContentItem = new ContentItem
         {
             ContentHierarchyItemId = _show.Id,
             MediaReconciledAt = new DateTime(2026, 9, 21, 0, 0, 0, DateTimeKind.Utc),
             PrimaryMediaFileCount = 1,
-            CurrentFileQualityRank = 1,
-            MediaFiles = { new MediaFile { FilePath = "Show S01E01.mkv", FileKind = "Video", DownloadId = downloadId } }
+            CurrentFileQualityRank = 1
         };
+        (coveringFile ? _show.ContentItem.CoveringMediaFiles : _show.ContentItem.MediaFiles).Add(file);
         _qualityTierLists.Setup(repository => repository.GetByIdAsync(listId, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new QualityTierList
             {
@@ -613,47 +727,6 @@ public sealed class ReleaseEvaluationServiceTests
         _contentHierarchyItems.Verify(
             value => value.GetLineageAsync(_season1.Id, It.IsAny<CancellationToken>()),
             Times.Never);
-    }
-
-    [Test]
-    public async Task ResolveScopeAsync_AssessesChildren_WhenTheAnchorIsPrecomputed()
-    {
-        // Arrange
-        var release = new Release { Protocol = "torrent", Title = "Show.Complete.Series" };
-        _matchingIds.UnionWith(
-        [
-            _show.Id,
-            _season1.Id,
-            _season2.Id,
-            _season3.Id,
-            _episode1.Id,
-            _episode2.Id,
-            _episode3.Id,
-            _episode4.Id,
-            _episode5.Id,
-            _episode6.Id,
-        ]);
-        var context = await _subject.CreateEvaluationContextAsync(_show.Id).ConfigureAwait(false);
-        var assessment = _subject.AssessMatch(release, [], context);
-
-        // Act
-        var result = await _subject.ResolveScopeAsync(release, [], context, assessment).ConfigureAwait(false);
-
-        // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(result.ScopeNodeIds, Does.Contain(_show.Id));
-            _releaseMatchProvider.Verify(provider => provider.IsMatch(
-                It.Is<ContentTarget>(target => target.Item.Id == _show.Id),
-                It.IsAny<IReadOnlyList<IReadOnlyList<ContentFact>>>(),
-                It.IsAny<Release>(),
-                It.IsAny<IReadOnlyList<ContentFact>>()), Times.Once);
-            _releaseMatchProvider.Verify(provider => provider.IsMatch(
-                It.Is<ContentTarget>(target => target.Item.Id == _season1.Id),
-                It.IsAny<IReadOnlyList<IReadOnlyList<ContentFact>>>(),
-                It.IsAny<Release>(),
-                It.IsAny<IReadOnlyList<ContentFact>>()), Times.Once);
-        }
     }
 
     [Test]

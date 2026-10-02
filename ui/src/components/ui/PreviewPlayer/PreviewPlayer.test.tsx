@@ -1,6 +1,9 @@
-import { render, screen, fireEvent } from '@testing-library/react';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { PreviewPlayer } from './PreviewPlayer';
 import { parseYouTubeId } from './parseYouTubeId';
@@ -143,6 +146,10 @@ describe('PreviewPlayer', () => {
         expect(screen.queryByTestId('preview-player-facade')).not.toBeInTheDocument();
     });
     describe('fit', () => {
+        beforeEach(() => {
+            vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue(undefined);
+        });
+
         it('defaults to the wide (16:9) fit', () => {
             render(<PreviewPlayer preview={{ url: 'https://www.youtube.com/watch?v=KEY123', kind: 'trailer' }} />);
             const box = screen.getByTestId('preview-player-facade').closest('[data-component="preview-player"]');
@@ -162,11 +169,138 @@ describe('PreviewPlayer', () => {
             const box = facade.closest('[data-component="preview-player"]');
             expect(box).toHaveAttribute('data-fit', 'poster');
             expect(box).toHaveClass('preview-player--poster');
-            expect(facade.querySelector('img')).toHaveAttribute('src', 'https://example.com/poster.jpg');
+            expect(screen.getByTestId('preview-player-poster-stage').querySelector('img')).toHaveAttribute(
+                'src',
+                'https://example.com/poster.jpg',
+            );
             expect(facade).toHaveAttribute('aria-label', 'Play Trailer');
             expect(screen.queryByTestId('preview-player-iframe')).not.toBeInTheDocument();
             expect(screen.queryByTestId('preview-player-video')).not.toBeInTheDocument();
             expect(screen.queryByTestId('preview-player-controls')).not.toBeInTheDocument();
+        });
+
+        it('plays a direct poster preview muted, with cover sizing and no controls', async () => {
+            const user = userEvent.setup();
+            render(
+                <PreviewPlayer
+                    preview={{ url: 'https://example.com/clip.mp4', title: 'Clip' }}
+                    posterUrl="https://example.com/poster.jpg"
+                    fit="poster"
+                />,
+            );
+
+            await user.click(screen.getByRole('button', { name: 'Play Clip' }));
+
+            const video = screen.getByTestId('preview-player-video') as HTMLVideoElement;
+            expect(video.muted).toBe(true);
+            expect(video.defaultMuted).toBe(true);
+            expect(video.volume).toBe(0);
+            expect(video.controls).toBe(false);
+            expect(video).toHaveClass('preview-player__video--cover');
+            expect(screen.queryByTestId('preview-player-controls')).not.toBeInTheDocument();
+            expect(screen.queryByRole('button', { name: 'Stop preview' })).not.toBeInTheDocument();
+            expect(screen.getByRole('button', { name: 'Play Clip' })).toHaveAttribute('aria-pressed', 'true');
+        });
+
+        it('starts a direct poster preview with play() inside the click', async () => {
+            const play = vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue(undefined);
+            const playCallsWhenTheClickEnds: number[] = [];
+            const recordPlayCalls = () => playCallsWhenTheClickEnds.push(play.mock.calls.length);
+            const user = userEvent.setup();
+            render(<PreviewPlayer preview={{ url: 'https://example.com/clip.mp4', title: 'Clip' }} fit="poster" />);
+
+            window.addEventListener('click', recordPlayCalls);
+            await user.click(screen.getByRole('button', { name: 'Play Clip' }));
+            window.removeEventListener('click', recordPlayCalls);
+
+            expect(playCallsWhenTheClickEnds).toEqual([1]);
+            expect(play.mock.contexts[0]).toBe(screen.getByTestId('preview-player-video'));
+            expect(screen.getByRole('button', { name: 'Play Clip' })).toHaveAttribute('aria-pressed', 'true');
+        });
+
+        it('returns to the static poster without a play button when the browser refuses play()', async () => {
+            vi.spyOn(HTMLMediaElement.prototype, 'play').mockRejectedValue(
+                new DOMException('The request is not allowed by the user agent.', 'NotAllowedError'),
+            );
+            const user = userEvent.setup();
+            render(
+                <PreviewPlayer
+                    preview={{ url: 'https://example.com/clip.mp4', title: 'Clip' }}
+                    posterUrl="https://example.com/poster.jpg"
+                    fit="poster"
+                />,
+            );
+
+            await user.click(screen.getByRole('button', { name: 'Play Clip' }));
+
+            await waitFor(() => expect(screen.queryByTestId('preview-player-video')).not.toBeInTheDocument());
+            expect(screen.queryByRole('button', { name: 'Play Clip' })).not.toBeInTheDocument();
+            expect(screen.getByTestId('preview-player-poster-stage').querySelector('img')).toHaveAttribute(
+                'src',
+                'https://example.com/poster.jpg',
+            );
+        });
+
+        it('keeps the poster visible behind a cover video until its first frame', () => {
+            const css = readFileSync(
+                resolve(process.cwd(), 'src/components/ui/PreviewPlayer/PreviewPlayer.css'),
+                'utf8',
+            );
+
+            expect(css).toMatch(/\.preview-player__video--cover \{[^}]*background-color: transparent;/);
+        });
+
+        it('keeps a direct poster preview muted when something unmutes it', async () => {
+            const user = userEvent.setup();
+            render(<PreviewPlayer preview={{ url: 'https://example.com/clip.mp4', title: 'Clip' }} fit="poster" />);
+            await user.click(screen.getByRole('button', { name: 'Play Clip' }));
+            const video = screen.getByTestId('preview-player-video') as HTMLVideoElement;
+
+            video.muted = false;
+            video.volume = 0.8;
+            fireEvent.volumeChange(video);
+
+            expect(video.muted).toBe(true);
+            expect(video.volume).toBe(0);
+        });
+
+        it('returns to the poster when a direct poster preview ends, and drops the play button when it fails', async () => {
+            const user = userEvent.setup();
+            render(<PreviewPlayer preview={{ url: 'https://example.com/clip.mp4', title: 'Clip' }} fit="poster" />);
+            await user.click(screen.getByRole('button', { name: 'Play Clip' }));
+
+            fireEvent.ended(screen.getByTestId('preview-player-video'));
+
+            expect(screen.queryByTestId('preview-player-video')).not.toBeInTheDocument();
+            expect(screen.getByRole('button', { name: 'Play Clip' })).toHaveAttribute('aria-pressed', 'false');
+
+            await user.click(screen.getByRole('button', { name: 'Play Clip' }));
+            fireEvent.error(screen.getByTestId('preview-player-video'));
+
+            expect(screen.queryByTestId('preview-player-video')).not.toBeInTheDocument();
+            expect(screen.queryByRole('button', { name: 'Play Clip' })).not.toBeInTheDocument();
+        });
+
+        it('plays a YouTube poster preview muted and without controls', async () => {
+            const user = userEvent.setup();
+            render(
+                <PreviewPlayer
+                    preview={{ url: 'https://www.youtube.com/watch?v=KEY123', kind: 'trailer' }}
+                    posterUrl="https://example.com/poster.jpg"
+                    fit="poster"
+                />,
+            );
+
+            await user.click(screen.getByRole('button', { name: 'Play Trailer' }));
+
+            const frame = screen.getByTestId('preview-player-iframe');
+            expect(frame).toHaveAttribute(
+                'src',
+                'https://www.youtube-nocookie.com/embed/KEY123?autoplay=1&mute=1&controls=0&disablekb=1&fs=0&playsinline=1&rel=0',
+            );
+            expect(frame).toHaveAttribute('tabindex', '-1');
+            expect(frame).toHaveAttribute('aria-hidden', 'true');
+            expect(screen.queryByRole('button', { name: 'Stop preview' })).not.toBeInTheDocument();
         });
     });
 });

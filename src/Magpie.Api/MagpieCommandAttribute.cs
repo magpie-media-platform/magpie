@@ -10,7 +10,7 @@ namespace Magpie.Api;
 /// <param name="routeTemplate">The API route template, relative to the command group</param>
 /// <param name="description">The description text of the generated CLI command</param>
 [AttributeUsage(AttributeTargets.Method)]
-public sealed class MagpieCommandAttribute(
+internal sealed class MagpieCommandAttribute(
     string command,
     string verb = "GET",
     string routeTemplate = "",

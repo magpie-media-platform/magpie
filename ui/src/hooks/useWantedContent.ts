@@ -163,12 +163,11 @@ export function useWantedContent(parentId?: string, filter = ''): UseWantedConte
         exact: false,
         failOpenEventNames: WANTED_FAIL_OPEN_EVENTS,
         maxWaitMs: 1200,
-        owner: 'wanted-content',
     });
     useInvalidateQueriesOnEvents(
         ['qualityTierList.created', 'qualityTierList.updated', 'qualityTierList.deleted'],
         [wantedQueryKeys.list(parentId, filter), wantedQueryKeys.upgrades(parentId, filter)],
-        { debounceMs: 300, exact: true, maxWaitMs: 1200, owner: 'wanted-content' },
+        { debounceMs: 300, exact: true, maxWaitMs: 1200 },
     );
 
     const rawItems = useMemo(() => dedupe(wantedQuery.data?.items ?? []), [wantedQuery.data?.items]);

@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 
 using YamlDotNet.Serialization;
 using YamlDotNet.Serialization.NamingConventions;
@@ -8,7 +9,7 @@ namespace Magpie.Extensions.Cardigann.Engine;
 internal sealed class CardigannLoader : ICardigannLoader
 {
     private readonly IDeserializer _deserializer = new DeserializerBuilder()
-        .WithNamingConvention(NullNamingConvention.Instance)
+        .WithNamingConvention(LowerCaseNamingConvention.Instance)
         .IgnoreUnmatchedProperties()
         .Build();
 
@@ -19,7 +20,7 @@ internal sealed class CardigannLoader : ICardigannLoader
             throw new CardigannDefinitionException("'id' is required.", origin);
         }
 
-        if (!IsTrackerIdValid(definition.Id))
+        if (!definition.Id.All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_'))
         {
             throw new CardigannDefinitionException(
                 $"'id' must be alphanumeric (with optional '-'/'_'); got {definition.Id}.",
@@ -45,25 +46,6 @@ internal sealed class CardigannLoader : ICardigannLoader
         {
             throw new CardigannDefinitionException("'search.rows.selector' is required.", origin);
         }
-    }
-
-    private static bool IsTrackerIdValid(string id)
-    {
-        if (string.IsNullOrEmpty(id))
-        {
-            return false;
-        }
-
-        foreach (var c in id)
-        {
-            var ok = c is >= 'a' and <= 'z' or >= 'A' and <= 'Z' or >= '0' and <= '9' or '-' or '_';
-            if (!ok)
-            {
-                return false;
-            }
-        }
-
-        return true;
     }
 
     public CardigannDefinition LoadString(string yaml, string origin)

@@ -7,25 +7,24 @@ import type { MonitoringMode } from '@/types';
 
 import { MonitoringToggle } from './MonitoringToggle';
 
-function renderToggle(value: boolean | null, onChange = vi.fn()) {
-    render(
-        <TooltipProvider>
-            <MonitoringToggle value={value} onChange={onChange} />
-        </TooltipProvider>,
-    );
-    return onChange;
-}
-
 describe('MonitoringToggle', () => {
     it('renders labels for every option, never the raw enum value', () => {
-        renderToggle(null);
+        render(
+            <TooltipProvider>
+                <MonitoringToggle value={null} onChange={vi.fn()} />
+            </TooltipProvider>,
+        );
 
         const options = screen.getAllByRole('radio');
         expect(options.map((option) => option.textContent)).toEqual(['Monitor', 'Do not monitor', 'Inherit']);
     });
 
     it('marks the matching option checked', () => {
-        renderToggle(false);
+        render(
+            <TooltipProvider>
+                <MonitoringToggle value={false} onChange={vi.fn()} />
+            </TooltipProvider>,
+        );
 
         expect(screen.getByRole('radio', { name: /^Do not monitor:/ })).toHaveAttribute('aria-checked', 'true');
         expect(screen.getByRole('radio', { name: /^Monitor:/ })).toHaveAttribute('aria-checked', 'false');
@@ -33,7 +32,12 @@ describe('MonitoringToggle', () => {
 
     it('calls onChange with the option value when clicked', async () => {
         const user = userEvent.setup();
-        const onChange = renderToggle(null);
+        const onChange = vi.fn();
+        render(
+            <TooltipProvider>
+                <MonitoringToggle value={null} onChange={onChange} />
+            </TooltipProvider>,
+        );
 
         await user.click(screen.getByRole('radio', { name: /^Monitor:/ }));
 
@@ -57,6 +61,38 @@ describe('MonitoringToggle', () => {
         expect(onChange).toHaveBeenCalledWith('Unmonitored');
     });
 
+    it('offers Unmonitored, Monitored and Shotgun without Inherit when inherit is off', () => {
+        render(
+            <TooltipProvider>
+                <MonitoringToggle<MonitoringMode> value="Monitored" onChange={vi.fn()} shotgun inherit={false} />
+            </TooltipProvider>,
+        );
+
+        const options = screen.getAllByRole('radio');
+
+        expect(options.map((option) => option.textContent)).toEqual(['Unmonitored', 'Monitored', 'Shotgun']);
+    });
+
+    it('takes its name from the labelling element when aria-labelledby is set', () => {
+        render(
+            <TooltipProvider>
+                <span id="mode-heading">Default monitoring</span>
+                <MonitoringToggle<MonitoringMode>
+                    value="Monitored"
+                    onChange={vi.fn()}
+                    aria-labelledby="mode-heading"
+                    shotgun
+                    inherit={false}
+                />
+            </TooltipProvider>,
+        );
+
+        const group = screen.getByRole('radiogroup');
+
+        expect(group).toHaveAccessibleName('Default monitoring');
+        expect(group).not.toHaveAttribute('aria-label');
+    });
+
     it('disables every option when disabled', () => {
         render(
             <TooltipProvider>
@@ -64,9 +100,11 @@ describe('MonitoringToggle', () => {
             </TooltipProvider>,
         );
 
-        for (const option of screen.getAllByRole('radio')) {
-            expect(option).toBeDisabled();
-        }
+        expect(screen.getAllByRole('radio').map((option) => (option as HTMLButtonElement).disabled)).toEqual([
+            true,
+            true,
+            true,
+        ]);
     });
 });
 

@@ -123,7 +123,7 @@ internal sealed class SetupService(
         };
         await WriteSettingsAsync(path, root, cancellationToken).ConfigureAwait(false);
 
-        return new DatabaseSetupResult { Provider = providerSlug, RestartRequired = true };
+        return new() { Provider = providerSlug, RestartRequired = true };
     }
 
     public async Task<User> CreateAdministratorAsync(
@@ -159,7 +159,7 @@ internal sealed class SetupService(
                 }
 
                 return await userService.CreateAsync(
-                    new LocalUserCreate { Username = normalizedUsername, Password = password, Role = Role.Admin },
+                    new() { Username = normalizedUsername, Password = password, Role = Role.Admin },
                     SystemUserId,
                     token).ConfigureAwait(false) ?? throw new MagpieException("The username is unavailable.");
             },
@@ -177,11 +177,11 @@ internal sealed class SetupService(
         var settings = group?.Group.Settings.Any(setting => setting.Key == CompleteKey) is true
             ? new DictionaryPatch<string, string, string>
             {
-                Update = new Dictionary<string, string> { [CompleteKey] = "true" }
+                Update = new() { [CompleteKey] = "true" }
             }
             : new DictionaryPatch<string, string, string>
             {
-                Add = new Dictionary<string, string> { [CompleteKey] = "true" }
+                Add = new() { [CompleteKey] = "true" }
             };
         await settingsService.PatchSystemGroupAsync(
             SetupGroup,
@@ -209,10 +209,7 @@ internal sealed class SetupService(
             cancellationToken: cancellationToken).ConfigureAwait(false) as JsonObject ?? [];
     }
 
-    private async Task WriteSettingsAsync(
-        string path,
-        JsonObject root,
-        CancellationToken cancellationToken)
+    private async Task WriteSettingsAsync(string path, JsonObject root, CancellationToken cancellationToken)
     {
         fileSystem.CreateDirectory(Path.GetDirectoryName(path)!);
         var temporaryPath = path + ".tmp";

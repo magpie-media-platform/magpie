@@ -10,8 +10,6 @@ internal sealed class IndexerConfiguration : IEntityTypeConfiguration<Indexer>
     public void Configure(EntityTypeBuilder<Indexer> builder)
     {
         builder.ToTable("indexer_indexer");
-        builder.HasKey(e => e.Id);
-        builder.Property(e => e.Id).ValueGeneratedOnAdd();
         builder.HasIndex(e => e.ProviderType);
         builder.HasOne<IndexerFeed>()
             .WithMany()

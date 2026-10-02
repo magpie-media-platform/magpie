@@ -44,11 +44,11 @@ internal sealed class ReleaseRepository(
                 continue;
             }
 
-            key.Authority = key.Authority.Trim();
-            key.Value = key.Value.Trim();
-            if (seen.Add((key.Authority, key.Value)))
+            var authority = key.Authority.Trim();
+            var value = key.Value.Trim();
+            if (seen.Add((authority, value)))
             {
-                normalized.Add(key);
+                normalized.Add(new ReleaseIdentityKey { Authority = authority, Value = value });
             }
         }
 
@@ -57,6 +57,21 @@ internal sealed class ReleaseRepository(
         {
             key.Ordinal = release.IdentityKeys.Count;
             release.IdentityKeys.Add(key);
+        }
+    }
+
+    private static void NormalizeExternalIds(Release release)
+    {
+        var incoming = release.ExternalIds.ToList();
+        release.ExternalIds.Clear();
+        foreach (var externalId in incoming)
+        {
+            release.ExternalIds.Add(new ExternalId
+            {
+                Source = externalId.Source,
+                Value = externalId.Value,
+                Ordinal = externalId.Ordinal,
+            });
         }
     }
 
@@ -70,7 +85,7 @@ internal sealed class ReleaseRepository(
 
     private static ReleaseSource SourceFromRelease(Release release)
     {
-        return new ReleaseSource
+        return new()
         {
             Key = string.Empty,
             IndexerId = release.IndexerId,
@@ -184,9 +199,7 @@ internal sealed class ReleaseRepository(
             .ConfigureAwait(false);
     }
 
-    private async Task<List<Release>> FindUpsertMatchesAsync(
-        Release release,
-        CancellationToken cancellationToken)
+    private async Task<List<Release>> FindUpsertMatchesAsync(Release release, CancellationToken cancellationToken)
     {
         if (release.IdentityKeys.Count > 0)
         {
@@ -293,9 +306,7 @@ internal sealed class ReleaseRepository(
                 await context.Downloads
                     .Where(download => download.ReleaseSourceId == source.Id)
                     .ExecuteUpdateAsync(
-                        setters => setters.SetProperty(
-                            download => download.ReleaseSourceId,
-                            (Guid?)retainedSourceId),
+                        setters => setters.SetProperty(download => download.ReleaseSourceId, (Guid?)retainedSourceId),
                         cancellationToken)
                     .ConfigureAwait(false);
                 await context.ReleaseSources
@@ -571,8 +582,10 @@ internal sealed class ReleaseRepository(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "The release repository failed to mark {ReleaseCount} releases " +
-                "observed.", releaseIds.Count);
+            logger.LogError(
+                ex,
+                "The release repository failed to mark {ReleaseCount} releases observed.",
+                releaseIds.Count);
             throw;
         }
     }
@@ -590,6 +603,7 @@ internal sealed class ReleaseRepository(
                     model.ObservedAt = now;
                     model.CreatedByUserId = createdByUserId;
                     NormalizeIdentityKeys(model);
+                    NormalizeExternalIds(model);
                     EnsureReleaseSources(model, now);
 
                     var transaction = context.Database.CurrentTransaction;
@@ -863,9 +877,7 @@ internal sealed class ReleaseRepository(
         await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    public async Task<int> DeleteWhereAsync(
-        ReleaseQuery query,
-        CancellationToken cancellationToken = default)
+    public async Task<int> DeleteWhereAsync(ReleaseQuery query, CancellationToken cancellationToken = default)
     {
         try
         {

@@ -26,13 +26,7 @@ import { DeleteConfirmDialog } from '@/components/ui/DeleteConfirmDialog/DeleteC
 import { IntegrationEmptyState } from '@/components/integrations/IntegrationEmptyState';
 import { IntegrationRowActions } from '@/components/integrations/IntegrationRowActions';
 import { useToast } from '@/components/ui/Toast';
-import {
-    useDownloadClients,
-    type ApiDownloadClient,
-    type DownloadClientStatusValue,
-    downloadClientStatusLabels,
-    downloadClientStatusVariants,
-} from '@/hooks/useDownloadClients';
+import { useDownloadClients, type ApiDownloadClient, type DownloadClientStatusValue } from '@/hooks/useDownloadClients';
 import {
     useTestDownloadClient,
     useTestDownloadClientSettings,
@@ -186,7 +180,7 @@ export function DownloadClientsPage() {
     const providerOptions = useMemo(() => [...new Set(clients.map((c) => c.provider))].sort(), [clients]);
     const statusOptions = useMemo<FacetOption[]>(() => {
         const present = [...new Set(clients.map((c) => c.status))];
-        return present.map((s) => ({ value: s, label: downloadClientStatusLabels[s] }));
+        return present.map((s) => ({ value: s, label: s }));
     }, [clients]);
 
     const setMulti = useCallback(
@@ -494,10 +488,10 @@ export function DownloadClientsPage() {
                 meta: { headerLabel: 'Status', mobileRole: 'header' },
                 size: 140,
                 cell: ({ row }) => {
-                    const variant = downloadClientStatusVariants[row.original.status];
+                    const variant = row.original.status.toLowerCase();
                     return (
                         <Badge variant={variant as Parameters<typeof Badge>[0]['variant']} size="sm" dot>
-                            {downloadClientStatusLabels[row.original.status]}
+                            {row.original.status}
                         </Badge>
                     );
                 },

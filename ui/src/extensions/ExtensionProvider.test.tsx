@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useContext } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -8,42 +8,6 @@ import type { UIManifest } from './types';
 
 const mockFetch = vi.fn();
 global.fetch = mockFetch;
-
-function mockJsonResponse(
-    body: unknown,
-    status = 200,
-): {
-    ok: boolean;
-    status: number;
-    headers: Headers;
-    json: () => Promise<unknown>;
-} {
-    return {
-        ok: status >= 200 && status < 300,
-        status,
-        headers: new Headers({ 'content-type': 'application/json' }),
-        json: () => Promise.resolve(body),
-    };
-}
-
-function mockErrorResponse(
-    status: number,
-    statusText: string,
-): {
-    ok: false;
-    status: number;
-    statusText: string;
-    headers: Headers;
-    text: () => Promise<string>;
-} {
-    return {
-        ok: false,
-        status,
-        statusText,
-        headers: new Headers({ 'content-type': 'text/plain' }),
-        text: () => Promise.resolve(statusText),
-    };
-}
 
 let injectedElements: HTMLElement[] = [];
 const originalAppendChild = document.head.appendChild.bind(document.head);
@@ -83,7 +47,12 @@ describe('ExtensionProvider', () => {
 
     it('provides default context values', () => {
         const manifest: UIManifest = { assets: [], extensions: [] };
-        mockFetch.mockResolvedValueOnce(mockJsonResponse(manifest));
+        mockFetch.mockResolvedValueOnce({
+            ok: true,
+            status: 200,
+            headers: new Headers({ 'content-type': 'application/json' }),
+            json: () => Promise.resolve(manifest),
+        });
 
         render(
             <ExtensionProvider>
@@ -99,7 +68,12 @@ describe('ExtensionProvider', () => {
 
     it('provides custom context values', async () => {
         const manifest: UIManifest = { assets: [], extensions: [] };
-        mockFetch.mockResolvedValueOnce(mockJsonResponse(manifest));
+        mockFetch.mockResolvedValueOnce({
+            ok: true,
+            status: 200,
+            headers: new Headers({ 'content-type': 'application/json' }),
+            json: () => Promise.resolve(manifest),
+        });
 
         render(
             <ExtensionProvider apiBaseUrl="/custom-api" userId="user-123" username="testuser" role="Admin">
@@ -120,12 +94,17 @@ describe('ExtensionProvider', () => {
     it('transitions through loading states', async () => {
         const manifest: UIManifest = { assets: [], extensions: [] };
 
+        let finishFetch: () => void = () => {};
         mockFetch.mockImplementationOnce(
             () =>
                 new Promise((resolve) => {
-                    setTimeout(() => {
-                        resolve(mockJsonResponse(manifest));
-                    }, 10);
+                    finishFetch = () =>
+                        resolve({
+                            ok: true,
+                            status: 200,
+                            headers: new Headers({ 'content-type': 'application/json' }),
+                            json: () => Promise.resolve(manifest),
+                        });
                 }),
         );
 
@@ -139,6 +118,8 @@ describe('ExtensionProvider', () => {
             expect(screen.getByTestId('state')).toHaveTextContent('loading');
         });
 
+        act(() => finishFetch());
+
         await waitFor(() => {
             expect(screen.getByTestId('state')).toHaveTextContent('ready');
         });
@@ -146,7 +127,13 @@ describe('ExtensionProvider', () => {
 
     it('handles fetch errors', async () => {
         mockFetch.mockReset();
-        mockFetch.mockResolvedValue(mockErrorResponse(500, 'Internal Server Error'));
+        mockFetch.mockResolvedValue({
+            ok: false as const,
+            status: 500,
+            statusText: 'Internal Server Error',
+            headers: new Headers({ 'content-type': 'text/plain' }),
+            text: () => Promise.resolve('Internal Server Error'),
+        });
 
         render(
             <ExtensionProvider userId="user-123">
@@ -173,7 +160,12 @@ describe('ExtensionProvider', () => {
         });
         expect(mockFetch.mock.calls.filter(([url]) => String(url).includes('/ui/manifest'))).toHaveLength(0);
 
-        mockFetch.mockResolvedValueOnce(mockJsonResponse({ assets: [], extensions: [] }));
+        mockFetch.mockResolvedValueOnce({
+            ok: true,
+            status: 200,
+            headers: new Headers({ 'content-type': 'application/json' }),
+            json: () => Promise.resolve({ assets: [], extensions: [] }),
+        });
 
         rerender(
             <ExtensionProvider userId="user-123" username="alice" role="Admin">
@@ -207,7 +199,12 @@ describe('ExtensionProvider', () => {
         };
 
         mockFetch.mockReset();
-        mockFetch.mockResolvedValue(mockJsonResponse(manifest));
+        mockFetch.mockResolvedValue({
+            ok: true,
+            status: 200,
+            headers: new Headers({ 'content-type': 'application/json' }),
+            json: () => Promise.resolve(manifest),
+        });
 
         function SlotConsumer() {
             const ctx = useContext(ExtensionContext);
@@ -241,7 +238,13 @@ describe('ExtensionProvider', () => {
         const user = userEvent.setup();
 
         mockFetch.mockReset();
-        mockFetch.mockResolvedValue(mockErrorResponse(503, 'Service Unavailable'));
+        mockFetch.mockResolvedValue({
+            ok: false as const,
+            status: 503,
+            statusText: 'Service Unavailable',
+            headers: new Headers({ 'content-type': 'text/plain' }),
+            text: () => Promise.resolve('Service Unavailable'),
+        });
 
         function RetryConsumer() {
             const ctx = useContext(ExtensionContext);
@@ -265,7 +268,12 @@ describe('ExtensionProvider', () => {
             expect(screen.getByTestId('state')).toHaveTextContent('error');
         });
 
-        mockFetch.mockResolvedValue(mockJsonResponse({ assets: [], extensions: [] }));
+        mockFetch.mockResolvedValue({
+            ok: true,
+            status: 200,
+            headers: new Headers({ 'content-type': 'application/json' }),
+            json: () => Promise.resolve({ assets: [], extensions: [] }),
+        });
 
         await user.click(screen.getByTestId('retry'));
 
@@ -276,7 +284,12 @@ describe('ExtensionProvider', () => {
 
     it('renders children', () => {
         const manifest: UIManifest = { assets: [], extensions: [] };
-        mockFetch.mockResolvedValueOnce(mockJsonResponse(manifest));
+        mockFetch.mockResolvedValueOnce({
+            ok: true,
+            status: 200,
+            headers: new Headers({ 'content-type': 'application/json' }),
+            json: () => Promise.resolve(manifest),
+        });
 
         render(
             <ExtensionProvider>
@@ -289,7 +302,12 @@ describe('ExtensionProvider', () => {
 
     it('updates context when props change', async () => {
         const manifest: UIManifest = { assets: [], extensions: [] };
-        mockFetch.mockResolvedValue(mockJsonResponse(manifest));
+        mockFetch.mockResolvedValue({
+            ok: true,
+            status: 200,
+            headers: new Headers({ 'content-type': 'application/json' }),
+            json: () => Promise.resolve(manifest),
+        });
 
         const { rerender } = render(
             <ExtensionProvider userId="user-1" username="alice">

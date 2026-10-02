@@ -215,16 +215,14 @@ describe('SimpleFilterBuilder', () => {
             );
 
             const nativeSelects = document.querySelectorAll('select');
-            expect(nativeSelects.length).toBeGreaterThan(0);
-            for (const nativeSelect of nativeSelects) {
-                expect(nativeSelect).toHaveAttribute('aria-hidden', 'true');
-            }
+            expect(nativeSelects).toHaveLength(2);
+            expect(nativeSelects[0]).toHaveAttribute('aria-hidden', 'true');
+            expect(nativeSelects[1]).toHaveAttribute('aria-hidden', 'true');
 
             const comboboxes = screen.getAllByRole('combobox');
             expect(comboboxes).toHaveLength(2);
-            for (const combobox of comboboxes) {
-                expect(combobox).toHaveAccessibleName();
-            }
+            expect(comboboxes[0]).toHaveAccessibleName();
+            expect(comboboxes[1]).toHaveAccessibleName();
             expect(screen.getByRole('combobox', { name: 'Content Type' })).toBeInTheDocument();
             expect(screen.getByRole('combobox', { name: 'Related kind' })).toBeInTheDocument();
         });
@@ -237,10 +235,8 @@ describe('SimpleFilterBuilder', () => {
             );
 
             const nativeSelects = document.querySelectorAll('select');
-            expect(nativeSelects.length).toBeGreaterThan(0);
-            for (const nativeSelect of nativeSelects) {
-                expect(nativeSelect).toHaveAttribute('aria-hidden', 'true');
-            }
+            expect(nativeSelects).toHaveLength(1);
+            expect(nativeSelects[0]).toHaveAttribute('aria-hidden', 'true');
 
             const comboboxes = screen.getAllByRole('combobox');
             expect(comboboxes).toHaveLength(1);
@@ -260,7 +256,8 @@ describe('SimpleFilterBuilder', () => {
             render(<SimpleFilterBuilder value="" onChange={mockOnChange} context="subject" />);
 
             expect(screen.getByLabelText('Kind')).toBeInTheDocument();
-            expect(screen.getByLabelText('Related')).toBeInTheDocument();
+            expect(screen.getByLabelText('Name')).toBeInTheDocument();
+            expect(screen.queryByLabelText('Related')).not.toBeInTheDocument();
             expect(screen.getByLabelText('Tag')).toBeInTheDocument();
 
             expect(screen.queryByLabelText('Genre')).not.toBeInTheDocument();
@@ -275,7 +272,7 @@ describe('SimpleFilterBuilder', () => {
             const row = document.querySelector('.simple-filter-builder__subject');
             expect(row).toBeInTheDocument();
             expect(row).toContainElement(screen.getByRole('combobox', { name: 'Kind' }));
-            expect(row).toContainElement(screen.getByLabelText('Related'));
+            expect(row).toContainElement(screen.getByLabelText('Name'));
         });
     });
 
@@ -907,30 +904,23 @@ describe('SimpleFilterBuilder', () => {
             expect(screen.getByRole('checkbox', { name: 'after' })).toHaveAttribute('aria-checked', 'false');
         });
 
-        it('round-trips each canonical publishDate form back into year + selected ops', () => {
-            const cases: { query: string; year: number; on: ('before' | 'in' | 'after')[] }[] = [
-                { query: 'publishDate = "1999"', year: 1999, on: ['in'] },
-                { query: 'publishDate < "1999"', year: 1999, on: ['before'] },
-                { query: 'publishDate > "1999"', year: 1999, on: ['after'] },
-                { query: 'publishDate <= "1999"', year: 1999, on: ['before', 'in'] },
-                { query: 'publishDate >= "1999"', year: 1999, on: ['in', 'after'] },
-                { query: 'publishDate != "1999"', year: 1999, on: ['before', 'after'] },
-            ];
+        it.each([
+            ['publishDate = "1999"', ['false', 'true', 'false']],
+            ['publishDate < "1999"', ['true', 'false', 'false']],
+            ['publishDate > "1999"', ['false', 'false', 'true']],
+            ['publishDate <= "1999"', ['true', 'true', 'false']],
+            ['publishDate >= "1999"', ['false', 'true', 'true']],
+            ['publishDate != "1999"', ['true', 'false', 'true']],
+        ])('round-trips the canonical publishDate form %s back into year and selected ops', (query, checked) => {
+            render(<SimpleFilterBuilder value={query} onChange={mockOnChange} />);
 
-            for (const { query, year, on } of cases) {
-                const { unmount } = render(<SimpleFilterBuilder value={query} onChange={mockOnChange} />);
-
-                expect(screen.getByLabelText('Release year')).toHaveValue(year);
-                for (const op of ['before', 'in', 'after'] as const) {
-                    expect(screen.getByRole('checkbox', { name: op })).toHaveAttribute(
-                        'aria-checked',
-                        on.includes(op) ? 'true' : 'false',
-                    );
-                }
-
-                expect(isSimpleQuery(query, 'content')).toBe(true);
-                unmount();
-            }
+            expect(screen.getByLabelText('Release year')).toHaveValue(1999);
+            expect([
+                screen.getByRole('checkbox', { name: 'before' }).getAttribute('aria-checked'),
+                screen.getByRole('checkbox', { name: 'in' }).getAttribute('aria-checked'),
+                screen.getByRole('checkbox', { name: 'after' }).getAttribute('aria-checked'),
+            ]).toEqual(checked);
+            expect(isSimpleQuery(query, 'content')).toBe(true);
         });
 
         it('parses a legacy range and normalizes it to canonical form on edit', async () => {
@@ -996,7 +986,7 @@ describe('SimpleFilterBuilder', () => {
 
             const kindTrigger = screen.getByRole('combobox');
             expect(kindTrigger).toHaveTextContent('Studio');
-            expect(screen.getByLabelText('Related')).toHaveValue('Inception');
+            expect(screen.getByLabelText('Name')).toHaveValue('Inception');
             expect(screen.getByLabelText('Tag')).toHaveValue('favorite');
 
             expect(screen.queryByLabelText('Genre')).not.toBeInTheDocument();
@@ -1207,7 +1197,7 @@ describe('SimpleFilterBuilder', () => {
                 />,
             );
 
-            fireEvent.change(screen.getByLabelText('Related'), { target: { value: 'A24' } });
+            fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'A24' } });
 
             expect(mockOnChange).toHaveBeenLastCalledWith('title contains "A24"');
         });

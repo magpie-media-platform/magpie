@@ -30,8 +30,8 @@ describe('useLibrarySelection', () => {
 
         expect(result.current.selectedItems).toEqual([{ id: 'a', title: 'Alpha', tags: ['qa-exploration'] }]);
         expect(result.current.selection.pageSelectedCount).toBe(1);
-        expect(result.current.selectedCount).toBe(1);
-        expect(result.current.hasSelection).toBe(true);
+        expect(result.current.selection.selectedCount).toBe(1);
+        expect(result.current.selection.hasSelection).toBe(true);
     });
 
     it('selects the page through the header toggle', () => {
@@ -39,7 +39,7 @@ describe('useLibrarySelection', () => {
 
         act(() => result.current.selection.toggleHeader(true));
 
-        expect(result.current.selectedCount).toBe(3);
+        expect(result.current.selection.selectedCount).toBe(3);
         expect(result.current.selection.pageSelectedCount).toBe(3);
     });
 
@@ -48,12 +48,12 @@ describe('useLibrarySelection', () => {
 
         act(() => result.current.selection.toggleRow('a', true));
         act(() => result.current.selection.toggleRow('b', true));
-        expect(result.current.selectedCount).toBe(2);
+        expect(result.current.selection.selectedCount).toBe(2);
 
-        act(() => result.current.handleClearSelection());
+        act(() => result.current.selection.clear());
 
-        expect(result.current.hasSelection).toBe(false);
-        expect(result.current.selectedCount).toBe(0);
+        expect(result.current.selection.hasSelection).toBe(false);
+        expect(result.current.selection.selectedCount).toBe(0);
     });
 
     it('drops a select-all-across-pages when the filter scope changes', () => {
@@ -64,11 +64,11 @@ describe('useLibrarySelection', () => {
         );
 
         act(() => result.current.selection.selectAllAcrossPages());
-        expect(result.current.selectedCount).toBe(250);
+        expect(result.current.selection.selectedCount).toBe(250);
 
         rerender({ resetKey: 'ParentId null and ContentType = "kind-y"' });
 
         expect(result.current.selection.allPages).toBe(false);
-        expect(result.current.selectedCount).toBe(0);
+        expect(result.current.selection.selectedCount).toBe(0);
     });
 });

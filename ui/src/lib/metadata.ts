@@ -1,3 +1,4 @@
+import type { TemporalPrecision } from '@/types/contentMetadata';
 import type { GalleryImage } from '@/types/images';
 
 export interface MetadataImage {
@@ -54,6 +55,7 @@ export interface MetadataContribution {
     title?: string | null;
     overview?: string | null;
     publishDate?: string | null;
+    publishDatePrecision?: TemporalPrecision | null;
     runtime?: number | null;
     sequenceNumber?: number | null;
     productionStatus?: string | null;
@@ -189,6 +191,15 @@ export function extractPublishDate(container?: MetadataContainer | null): string
     for (const contribution of sortedContributions(container)) {
         if (contribution.publishDate) {
             return contribution.publishDate;
+        }
+    }
+    return undefined;
+}
+
+export function extractPublishDatePrecision(container?: MetadataContainer | null): TemporalPrecision | undefined {
+    for (const contribution of sortedContributions(container)) {
+        if (contribution.publishDate) {
+            return contribution.publishDatePrecision ?? undefined;
         }
     }
     return undefined;

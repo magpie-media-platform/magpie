@@ -47,7 +47,7 @@ public static class MagpieDataPostgreSqlServiceCollectionExtensions
     }
 
     /// <summary>
-    /// If no backplane exists, registers the PostgreSQL LISTEN/NOTIFY cluster backplane.
+    /// Registers the PostgreSQL cluster backplane.
     /// </summary>
     /// <param name="services">The service collection to register into</param>
     /// <param name="connectionString">The PostgreSQL connection string</param>

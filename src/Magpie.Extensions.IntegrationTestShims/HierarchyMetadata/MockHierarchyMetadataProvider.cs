@@ -11,31 +11,13 @@ using Magpie.Sdk.Content;
 
 namespace Magpie.Extensions.IntegrationTestShims.HierarchyMetadata;
 
-internal sealed class MockHierarchyMetadataProvider : IContentHierarchyMetadataRelationshipProvider
+internal sealed class MockHierarchyMetadataProvider(string slug) : IContentHierarchyMetadataRelationshipProvider
 {
-    private readonly AuditWriter _audit;
-    private readonly LatencyInjector _latency;
-    private readonly ScenarioReader _scenarios;
+    private readonly AuditWriter _audit = new(slug);
+    private readonly LatencyInjector _latency = new(slug);
+    private readonly ScenarioReader _scenarios = new(slug);
 
-    public MockHierarchyMetadataProvider()
-        : this(MockHierarchyMetadataProviderType.Primary)
-    {
-    }
-
-    public MockHierarchyMetadataProvider(string slug)
-    {
-        if (string.IsNullOrWhiteSpace(slug))
-        {
-            throw new ArgumentException("Slug must be non-empty.", nameof(slug));
-        }
-
-        ProviderType = slug;
-        _audit = new AuditWriter(slug);
-        _latency = new LatencyInjector(slug);
-        _scenarios = new ScenarioReader(slug);
-    }
-
-    public string ProviderType { get; }
+    public string ProviderType { get; } = slug;
 
     public IEnumerable<string> SupportedContentTypes => ["*"];
 

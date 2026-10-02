@@ -90,19 +90,6 @@
         color: inherit;
     }
 
-    .download-queue-widget__item--clickable {
-        cursor: pointer;
-
-        &:hover {
-            background-color: var(--bg-tertiary);
-        }
-
-        &:focus-visible {
-            outline: var(--focus-ring-width) solid var(--focus-ring-color);
-            outline-offset: var(--focus-ring-offset);
-        }
-    }
-
     .download-queue-widget__item-header {
         display: flex;
         align-items: center;

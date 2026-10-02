@@ -45,7 +45,7 @@ const mockApiWishlists: ApiWishlist[] = [
         enabled: true,
         lastSyncedAt: '2024-01-15T10:30:00Z',
         createdAt: '2024-01-01T00:00:00Z',
-        contentFilter: { id: 'filter-1', name: 'Action Movies' },
+        contentFilter: { id: 'filter-1', name: 'Action Movies', ownerUserId: 'user-1', ownerLock: false },
         qualityTierList: { id: 'qtl-1', name: 'HD' },
     },
     {
@@ -58,7 +58,7 @@ const mockApiWishlists: ApiWishlist[] = [
         enabled: true,
         lastSyncedAt: null,
         createdAt: '2024-01-02T00:00:00Z',
-        contentFilter: { id: 'filter-2', name: 'All Movies' },
+        contentFilter: { id: 'filter-2', name: 'All Movies', ownerUserId: null, ownerLock: false },
         qualityTierList: null,
     },
     {
@@ -1310,6 +1310,33 @@ describe('WishlistsPage Edit and Delete actions', () => {
         await waitFor(() => {
             expect(mockApiDelete).toHaveBeenCalledWith('/wishlists/wl-1');
         });
+    });
+
+    it('disables the also-delete-filter toggle when the caller cannot delete the filter', async () => {
+        const user = userEvent.setup();
+
+        render(
+            <TestWrapper role={Role.Manager} userId="user-1">
+                <WishlistsPage />
+            </TestWrapper>,
+        );
+
+        await waitFor(() => {
+            expect(document.querySelector('[data-action="delete"]')).toBeInTheDocument();
+        });
+
+        const deleteButton = document.querySelector(
+            '[data-wishlist-id="wl-2"] [data-action="delete"]',
+        ) as HTMLButtonElement;
+        await user.click(deleteButton);
+
+        await waitFor(() => {
+            expect(screen.getByText('Delete Wishlist')).toBeInTheDocument();
+        });
+
+        const toggle = screen.getByRole('switch');
+        expect(toggle).toBeDisabled();
+        expect(toggle.parentElement).toHaveAccessibleDescription('You do not have permission to delete this filter.');
     });
 
     it('closes confirmation dialog on cancel', async () => {

@@ -156,9 +156,9 @@ internal sealed class QueryCoordinator : IQueryCoordinator, IDisposable
                 {
                     entry = new Entry
                     {
-                        Source = new TaskCompletionSource<TValue>(
+                        Source = new(
                             TaskCreationOptions.RunContinuationsAsynchronously),
-                        FillCancellation = new CancellationTokenSource(),
+                        FillCancellation = new(),
                         WaiterCount = 1
                     };
                     _entries.Add(key, entry);
@@ -167,7 +167,10 @@ internal sealed class QueryCoordinator : IQueryCoordinator, IDisposable
                 }
 
                 lease = new Lease(
-                    this, key, entry, completedAtLookup,
+                    this,
+                    key,
+                    entry,
+                    completedAtLookup,
                     UpstreamRequestAccounting.Observer ?? requestObserver);
                 entry.Waiters.Add(lease);
             }
@@ -383,15 +386,35 @@ internal sealed class QueryCoordinator : IQueryCoordinator, IDisposable
         _cacheScope = scopeFactory.CreateScope();
         var cacheFactory = _cacheScope.ServiceProvider.GetRequiredService<ICacheFactory>();
         _entities = new CoalescingStore<EntityCacheValue>(
-            cacheFactory, "wikidata-entities", 1024, EntityTtl, MissingEntityTtl);
+            cacheFactory,
+            "wikidata-entities",
+            1024,
+            EntityTtl,
+            MissingEntityTtl);
         _identities = new CoalescingStore<EntityResolution>(
-            cacheFactory, "wikidata-identities", 512, IdentityTtl, NegativeIdentityTtl);
+            cacheFactory,
+            "wikidata-identities",
+            512,
+            IdentityTtl,
+            NegativeIdentityTtl);
         _searches = new CoalescingStore<IReadOnlyList<Dictionary<string, SparqlBindingDto>>>(
-            cacheFactory, "wikidata-searches", 256, SearchTtl, SearchTtl);
+            cacheFactory,
+            "wikidata-searches",
+            256,
+            SearchTtl,
+            SearchTtl);
         _entitySearches = new CoalescingStore<IReadOnlyList<string>>(
-            cacheFactory, "wikidata-entitysearches", 256, EntitySearchTtl, NegativeEntitySearchTtl);
+            cacheFactory,
+            "wikidata-entitysearches",
+            256,
+            EntitySearchTtl,
+            NegativeEntitySearchTtl);
         _hierarchies = new CoalescingStore<HierarchyResult>(
-            cacheFactory, "wikidata-hierarchies", 128, HierarchyTtl, HierarchyTtl);
+            cacheFactory,
+            "wikidata-hierarchies",
+            128,
+            HierarchyTtl,
+            HierarchyTtl);
     }
 
     public async Task<EntityDto?> GetEntityAsync(
@@ -476,25 +499,19 @@ internal sealed class QueryCoordinator : IQueryCoordinator, IDisposable
         CancellationToken cancellationToken,
         Action<SearchCacheProvenance>? provenanceObserver = null)
     {
-        cancellationToken.ThrowIfCancellationRequested();
-        using var lease = _searches.Acquire(
+        var provenance = SearchCacheProvenance.Remote;
+        var rows = await GetOrCreateAsync(
+            _searches,
             key,
+            factory,
+            _ => false,
+            _ => true,
             cancellationToken,
-            out var owner,
-            out var completedAtLookup);
-        var provenance = Provenance(owner, completedAtLookup);
-        provenanceObserver?.Invoke(provenance);
-        if (owner && _searches.TryStartFill(lease))
-        {
-            _ = FillAsync(
-                _searches,
-                lease,
-                factory,
-                _ => false,
-                _ => true);
-        }
-
-        var rows = await AwaitAsync(lease.Completion, cancellationToken).ConfigureAwait(false);
+            value =>
+            {
+                provenance = value;
+                provenanceObserver?.Invoke(value);
+            }).ConfigureAwait(false);
         return new SearchCacheResult(rows, provenance);
     }
 

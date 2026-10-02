@@ -7,20 +7,23 @@ namespace Magpie.Test.Extensions.Tv.Parsing;
 [TestFixture]
 public class TvReleaseTitleParsingExtensionsTests
 {
-    [Test]
-    public void Parse_RejectsEndEpisode_WhenResolutionFollowsNumXNumToken()
+    [TestCase("show 1x05 720p", 1, 5)]
+    [TestCase("mash s03e05 1974 dvdrip", 3, 5)]
+    [TestCase("show 2x03 480p", 2, 3)]
+    public void Parse_RejectsEndEpisode_WhenTokenFollowsEpisode(
+        string title,
+        int season,
+        int episode)
     {
         // Arrange
-        var title = "show 1x05 720p";
-
         // Act
         var parsed = title.ParseTvReleaseTitle();
 
         // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(parsed.Seasons, Is.EqualTo([1]));
-            Assert.That(parsed.Episodes, Is.EqualTo([5]));
+            Assert.That(parsed.Seasons, Is.EqualTo([season]));
+            Assert.That(parsed.Episodes, Is.EqualTo([episode]));
         }
     }
 
@@ -42,23 +45,6 @@ public class TvReleaseTitleParsingExtensionsTests
     }
 
     [Test]
-    public void Parse_RejectsEndEpisode_WhenYearFollowsSeasonEpisodeToken()
-    {
-        // Arrange
-        var title = "mash s03e05 1974 dvdrip";
-
-        // Act
-        var parsed = title.ParseTvReleaseTitle();
-
-        // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(parsed.Seasons, Is.EqualTo([3]));
-            Assert.That(parsed.Episodes, Is.EqualTo([5]));
-        }
-    }
-
-    [Test]
     public void Parse_ParsesEpisodeRange_WhenSeasonEpisodeCarriesExplicitEnd()
     {
         // Arrange
@@ -73,6 +59,32 @@ public class TvReleaseTitleParsingExtensionsTests
             Assert.That(parsed.Seasons, Is.EqualTo([1]));
             Assert.That(parsed.Episodes, Is.EqualTo([1, 2, 3, 4]));
         }
+    }
+
+    [TestCase("Show.S01E01.720p.WEB", new[] { 1 })]
+    [TestCase("Show.S01E01.1080p.x265", new[] { 1 })]
+    [TestCase("Show S01E01 2160p", new[] { 1 })]
+    [TestCase("Show.S01E01E02", new[] { 1, 2 })]
+    [TestCase("Show.S01E01-E03", new[] { 1, 2, 3 })]
+    [TestCase("Show.S01E01-03", new[] { 1, 2, 3 })]
+    [TestCase("Show.S01E01.E02.720p", new[] { 1, 2 })]
+    [TestCase("Show.S01E01-E02-E03.720p", new[] { 1, 2, 3 })]
+    [TestCase("Show.S01E01E02E03.720p", new[] { 1, 2, 3 })]
+    [TestCase("Show - S01E01 - Title", new[] { 1 })]
+    [TestCase("Show - S01E01 - 100 Days", new[] { 1 })]
+    [TestCase("Show.S01E01.100.Days.720p.WEB", new[] { 1 })]
+    [TestCase("Show S01E05 12 Angry Men", new[] { 5 })]
+    [TestCase("Show.S01E05.2019.1080p", new[] { 5 })]
+    [TestCase("Show 1x01 100 Days", new[] { 1 })]
+    [TestCase("Show 1x01-03", new[] { 1, 2, 3 })]
+    public void Parse_ReadsOnlyTheNamedEpisodes_WhenTheTitleHasACommonReleaseShape(string title, int[] expected)
+    {
+        // Arrange
+        // Act
+        var parsed = title.ParseTvReleaseTitle();
+
+        // Assert
+        Assert.That(parsed.Episodes, Is.EqualTo(expected));
     }
 
     [Test]
@@ -142,23 +154,6 @@ public class TvReleaseTitleParsingExtensionsTests
 
         // Assert
         Assert.That(parsed.Seasons, Is.EqualTo([1, 3]));
-    }
-
-    [Test]
-    public void Parse_RejectsEndEpisode_When480pFollowsNumXNumToken()
-    {
-        // Arrange
-        var title = "show 2x03 480p";
-
-        // Act
-        var parsed = title.ParseTvReleaseTitle();
-
-        // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(parsed.Seasons, Is.EqualTo([2]));
-            Assert.That(parsed.Episodes, Is.EqualTo([3]));
-        }
     }
 
     [Test]

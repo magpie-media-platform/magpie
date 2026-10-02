@@ -26,13 +26,6 @@
         color: var(--accent-primary);
     }
 
-    .dashboard-page__title {
-        margin: 0;
-        font-size: var(--text-2xl);
-        font-weight: var(--weight-semibold);
-        color: var(--text-primary);
-    }
-
     .dashboard-page__content {
         display: flex;
         flex-direction: column;
@@ -65,10 +58,6 @@
 
         .dashboard-page__header {
             margin-bottom: var(--space-lg);
-        }
-
-        .dashboard-page__title {
-            font-size: var(--text-xl);
         }
     }
 

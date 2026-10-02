@@ -1,13 +1,9 @@
 import type { ScalarPatch, DictionaryPatch } from '@/types/patch';
 import { buildQueryKeys, useCrudResource } from './useCrudResource';
 import { useInvalidateQueriesOnEvents } from './useInvalidateQueriesOnEvents';
-import { healthStatusLabels, healthStatusVariants } from '@/types/healthStatus';
 import type { HealthStatusValue } from '@/types/healthStatus';
 
 export type MediaServerStatusValue = HealthStatusValue;
-
-export const mediaServerStatusLabels = healthStatusLabels;
-export const mediaServerStatusVariants = healthStatusVariants;
 
 export interface ApiMediaServer {
     id: string;
@@ -63,7 +59,6 @@ export function useMediaServers() {
         debounceMs: 150,
         exact: true,
         maxWaitMs: 600,
-        owner: 'media-server-settings',
     });
     const resource = useCrudResource<ApiMediaServer, MediaServerCreate, MediaServerPatch>(
         {

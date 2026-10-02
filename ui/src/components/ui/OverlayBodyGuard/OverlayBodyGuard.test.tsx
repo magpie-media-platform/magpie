@@ -3,8 +3,6 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { OverlayBodyGuard } from './OverlayBodyGuard';
 
-const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
-
 describe('OverlayBodyGuard', () => {
     afterEach(() => {
         document.body.style.pointerEvents = '';
@@ -16,7 +14,7 @@ describe('OverlayBodyGuard', () => {
         document.body.style.pointerEvents = 'none';
 
         unmount();
-        await flush();
+        await Promise.resolve();
 
         expect(document.body.style.pointerEvents).toBe('');
     });
@@ -31,7 +29,7 @@ describe('OverlayBodyGuard', () => {
         document.body.style.pointerEvents = 'none';
 
         unmount();
-        await flush();
+        await Promise.resolve();
 
         expect(document.body.style.pointerEvents).toBe('none');
     });
@@ -41,7 +39,7 @@ describe('OverlayBodyGuard', () => {
         document.body.style.pointerEvents = 'auto';
 
         unmount();
-        await flush();
+        await Promise.resolve();
 
         expect(document.body.style.pointerEvents).toBe('auto');
     });

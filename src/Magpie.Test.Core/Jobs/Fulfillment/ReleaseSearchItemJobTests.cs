@@ -192,7 +192,7 @@ public sealed class ReleaseSearchItemJobTests
         // Arrange
         var context = _jobContext with { Parameters = new Dictionary<string, string>() };
 
-        // Assert
+        // Act and Assert
         Assert.ThrowsAsync<ArgumentException>(async () => await _subject.ExecuteAsync(context).ConfigureAwait(false));
     }
 }

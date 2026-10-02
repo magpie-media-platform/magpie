@@ -14,18 +14,6 @@ vi.mock('@/lib/api', () => ({
     buildUrl: vi.fn(),
 }));
 
-function createTestQueryClient() {
-    return new QueryClient({
-        defaultOptions: {
-            queries: {
-                retry: false,
-                gcTime: 0,
-                staleTime: 0,
-            },
-        },
-    });
-}
-
 function createWrapper(queryClient: QueryClient) {
     return function Wrapper({ children }: { children: ReactNode }) {
         return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
@@ -36,7 +24,15 @@ describe('content command hooks', () => {
     let queryClient: QueryClient;
 
     beforeEach(() => {
-        queryClient = createTestQueryClient();
+        queryClient = new QueryClient({
+            defaultOptions: {
+                queries: {
+                    retry: false,
+                    gcTime: 0,
+                    staleTime: 0,
+                },
+            },
+        });
         vi.clearAllMocks();
     });
 

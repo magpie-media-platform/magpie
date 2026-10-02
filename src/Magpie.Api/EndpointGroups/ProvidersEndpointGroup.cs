@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using System.Linq;
 
+using Magpie.Models;
 using Magpie.Models.Integrations;
 using Magpie.Sdk.Api;
 using Magpie.Sdk.Integrations;
@@ -32,45 +33,30 @@ internal sealed class ProvidersEndpointGroup : IApiEndpointGroup
         [FromServices] IEnumerable<INotificationProvider> notifications,
         [FromServices] IEnumerable<IIndexerFeedProvider> indexerFeeds)
     {
-        var providers = indexers.Select(provider => new ProviderDescriptor
-        {
-            Kind = "indexer",
-            ProviderType = provider.ProviderType,
-            DisplayName = provider.DisplayName,
-            Schema = provider.SettingsSchema
-        })
-            .Concat(downloadClients.Select(provider => new ProviderDescriptor
-            {
-                Kind = "downloadClient",
-                ProviderType = provider.ProviderType,
-                DisplayName = provider.DisplayName,
-                Schema = provider.SettingsSchema
-            }))
-            .Concat(mediaServers.Select(provider => new ProviderDescriptor
-            {
-                Kind = "mediaServer",
-                ProviderType = provider.ProviderType,
-                DisplayName = provider.DisplayName,
-                Schema = provider.SettingsSchema
-            }))
-            .Concat(notifications.Select(provider => new ProviderDescriptor
-            {
-                Kind = "notification",
-                ProviderType = provider.ProviderType,
-                DisplayName = provider.DisplayName,
-                Schema = provider.SettingsSchema
-            }))
-            .Concat(indexerFeeds.Select(provider => new ProviderDescriptor
-            {
-                Kind = "indexerFeed",
-                ProviderType = provider.ProviderType,
-                DisplayName = provider.DisplayName,
-                Schema = provider.SettingsSchema
-            }))
+        var providers = indexers.Select(p => Describe("indexer", p.ProviderType, p.DisplayName, p.SettingsSchema))
+            .Concat(downloadClients.Select(p => Describe(
+                "downloadClient",
+                p.ProviderType,
+                p.DisplayName,
+                p.SettingsSchema)))
+            .Concat(mediaServers.Select(p => Describe("mediaServer", p.ProviderType, p.DisplayName, p.SettingsSchema)))
+            .Concat(notifications.Select(p => Describe(
+                "notification",
+                p.ProviderType,
+                p.DisplayName,
+                p.SettingsSchema)))
+            .Concat(indexerFeeds.Select(p => Describe("indexerFeed", p.ProviderType, p.DisplayName, p.SettingsSchema)))
             .OrderBy(provider => provider.Kind)
             .ThenBy(provider => provider.ProviderType)
             .ToList();
 
         return Results.Ok(providers);
+
+        static ProviderDescriptor Describe(
+            string kind,
+            string providerType,
+            string displayName,
+            IReadOnlyList<SettingSchemaDefinition> schema) =>
+            new() { Kind = kind, ProviderType = providerType, DisplayName = displayName, Schema = schema };
     }
 }

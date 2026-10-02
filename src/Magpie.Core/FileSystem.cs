@@ -83,6 +83,29 @@ internal sealed partial class FileSystem(
         Guid? actingUserId,
         CancellationToken cancellationToken = default)
     {
+        if (pattern.Contains('/', StringComparison.Ordinal))
+        {
+            if (!IsWellFormedMimeType(pattern))
+            {
+                throw new ArgumentException($"{pattern} is not a valid MIME type.");
+            }
+
+            if (pattern.Contains('*', StringComparison.Ordinal))
+            {
+                throw new ArgumentException($"Wildcard MIME type {pattern} is not supported.");
+            }
+        }
+        else if (!IsWellFormedExtension(pattern))
+        {
+            throw new ArgumentException($"{pattern} is not a valid file extension.");
+        }
+
+        var blocked = await blockedFileTypeRepository.ListAllAsync(cancellationToken).ConfigureAwait(false);
+        if (blocked.Any(entry => string.Equals(entry.Pattern, pattern, StringComparison.OrdinalIgnoreCase)))
+        {
+            throw new ArgumentException($"{pattern} is already a blocked file pattern.");
+        }
+
         var exclusion = new BlockedFileType { Pattern = pattern };
         return await blockedFileTypeRepository
             .CreateAsync(exclusion, actingUserId, cancellationToken)
@@ -167,7 +190,7 @@ internal sealed partial class FileSystem(
         var file = new FileInfo(path);
         var size = file.Length;
         using var readableFile = File.OpenRead(path);
-        return new FileState
+        return new()
         {
             Size = size,
             LastWriteTimeUtc = file.LastWriteTimeUtc
@@ -185,9 +208,7 @@ internal sealed partial class FileSystem(
         Directory.Delete(path, recursive: false);
     }
 
-    public Task<IReadOnlyList<FileSystemEntry>> BrowseAsync(
-        string? path,
-        CancellationToken cancellationToken = default)
+    public Task<IReadOnlyList<FileSystemEntry>> BrowseAsync(string? path, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
 
@@ -348,17 +369,6 @@ internal sealed partial class FileSystem(
             ? fileSystem.MatchesAnyFileType(file.FilePath, file.MimeType, level.AcceptedFileTypes)
             : !fileSystem.MatchesAnyFileType(file.FilePath, file.MimeType, level.AcceptedSidecarTypes);
 
-    /// <summary>
-    /// Throws if a directory cannot be listed.
-    /// </summary>
-    /// <param name="fileSystem">The file system that lists the directory</param>
-    /// <param name="path">The path of the directory</param>
-    internal static void RequireListable(IFileSystem fileSystem, string path)
-    {
-        using var entries = fileSystem.EnumerateFileSystemEntries(path).GetEnumerator();
-        entries.MoveNext();
-    }
-
     public bool MatchesAnyFileType(string filePath, string? mimeType, IReadOnlyList<string>? fileTypes)
     {
         return fileTypes is not null &&
@@ -386,8 +396,7 @@ internal sealed partial class FileSystem(
                 mimeParts.Length == 2 &&
                 (ruleParts[0] == "*" ||
                     string.Equals(ruleParts[0], mimeParts[0], StringComparison.OrdinalIgnoreCase)) &&
-                (ruleParts[1] == "*" ||
-                    string.Equals(ruleParts[1], mimeParts[1], StringComparison.OrdinalIgnoreCase));
+                (ruleParts[1] == "*" || string.Equals(ruleParts[1], mimeParts[1], StringComparison.OrdinalIgnoreCase));
         }
 
         var extension = Path.GetExtension(filePath);
@@ -430,6 +439,16 @@ internal sealed partial class FileSystem(
             parsed.Parameters.Count == 0 &&
             string.Equals(parsed.MediaType, mimeType, StringComparison.OrdinalIgnoreCase) &&
             mimeType.Split('/') is [{ Length: > 0 }, { Length: > 0 }];
+    }
+
+    private static bool IsWellFormedExtension(string extension)
+    {
+        var name = extension.StartsWith("*.", StringComparison.Ordinal)
+            ? extension[2..]
+            : extension.StartsWith('.') ? extension[1..] : extension;
+        return name.Length > 0 &&
+            !name.Any(character => char.IsWhiteSpace(character) || char.IsControl(character) ||
+                "\\/:*?\"<>|.".Contains(character));
     }
 
     public async Task<MimeMapping> UpsertMimeMappingAsync(
@@ -477,7 +496,7 @@ internal sealed partial class FileSystem(
         var normalized = NormalizeExtension(extension);
         if (normalized is null)
         {
-            logger.LogDebug("Extension {Extension} is not valid, so the MIME mapping deletion did not run", extension);
+            logger.LogDebug("Extension {Extension} is not valid", extension);
             return false;
         }
 
@@ -508,21 +527,30 @@ internal sealed partial class FileSystem(
 
             if (OperatingSystem.IsWindowsVersionAtLeast(6, 2))
             {
-                using var handle = PInvoke.CreateFile(path, 0,
+                using var handle = PInvoke.CreateFile(
+                    path,
+                    0,
                     FILE_SHARE_MODE.FILE_SHARE_READ |
                         FILE_SHARE_MODE.FILE_SHARE_WRITE |
                         FILE_SHARE_MODE.FILE_SHARE_DELETE,
-                    null, FILE_CREATION_DISPOSITION.OPEN_EXISTING, default, null);
+                    null,
+                    FILE_CREATION_DISPOSITION.OPEN_EXISTING,
+                    default,
+                    null);
                 Span<byte> identity = stackalloc byte[24];
-                return handle.IsInvalid || !PInvoke.GetFileInformationByHandleEx(handle,
-                    FILE_INFO_BY_HANDLE_CLASS.FileIdInfo, identity) ? null : "windows:" + Convert.ToHexString(identity);
+                return handle.IsInvalid || !PInvoke.GetFileInformationByHandleEx(
+                    handle,
+                    FILE_INFO_BY_HANDLE_CLASS.FileIdInfo,
+                    identity) ? null : "windows:" + Convert.ToHexString(identity);
             }
 
             if (OperatingSystem.IsLinux() && ReadLinuxFileIdentity(-100, path, 0x100, 0x900, out var linux) == 0 &&
-                (linux.Mask & 0x900) == 0x900)
+                (linux.Mask & 0x100) == 0x100)
             {
-                return $"linux:{linux.DeviceMajor:X}:{linux.DeviceMinor:X}:{linux.Inode:X}:" +
-                    $"{linux.BirthSeconds:X}:{linux.BirthNanoseconds:X}";
+                var birth = (linux.Mask & 0x800) == 0x800
+                    ? $":{linux.BirthSeconds:X}:{linux.BirthNanoseconds:X}"
+                    : string.Empty;
+                return $"linux:{linux.DeviceMajor:X}:{linux.DeviceMinor:X}:{linux.Inode:X}{birth}";
             }
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or
@@ -586,24 +614,26 @@ internal sealed partial class FileSystem(
             {
                 Directory.CreateDirectory(Path.GetDirectoryName(path)!);
 
-                stream = new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite,
+                stream = new(
+                    path,
+                    FileMode.OpenOrCreate,
+                    FileAccess.ReadWrite,
                     OperatingSystem.IsWindows() ? FileShare.Delete : FileShare.None);
             }
-            catch (Exception ex) when (attempt < 3 &&
-                ex is DirectoryNotFoundException or UnauthorizedAccessException)
+            catch (Exception ex) when (attempt < 3 && ex is DirectoryNotFoundException or UnauthorizedAccessException)
             {
                 continue;
             }
 
             if (OperatingSystem.IsWindows())
             {
-                return new ImportPathLock(stream, path, Removable: true);
+                return new(stream, path, Removable: true);
             }
 
             var linked = IsLinkedLinuxFile(stream, path);
             if (linked != false)
             {
-                return new ImportPathLock(stream, path, Removable: linked == true);
+                return new(stream, path, Removable: linked == true);
             }
 
             stream.Dispose();
@@ -640,20 +670,29 @@ internal sealed partial class FileSystem(
     }
 
     /// <inheritdoc />
-    public Task TransferToOwnedPathAsync(string source, string destination, ImportMode mode,
-        Func<string, Task> onCreated, CancellationToken cancellationToken = default) =>
+    public Task TransferToOwnedPathAsync(
+        string source,
+        string destination,
+        ImportMode mode,
+        Func<string, Task> onCreated,
+        CancellationToken cancellationToken = default) =>
         TransferToOwnedPathAsync(this, source, destination, mode, onCreated, cancellationToken);
 
-    internal static async Task TransferToOwnedPathAsync(IFileSystem observations, string source, string destination,
-        ImportMode mode, Func<string, Task> onCreated, CancellationToken cancellationToken = default)
+    internal static async Task TransferToOwnedPathAsync(
+        IFileSystem observations,
+        string source,
+        string destination,
+        ImportMode mode,
+        Func<string, Task> onCreated,
+        CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var sourceIdentity = observations.GetFileIdentity(source) ??
             throw new FileOwnershipUnavailableException(
                 "The source file identity is unavailable, so the import cannot confirm file ownership.");
-        var capacity = RootFolderService.ReadDestinationCapacity(observations, destination) ??
+        var capacity = observations.GetStorageCapacity(destination) ??
             throw new StorageCapacityUnavailableException(null);
-        var sourceVolume = RootFolderService.ReadDestinationCapacity(observations, source)?.VolumeId;
+        var sourceVolume = observations.GetStorageCapacity(source)?.VolumeId;
         var destinationVolume = capacity.VolumeId;
         if (mode == ImportMode.Move &&
             (string.IsNullOrWhiteSpace(sourceVolume) || string.IsNullOrWhiteSpace(destinationVolume)))
@@ -669,8 +708,13 @@ internal sealed partial class FileSystem(
             return;
         }
 
-        var output = new FileStream(destination, FileMode.CreateNew, FileAccess.Write, FileShare.Read,
-            81920, FileOptions.Asynchronous | FileOptions.SequentialScan);
+        var output = new FileStream(
+            destination,
+            FileMode.CreateNew,
+            FileAccess.Write,
+            FileShare.Read,
+            81920,
+            FileOptions.Asynchronous | FileOptions.SequentialScan);
         var recorded = false;
         try
         {
@@ -681,8 +725,13 @@ internal sealed partial class FileSystem(
                         "The destination file identity is unavailable, so the import cannot confirm file ownership.");
                 await onCreated(identity).ConfigureAwait(false);
                 recorded = true;
-                var input = new FileStream(source, FileMode.Open, FileAccess.Read, FileShare.Read,
-                    81920, FileOptions.Asynchronous | FileOptions.SequentialScan);
+                var input = new FileStream(
+                    source,
+                    FileMode.Open,
+                    FileAccess.Read,
+                    FileShare.Read,
+                    81920,
+                    FileOptions.Asynchronous | FileOptions.SequentialScan);
                 await using var inputHandle = input.ConfigureAwait(false);
                 await input.CopyToAsync(output, cancellationToken).ConfigureAwait(false);
                 await output.FlushAsync(cancellationToken).ConfigureAwait(false);
@@ -717,7 +766,7 @@ internal sealed partial class FileSystem(
                     return null;
                 }
 
-                return new StorageCapacity
+                return new()
                 {
                     VolumeId = ReadWindowsCapacityVolumeId(resolvedPath),
                     AvailableBytes = (long)free
@@ -730,14 +779,13 @@ internal sealed partial class FileSystem(
                     drive.Name.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar,
                     StringComparison.Ordinal))
                 .MaxBy(drive => drive.Name.Length);
-            return mount is null ? null : new StorageCapacity
+            return mount is null || mount.AvailableFreeSpace < 0 ? null : new StorageCapacity
             {
                 VolumeId = mount.Name,
                 AvailableBytes = mount.AvailableFreeSpace
             };
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or
-            NotSupportedException or System.Security.SecurityException)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
             logger.LogDebug(ex, "Storage capacity is unavailable for {Path}", path);
             return null;
@@ -750,7 +798,8 @@ internal sealed partial class FileSystem(
         Span<char> mountPath = new char[Math.Max(path.Length + 2, 260)];
         Span<char> volumeName = stackalloc char[50];
         if (PInvoke.GetVolumePathName(path, mountPath) && PInvoke.GetVolumeNameForVolumeMountPoint(
-                mountPath[..mountPath.IndexOf('\0')].ToString(), volumeName))
+                mountPath[..mountPath.IndexOf('\0')].ToString(),
+                volumeName))
         {
             return volumeName[..volumeName.IndexOf('\0')].ToString().ToUpperInvariant();
         }
@@ -769,7 +818,9 @@ internal sealed partial class FileSystem(
         }
 
         Span<char> finalPath = new char[32768];
-        var length = PInvoke.GetFinalPathNameByHandle(handle, finalPath,
+        var length = PInvoke.GetFinalPathNameByHandle(
+            handle,
+            finalPath,
             GETFINALPATHNAMEBYHANDLE_FLAGS.FILE_NAME_OPENED);
         if (length == 0 || length >= finalPath.Length)
         {

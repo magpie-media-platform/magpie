@@ -52,17 +52,15 @@ public sealed class ExtensionActivationGenerationRepositoryTests
         _context.ExtensionActivationStates.Add(new ExtensionActivationState { Id = 1, Generation = 0 });
         _context.SaveChanges();
 
-        var loggerFactory = NullLoggerFactory.Instance;
         _subject = new ExtensionActivationGenerationRepository(
             _context,
             new TransactionManager(_context, NullLogger<TransactionManager>.Instance),
-            loggerFactory.CreateLogger<ExtensionActivationGenerationRepository>());
+            NullLogger<ExtensionActivationGenerationRepository>.Instance);
     }
 
     [TearDown]
     public void TearDown()
     {
-        _context.Database.CloseConnection();
         _context.Dispose();
     }
 

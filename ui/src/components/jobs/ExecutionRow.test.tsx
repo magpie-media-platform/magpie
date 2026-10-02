@@ -3,7 +3,6 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi, beforeEach } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
-import { createElement } from 'react';
 
 vi.mock('@/lib/api', () => ({
     apiGet: vi.fn(),
@@ -15,36 +14,6 @@ import type { ApiJobExecution } from '@/hooks/useJobs';
 
 import { ExecutionRow } from './ExecutionRow';
 
-function createWrapper() {
-    const queryClient = new QueryClient({
-        defaultOptions: {
-            queries: { retry: false, gcTime: 0 },
-            mutations: { retry: false },
-        },
-    });
-    return ({ children }: { children: React.ReactNode }) =>
-        createElement(QueryClientProvider, { client: queryClient }, createElement(MemoryRouter, null, children));
-}
-
-function renderWithClient(ui: React.ReactElement) {
-    return render(ui, { wrapper: createWrapper() });
-}
-
-function makeExecution(overrides: Partial<ApiJobExecution> = {}): ApiJobExecution {
-    return {
-        id: 'exec-1',
-        jobType: 'ImportMedia',
-        scope: 'System',
-        status: 'Completed',
-        createdAt: '2024-01-15T12:00:00Z',
-        startedAt: '2024-01-15T12:00:01Z',
-        completedAt: '2024-01-15T12:05:00Z',
-        statusMessage: null,
-        progress: null,
-        ...overrides,
-    };
-}
-
 describe('ExecutionRow', () => {
     const mockApiGet = vi.mocked(apiGet);
 
@@ -54,30 +23,146 @@ describe('ExecutionRow', () => {
     });
 
     it('renders the humanized job type name', () => {
-        renderWithClient(<ExecutionRow execution={makeExecution()} />);
+        render(
+            <QueryClientProvider
+                client={
+                    new QueryClient({
+                        defaultOptions: { queries: { retry: false, gcTime: 0 }, mutations: { retry: false } },
+                    })
+                }
+            >
+                <MemoryRouter>
+                    <ExecutionRow
+                        execution={{
+                            id: 'exec-1',
+                            jobType: 'ImportMedia',
+                            scope: 'System',
+                            status: 'Completed',
+                            createdAt: '2024-01-15T12:00:00Z',
+                            startedAt: '2024-01-15T12:00:01Z',
+                            completedAt: '2024-01-15T12:05:00Z',
+                            statusMessage: null,
+                            progress: null,
+                        }}
+                    />
+                </MemoryRouter>
+            </QueryClientProvider>,
+        );
         expect(screen.getByText('Import Media')).toBeInTheDocument();
     });
 
     it('displays the correct status badge', () => {
-        renderWithClient(<ExecutionRow execution={makeExecution({ status: 'Completed' })} />);
+        render(
+            <QueryClientProvider
+                client={
+                    new QueryClient({
+                        defaultOptions: { queries: { retry: false, gcTime: 0 }, mutations: { retry: false } },
+                    })
+                }
+            >
+                <MemoryRouter>
+                    <ExecutionRow
+                        execution={{
+                            id: 'exec-1',
+                            jobType: 'ImportMedia',
+                            scope: 'System',
+                            status: 'Completed',
+                            createdAt: '2024-01-15T12:00:00Z',
+                            startedAt: '2024-01-15T12:00:01Z',
+                            completedAt: '2024-01-15T12:05:00Z',
+                            statusMessage: null,
+                            progress: null,
+                        }}
+                    />
+                </MemoryRouter>
+            </QueryClientProvider>,
+        );
         expect(screen.getByText('Completed')).toBeInTheDocument();
     });
 
     it('shows failed status badge for failed execution', () => {
-        renderWithClient(<ExecutionRow execution={makeExecution({ status: 'Failed', statusMessage: 'Timeout' })} />);
+        render(
+            <QueryClientProvider
+                client={
+                    new QueryClient({
+                        defaultOptions: { queries: { retry: false, gcTime: 0 }, mutations: { retry: false } },
+                    })
+                }
+            >
+                <MemoryRouter>
+                    <ExecutionRow
+                        execution={{
+                            id: 'exec-1',
+                            jobType: 'ImportMedia',
+                            scope: 'System',
+                            status: 'Failed',
+                            createdAt: '2024-01-15T12:00:00Z',
+                            startedAt: '2024-01-15T12:00:01Z',
+                            completedAt: '2024-01-15T12:05:00Z',
+                            statusMessage: 'Timeout',
+                            progress: null,
+                        }}
+                    />
+                </MemoryRouter>
+            </QueryClientProvider>,
+        );
         expect(screen.getByText('Failed')).toBeInTheDocument();
     });
 
     it('shows status message when present', () => {
-        renderWithClient(<ExecutionRow execution={makeExecution({ statusMessage: 'Processing items' })} />);
+        render(
+            <QueryClientProvider
+                client={
+                    new QueryClient({
+                        defaultOptions: { queries: { retry: false, gcTime: 0 }, mutations: { retry: false } },
+                    })
+                }
+            >
+                <MemoryRouter>
+                    <ExecutionRow
+                        execution={{
+                            id: 'exec-1',
+                            jobType: 'ImportMedia',
+                            scope: 'System',
+                            status: 'Completed',
+                            createdAt: '2024-01-15T12:00:00Z',
+                            startedAt: '2024-01-15T12:00:01Z',
+                            completedAt: '2024-01-15T12:05:00Z',
+                            statusMessage: 'Processing items',
+                            progress: null,
+                        }}
+                    />
+                </MemoryRouter>
+            </QueryClientProvider>,
+        );
         expect(screen.getByText('Processing items')).toBeInTheDocument();
     });
 
     it('marks the status message as live for a running execution', () => {
-        renderWithClient(
-            <ExecutionRow
-                execution={makeExecution({ status: 'Running', completedAt: null, statusMessage: 'Importing' })}
-            />,
+        render(
+            <QueryClientProvider
+                client={
+                    new QueryClient({
+                        defaultOptions: { queries: { retry: false, gcTime: 0 }, mutations: { retry: false } },
+                    })
+                }
+            >
+                <MemoryRouter>
+                    <ExecutionRow
+                        execution={{
+                            id: 'exec-1',
+                            jobType: 'ImportMedia',
+                            scope: 'System',
+                            status: 'Running',
+                            createdAt: '2024-01-15T12:00:00Z',
+                            startedAt: '2024-01-15T12:00:01Z',
+                            completedAt: null,
+                            statusMessage: 'Importing',
+                            progress: null,
+                        }}
+                    />
+                </MemoryRouter>
+            </QueryClientProvider>,
         );
         const message = screen.getByText('Importing').closest('.execution-row__message');
         expect(message).toHaveAttribute('data-message-kind', 'live');
@@ -85,56 +170,159 @@ describe('ExecutionRow', () => {
     });
 
     it('marks the status message as a result for a finished execution', () => {
-        renderWithClient(<ExecutionRow execution={makeExecution({ statusMessage: 'Imported 9 files' })} />);
+        render(
+            <QueryClientProvider
+                client={
+                    new QueryClient({
+                        defaultOptions: { queries: { retry: false, gcTime: 0 }, mutations: { retry: false } },
+                    })
+                }
+            >
+                <MemoryRouter>
+                    <ExecutionRow
+                        execution={{
+                            id: 'exec-1',
+                            jobType: 'ImportMedia',
+                            scope: 'System',
+                            status: 'Completed',
+                            createdAt: '2024-01-15T12:00:00Z',
+                            startedAt: '2024-01-15T12:00:01Z',
+                            completedAt: '2024-01-15T12:05:00Z',
+                            statusMessage: 'Imported 9 files',
+                            progress: null,
+                        }}
+                    />
+                </MemoryRouter>
+            </QueryClientProvider>,
+        );
         const message = screen.getByText('Imported 9 files').closest('.execution-row__message');
         expect(message).toHaveAttribute('data-message-kind', 'result');
         expect(message).toHaveTextContent('Result');
     });
 
     it('always renders an expandable details panel (collapsed by default)', () => {
-        renderWithClient(<ExecutionRow execution={makeExecution({ statusMessage: null })} />);
+        render(
+            <QueryClientProvider
+                client={
+                    new QueryClient({
+                        defaultOptions: { queries: { retry: false, gcTime: 0 }, mutations: { retry: false } },
+                    })
+                }
+            >
+                <MemoryRouter>
+                    <ExecutionRow
+                        execution={{
+                            id: 'exec-1',
+                            jobType: 'ImportMedia',
+                            scope: 'System',
+                            status: 'Completed',
+                            createdAt: '2024-01-15T12:00:00Z',
+                            startedAt: '2024-01-15T12:00:01Z',
+                            completedAt: '2024-01-15T12:05:00Z',
+                            statusMessage: null,
+                            progress: null,
+                        }}
+                    />
+                </MemoryRouter>
+            </QueryClientProvider>,
+        );
         const logs = screen.getByTestId('execution-row__logs');
         expect(logs).toBeInTheDocument();
         expect(logs).not.toBeVisible();
     });
 
     it.each([
-        [42.4, 42],
-        [-1, 0],
-        [101, 99],
-        [99.6, 99],
-        [Number.NaN, 0],
-    ])('shows whole, clamped progress for %s', (progress, displayProgress) => {
-        renderWithClient(
-            <ExecutionRow
-                execution={makeExecution({
-                    status: 'Running',
-                    progress,
-                    completedAt: null,
-                })}
-            />,
+        [42.4, 42, '42%'],
+        [-1, 0, ''],
+        [101, 99, '99%'],
+        [99.6, 99, '99%'],
+        [Number.NaN, 0, ''],
+    ])('shows whole, clamped progress for %s', (progress, displayProgress, fillWidth) => {
+        render(
+            <QueryClientProvider
+                client={
+                    new QueryClient({
+                        defaultOptions: { queries: { retry: false, gcTime: 0 }, mutations: { retry: false } },
+                    })
+                }
+            >
+                <MemoryRouter>
+                    <ExecutionRow
+                        execution={{
+                            id: 'exec-1',
+                            jobType: 'ImportMedia',
+                            scope: 'System',
+                            status: 'Running',
+                            createdAt: '2024-01-15T12:00:00Z',
+                            startedAt: '2024-01-15T12:00:01Z',
+                            completedAt: null,
+                            statusMessage: null,
+                            progress,
+                        }}
+                    />
+                </MemoryRouter>
+            </QueryClientProvider>,
         );
         const progressBar = screen.getByTestId('execution-row__progress-bar');
         expect(progressBar).toHaveAttribute('aria-valuenow', `${displayProgress}`);
         expect(screen.getByText(`${displayProgress}%`)).toBeInTheDocument();
-        expect(screen.getByTestId('execution-row__progress-fill').style.width).toBe(
-            displayProgress > 0 ? `${displayProgress}%` : '',
-        );
+        expect(screen.getByTestId('execution-row__progress-fill').style.width).toBe(fillWidth);
     });
 
     it('does not show progress bar for completed executions', () => {
-        renderWithClient(<ExecutionRow execution={makeExecution({ status: 'Completed', progress: 100 })} />);
+        render(
+            <QueryClientProvider
+                client={
+                    new QueryClient({
+                        defaultOptions: { queries: { retry: false, gcTime: 0 }, mutations: { retry: false } },
+                    })
+                }
+            >
+                <MemoryRouter>
+                    <ExecutionRow
+                        execution={{
+                            id: 'exec-1',
+                            jobType: 'ImportMedia',
+                            scope: 'System',
+                            status: 'Completed',
+                            createdAt: '2024-01-15T12:00:00Z',
+                            startedAt: '2024-01-15T12:00:01Z',
+                            completedAt: '2024-01-15T12:05:00Z',
+                            statusMessage: null,
+                            progress: 100,
+                        }}
+                    />
+                </MemoryRouter>
+            </QueryClientProvider>,
+        );
         expect(screen.queryByTestId('execution-row__progress-bar')).not.toBeInTheDocument();
     });
 
     it('shows duration when completedAt is present', () => {
-        renderWithClient(
-            <ExecutionRow
-                execution={makeExecution({
-                    startedAt: '2024-01-15T12:00:00Z',
-                    completedAt: '2024-01-15T12:05:00Z',
-                })}
-            />,
+        render(
+            <QueryClientProvider
+                client={
+                    new QueryClient({
+                        defaultOptions: { queries: { retry: false, gcTime: 0 }, mutations: { retry: false } },
+                    })
+                }
+            >
+                <MemoryRouter>
+                    <ExecutionRow
+                        execution={{
+                            id: 'exec-1',
+                            jobType: 'ImportMedia',
+                            scope: 'System',
+                            status: 'Completed',
+                            createdAt: '2024-01-15T12:00:00Z',
+                            startedAt: '2024-01-15T12:00:00Z',
+                            completedAt: '2024-01-15T12:05:00Z',
+                            statusMessage: null,
+                            progress: null,
+                        }}
+                    />
+                </MemoryRouter>
+            </QueryClientProvider>,
         );
         const trigger = screen.getByTestId('execution-row__trigger');
         expect(trigger.textContent).toContain('5m');
@@ -142,7 +330,31 @@ describe('ExecutionRow', () => {
 
     it('expands details when trigger is clicked', async () => {
         const user = userEvent.setup();
-        renderWithClient(<ExecutionRow execution={makeExecution({ statusMessage: 'Details here' })} />);
+        render(
+            <QueryClientProvider
+                client={
+                    new QueryClient({
+                        defaultOptions: { queries: { retry: false, gcTime: 0 }, mutations: { retry: false } },
+                    })
+                }
+            >
+                <MemoryRouter>
+                    <ExecutionRow
+                        execution={{
+                            id: 'exec-1',
+                            jobType: 'ImportMedia',
+                            scope: 'System',
+                            status: 'Completed',
+                            createdAt: '2024-01-15T12:00:00Z',
+                            startedAt: '2024-01-15T12:00:01Z',
+                            completedAt: '2024-01-15T12:05:00Z',
+                            statusMessage: 'Details here',
+                            progress: null,
+                        }}
+                    />
+                </MemoryRouter>
+            </QueryClientProvider>,
+        );
 
         expect(screen.queryByTestId('execution-row__logs')).not.toBeVisible();
 
@@ -151,21 +363,61 @@ describe('ExecutionRow', () => {
     });
 
     it('sets correct data attributes on the root element', () => {
-        const { container } = renderWithClient(<ExecutionRow execution={makeExecution()} />);
+        const queryClient = new QueryClient({
+            defaultOptions: { queries: { retry: false, gcTime: 0 }, mutations: { retry: false } },
+        });
+        const { container } = render(
+            <ExecutionRow
+                execution={{
+                    id: 'exec-1',
+                    jobType: 'ImportMedia',
+                    scope: 'System',
+                    status: 'Completed',
+                    createdAt: '2024-01-15T12:00:00Z',
+                    startedAt: '2024-01-15T12:00:01Z',
+                    completedAt: '2024-01-15T12:05:00Z',
+                    statusMessage: null,
+                    progress: null,
+                }}
+            />,
+            {
+                wrapper: ({ children }: { children: React.ReactNode }) => (
+                    <QueryClientProvider client={queryClient}>
+                        <MemoryRouter>{children}</MemoryRouter>
+                    </QueryClientProvider>
+                ),
+            },
+        );
         const root = container.firstElementChild!;
         expect(root).toHaveAttribute('data-execution-id', 'exec-1');
         expect(root).toHaveAttribute('data-status', 'completed');
     });
 
     it('shows indeterminate progress when progress is 0 and running', () => {
-        renderWithClient(
-            <ExecutionRow
-                execution={makeExecution({
-                    status: 'Running',
-                    progress: 0,
-                    completedAt: null,
-                })}
-            />,
+        render(
+            <QueryClientProvider
+                client={
+                    new QueryClient({
+                        defaultOptions: { queries: { retry: false, gcTime: 0 }, mutations: { retry: false } },
+                    })
+                }
+            >
+                <MemoryRouter>
+                    <ExecutionRow
+                        execution={{
+                            id: 'exec-1',
+                            jobType: 'ImportMedia',
+                            scope: 'System',
+                            status: 'Running',
+                            createdAt: '2024-01-15T12:00:00Z',
+                            startedAt: '2024-01-15T12:00:01Z',
+                            completedAt: null,
+                            statusMessage: null,
+                            progress: 0,
+                        }}
+                    />
+                </MemoryRouter>
+            </QueryClientProvider>,
         );
         const progressBar = screen.getByTestId('execution-row__progress-bar');
         expect(progressBar).toHaveAttribute('aria-valuenow', '0');
@@ -175,15 +427,30 @@ describe('ExecutionRow', () => {
     });
 
     it('does not animate the bar for a queued (pending) job at 0%', () => {
-        renderWithClient(
-            <ExecutionRow
-                execution={makeExecution({
-                    status: 'Queued',
-                    progress: 0,
-                    startedAt: null,
-                    completedAt: null,
-                })}
-            />,
+        render(
+            <QueryClientProvider
+                client={
+                    new QueryClient({
+                        defaultOptions: { queries: { retry: false, gcTime: 0 }, mutations: { retry: false } },
+                    })
+                }
+            >
+                <MemoryRouter>
+                    <ExecutionRow
+                        execution={{
+                            id: 'exec-1',
+                            jobType: 'ImportMedia',
+                            scope: 'System',
+                            status: 'Queued',
+                            createdAt: '2024-01-15T12:00:00Z',
+                            startedAt: null,
+                            completedAt: null,
+                            statusMessage: null,
+                            progress: 0,
+                        }}
+                    />
+                </MemoryRouter>
+            </QueryClientProvider>,
         );
         const fill = screen.getByTestId('execution-row__progress-fill');
         expect(fill).not.toHaveClass('execution-row__progress-fill--indeterminate');
@@ -191,7 +458,31 @@ describe('ExecutionRow', () => {
     });
 
     it('has accessible trigger with aria-expanded', () => {
-        renderWithClient(<ExecutionRow execution={makeExecution({ statusMessage: 'test' })} />);
+        render(
+            <QueryClientProvider
+                client={
+                    new QueryClient({
+                        defaultOptions: { queries: { retry: false, gcTime: 0 }, mutations: { retry: false } },
+                    })
+                }
+            >
+                <MemoryRouter>
+                    <ExecutionRow
+                        execution={{
+                            id: 'exec-1',
+                            jobType: 'ImportMedia',
+                            scope: 'System',
+                            status: 'Completed',
+                            createdAt: '2024-01-15T12:00:00Z',
+                            startedAt: '2024-01-15T12:00:01Z',
+                            completedAt: '2024-01-15T12:05:00Z',
+                            statusMessage: 'test',
+                            progress: null,
+                        }}
+                    />
+                </MemoryRouter>
+            </QueryClientProvider>,
+        );
         const trigger = screen.getByRole('button', {
             name: 'Import Media - Completed. Click to show details.',
         });
@@ -200,23 +491,42 @@ describe('ExecutionRow', () => {
 
     it('keeps the details panel open across re-renders that clear the status message', async () => {
         const user = userEvent.setup();
-        const running = makeExecution({
+        const running: ApiJobExecution = {
+            id: 'exec-1',
+            jobType: 'ImportMedia',
+            scope: 'System',
             status: 'Running',
-            statusMessage: 'Processing items',
+            createdAt: '2024-01-15T12:00:00Z',
             startedAt: '2024-01-15T12:00:01Z',
             completedAt: null,
+            statusMessage: 'Processing items',
+            progress: null,
+        };
+        const queryClient = new QueryClient({
+            defaultOptions: { queries: { retry: false, gcTime: 0 }, mutations: { retry: false } },
         });
-        const { rerender } = renderWithClient(<ExecutionRow execution={running} />);
+        const { rerender } = render(<ExecutionRow execution={running} />, {
+            wrapper: ({ children }: { children: React.ReactNode }) => (
+                <QueryClientProvider client={queryClient}>
+                    <MemoryRouter>{children}</MemoryRouter>
+                </QueryClientProvider>
+            ),
+        });
 
         await user.click(screen.getByTestId('execution-row__trigger'));
         expect(screen.getByTestId('execution-row__logs')).toHaveAttribute('data-state', 'open');
 
-        const completed = makeExecution({
+        const completed: ApiJobExecution = {
+            id: 'exec-1',
+            jobType: 'ImportMedia',
+            scope: 'System',
             status: 'Completed',
-            statusMessage: null,
+            createdAt: '2024-01-15T12:00:00Z',
             startedAt: '2024-01-15T12:00:01Z',
             completedAt: '2024-01-15T12:05:00Z',
-        });
+            statusMessage: null,
+            progress: null,
+        };
         rerender(<ExecutionRow execution={completed} />);
 
         expect(screen.getByTestId('execution-row__logs')).toHaveAttribute('data-state', 'open');
@@ -224,22 +534,41 @@ describe('ExecutionRow', () => {
     });
 
     it('preserves the row identity (one row per execution.id) across status updates', () => {
-        const running = makeExecution({
+        const running: ApiJobExecution = {
             id: 'exec-42',
+            jobType: 'ImportMedia',
+            scope: 'System',
             status: 'Running',
-            statusMessage: 'Working',
+            createdAt: '2024-01-15T12:00:00Z',
+            startedAt: '2024-01-15T12:00:01Z',
             completedAt: null,
+            statusMessage: 'Working',
+            progress: null,
+        };
+        const queryClient = new QueryClient({
+            defaultOptions: { queries: { retry: false, gcTime: 0 }, mutations: { retry: false } },
         });
-        const { container, rerender } = renderWithClient(<ExecutionRow execution={running} />);
+        const { container, rerender } = render(<ExecutionRow execution={running} />, {
+            wrapper: ({ children }: { children: React.ReactNode }) => (
+                <QueryClientProvider client={queryClient}>
+                    <MemoryRouter>{children}</MemoryRouter>
+                </QueryClientProvider>
+            ),
+        });
         const initialRoot = container.querySelector('[data-execution-id="exec-42"]');
         expect(initialRoot).toBeInTheDocument();
 
-        const completed = makeExecution({
+        const completed: ApiJobExecution = {
             id: 'exec-42',
+            jobType: 'ImportMedia',
+            scope: 'System',
             status: 'Completed',
-            statusMessage: null,
+            createdAt: '2024-01-15T12:00:00Z',
+            startedAt: '2024-01-15T12:00:01Z',
             completedAt: '2024-01-15T12:05:00Z',
-        });
+            statusMessage: null,
+            progress: null,
+        };
         rerender(<ExecutionRow execution={completed} />);
 
         const updatedRoot = container.querySelector('[data-execution-id="exec-42"]');
@@ -249,8 +578,31 @@ describe('ExecutionRow', () => {
 
     it('renders the execution-detail panel as one untabbed surface when expanded', async () => {
         const user = userEvent.setup();
-        renderWithClient(
-            <ExecutionRow execution={makeExecution({ correlationId: null, statusMessage: 'Processing' })} />,
+        render(
+            <QueryClientProvider
+                client={
+                    new QueryClient({
+                        defaultOptions: { queries: { retry: false, gcTime: 0 }, mutations: { retry: false } },
+                    })
+                }
+            >
+                <MemoryRouter>
+                    <ExecutionRow
+                        execution={{
+                            id: 'exec-1',
+                            jobType: 'ImportMedia',
+                            scope: 'System',
+                            status: 'Completed',
+                            createdAt: '2024-01-15T12:00:00Z',
+                            startedAt: '2024-01-15T12:00:01Z',
+                            completedAt: '2024-01-15T12:05:00Z',
+                            statusMessage: 'Processing',
+                            progress: null,
+                            correlationId: null,
+                        }}
+                    />
+                </MemoryRouter>
+            </QueryClientProvider>,
         );
         await user.click(screen.getByTestId('execution-row__trigger'));
 
@@ -276,15 +628,31 @@ describe('ExecutionRow deferred status', () => {
     });
 
     it('renders a deferred Queued row as "Pending" and surfaces the deferred-until hint', () => {
-        renderWithClient(
-            <ExecutionRow
-                execution={makeExecution({
-                    status: 'Queued',
-                    notBeforeAt: '2024-01-15T13:00:00Z',
-                    startedAt: null,
-                    completedAt: null,
-                })}
-            />,
+        render(
+            <QueryClientProvider
+                client={
+                    new QueryClient({
+                        defaultOptions: { queries: { retry: false, gcTime: 0 }, mutations: { retry: false } },
+                    })
+                }
+            >
+                <MemoryRouter>
+                    <ExecutionRow
+                        execution={{
+                            id: 'exec-1',
+                            jobType: 'ImportMedia',
+                            scope: 'System',
+                            status: 'Queued',
+                            createdAt: '2024-01-15T12:00:00Z',
+                            startedAt: null,
+                            completedAt: null,
+                            statusMessage: null,
+                            progress: null,
+                            notBeforeAt: '2024-01-15T13:00:00Z',
+                        }}
+                    />
+                </MemoryRouter>
+            </QueryClientProvider>,
         );
 
         const badge = screen.getByTestId('execution-row__status-badge');
@@ -294,15 +662,31 @@ describe('ExecutionRow deferred status', () => {
     });
 
     it('renders an eligible-now Queued row as "Queued" with no deferred hint', () => {
-        renderWithClient(
-            <ExecutionRow
-                execution={makeExecution({
-                    status: 'Queued',
-                    notBeforeAt: '2024-01-15T12:00:00Z',
-                    startedAt: null,
-                    completedAt: null,
-                })}
-            />,
+        render(
+            <QueryClientProvider
+                client={
+                    new QueryClient({
+                        defaultOptions: { queries: { retry: false, gcTime: 0 }, mutations: { retry: false } },
+                    })
+                }
+            >
+                <MemoryRouter>
+                    <ExecutionRow
+                        execution={{
+                            id: 'exec-1',
+                            jobType: 'ImportMedia',
+                            scope: 'System',
+                            status: 'Queued',
+                            createdAt: '2024-01-15T12:00:00Z',
+                            startedAt: null,
+                            completedAt: null,
+                            statusMessage: null,
+                            progress: null,
+                            notBeforeAt: '2024-01-15T12:00:00Z',
+                        }}
+                    />
+                </MemoryRouter>
+            </QueryClientProvider>,
         );
 
         const badge = screen.getByTestId('execution-row__status-badge');
@@ -312,8 +696,31 @@ describe('ExecutionRow deferred status', () => {
     });
 
     it('renders a past-deferred Queued row as "Queued"', () => {
-        renderWithClient(
-            <ExecutionRow execution={makeExecution({ status: 'Queued', notBeforeAt: '2024-01-15T11:59:59Z' })} />,
+        render(
+            <QueryClientProvider
+                client={
+                    new QueryClient({
+                        defaultOptions: { queries: { retry: false, gcTime: 0 }, mutations: { retry: false } },
+                    })
+                }
+            >
+                <MemoryRouter>
+                    <ExecutionRow
+                        execution={{
+                            id: 'exec-1',
+                            jobType: 'ImportMedia',
+                            scope: 'System',
+                            status: 'Queued',
+                            createdAt: '2024-01-15T12:00:00Z',
+                            startedAt: '2024-01-15T12:00:01Z',
+                            completedAt: '2024-01-15T12:05:00Z',
+                            statusMessage: null,
+                            progress: null,
+                            notBeforeAt: '2024-01-15T11:59:59Z',
+                        }}
+                    />
+                </MemoryRouter>
+            </QueryClientProvider>,
         );
         expect(screen.getByTestId('execution-row__status-badge')).toHaveTextContent('Queued');
     });

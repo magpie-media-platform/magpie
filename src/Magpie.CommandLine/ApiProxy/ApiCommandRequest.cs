@@ -1,10 +1,9 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Net.Http;
 using System.Text;
-
-using Magpie.CommandLine.Dispatch;
 
 using Microsoft.AspNetCore.Routing.Patterns;
 
@@ -19,19 +18,24 @@ internal sealed record ApiCommandRequest(
     string? FilePath = null,
     string? FileFieldName = null)
 {
-    public CommandHttpRequest ToHttpRequest()
+    public HttpRequestMessage ToHttpRequestMessage()
     {
+        var message = new HttpRequestMessage(Method, BuildUri());
         if (BodyJson is not null)
         {
-            return CommandHttpRequest.WithRawJsonBody(Method, BuildUri(), BodyJson);
+            message.Content = new StringContent(BodyJson, Encoding.UTF8, "application/json");
         }
-
-        if (FilePath is not null)
+        else if (FilePath is not null)
         {
-            return CommandHttpRequest.WithFileBody(Method, BuildUri(), FilePath, FileFieldName ?? "file");
+            var multipart = new MultipartFormDataContent();
+            multipart.Add(
+                new StreamContent(File.OpenRead(FilePath)),
+                FileFieldName ?? "file",
+                Path.GetFileName(FilePath));
+            message.Content = multipart;
         }
 
-        return CommandHttpRequest.Create(Method, BuildUri());
+        return message;
     }
 
     private string BuildUri()

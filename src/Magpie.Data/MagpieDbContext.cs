@@ -14,7 +14,7 @@ namespace Magpie.Data;
 public sealed class MagpieDbContext(DbContextOptions<MagpieDbContext> options) : DbContext(options)
 {
     /// <summary>
-    /// The alternate titles attached to metadata entries.
+    /// The alternate texts attached to metadata entries.
     /// </summary>
     public DbSet<AlternateText> AlternateTexts => Set<AlternateText>();
 
@@ -24,7 +24,7 @@ public sealed class MagpieDbContext(DbContextOptions<MagpieDbContext> options) :
     public DbSet<ApiKey> ApiKeys => Set<ApiKey>();
 
     /// <summary>
-    /// The audit trail of system changes.
+    /// The audit records of system changes.
     /// </summary>
     public DbSet<AuditRecord> AuditRecords => Set<AuditRecord>();
 
@@ -34,7 +34,7 @@ public sealed class MagpieDbContext(DbContextOptions<MagpieDbContext> options) :
     public DbSet<Award> Awards => Set<Award>();
 
     /// <summary>
-    /// The deny list of blocked file types.
+    /// The blocked file types.
     /// </summary>
     public DbSet<BlockedFileType> BlockedFileTypes => Set<BlockedFileType>();
 
@@ -149,6 +149,11 @@ public sealed class MagpieDbContext(DbContextOptions<MagpieDbContext> options) :
     public DbSet<MediaFile> MediaFiles => Set<MediaFile>();
 
     /// <summary>
+    /// The content items, other than the owners, that media files also cover.
+    /// </summary>
+    public DbSet<MediaFileCoverage> MediaFileCoverages => Set<MediaFileCoverage>();
+
+    /// <summary>
     /// The configured connections to media servers.
     /// </summary>
     public DbSet<MediaServer> MediaServers => Set<MediaServer>();
@@ -174,7 +179,7 @@ public sealed class MagpieDbContext(DbContextOptions<MagpieDbContext> options) :
     public DbSet<NotificationRule> NotificationRules => Set<NotificationRule>();
 
     /// <summary>
-    /// The files that library scans found for import.
+    /// The library import candidates that library scans found.
     /// </summary>
     public DbSet<LibraryImportCandidate> LibraryImportCandidates => Set<LibraryImportCandidate>();
 

@@ -155,8 +155,8 @@ internal sealed class JellyfinMediaServerIntegration(
         string? match = null;
         foreach (var row in rows)
         {
-            var rowContentType = GetRowValue(row, Constants.MappingContentTypeKey);
-            var rowRootFolderPath = GetRowValue(row, Constants.MappingRootFolderPathKey);
+            var rowContentType = row.GetValueOrDefault(Constants.MappingContentTypeKey);
+            var rowRootFolderPath = row.GetValueOrDefault(Constants.MappingRootFolderPathKey);
             if (string.IsNullOrWhiteSpace(rowContentType) || string.IsNullOrWhiteSpace(rowRootFolderPath))
             {
                 continue;
@@ -176,7 +176,7 @@ internal sealed class JellyfinMediaServerIntegration(
                 continue;
             }
 
-            var libraryId = GetRowValue(row, Constants.MappingServerLibraryIdKey);
+            var libraryId = row.GetValueOrDefault(Constants.MappingServerLibraryIdKey);
             if (string.IsNullOrWhiteSpace(libraryId))
             {
                 continue;
@@ -187,11 +187,6 @@ internal sealed class JellyfinMediaServerIntegration(
         }
 
         return match;
-    }
-
-    private static string? GetRowValue(IReadOnlyDictionary<string, string> row, string key)
-    {
-        return row.TryGetValue(key, out var value) ? value : null;
     }
 
     private static string CanonicalizeSettings(JellyfinSettings parsed)
@@ -305,7 +300,7 @@ internal sealed class JellyfinMediaServerIntegration(
             return false;
         }
 
-        var libraryId = ResolveLibraryId(server, contentType, rootFolderPath);
+        var libraryId = MatchLibraryId(server.ToJellyfinMappingRows(_logger), contentType, rootFolderPath);
         if (libraryId is null)
         {
             return await _client.RefreshAllLibrariesAsync(parsed, cancellationToken).ConfigureAwait(false);
@@ -338,9 +333,7 @@ internal sealed class JellyfinMediaServerIntegration(
         }
 
         var mappingRows = server.ToJellyfinMappingRows(_logger);
-        var libraryId = mappingRows.Count > 0
-            ? MatchLibraryId(mappingRows, contentType, rootFolderPath)
-            : null;
+        var libraryId = MatchLibraryId(mappingRows, contentType, rootFolderPath);
         if (string.IsNullOrWhiteSpace(libraryId))
         {
             libraryId = null;
@@ -354,7 +347,12 @@ internal sealed class JellyfinMediaServerIntegration(
         }
 
         var resolution = await ResolveItemIdAsync(
-            server, parsed, externalIds, title, libraryId, cancellationToken)
+                server,
+                parsed,
+                externalIds,
+                title,
+                libraryId,
+                cancellationToken)
             .ConfigureAwait(false);
         if (string.IsNullOrWhiteSpace(resolution.ItemId))
         {
@@ -373,7 +371,7 @@ internal sealed class JellyfinMediaServerIntegration(
 
         var itemId = resolution.ItemId;
         var baseUrl = parsed.Host.AbsoluteUri.TrimEnd('/');
-        var detailsUrl = baseUrl + "/web/index.html#!/details?id=" + Uri.EscapeDataString(itemId!);
+        var detailsUrl = baseUrl + "/web/index.html#!/details?id=" + Uri.EscapeDataString(itemId);
         return Uri.TryCreate(detailsUrl, UriKind.Absolute, out var detailsUri) ? detailsUri : null;
     }
 
@@ -431,13 +429,5 @@ internal sealed class JellyfinMediaServerIntegration(
         builder.Append(string.IsNullOrWhiteSpace(libraryId) ? ServerWideCacheScope : libraryId).Append('|');
         builder.Append(DescribeExternalIds(externalIds));
         return builder.ToString();
-    }
-
-    private string? ResolveLibraryId(MediaServer server, string contentType, string rootFolderPath)
-    {
-        return MatchLibraryId(
-            server.ToJellyfinMappingRows(_logger),
-            contentType,
-            rootFolderPath);
     }
 }

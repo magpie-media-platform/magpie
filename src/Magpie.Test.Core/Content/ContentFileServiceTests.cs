@@ -151,6 +151,12 @@ public sealed class ContentFileServiceTests
                 It.IsAny<CancellationToken>()))
             .Returns((Func<CancellationToken, Task<AttachContentFileResult>> operation,
                 CancellationToken cancellationToken) => operation(cancellationToken));
+        _transactionManager
+            .Setup(manager => manager.ExecuteWithTransactionAsync(
+                It.IsAny<Func<CancellationToken, Task<bool>>>(),
+                It.IsAny<CancellationToken>()))
+            .Returns((Func<CancellationToken, Task<bool>> operation, CancellationToken cancellationToken) =>
+                operation(cancellationToken));
         _subject = new ContentFileService(
             _contentHierarchyItems.Object,
             _metadataContainers.Object,
@@ -680,6 +686,342 @@ public sealed class ContentFileServiceTests
         Assert.That(exception!.Message, Is.EqualTo("Rename target escapes root folder"));
     }
 
+    [TestCase(new string[0], "S01E01.mkv")]
+    [TestCase(
+        new[] { "22222222-2222-2222-2222-222222222222", "33333333-3333-3333-3333-333333333333" },
+        "S01E01-03.mkv")]
+    public async Task PreviewRenameMaskAsync_RendersTheCoveredRange_WhenTheFileCoversSiblings(
+        string[] covered,
+        string expectedFileName)
+    {
+        // Arrange
+        var show = new ContentHierarchyItem
+        {
+            Id = Guid.NewGuid(),
+            ContentType = "tv",
+            Level = "show",
+            Slug = "show",
+            Name = "Show",
+            Path = "Show",
+            EffectiveRootFolderId = _rootFolder.Id,
+            CreatedAt = DateTime.UtcNow
+        };
+        var season = new ContentHierarchyItem
+        {
+            Id = Guid.NewGuid(),
+            ParentId = show.Id,
+            ContentType = "tv",
+            Level = "season",
+            Slug = "season-1",
+            Name = "Season 1",
+            Ordinal = 1,
+            EffectiveRootFolderId = _rootFolder.Id,
+            CreatedAt = DateTime.UtcNow
+        };
+        var primary = new MediaFile
+        {
+            Id = Guid.NewGuid(),
+            ContentItemId = new Guid("11111111-1111-1111-1111-111111111111"),
+            FileKind = "Video",
+            FilePath = Path.Combine(_rootFolder.Path, "Show", "old.mkv")
+        };
+        foreach (var contentItemId in covered)
+        {
+            primary.Coverage.Add(new() { MediaFileId = primary.Id, ContentItemId = new Guid(contentItemId) });
+        }
+
+        _rootFolder.RenameTemplate = "S{Season.Number:00}E{Episode.Number:00}.{Ext}";
+        _leaf.ContentType = "tv";
+        _leaf.Level = "episode";
+        _leaf.Ordinal = 1;
+        _leaf.ParentId = season.Id;
+        _leaf.ContentItem = new ContentItem { Id = primary.ContentItemId, MediaFiles = { primary } };
+        _files[primary.FilePath] = 5;
+        _contentHierarchyItems
+            .Setup(r => r.GetLineageAsync(_leaf.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync([_leaf, season, show]);
+        _contentHierarchyItems
+            .Setup(repository => repository.QueryAsync(
+                It.Is<ContentHierarchyItemCriteria>(criteria => criteria.AncestorId == _leaf.Id),
+                It.IsAny<PagingParameter>(),
+                null,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<ContentHierarchyItem>());
+        _contentHierarchyItems
+            .Setup(repository => repository.QueryAsync(
+                It.Is<ContentHierarchyItemCriteria>(criteria =>
+                    criteria.ParentId.And.Any(criterion => criterion.Value == season.Id)),
+                It.IsAny<PagingParameter>(),
+                null,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<ContentHierarchyItem>
+            {
+                Items =
+                [
+                    _leaf,
+                    new()
+                    {
+                        ContentType = "tv",
+                        Level = "episode",
+                        Slug = "episode-2",
+                        Name = "Episode 2",
+                        Ordinal = 2,
+                        ContentItem = new() { Id = new Guid("22222222-2222-2222-2222-222222222222") }
+                    },
+                    new()
+                    {
+                        ContentType = "tv",
+                        Level = "episode",
+                        Slug = "episode-3",
+                        Name = "Episode 3",
+                        Ordinal = 3,
+                        ContentItem = new() { Id = new Guid("33333333-3333-3333-3333-333333333333") }
+                    }
+                ],
+                TotalItems = 3
+            });
+        _contentTypes
+            .Setup(registry => registry.GetDefinitionFor("tv"))
+            .Returns(new ContentTypeDefinition
+            {
+                Slug = "tv",
+                DisplayName = "TV",
+                LevelDefinitions =
+                [
+                    new ContentHierarchyLevelDefinition
+                    {
+                        Slug = "show",
+                        DisplayName = "Show",
+                        CustomMetadataFields = [],
+                        Subfolder = string.Empty
+                    },
+                    new ContentHierarchyLevelDefinition
+                    {
+                        Slug = "season",
+                        DisplayName = "Season",
+                        CustomMetadataFields = []
+                    },
+                    new ContentHierarchyLevelDefinition
+                    {
+                        Slug = "episode",
+                        DisplayName = "Episode",
+                        CustomMetadataFields = [],
+                        AcceptedFileTypes = [".mkv"]
+                    }
+                ]
+            });
+
+        // Act
+        var rename = await _subject.PreviewRenameMaskAsync(_leaf.Id, new() { MediaFileIds = [primary.Id] })
+            .ConfigureAwait(false);
+
+        // Assert
+        Assert.That(
+            rename.Files.Single().DestinationPath,
+            Is.EqualTo(Path.Combine(_rootFolder.Path, "Show", expectedFileName)));
+    }
+
+    [Test]
+    public async Task PreviewImportRenameMaskAsync_RendersTheCoveredRange_WhenTheFileCoversSiblings()
+    {
+        // Arrange
+        var show = new ContentHierarchyItem
+        {
+            Id = Guid.NewGuid(),
+            ContentType = "tv",
+            Level = "show",
+            Slug = "show",
+            Name = "Show",
+            Path = "Show",
+            EffectiveRootFolderId = _rootFolder.Id,
+            CreatedAt = DateTime.UtcNow
+        };
+        var season = new ContentHierarchyItem
+        {
+            Id = Guid.NewGuid(),
+            ParentId = show.Id,
+            ContentType = "tv",
+            Level = "season",
+            Slug = "season-1",
+            Name = "Season 1",
+            Ordinal = 1,
+            EffectiveRootFolderId = _rootFolder.Id,
+            CreatedAt = DateTime.UtcNow
+        };
+        ContentHierarchyItem[] covered =
+        [
+            new()
+            {
+                ParentId = season.Id,
+                ContentType = "tv",
+                Level = "episode",
+                Slug = "episode-2",
+                Name = "Episode 2",
+                Ordinal = 2
+            },
+            new()
+            {
+                ParentId = season.Id,
+                ContentType = "tv",
+                Level = "episode",
+                Slug = "episode-3",
+                Name = "Episode 3",
+                Ordinal = 3
+            }
+        ];
+        var path = Path.Combine(_rootFolder.Path, "Show", "Show.S01E01-E03.mkv");
+        _rootFolder.RenameTemplate = "S{Season.Number:00}E{Episode.Number:00}.{Ext}";
+        _leaf.ContentType = "tv";
+        _leaf.Level = "episode";
+        _leaf.Ordinal = 1;
+        _leaf.ParentId = season.Id;
+        _files[path] = 5;
+        _contentTypes
+            .Setup(registry => registry.GetDefinitionFor("tv"))
+            .Returns(new ContentTypeDefinition
+            {
+                Slug = "tv",
+                DisplayName = "TV",
+                LevelDefinitions =
+                [
+                    new ContentHierarchyLevelDefinition
+                    {
+                        Slug = "show",
+                        DisplayName = "Show",
+                        CustomMetadataFields = [],
+                        Subfolder = string.Empty
+                    },
+                    new ContentHierarchyLevelDefinition
+                    {
+                        Slug = "season",
+                        DisplayName = "Season",
+                        CustomMetadataFields = []
+                    },
+                    new ContentHierarchyLevelDefinition
+                    {
+                        Slug = "episode",
+                        DisplayName = "Episode",
+                        CustomMetadataFields = [],
+                        AcceptedFileTypes = [".mkv"]
+                    }
+                ]
+            });
+
+        // Act
+        var preview = await _subject.PreviewImportRenameMaskAsync([_leaf, season, show], covered, path)
+            .ConfigureAwait(false);
+
+        // Assert
+        Assert.That(
+            preview.Files.Single().DestinationPath,
+            Is.EqualTo(Path.Combine(_rootFolder.Path, "Show", "S01E01-03.mkv")));
+    }
+
+    [TestCase(new string[0], "episode")]
+    [TestCase(new[] { "22222222-2222-2222-2222-222222222222" }, "season")]
+    public async Task PreviewRenameAsync_PlansThePathFromTheParent_WhenTheFileCoversSiblings(
+        string[] covered,
+        string expectedLastLevel)
+    {
+        // Arrange
+        var show = new ContentHierarchyItem
+        {
+            Id = Guid.NewGuid(),
+            ContentType = "tv",
+            Level = "show",
+            Slug = "show",
+            Name = "Show",
+            EffectiveRootFolderId = _rootFolder.Id,
+            CreatedAt = DateTime.UtcNow
+        };
+        var season = new ContentHierarchyItem
+        {
+            Id = Guid.NewGuid(),
+            ParentId = show.Id,
+            ContentType = "tv",
+            Level = "season",
+            Slug = "season-1",
+            Name = "Season 1",
+            Ordinal = 1,
+            EffectiveRootFolderId = _rootFolder.Id,
+            CreatedAt = DateTime.UtcNow
+        };
+        var original = new FileInfo(Path.Combine(_rootFolder.Path, "Show", "Show.S01E01-E02.mkv"));
+        var primary = new MediaFile
+        {
+            Id = Guid.NewGuid(),
+            ContentItemId = new Guid("11111111-1111-1111-1111-111111111111"),
+            FileKind = "Video",
+            FilePath = original.FullName
+        };
+        foreach (var contentItemId in covered)
+        {
+            primary.Coverage.Add(new() { MediaFileId = primary.Id, ContentItemId = new Guid(contentItemId) });
+        }
+
+        _leaf.ContentType = "tv";
+        _leaf.Level = "episode";
+        _leaf.Ordinal = 1;
+        _leaf.ParentId = season.Id;
+        _leaf.ContentItem = new ContentItem { Id = primary.ContentItemId, MediaFiles = { primary } };
+        var provider = new Mock<IPathResolutionContentTypeDefinitionProvider>();
+        provider
+            .Setup(p => p.BuildPathPlan(
+                It.IsAny<IReadOnlyList<ContentHierarchyItem>>(),
+                It.IsAny<IReadOnlyDictionary<Guid, IReadOnlyDictionary<string, IReadOnlyList<string>>>>(),
+                It.IsAny<string>(),
+                It.IsAny<string>()))
+            .Returns(new ContentPathPlan
+            {
+                Directories = [new ContentPathPlanDirectory { LevelSlug = "show", Name = "Show" }],
+                FileName = "Show.S01E01-E02.mkv"
+            });
+        _contentTypes.Setup(registry => registry.FindProviderFor("tv")).Returns(provider.Object);
+        _contentHierarchyItems
+            .Setup(r => r.GetLineageAsync(_leaf.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync([_leaf, season, show]);
+        _contentHierarchyItems
+            .Setup(repository => repository.QueryAsync(
+                It.Is<ContentHierarchyItemCriteria>(criteria =>
+                    criteria.ParentId.And.Any(criterion => criterion.Value == season.Id)),
+                It.IsAny<PagingParameter>(),
+                null,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<ContentHierarchyItem>
+            {
+                Items =
+                [
+                    _leaf,
+                    new()
+                    {
+                        ContentType = "tv",
+                        Level = "episode",
+                        Slug = "episode-2",
+                        Name = "Episode 2",
+                        Ordinal = 2,
+                        ContentItem = new() { Id = new Guid("22222222-2222-2222-2222-222222222222") }
+                    }
+                ],
+                TotalItems = 2
+            });
+        _mediaFiles.Setup(repository => repository.GetByPathAsync(original.FullName, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(primary);
+
+        // Act
+        var result = await _subject.PreviewRenameAsync(_leaf.Id, original).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.Item.Id, Is.EqualTo(_leaf.Id));
+            provider.Verify(p => p.BuildPathPlan(
+                It.Is<IReadOnlyList<ContentHierarchyItem>>(ancestors => ancestors.Last().Level == expectedLastLevel),
+                It.IsAny<IReadOnlyDictionary<Guid, IReadOnlyDictionary<string, IReadOnlyList<string>>>>(),
+                "Show.S01E01-E02",
+                "mkv"), Times.Once);
+        }
+    }
+
     [Test]
     public async Task ExecuteRenameAsync_ReturnsUpdatedMediaFileAndWritesAudit_WhenPreviewIsCurrent()
     {
@@ -766,10 +1108,13 @@ public sealed class ContentFileServiceTests
 
         // Act
         // Assert
-        Assert.That(
-            () => _subject.ExecuteRenameAsync(preview, null, null).GetAwaiter().GetResult(),
-            Throws.InstanceOf<InvalidOperationException>());
-        _fileSystem.Verify(f => f.Move(It.IsAny<string>(), It.IsAny<string>()), Times.Never);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(
+                () => _subject.ExecuteRenameAsync(preview, null, null).GetAwaiter().GetResult(),
+                Throws.InstanceOf<InvalidOperationException>());
+            _fileSystem.Verify(f => f.Move(It.IsAny<string>(), It.IsAny<string>()), Times.Never);
+        }
     }
 
     [Test]
@@ -798,10 +1143,13 @@ public sealed class ContentFileServiceTests
 
         // Act
         // Assert
-        Assert.That(
-            () => _subject.ExecuteRenameAsync(preview, null, null).GetAwaiter().GetResult(),
-            Throws.InstanceOf<InvalidOperationException>());
-        _fileSystem.Verify(f => f.Move(It.IsAny<string>(), It.IsAny<string>()), Times.Never);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(
+                () => _subject.ExecuteRenameAsync(preview, null, null).GetAwaiter().GetResult(),
+                Throws.InstanceOf<InvalidOperationException>());
+            _fileSystem.Verify(f => f.Move(It.IsAny<string>(), It.IsAny<string>()), Times.Never);
+        }
     }
 
     [Test]
@@ -908,6 +1256,38 @@ public sealed class ContentFileServiceTests
             _fileSystem.Verify(fileSystem => fileSystem.DeleteFile(rootPath), Times.Once);
             _fileSystem.Verify(fileSystem => fileSystem.DeleteFile(descendantPath), Times.Once);
         }
+    }
+
+    [TestCase(true, 0)]
+    [TestCase(false, 1)]
+    public async Task DeleteFilesAsync_KeepsTheFileOnDisk_WhenAKeptItemStillHasTheFile(bool kept, int expectedDeletes)
+    {
+        // Arrange
+        var path = Path.Combine(_rootFolder.Path, "S01E01-E02.mkv");
+        var contentItem = new ContentItem
+        {
+            Id = Guid.NewGuid(),
+            ContentHierarchyItemId = _leaf.Id,
+            CreatedAt = DateTime.UtcNow
+        };
+        var mediaFile = new MediaFile
+        {
+            Id = Guid.NewGuid(),
+            ContentItemId = contentItem.Id,
+            FileKind = "Video",
+            FilePath = path
+        };
+        mediaFile.Coverage.Add(new() { MediaFileId = mediaFile.Id, ContentItemId = Guid.NewGuid() });
+        contentItem.MediaFiles.Add(mediaFile);
+        _files[path] = 100;
+        _mediaFiles.Setup(repository => repository.GetByIdAsync(mediaFile.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(kept ? mediaFile : null);
+
+        // Act
+        await _subject.DeleteFilesAsync([_leaf with { ContentItem = contentItem }]).ConfigureAwait(false);
+
+        // Assert
+        _fileSystem.Verify(fileSystem => fileSystem.DeleteFile(path), Times.Exactly(expectedDeletes));
     }
 
     [Test]
@@ -1103,7 +1483,8 @@ public sealed class ContentFileServiceTests
                     request.Mode == JobExecutionMode.Queue &&
                     request.UserId == actingUserId &&
                     request.Parameters != null &&
-                    request.Parameters[MagpieJobs.Parameters.ContentHierarchyItemId] == _leaf.Id.ToString("D")),
+                    request.Parameters[MagpieJobs.Parameters.ContentHierarchyItemId] == _leaf.Id.ToString("D") &&
+                    request.Parameters[MagpieJobs.Parameters.MediaInfoPolicy] == "All"),
                 It.IsAny<CancellationToken>()), Times.Once);
         }
     }
@@ -1336,6 +1717,268 @@ public sealed class ContentFileServiceTests
     }
 
     [Test]
+    public async Task AttachAsync_AddsCoverageAndReturnsTheStoredFile_WhenASiblingOwnsTheFile()
+    {
+        // Arrange
+        var path = Path.Combine(_rootFolder.Path, "S01E01-E02.mkv");
+        var parentId = Guid.NewGuid();
+        var contentItem = new ContentItem
+        {
+            Id = Guid.NewGuid(),
+            ContentHierarchyItemId = _leaf.Id,
+            Fulfillment = FulfillmentStatus.Missing,
+            CreatedAt = DateTime.UtcNow
+        };
+        var mediaFile = new MediaFile
+        {
+            Id = Guid.NewGuid(),
+            ContentItemId = Guid.NewGuid(),
+            FileKind = "Video",
+            FilePath = path
+        };
+        _leaf.ParentId = parentId;
+        _files[path] = 123;
+        _contentTypes.Setup(registry => registry.GetDefinitionFor("movie")).Returns(new ContentTypeDefinition
+        {
+            Slug = "movie",
+            DisplayName = "Movie",
+            LevelDefinitions =
+            [
+                new ContentHierarchyLevelDefinition
+                {
+                    Slug = "movie",
+                    DisplayName = "Movie",
+                    CustomMetadataFields = [],
+                    AcceptedFileTypes = ["video/*"]
+                }
+            ]
+        });
+        _fileSystem.Setup(system => system.LookupMimeTypeAsync(path, It.IsAny<CancellationToken>()))
+            .ReturnsAsync("video/x-matroska");
+        _fileSystem.Setup(system => system.MatchesAnyFileTypeAsync(
+                path,
+                It.IsAny<IReadOnlyList<string>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        _mediaFiles.Setup(repository => repository.GetByPathAsync(path, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(mediaFile);
+        _mediaFiles.Setup(repository => repository.UpdateAsync(
+                It.IsAny<MediaFile>(),
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        _contentHierarchyItems.Setup(repository => repository.QueryIdsAsync(
+                It.Is<ContentHierarchyItemCriteria>(criteria => criteria.ContentItemId == mediaFile.ContentItemId &&
+                    criteria.ParentId.And.Any(criterion => criterion.Value == parentId)),
+                It.IsAny<PagingParameter>(),
+                null,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync([Guid.NewGuid()]);
+        _contentItems.Setup(repository => repository.QueryAsync(
+                It.IsAny<ContentItemQuery>(),
+                It.IsAny<PagingParameter>(),
+                null,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<ContentItem> { Items = [contentItem], TotalItems = 1 });
+        _mediaFiles.Setup(repository => repository.GetByIdAsync(mediaFile.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new MediaFile
+            {
+                Id = mediaFile.Id,
+                ContentItemId = contentItem.Id,
+                FileKind = "Video",
+                FilePath = path
+            });
+
+        // Act
+        var result = await _subject.AttachAsync(_leaf.Id, path, null).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.Result?.MediaFile.Id, Is.EqualTo(mediaFile.Id));
+            Assert.That(result.Result?.MediaFile.ContentItemId, Is.EqualTo(contentItem.Id));
+            _mediaFiles.Verify(repository => repository.UpdateAsync(
+                It.Is<MediaFile>(file => file.Id == mediaFile.Id &&
+                    file.Coverage.Select(coverage => coverage.ContentItemId).SequenceEqual(new[] { contentItem.Id })),
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()), Times.Once);
+            _mediaFiles.Verify(repository => repository.CreateAsync(
+                It.IsAny<MediaFile>(),
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()), Times.Never);
+            _jobManager.Verify(manager => manager.ExecuteAsync(
+                It.IsAny<JobEnqueueRequest>(),
+                It.IsAny<CancellationToken>()), Times.Never);
+        }
+    }
+
+    [Test]
+    public void AttachImportedAsync_ThrowsWithoutStoredChange_WhenASiblingOwnsTheFile()
+    {
+        // Arrange
+        var path = Path.Combine(_rootFolder.Path, "S01E01-E02.mkv");
+        var parentId = Guid.NewGuid();
+        var contentItem = new ContentItem
+        {
+            Id = Guid.NewGuid(),
+            ContentHierarchyItemId = _leaf.Id,
+            Fulfillment = FulfillmentStatus.Missing,
+            CreatedAt = DateTime.UtcNow
+        };
+        var mediaFile = new MediaFile
+        {
+            Id = Guid.NewGuid(),
+            ContentItemId = Guid.NewGuid(),
+            FileKind = "Video",
+            FilePath = path
+        };
+        _leaf.ParentId = parentId;
+        _files[path] = 123;
+        _contentTypes.Setup(registry => registry.GetDefinitionFor("movie")).Returns(new ContentTypeDefinition
+        {
+            Slug = "movie",
+            DisplayName = "Movie",
+            LevelDefinitions =
+            [
+                new ContentHierarchyLevelDefinition
+                {
+                    Slug = "movie",
+                    DisplayName = "Movie",
+                    CustomMetadataFields = [],
+                    AcceptedFileTypes = ["video/*"]
+                }
+            ]
+        });
+        _fileSystem.Setup(system => system.LookupMimeTypeAsync(path, It.IsAny<CancellationToken>()))
+            .ReturnsAsync("video/x-matroska");
+        _fileSystem.Setup(system => system.MatchesAnyFileTypeAsync(
+                path,
+                It.IsAny<IReadOnlyList<string>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        _mediaFiles.Setup(repository => repository.GetByPathAsync(path, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(mediaFile);
+        _mediaFiles.Setup(repository => repository.UpdateAsync(
+                It.IsAny<MediaFile>(),
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        _contentHierarchyItems.Setup(repository => repository.QueryIdsAsync(
+                It.Is<ContentHierarchyItemCriteria>(criteria => criteria.ContentItemId == mediaFile.ContentItemId &&
+                    criteria.ParentId.And.Any(criterion => criterion.Value == parentId)),
+                It.IsAny<PagingParameter>(),
+                null,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync([Guid.NewGuid()]);
+        _contentItems.Setup(repository => repository.QueryAsync(
+                It.IsAny<ContentItemQuery>(),
+                It.IsAny<PagingParameter>(),
+                null,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<ContentItem> { Items = [contentItem], TotalItems = 1 });
+
+        // Act
+        var exception = Assert.ThrowsAsync<ArgumentException>(
+            async () => await _subject.AttachImportedAsync(_leaf.Id, path, null).ConfigureAwait(false));
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(exception!.Message, Is.EqualTo("The selected file is already attached to content."));
+            _mediaFiles.Verify(repository => repository.UpdateAsync(
+                It.IsAny<MediaFile>(),
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()), Times.Never);
+        }
+    }
+
+    [Test]
+    public async Task AttachImportedAsync_ReturnsTheFileWithoutStoredChange_WhenTheFileCoversTheItem()
+    {
+        // Arrange
+        var path = Path.Combine(_rootFolder.Path, "S01E01-E02.mkv");
+        var parentId = Guid.NewGuid();
+        var contentItem = new ContentItem
+        {
+            Id = Guid.NewGuid(),
+            ContentHierarchyItemId = _leaf.Id,
+            Fulfillment = FulfillmentStatus.Missing,
+            CreatedAt = DateTime.UtcNow
+        };
+        var mediaFile = new MediaFile
+        {
+            Id = Guid.NewGuid(),
+            ContentItemId = Guid.NewGuid(),
+            FileKind = "Video",
+            FilePath = path
+        };
+        mediaFile.Coverage.Add(new() { MediaFileId = mediaFile.Id, ContentItemId = contentItem.Id });
+        _leaf.ParentId = parentId;
+        _files[path] = 123;
+        _contentTypes.Setup(registry => registry.GetDefinitionFor("movie")).Returns(new ContentTypeDefinition
+        {
+            Slug = "movie",
+            DisplayName = "Movie",
+            LevelDefinitions =
+            [
+                new ContentHierarchyLevelDefinition
+                {
+                    Slug = "movie",
+                    DisplayName = "Movie",
+                    CustomMetadataFields = [],
+                    AcceptedFileTypes = ["video/*"]
+                }
+            ]
+        });
+        _fileSystem.Setup(system => system.LookupMimeTypeAsync(path, It.IsAny<CancellationToken>()))
+            .ReturnsAsync("video/x-matroska");
+        _fileSystem.Setup(system => system.MatchesAnyFileTypeAsync(
+                path,
+                It.IsAny<IReadOnlyList<string>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        _mediaFiles.Setup(repository => repository.GetByPathAsync(path, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(mediaFile);
+        _mediaFiles.Setup(repository => repository.UpdateAsync(
+                It.IsAny<MediaFile>(),
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        _contentHierarchyItems.Setup(repository => repository.QueryIdsAsync(
+                It.Is<ContentHierarchyItemCriteria>(criteria => criteria.ContentItemId == mediaFile.ContentItemId &&
+                    criteria.ParentId.And.Any(criterion => criterion.Value == parentId)),
+                It.IsAny<PagingParameter>(),
+                null,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync([Guid.NewGuid()]);
+        _contentItems.Setup(repository => repository.QueryAsync(
+                It.IsAny<ContentItemQuery>(),
+                It.IsAny<PagingParameter>(),
+                null,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<ContentItem> { Items = [contentItem], TotalItems = 1 });
+        _contentItems.Setup(repository => repository.GetByIdAsync(contentItem.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(contentItem);
+
+        // Act
+        var result = await _subject.AttachImportedAsync(_leaf.Id, path, null).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.Result?.MediaFile.Id, Is.EqualTo(mediaFile.Id));
+            _mediaFiles.Verify(repository => repository.UpdateAsync(
+                It.IsAny<MediaFile>(),
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()), Times.Never);
+            _mediaFiles.Verify(repository => repository.CreateAsync(
+                It.IsAny<MediaFile>(),
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()), Times.Never);
+        }
+    }
+
+    [Test]
     public void AttachAsync_ThrowsWithoutStoredChange_WhenFileIsOutsideConfiguredRoot()
     {
         // Arrange
@@ -1361,11 +2004,14 @@ public sealed class ContentFileServiceTests
             async () => await _subject.AttachAsync(_leaf.Id, path, null).ConfigureAwait(false));
 
         // Assert
-        Assert.That(exception!.Message, Is.EqualTo("The selected file is outside the configured root folder."));
-        _mediaFiles.Verify(repository => repository.CreateAsync(
-            It.IsAny<MediaFile>(),
-            It.IsAny<Guid?>(),
-            It.IsAny<CancellationToken>()), Times.Never);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(exception!.Message, Is.EqualTo("The selected file is outside the configured root folder."));
+            _mediaFiles.Verify(repository => repository.CreateAsync(
+                It.IsAny<MediaFile>(),
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()), Times.Never);
+        }
     }
 
     [Test]
@@ -1479,14 +2125,17 @@ public sealed class ContentFileServiceTests
         var exception = Assert.ThrowsAsync<ArgumentException>(
             async () => await _subject.AttachAsync(_leaf.Id, path, null).ConfigureAwait(false));
 
-        Assert.That(exception!.Message, Is.EqualTo("The selected file type is unknown."));
-        _mediaFiles.Verify(repository => repository.CreateAsync(
-            It.IsAny<MediaFile>(),
-            It.IsAny<Guid?>(),
-            It.IsAny<CancellationToken>()), Times.Never);
-        _auditRecords.Verify(repository => repository.CreateAsync(
-            It.IsAny<AuditRecord>(),
-            It.IsAny<CancellationToken>()), Times.Never);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(exception!.Message, Is.EqualTo("The selected file type is unknown."));
+            _mediaFiles.Verify(repository => repository.CreateAsync(
+                It.IsAny<MediaFile>(),
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()), Times.Never);
+            _auditRecords.Verify(repository => repository.CreateAsync(
+                It.IsAny<AuditRecord>(),
+                It.IsAny<CancellationToken>()), Times.Never);
+        }
     }
 
     [Test]
@@ -1521,13 +2170,16 @@ public sealed class ContentFileServiceTests
 
         // Act
         // Assert
-        Assert.That(
-            () => _subject.AttachAsync(_leaf.Id, path, null).GetAwaiter().GetResult(),
-            Throws.InstanceOf<ArgumentException>());
-        _mediaFiles.Verify(repository => repository.CreateAsync(
-            It.IsAny<MediaFile>(),
-            It.IsAny<Guid?>(),
-            It.IsAny<CancellationToken>()), Times.Never);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(
+                () => _subject.AttachAsync(_leaf.Id, path, null).GetAwaiter().GetResult(),
+                Throws.InstanceOf<ArgumentException>());
+            _mediaFiles.Verify(repository => repository.CreateAsync(
+                It.IsAny<MediaFile>(),
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()), Times.Never);
+        }
     }
 
     [Test]
@@ -1552,13 +2204,16 @@ public sealed class ContentFileServiceTests
 
         // Act
         // Assert
-        Assert.That(
-            () => _subject.AttachAsync(_leaf.Id, path, null).GetAwaiter().GetResult(),
-            Throws.InstanceOf<ArgumentException>());
-        _mediaFiles.Verify(repository => repository.CreateAsync(
-            It.IsAny<MediaFile>(),
-            It.IsAny<Guid?>(),
-            It.IsAny<CancellationToken>()), Times.Never);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(
+                () => _subject.AttachAsync(_leaf.Id, path, null).GetAwaiter().GetResult(),
+                Throws.InstanceOf<ArgumentException>());
+            _mediaFiles.Verify(repository => repository.CreateAsync(
+                It.IsAny<MediaFile>(),
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()), Times.Never);
+        }
     }
 
     [Test]
@@ -1593,16 +2248,19 @@ public sealed class ContentFileServiceTests
 
         // Act
         // Assert
-        Assert.That(
-            () => _subject.AttachAsync(_leaf.Id, path, null).GetAwaiter().GetResult(),
-            Throws.InstanceOf<ArgumentException>());
-        _mediaFiles.Verify(repository => repository.CreateAsync(
-            It.IsAny<MediaFile>(),
-            It.IsAny<Guid?>(),
-            It.IsAny<CancellationToken>()), Times.Never);
-        _transactionManager.Verify(manager => manager.ExecuteWithTransactionAsync(
-            It.IsAny<Func<CancellationToken, Task<AttachContentFileResult>>>(),
-            It.IsAny<CancellationToken>()), Times.Never);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(
+                () => _subject.AttachAsync(_leaf.Id, path, null).GetAwaiter().GetResult(),
+                Throws.InstanceOf<ArgumentException>());
+            _mediaFiles.Verify(repository => repository.CreateAsync(
+                It.IsAny<MediaFile>(),
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()), Times.Never);
+            _transactionManager.Verify(manager => manager.ExecuteWithTransactionAsync(
+                It.IsAny<Func<CancellationToken, Task<AttachContentFileResult>>>(),
+                It.IsAny<CancellationToken>()), Times.Never);
+        }
     }
 
     [Test]
@@ -1638,13 +2296,16 @@ public sealed class ContentFileServiceTests
 
         // Act
         // Assert
-        Assert.That(
-            () => _subject.AttachAsync(_leaf.Id, path, null).GetAwaiter().GetResult(),
-            Throws.InstanceOf<ArgumentException>());
-        _mediaFiles.Verify(repository => repository.CreateAsync(
-            It.IsAny<MediaFile>(),
-            It.IsAny<Guid?>(),
-            It.IsAny<CancellationToken>()), Times.Never);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(
+                () => _subject.AttachAsync(_leaf.Id, path, null).GetAwaiter().GetResult(),
+                Throws.InstanceOf<ArgumentException>());
+            _mediaFiles.Verify(repository => repository.CreateAsync(
+                It.IsAny<MediaFile>(),
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()), Times.Never);
+        }
     }
 
     [Test]
@@ -1688,12 +2349,15 @@ public sealed class ContentFileServiceTests
             async () => await _subject.AttachAsync(_leaf.Id, selectedPath, null).ConfigureAwait(false));
 
         // Assert
-        Assert.That(exception!.Message, Is.EqualTo("The selected file is already attached to content."));
-        _mediaFiles.Verify(repository => repository.CreateAsync(
-            It.IsAny<MediaFile>(),
-            It.IsAny<Guid?>(),
-            It.IsAny<CancellationToken>()), Times.Never);
-        _mediaFiles.Verify(repository => repository.ListAllAsync(It.IsAny<CancellationToken>()), Times.Never);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(exception!.Message, Is.EqualTo("The selected file is already attached to content."));
+            _mediaFiles.Verify(repository => repository.CreateAsync(
+                It.IsAny<MediaFile>(),
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()), Times.Never);
+            _mediaFiles.Verify(repository => repository.ListAllAsync(It.IsAny<CancellationToken>()), Times.Never);
+        }
     }
 
     [TestCase("The INSERT violated IX_content_mediaFile_PathKey.", typeof(ArgumentException))]
@@ -1852,11 +2516,14 @@ public sealed class ContentFileServiceTests
         var result = await _subject.AttachAsync(unknownId, "unknown.mkv", null).ConfigureAwait(false);
 
         // Assert
-        Assert.That(result.Result, Is.Null);
-        _mediaFiles.Verify(repository => repository.CreateAsync(
-            It.IsAny<MediaFile>(),
-            It.IsAny<Guid?>(),
-            It.IsAny<CancellationToken>()), Times.Never);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.Result, Is.Null);
+            _mediaFiles.Verify(repository => repository.CreateAsync(
+                It.IsAny<MediaFile>(),
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()), Times.Never);
+        }
     }
 
     [Test]
@@ -1881,16 +2548,19 @@ public sealed class ContentFileServiceTests
         var result = await _subject.UpdateFulfillmentAsync(_leaf.Id, null).ConfigureAwait(false);
 
         // Assert
-        Assert.That(result, Is.False);
-        _mediaFiles.Verify(repository => repository.QueryAsync(
-            It.IsAny<MediaFileQuery>(),
-            It.IsAny<PagingParameter>(),
-            null,
-            It.IsAny<CancellationToken>()), Times.Never);
-        _contentItems.Verify(repository => repository.UpdateAsync(
-            It.IsAny<ContentItem>(),
-            It.IsAny<Guid?>(),
-            It.IsAny<CancellationToken>()), Times.Never);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result, Is.False);
+            _mediaFiles.Verify(repository => repository.QueryAsync(
+                It.IsAny<MediaFileQuery>(),
+                It.IsAny<PagingParameter>(),
+                null,
+                It.IsAny<CancellationToken>()), Times.Never);
+            _contentItems.Verify(repository => repository.UpdateAsync(
+                It.IsAny<ContentItem>(),
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()), Times.Never);
+        }
     }
 
     [Test]
@@ -2189,6 +2859,139 @@ public sealed class ContentFileServiceTests
         }
     }
 
+    [TestCase(
+        "11111111-1111-1111-1111-111111111111",
+        "22222222-2222-2222-2222-222222222222",
+        "33333333-3333-3333-3333-333333333333")]
+    [TestCase(
+        "22222222-2222-2222-2222-222222222222",
+        "11111111-1111-1111-1111-111111111111",
+        "33333333-3333-3333-3333-333333333333")]
+    public async Task UnlinkAsync_KeepsTheFileOnTheOtherItems_WhenTheFileCoversSeveralItems(
+        string owner,
+        string firstCovered,
+        string secondCovered)
+    {
+        // Arrange
+        var contentItem = new ContentItem
+        {
+            Id = new Guid("11111111-1111-1111-1111-111111111111"),
+            ContentHierarchyItemId = _leaf.Id,
+            Fulfillment = FulfillmentStatus.Fulfilled,
+            CreatedAt = DateTime.UtcNow
+        };
+        var mediaFile = new MediaFile
+        {
+            Id = Guid.NewGuid(),
+            ContentItemId = new Guid(owner),
+            FileKind = "Video",
+            FilePath = Path.Combine(_rootFolder.Path, "S01E01-E03.mkv")
+        };
+        mediaFile.Coverage.Add(new() { MediaFileId = mediaFile.Id, ContentItemId = new Guid(firstCovered) });
+        mediaFile.Coverage.Add(new() { MediaFileId = mediaFile.Id, ContentItemId = new Guid(secondCovered) });
+        _mediaFiles.Setup(repository => repository.GetByIdAsync(mediaFile.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(mediaFile);
+        _mediaFiles.Setup(repository => repository.UpdateAsync(
+                It.IsAny<MediaFile>(),
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        _contentItems.Setup(repository => repository.GetByIdAsync(contentItem.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(contentItem);
+        _contentItems.Setup(repository => repository.QueryAsync(
+                It.IsAny<ContentItemQuery>(),
+                It.IsAny<PagingParameter>(),
+                null,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<ContentItem> { Items = [contentItem], TotalItems = 1 });
+
+        // Act
+        var result = await _subject.UnlinkAsync(_leaf.Id, mediaFile.Id, null).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.Removed, Is.True);
+            _mediaFiles.Verify(repository => repository.UpdateAsync(
+                It.Is<MediaFile>(file =>
+                    file.ContentItemId == new Guid("22222222-2222-2222-2222-222222222222") &&
+                    file.Coverage.Select(coverage => coverage.ContentItemId)
+                        .SequenceEqual(new[] { new Guid("33333333-3333-3333-3333-333333333333") })),
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()), Times.Once);
+            _mediaFiles.Verify(repository => repository.DeleteAsync(
+                It.IsAny<Guid>(),
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()), Times.Never);
+        }
+    }
+
+    [Test]
+    public async Task UnlinkAsync_KeepsCoverageAddedAfterTheCheck_WhenTheFileChangesBeforeTheLock()
+    {
+        // Arrange
+        var contentItem = new ContentItem
+        {
+            Id = new Guid("11111111-1111-1111-1111-111111111111"),
+            ContentHierarchyItemId = _leaf.Id,
+            Fulfillment = FulfillmentStatus.Fulfilled,
+            CreatedAt = DateTime.UtcNow
+        };
+        var checkedFile = new MediaFile
+        {
+            Id = Guid.NewGuid(),
+            ContentItemId = new Guid("22222222-2222-2222-2222-222222222222"),
+            FileKind = "Video",
+            FilePath = Path.Combine(_rootFolder.Path, "S01E01-E03.mkv")
+        };
+        checkedFile.Coverage.Add(new() { MediaFileId = checkedFile.Id, ContentItemId = contentItem.Id });
+        var lockedFile = new MediaFile
+        {
+            Id = checkedFile.Id,
+            ContentItemId = new Guid("22222222-2222-2222-2222-222222222222"),
+            FileKind = "Video",
+            FilePath = checkedFile.FilePath
+        };
+        lockedFile.Coverage.Add(new() { MediaFileId = checkedFile.Id, ContentItemId = contentItem.Id });
+        lockedFile.Coverage.Add(new()
+        {
+            MediaFileId = checkedFile.Id,
+            ContentItemId = new Guid("33333333-3333-3333-3333-333333333333")
+        });
+        _mediaFiles.SetupSequence(repository => repository.GetByIdAsync(checkedFile.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(checkedFile)
+            .ReturnsAsync(lockedFile);
+        _mediaFiles.Setup(repository => repository.UpdateAsync(
+                It.IsAny<MediaFile>(),
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        _contentItems.Setup(repository => repository.GetByIdAsync(contentItem.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(contentItem);
+        _contentItems.Setup(repository => repository.QueryAsync(
+                It.IsAny<ContentItemQuery>(),
+                It.IsAny<PagingParameter>(),
+                null,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<ContentItem> { Items = [contentItem], TotalItems = 1 });
+
+        // Act
+        var result = await _subject.UnlinkAsync(_leaf.Id, checkedFile.Id, null).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.Removed, Is.True);
+            _mediaFiles.Verify(repository => repository.UpdateAsync(
+                It.Is<MediaFile>(file =>
+                    file.ContentItemId == new Guid("22222222-2222-2222-2222-222222222222") &&
+                    file.Coverage.Select(coverage => coverage.ContentItemId)
+                        .SequenceEqual(new[] { new Guid("33333333-3333-3333-3333-333333333333") })),
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()), Times.Once);
+        }
+    }
+
     [Test]
     public async Task DeleteAsync_ReturnsTrue_WhenOwnedRowIsRemovedConcurrently()
     {
@@ -2323,6 +3126,70 @@ public sealed class ContentFileServiceTests
                     record.Operation == "FileDeleted" &&
                     record.Detail == "Removed the missing file movie.mkv from content."),
                 It.IsAny<CancellationToken>()), Times.Once);
+        }
+    }
+
+    [Test]
+    public async Task DeleteAsync_DeletesTheFileAndItsRowForEveryItem_WhenTheFileOfAnotherItemCoversTheItem()
+    {
+        // Arrange
+        var contentItem = new ContentItem
+        {
+            Id = Guid.NewGuid(),
+            ContentHierarchyItemId = _leaf.Id,
+            Fulfillment = FulfillmentStatus.Fulfilled,
+            CreatedAt = DateTime.UtcNow
+        };
+        var owner = new ContentItem
+        {
+            Id = Guid.NewGuid(),
+            ContentHierarchyItemId = Guid.NewGuid(),
+            Fulfillment = FulfillmentStatus.Fulfilled,
+            CreatedAt = DateTime.UtcNow
+        };
+        var mediaFile = new MediaFile
+        {
+            Id = Guid.NewGuid(),
+            ContentItemId = owner.Id,
+            FileKind = "Video",
+            FilePath = Path.Combine(_rootFolder.Path, "S01E01-E02.mkv")
+        };
+        mediaFile.Coverage.Add(new() { MediaFileId = mediaFile.Id, ContentItemId = contentItem.Id });
+        _files[mediaFile.FilePath] = 100;
+        _mediaFiles.Setup(repository => repository.GetByIdAsync(mediaFile.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(mediaFile);
+        _mediaFiles.Setup(repository => repository.DeleteAsync(
+                mediaFile.Id,
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        _contentItems.Setup(repository => repository.GetByIdAsync(owner.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(owner);
+        _contentItems.Setup(repository => repository.GetByIdAsync(contentItem.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(contentItem);
+        _contentItems.Setup(repository => repository.QueryAsync(
+                It.IsAny<ContentItemQuery>(),
+                It.IsAny<PagingParameter>(),
+                null,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<ContentItem> { Items = [contentItem], TotalItems = 1 });
+
+        // Act
+        var result = await _subject.DeleteAsync(_leaf.Id, mediaFile.Id, null).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.Deleted, Is.True);
+            _mediaFiles.Verify(repository => repository.DeleteAsync(
+                mediaFile.Id,
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()), Times.Once);
+            _mediaFiles.Verify(repository => repository.UpdateAsync(
+                It.IsAny<MediaFile>(),
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()), Times.Never);
+            _fileSystem.Verify(fileSystem => fileSystem.DeleteFile(mediaFile.FilePath), Times.Once);
         }
     }
 
@@ -2639,12 +3506,15 @@ public sealed class ContentFileServiceTests
 
         // Act
         // Assert
-        Assert.That(
-            () => _subject.BrowseAsync(_leaf.Id, outsidePath).GetAwaiter().GetResult(),
-            Throws.InstanceOf<ArgumentException>());
-        _fileSystem.Verify(system => system.BrowseAsync(
-            It.IsAny<string>(),
-            It.IsAny<CancellationToken>()), Times.Never);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(
+                () => _subject.BrowseAsync(_leaf.Id, outsidePath).GetAwaiter().GetResult(),
+                Throws.InstanceOf<ArgumentException>());
+            _fileSystem.Verify(system => system.BrowseAsync(
+                It.IsAny<string>(),
+                It.IsAny<CancellationToken>()), Times.Never);
+        }
     }
 
     [Test]
@@ -2656,12 +3526,15 @@ public sealed class ContentFileServiceTests
 
         // Act
         // Assert
-        Assert.That(
-            () => _subject.BrowseAsync(_leaf.Id, linkedPath).GetAwaiter().GetResult(),
-            Throws.InstanceOf<ArgumentException>());
-        _fileSystem.Verify(system => system.BrowseAsync(
-            It.IsAny<string>(),
-            It.IsAny<CancellationToken>()), Times.Never);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(
+                () => _subject.BrowseAsync(_leaf.Id, linkedPath).GetAwaiter().GetResult(),
+                Throws.InstanceOf<ArgumentException>());
+            _fileSystem.Verify(system => system.BrowseAsync(
+                It.IsAny<string>(),
+                It.IsAny<CancellationToken>()), Times.Never);
+        }
     }
 
     [Test]
@@ -2689,12 +3562,380 @@ public sealed class ContentFileServiceTests
 
         // Act
         // Assert
-        Assert.That(
-            () => _subject.AttachAsync(_leaf.Id, linkedPath, null).GetAwaiter().GetResult(),
-            Throws.InstanceOf<ArgumentException>());
-        _mediaFiles.Verify(repository => repository.CreateAsync(
-            It.IsAny<MediaFile>(),
-            It.IsAny<Guid?>(),
-            It.IsAny<CancellationToken>()), Times.Never);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(
+                () => _subject.AttachAsync(_leaf.Id, linkedPath, null).GetAwaiter().GetResult(),
+                Throws.InstanceOf<ArgumentException>());
+            _mediaFiles.Verify(repository => repository.CreateAsync(
+                It.IsAny<MediaFile>(),
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()), Times.Never);
+        }
+    }
+
+    [TestCase(
+        "22222222-2222-2222-2222-222222222222",
+        new[] { "11111111-1111-1111-1111-111111111111", "33333333-3333-3333-3333-333333333333" },
+        "44444444-4444-4444-4444-444444444444",
+        "22222222-2222-2222-2222-222222222222",
+        new[] { "33333333-3333-3333-3333-333333333333", "44444444-4444-4444-4444-444444444444" })]
+    [TestCase(
+        "11111111-1111-1111-1111-111111111111",
+        new[] { "22222222-2222-2222-2222-222222222222" },
+        "44444444-4444-4444-4444-444444444444",
+        "22222222-2222-2222-2222-222222222222",
+        new[] { "44444444-4444-4444-4444-444444444444" })]
+    [TestCase(
+        "22222222-2222-2222-2222-222222222222",
+        new[] { "11111111-1111-1111-1111-111111111111" },
+        "22222222-2222-2222-2222-222222222222",
+        "22222222-2222-2222-2222-222222222222",
+        new string[0])]
+    public async Task ReassignAsync_MovesOnlyTheSourceAssociation_WhenTheFileCoversSeveralItems(
+        string owner,
+        string[] covered,
+        string targetItem,
+        string expectedOwner,
+        string[] expectedCovered)
+    {
+        // Arrange
+        var path = Path.Combine(_rootFolder.Path, "S01E01-E03.mkv");
+        var season = new ContentHierarchyItem
+        {
+            Id = Guid.NewGuid(),
+            ContentType = "tv",
+            Level = "season",
+            Slug = "season-1",
+            Name = "Season 1",
+            EffectiveRootFolderId = _rootFolder.Id,
+            CreatedAt = DateTime.UtcNow
+        };
+        var source = new ContentHierarchyItem
+        {
+            Id = Guid.NewGuid(),
+            ParentId = season.Id,
+            ContentType = "tv",
+            Level = "episode",
+            Slug = "episode-1",
+            Name = "Episode 1",
+            EffectiveRootFolderId = _rootFolder.Id,
+            CreatedAt = DateTime.UtcNow,
+            ContentItem = new() { Id = new Guid("11111111-1111-1111-1111-111111111111") }
+        };
+        var target = new ContentHierarchyItem
+        {
+            Id = Guid.NewGuid(),
+            ParentId = season.Id,
+            ContentType = "tv",
+            Level = "episode",
+            Slug = "episode-4",
+            Name = "Episode 4",
+            EffectiveRootFolderId = _rootFolder.Id,
+            CreatedAt = DateTime.UtcNow,
+            ContentItem = new() { Id = new Guid(targetItem) }
+        };
+        var mediaFile = new MediaFile
+        {
+            Id = Guid.NewGuid(),
+            ContentItemId = new Guid(owner),
+            FileKind = "Video",
+            FilePath = path
+        };
+        foreach (var contentItemId in covered)
+        {
+            mediaFile.Coverage.Add(new() { MediaFileId = mediaFile.Id, ContentItemId = new Guid(contentItemId) });
+        }
+
+        _files[path] = 100;
+        _contentHierarchyItems
+            .Setup(repository => repository.GetLineageAsync(source.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync([source, season]);
+        _contentHierarchyItems
+            .Setup(repository => repository.GetLineageAsync(target.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync([target, season]);
+        _contentTypes.Setup(registry => registry.GetDefinitionFor("tv")).Returns(new ContentTypeDefinition
+        {
+            Slug = "tv",
+            DisplayName = "TV",
+            LevelDefinitions =
+            [
+                new ContentHierarchyLevelDefinition
+                {
+                    Slug = "episode",
+                    DisplayName = "Episode",
+                    CustomMetadataFields = [],
+                    AcceptedFileTypes = ["video/*"]
+                }
+            ]
+        });
+        _fileSystem.Setup(system => system.MatchesAnyFileTypeAsync(
+                path,
+                It.IsAny<IReadOnlyList<string>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        _mediaFiles.Setup(repository => repository.GetByIdAsync(mediaFile.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(mediaFile);
+        _mediaFiles.Setup(repository => repository.UpdateAsync(
+                It.IsAny<MediaFile>(),
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        _contentItems.Setup(repository => repository.QueryAsync(
+                It.Is<ContentItemQuery>(query => query.ContentHierarchyItemId == target.Id),
+                It.IsAny<PagingParameter>(),
+                null,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<ContentItem> { Items = [target.ContentItem], TotalItems = 1 });
+
+        // Act
+        var reassigned = await _subject.ReassignAsync(
+            source.Id,
+            mediaFile.Id,
+            new() { TargetContentHierarchyItemId = target.Id, ExpectedFilePath = path },
+            null).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(reassigned, Is.True);
+            _mediaFiles.Verify(repository => repository.UpdateAsync(
+                It.Is<MediaFile>(file => file.ContentItemId == new Guid(expectedOwner) &&
+                    file.Coverage.Select(coverage => coverage.ContentItemId.ToString()).SequenceEqual(expectedCovered)),
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()), Times.Once);
+        }
+    }
+
+    [Test]
+    public void ReassignAsync_ThrowsWithoutStoredChange_WhenTheDestinationIsNotASiblingOfTheCoveredItems()
+    {
+        // Arrange
+        var path = Path.Combine(_rootFolder.Path, "S01E01-E02.mkv");
+        var show = new ContentHierarchyItem
+        {
+            Id = Guid.NewGuid(),
+            ContentType = "tv",
+            Level = "show",
+            Slug = "show",
+            Name = "Show",
+            EffectiveRootFolderId = _rootFolder.Id,
+            CreatedAt = DateTime.UtcNow
+        };
+        var firstSeason = new ContentHierarchyItem
+        {
+            Id = Guid.NewGuid(),
+            ParentId = show.Id,
+            ContentType = "tv",
+            Level = "season",
+            Slug = "season-1",
+            Name = "Season 1",
+            EffectiveRootFolderId = _rootFolder.Id,
+            CreatedAt = DateTime.UtcNow
+        };
+        var secondSeason = firstSeason with { Id = Guid.NewGuid(), Slug = "season-2", Name = "Season 2" };
+        var source = new ContentHierarchyItem
+        {
+            Id = Guid.NewGuid(),
+            ParentId = firstSeason.Id,
+            ContentType = "tv",
+            Level = "episode",
+            Slug = "episode-1",
+            Name = "Episode 1",
+            EffectiveRootFolderId = _rootFolder.Id,
+            CreatedAt = DateTime.UtcNow,
+            ContentItem = new() { Id = Guid.NewGuid() }
+        };
+        var target = new ContentHierarchyItem
+        {
+            Id = Guid.NewGuid(),
+            ParentId = secondSeason.Id,
+            ContentType = "tv",
+            Level = "episode",
+            Slug = "episode-5",
+            Name = "Episode 5",
+            EffectiveRootFolderId = _rootFolder.Id,
+            CreatedAt = DateTime.UtcNow
+        };
+        var mediaFile = new MediaFile
+        {
+            Id = Guid.NewGuid(),
+            ContentItemId = Guid.NewGuid(),
+            FileKind = "Video",
+            FilePath = path
+        };
+        mediaFile.Coverage.Add(new() { MediaFileId = mediaFile.Id, ContentItemId = source.ContentItem!.Id });
+        _files[path] = 100;
+        _contentHierarchyItems
+            .Setup(repository => repository.GetLineageAsync(source.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync([source, firstSeason, show]);
+        _contentHierarchyItems
+            .Setup(repository => repository.GetLineageAsync(target.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync([target, secondSeason, show]);
+        _mediaFiles.Setup(repository => repository.GetByIdAsync(mediaFile.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(mediaFile);
+
+        // Act
+        var exception = Assert.ThrowsAsync<ArgumentException>(async () => await _subject.ReassignAsync(
+            source.Id,
+            mediaFile.Id,
+            new() { TargetContentHierarchyItemId = target.Id, ExpectedFilePath = path },
+            null).ConfigureAwait(false));
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(
+                exception!.Message,
+                Is.EqualTo("The destination is not a sibling of the other items that the file covers."));
+            _mediaFiles.Verify(repository => repository.UpdateAsync(
+                It.IsAny<MediaFile>(),
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()), Times.Never);
+        }
+    }
+
+    [Test]
+    public async Task ReassignAsync_ReturnsTrueWithoutStoredChange_WhenOnlyTheTargetHasTheFile()
+    {
+        // Arrange
+        var path = Path.Combine(_rootFolder.Path, "S01E01-E02.mkv");
+        var season = new ContentHierarchyItem
+        {
+            Id = Guid.NewGuid(),
+            ContentType = "tv",
+            Level = "season",
+            Slug = "season-1",
+            Name = "Season 1",
+            EffectiveRootFolderId = _rootFolder.Id,
+            CreatedAt = DateTime.UtcNow
+        };
+        var source = new ContentHierarchyItem
+        {
+            Id = Guid.NewGuid(),
+            ParentId = season.Id,
+            ContentType = "tv",
+            Level = "episode",
+            Slug = "episode-1",
+            Name = "Episode 1",
+            EffectiveRootFolderId = _rootFolder.Id,
+            CreatedAt = DateTime.UtcNow,
+            ContentItem = new() { Id = new Guid("11111111-1111-1111-1111-111111111111") }
+        };
+        var target = new ContentHierarchyItem
+        {
+            Id = Guid.NewGuid(),
+            ParentId = season.Id,
+            ContentType = "tv",
+            Level = "episode",
+            Slug = "episode-2",
+            Name = "Episode 2",
+            EffectiveRootFolderId = _rootFolder.Id,
+            CreatedAt = DateTime.UtcNow,
+            ContentItem = new() { Id = new Guid("22222222-2222-2222-2222-222222222222") }
+        };
+        var mediaFile = new MediaFile
+        {
+            Id = Guid.NewGuid(),
+            ContentItemId = new Guid("22222222-2222-2222-2222-222222222222"),
+            FileKind = "Video",
+            FilePath = path
+        };
+        _files[path] = 100;
+        _contentHierarchyItems
+            .Setup(repository => repository.GetLineageAsync(source.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync([source, season]);
+        _mediaFiles.Setup(repository => repository.GetByIdAsync(mediaFile.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(mediaFile);
+        _contentHierarchyItems
+            .Setup(repository => repository.GetLineageAsync(target.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync([target, season]);
+
+        // Act
+        var reassigned = await _subject.ReassignAsync(
+            source.Id,
+            mediaFile.Id,
+            new() { TargetContentHierarchyItemId = target.Id, ExpectedFilePath = path },
+            null).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(reassigned, Is.True);
+            _mediaFiles.Verify(repository => repository.UpdateAsync(
+                It.IsAny<MediaFile>(),
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()), Times.Never);
+            _auditRecords.Verify(repository => repository.CreateAsync(
+                It.IsAny<AuditRecord>(),
+                It.IsAny<CancellationToken>()), Times.Never);
+        }
+    }
+
+    [Test]
+    public async Task ReassignAsync_ReturnsTrueWithoutStoredChange_WhenTheTargetIsTheSource()
+    {
+        // Arrange
+        var path = Path.Combine(_rootFolder.Path, "S01E01-E02.mkv");
+        var season = new ContentHierarchyItem
+        {
+            Id = Guid.NewGuid(),
+            ContentType = "tv",
+            Level = "season",
+            Slug = "season-1",
+            Name = "Season 1",
+            EffectiveRootFolderId = _rootFolder.Id,
+            CreatedAt = DateTime.UtcNow
+        };
+        var source = new ContentHierarchyItem
+        {
+            Id = Guid.NewGuid(),
+            ParentId = season.Id,
+            ContentType = "tv",
+            Level = "episode",
+            Slug = "episode-1",
+            Name = "Episode 1",
+            EffectiveRootFolderId = _rootFolder.Id,
+            CreatedAt = DateTime.UtcNow,
+            ContentItem = new() { Id = new Guid("11111111-1111-1111-1111-111111111111") }
+        };
+        var mediaFile = new MediaFile
+        {
+            Id = Guid.NewGuid(),
+            ContentItemId = new Guid("11111111-1111-1111-1111-111111111111"),
+            FileKind = "Video",
+            FilePath = path
+        };
+        mediaFile.Coverage.Add(new()
+        {
+            MediaFileId = mediaFile.Id,
+            ContentItemId = new Guid("22222222-2222-2222-2222-222222222222")
+        });
+        _files[path] = 100;
+        _contentHierarchyItems
+            .Setup(repository => repository.GetLineageAsync(source.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync([source, season]);
+        _mediaFiles.Setup(repository => repository.GetByIdAsync(mediaFile.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(mediaFile);
+
+        // Act
+        var reassigned = await _subject.ReassignAsync(
+            source.Id,
+            mediaFile.Id,
+            new() { TargetContentHierarchyItemId = source.Id, ExpectedFilePath = path },
+            null).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(reassigned, Is.True);
+            _mediaFiles.Verify(repository => repository.UpdateAsync(
+                It.IsAny<MediaFile>(),
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()), Times.Never);
+            _auditRecords.Verify(repository => repository.CreateAsync(
+                It.IsAny<AuditRecord>(),
+                It.IsAny<CancellationToken>()), Times.Never);
+        }
     }
 }

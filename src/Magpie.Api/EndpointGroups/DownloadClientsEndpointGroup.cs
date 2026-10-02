@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -74,16 +73,16 @@ internal sealed class DownloadClientsEndpointGroup : IApiEndpointGroup
     {
         var clients = await downloadClientService.ListAsync(cancellationToken).ConfigureAwait(false);
 
-        var schemas = new Dictionary<string, IReadOnlyList<SettingSchemaDefinition>>(StringComparer.Ordinal);
-        foreach (var providerType in clients.Select(c => c.ProviderType).Distinct(StringComparer.Ordinal))
+        var redacted = new List<DownloadClient>(clients.Count);
+        foreach (var client in clients)
         {
-            schemas[providerType] = await downloadClientService
-                .GetSettingsSchemaAsync(providerType, cancellationToken)
+            var schema = await downloadClientService
+                .GetSettingsSchemaAsync(client.ProviderType, cancellationToken)
                 .ConfigureAwait(false);
+            redacted.Add(RedactSecrets(client, schema));
         }
 
-        return Results.Ok<IReadOnlyList<DownloadClient>>(
-            [.. clients.Select(c => RedactSecrets(c, schemas[c.ProviderType]))]);
+        return Results.Ok<IReadOnlyList<DownloadClient>>(redacted);
     }
 
     [MagpieCommand("create", "POST", "", "Create a download client")]
@@ -174,13 +173,8 @@ internal sealed class DownloadClientsEndpointGroup : IApiEndpointGroup
         return Results.Ok(result);
     }
 
-    private static DownloadClient RedactSecrets(
-        DownloadClient client,
-        IReadOnlyList<SettingSchemaDefinition> schema)
+    private static DownloadClient RedactSecrets(DownloadClient client, IReadOnlyList<SettingSchemaDefinition> schema)
     {
-        return client with
-        {
-            Settings = client.Settings.RedactSecrets(schema)
-        };
+        return client with { Settings = client.Settings.RedactSecrets(schema) };
     }
 }

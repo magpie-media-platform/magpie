@@ -19,7 +19,7 @@ import { PullToRefresh } from '@/components/ui/PullToRefresh';
 import { QuickActionsButton, type QuickAction } from '@/components/ui/QuickActionsButton';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/Tabs';
 import { useToast } from '@/components/ui/Toast';
-import { AdminExtensionsSlot } from '@/components/ui/Slot';
+import { Slot } from '@/components/ui/Slot';
 import { EmptyState } from '@/components/ui/EmptyState';
 import {
     SortableListControls,
@@ -233,7 +233,7 @@ export function ExtensionsPage() {
     if (error && extensions.length === 0) {
         return (
             <div className="extensions-page" data-page="extensions">
-                <AdminExtensionsSlot>
+                <Slot slot="admin.extensions">
                     <PageHeader
                         className="extensions-page__header"
                         title="Extensions"
@@ -252,14 +252,14 @@ export function ExtensionsPage() {
                             </Button>
                         }
                     />
-                </AdminExtensionsSlot>
+                </Slot>
             </div>
         );
     }
 
     return (
         <div className="extensions-page" data-page="extensions">
-            <AdminExtensionsSlot>
+            <Slot slot="admin.extensions">
                 <PullToRefresh onRefresh={handleRefresh} className="extensions-page__pull-to-refresh">
                     <PageHeader
                         className="extensions-page__header"
@@ -381,7 +381,7 @@ export function ExtensionsPage() {
                         </TabsContent>
                     </Tabs>
                 </PullToRefresh>
-            </AdminExtensionsSlot>
+            </Slot>
 
             <QuickActionsButton actions={pageActions} title="Extension Actions" />
 

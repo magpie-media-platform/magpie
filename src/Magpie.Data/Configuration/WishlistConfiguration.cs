@@ -10,8 +10,6 @@ internal sealed class WishlistConfiguration : IEntityTypeConfiguration<Wishlist>
     public void Configure(EntityTypeBuilder<Wishlist> builder)
     {
         builder.ToTable("wishlist_wishlist");
-        builder.HasKey(e => e.Id);
-        builder.Property(e => e.Id).ValueGeneratedOnAdd();
         builder.HasOne(e => e.ContentFilter)
             .WithMany()
             .HasForeignKey(e => e.ContentFilterId)
@@ -33,8 +31,5 @@ internal sealed class WishlistConfiguration : IEntityTypeConfiguration<Wishlist>
                 l => l.HasOne(typeof(Wishlist)).WithMany()
                     .HasForeignKey("WishlistsId").HasPrincipalKey(nameof(Wishlist.Id)));
         builder.HasIndex(e => e.OwnerUserId);
-        builder.HasIndex(e => e.ContentFilterId);
-        builder.HasIndex(e => e.QualityTierListId);
-        builder.HasIndex(e => e.RootFolderId);
     }
 }

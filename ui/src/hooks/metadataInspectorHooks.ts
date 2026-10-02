@@ -128,7 +128,6 @@ export function createMetadataInspectorHooks(config: MetadataInspectorHooksConfi
         useInvalidateQueriesOnEvents((options?.enabled ?? true) && id ? entityEvents : [], [queryKey], {
             entityIds: id ? [id] : [],
             exact: true,
-            owner: 'metadata-inspector',
         });
         useInvalidateQueriesOnEvents(
             (options?.enabled ?? true) && id && refreshJobType ? ['job.execution.completed'] : [],
@@ -136,7 +135,6 @@ export function createMetadataInspectorHooks(config: MetadataInspectorHooksConfi
             {
                 entityIds: id ? [id] : [],
                 exact: true,
-                owner: 'metadata-inspector',
                 predicate: (event) => event.context['execution.jobType'] === refreshJobType,
             },
         );

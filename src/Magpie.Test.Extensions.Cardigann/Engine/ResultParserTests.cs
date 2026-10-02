@@ -716,4 +716,40 @@ public sealed class ResultParserTests
             Assert.That(properties["resolution"], Is.EqualTo("1080p"));
         }
     }
+
+    [Test]
+    public void Parse_KeepsTheEscaping_WhenPropertyUrlsAreRewritten()
+    {
+        // Arrange
+        var definition = new CardigannDefinition { Id = "test" };
+        definition.Search.Rows.Selector = "tr.row";
+        definition.Search.Fields = new Dictionary<string, FieldDefinition>(StringComparer.Ordinal)
+        {
+            ["title"] = new() { Selector = "td.title" },
+            ["details"] = new() { Selector = "td.details a", Attribute = "href" },
+            ["poster"] = new() { Selector = "td.poster" },
+            ["banner"] = new() { Selector = "td.banner" },
+        };
+
+        var html = """
+            <table><tr class="row">
+                <td class="title">Cool Movie 2020 1080p</td>
+                <td class="details"><a href="/details/42">link</a></td>
+                <td class="poster">/images/poster%2042.jpg</td>
+                <td class="banner">data:image/svg+xml,%3Csvg%3E%3C/svg%3E</td>
+            </tr></table>
+            """;
+
+        // Act
+        var releases = _parser.Parse(html, definition, new Uri("https://tracker.test/browse/"));
+
+        // Assert
+        Assert.That(releases, Has.Count.EqualTo(1));
+        var properties = JsonSerializer.Deserialize<Dictionary<string, string?>>(releases[0].Properties!)!;
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(properties["poster"], Is.EqualTo("https://tracker.test/images/poster%2042.jpg"));
+            Assert.That(properties["banner"], Is.EqualTo("data:image/svg+xml,%3Csvg%3E%3C/svg%3E"));
+        }
+    }
 }

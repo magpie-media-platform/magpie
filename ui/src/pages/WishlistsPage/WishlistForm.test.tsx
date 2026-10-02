@@ -326,44 +326,30 @@ describe('WishlistForm', () => {
         expect(screen.getByRole('option', { name: '4K Ultra HD - Any MIME type' })).toBeInTheDocument();
     });
 
-    it('requests tier lists compatible with the wishlist content type', async () => {
+    it('requests every tier list once the wishlist has a content type', async () => {
         const user = userEvent.setup();
         renderForm({
             qualityTierLists: undefined,
             initialValues: { ...baseInitialValues, name: 'Compatible policy' },
         });
 
-        await waitFor(() => expect(apiGet).toHaveBeenCalledWith('/quality-tier-lists?contentType=movie'));
+        await waitFor(() => expect(apiGet).toHaveBeenCalledWith('/quality-tier-lists'));
         await user.click(document.querySelector('[data-field="qualityTierListId"]') as HTMLElement);
         expect(await screen.findByRole('option', { name: 'Compatible - video/*' })).toBeInTheDocument();
     });
 
-    it('resolves an excluded current assignment from the unfiltered tier lists', async () => {
-        const user = userEvent.setup();
-        vi.mocked(apiGet).mockImplementation((url: string) =>
-            Promise.resolve(
-                url.includes('contentType=')
-                    ? [
-                          {
-                              id: 'qtl-compatible',
-                              name: 'Compatible',
-                              mimeTypes: ['video/*'],
-                              upgradeAllowed: true,
-                              createdAt: '2026-01-01T00:00:00Z',
-                              qualityTierRanks: [],
-                          },
-                      ]
-                    : [
-                          {
-                              id: 'qtl-audio',
-                              name: 'Audio',
-                              mimeTypes: ['audio/*'],
-                              upgradeAllowed: true,
-                              createdAt: '2026-01-01T00:00:00Z',
-                              qualityTierRanks: [],
-                          },
-                      ],
-            ),
+    it('resolves the current assignment from the tier lists', async () => {
+        vi.mocked(apiGet).mockImplementation(() =>
+            Promise.resolve([
+                {
+                    id: 'qtl-audio',
+                    name: 'Audio',
+                    mimeTypes: ['audio/*'],
+                    upgradeAllowed: true,
+                    createdAt: '2026-01-01T00:00:00Z',
+                    qualityTierRanks: [],
+                },
+            ]),
         );
         renderForm({
             qualityTierLists: undefined,
@@ -376,10 +362,6 @@ describe('WishlistForm', () => {
 
         const trigger = document.querySelector('[data-field="qualityTierListId"]') as HTMLElement;
         await waitFor(() => expect(trigger).toHaveTextContent('Audio - audio/*'));
-        await user.click(trigger);
-
-        expect(await screen.findByRole('option', { name: 'Compatible - video/*' })).toBeInTheDocument();
-        expect(screen.queryByRole('option', { name: 'Audio - audio/*' })).not.toBeInTheDocument();
     });
 
     it('renders the root folder picker defaulting to None', () => {
@@ -620,10 +602,7 @@ describe('WishlistForm', () => {
         expect(screen.getByText('Newest 3 of 5')).toBeInTheDocument();
     });
 
-    it.each([
-        { thumbnailUrl: null, childCount: 0 },
-        { thumbnailUrl: '/broken.jpg', childCount: 1 },
-    ])('renders preview artwork state for $thumbnailUrl', async ({ thumbnailUrl, childCount }) => {
+    it('renders the placeholder preview artwork when the candidate has no thumbnail', async () => {
         const user = userEvent.setup();
         vi.mocked(apiGet).mockResolvedValue({
             matches: [
@@ -635,7 +614,48 @@ describe('WishlistForm', () => {
                         contentType: 'movie',
                         title: 'Inception',
                         year: 2010,
-                        thumbnailUrl,
+                        thumbnailUrl: null,
+                    },
+                    inLibrary: false,
+                },
+            ],
+            pageItemCount: 1,
+            existsInLibraryCount: 0,
+        });
+        renderForm({ initialValues: { ...baseInitialValues, name: 'Preview', criteria: sampleCriteria } });
+
+        await waitFor(() => expect(screen.getByText('genre has "Action"')).toBeInTheDocument());
+
+        await user.click(previewButton());
+
+        await waitFor(() => {
+            expect(apiGet).toHaveBeenCalledWith(
+                '/content-search?query=genre+has+%22Action%22&contentType=movie&page=1',
+            );
+        });
+        const previewList = await screen.findByTestId('wishlist-form__preview-list');
+        expect(previewList.querySelector('img')).not.toBeInTheDocument();
+        const placeholder = previewList.querySelector('.wishlist-form__preview-thumb--placeholder');
+        expect(placeholder).toHaveClass('wishlist-form__preview-thumb');
+        expect(placeholder).toHaveAttribute('aria-hidden', 'true');
+        expect(placeholder?.children).toHaveLength(0);
+        expect(placeholder?.querySelectorAll('svg')).toHaveLength(0);
+        expect(screen.getByText('Inception')).toBeInTheDocument();
+    });
+
+    it('falls back to the placeholder preview artwork when the thumbnail fails to load', async () => {
+        const user = userEvent.setup();
+        vi.mocked(apiGet).mockResolvedValue({
+            matches: [
+                {
+                    candidate: {
+                        providerType: 'provider-a',
+                        externalIdSource: 'provider-a.movie',
+                        externalId: '27205',
+                        contentType: 'movie',
+                        title: 'Inception',
+                        year: 2010,
+                        thumbnailUrl: '/broken.jpg',
                     },
                     inLibrary: false,
                 },
@@ -656,16 +676,14 @@ describe('WishlistForm', () => {
         });
         const previewList = await screen.findByTestId('wishlist-form__preview-list');
         const image = previewList.querySelector('img');
-        if (thumbnailUrl) {
-            expect(image).toHaveAttribute('src', thumbnailUrl);
-            fireEvent.error(image!);
-        }
+        expect(image).toHaveAttribute('src', '/broken.jpg');
+        fireEvent.error(image!);
         expect(previewList.querySelector('img')).not.toBeInTheDocument();
         const placeholder = previewList.querySelector('.wishlist-form__preview-thumb--placeholder');
         expect(placeholder).toHaveClass('wishlist-form__preview-thumb');
         expect(placeholder).toHaveAttribute('aria-hidden', 'true');
-        expect(placeholder?.children).toHaveLength(childCount);
-        expect(placeholder?.querySelectorAll('svg')).toHaveLength(childCount);
+        expect(placeholder?.children).toHaveLength(1);
+        expect(placeholder?.querySelectorAll('svg')).toHaveLength(1);
         expect(screen.getByText('Inception')).toBeInTheDocument();
     });
 

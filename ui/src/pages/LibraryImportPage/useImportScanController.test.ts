@@ -111,14 +111,39 @@ describe('useImportScanController', () => {
         expect(mockApiPost).toHaveBeenCalledTimes(3);
     });
 
-    it.each(['before', 'after'])('Scan_CountUnavailable_WhenCountFetchFails %s', async (failure) => {
+    it('Scan_CountUnavailable_WhenCountFetchFails before', async () => {
         // Arrange
         const counts = vi.fn().mockResolvedValue({ items: [], totalItems: 8 });
-        if (failure === 'before') {
-            counts.mockRejectedValueOnce(new Error('Unavailable'));
-        } else {
-            counts.mockResolvedValueOnce({ items: [], totalItems: 3 }).mockRejectedValueOnce(new Error('Unavailable'));
-        }
+        counts.mockRejectedValueOnce(new Error('Unavailable'));
+        mockApiPost.mockResolvedValueOnce('exec-count');
+        mockApiGet.mockImplementation(async (url) =>
+            url.startsWith('/jobs/') ? { id: 'exec-count', status: 'Completed' } : counts(),
+        );
+        const queryClient = new QueryClient({
+            defaultOptions: { queries: { retry: false, gcTime: 0 }, mutations: { retry: false } },
+        });
+        const { result } = renderHook(() => useImportScanController(), {
+            wrapper: ({ children }) => createElement(QueryClientProvider, { client: queryClient }, children),
+        });
+
+        // Act
+        await act(async () => result.current.startScanAll([{ id: 'folder-1', name: 'Archive' }]));
+
+        // Assert
+        await waitFor(() =>
+            expect(result.current.lastSummary).toEqual({
+                rootFolderName: 'All root folders',
+                outcome: 'completed',
+                toImport: null,
+            }),
+        );
+        expect(result.current.isScanning).toBe(false);
+    });
+
+    it('Scan_CountUnavailable_WhenCountFetchFails after', async () => {
+        // Arrange
+        const counts = vi.fn().mockResolvedValue({ items: [], totalItems: 8 });
+        counts.mockResolvedValueOnce({ items: [], totalItems: 3 }).mockRejectedValueOnce(new Error('Unavailable'));
         mockApiPost.mockResolvedValueOnce('exec-count');
         mockApiGet.mockImplementation(async (url) =>
             url.startsWith('/jobs/') ? { id: 'exec-count', status: 'Completed' } : counts(),

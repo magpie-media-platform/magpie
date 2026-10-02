@@ -10,8 +10,6 @@ internal sealed class MediaServerConfiguration : IEntityTypeConfiguration<MediaS
     public void Configure(EntityTypeBuilder<MediaServer> builder)
     {
         builder.ToTable("media_server");
-        builder.HasKey(e => e.Id);
-        builder.Property(e => e.Id).ValueGeneratedOnAdd();
         builder.Property(e => e.Settings).UseStringDictionaryConversion();
         builder.Property(e => e.LastError).HasMaxLength(1024);
         builder.Property(e => e.ConsecutiveFailures).HasDefaultValue(0);

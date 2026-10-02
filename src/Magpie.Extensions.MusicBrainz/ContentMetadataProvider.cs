@@ -82,6 +82,7 @@ internal sealed class ContentMetadataProvider(
             return await ExpandTrackAsync(
                 request.Contribution,
                 request.ExistingMetadata,
+                request.AncestorMetadata,
                 cancellationToken).ConfigureAwait(false);
         }
 
@@ -103,7 +104,6 @@ internal sealed class ContentMetadataProvider(
         var groupEntity = await GetEntityAsync(
             EntityKind.ReleaseGroup,
             mbid,
-            LookupProfile.Hydration,
             settings,
             required: false,
             cancellationToken).ConfigureAwait(false);
@@ -121,7 +121,6 @@ internal sealed class ContentMetadataProvider(
         var releaseEntity = await GetEntityAsync(
             EntityKind.Release,
             releaseMbid,
-            LookupProfile.Hydration,
             settings,
             required: false,
             cancellationToken).ConfigureAwait(false);
@@ -133,19 +132,30 @@ internal sealed class ContentMetadataProvider(
     private async Task<IReadOnlyList<SubjectRelationshipDefinition>> ExpandTrackAsync(
         MetadataContribution contribution,
         IEnumerable<MetadataContribution> existingMetadata,
+        IEnumerable<MetadataContribution> ancestorMetadata,
         CancellationToken cancellationToken)
     {
-        var mbid = new[] { contribution }.Concat(existingMetadata).FindExternalId(Constants.ProviderType);
+        var contributions = new[] { contribution }.Concat(existingMetadata);
+        var mbid = contributions.FindExternalId(Constants.ProviderType);
         if (mbid is null)
         {
             return [];
         }
 
         var settings = await settingsResolver.ResolveAsync(cancellationToken).ConfigureAwait(false);
+        if (contributions.IsTrackAppearance())
+        {
+            var (_, appearanceRecording) = await GetTrackAppearanceAsync(
+                mbid,
+                ancestorMetadata,
+                settings,
+                cancellationToken).ConfigureAwait(false);
+            return appearanceRecording.TrackSubjectRelationships(timeProvider.GetUtcNow().UtcDateTime);
+        }
+
         var entity = await GetEntityAsync(
             EntityKind.Recording,
             mbid,
-            LookupProfile.Hydration,
             settings,
             required: false,
             cancellationToken).ConfigureAwait(false);
@@ -162,14 +172,12 @@ internal sealed class ContentMetadataProvider(
         var labels = new Dictionary<string, LabelDto>(StringComparer.OrdinalIgnoreCase);
         foreach (var mbid in release.LabelReferences()
             .Select(reference => reference.Mbid)
-            .Where(value => value is not null)
-            .Select(value => value!)
+            .OfType<string>()
             .Take(MaximumLabelsPerExpansion))
         {
             var entity = await GetEntityAsync(
                 EntityKind.Label,
                 mbid,
-                LookupProfile.Hydration,
                 settings,
                 required: false,
                 cancellationToken).ConfigureAwait(false);
@@ -196,7 +204,6 @@ internal sealed class ContentMetadataProvider(
         var entity = await GetEntityAsync(
             EntityKind.Artist,
             mbid,
-            LookupProfile.Hydration,
             settings,
             required: true,
             cancellationToken).ConfigureAwait(false);
@@ -223,13 +230,8 @@ internal sealed class ContentMetadataProvider(
                 cancellationToken).ConfigureAwait(false);
             if (fetched is not { Outcome: FetchOutcome.Success, Value: { } page })
             {
-                if (fetched.Outcome != FetchOutcome.NotFound)
-                {
-                    throw new InvalidOperationException(
-                        $"MusicBrainz could not browse the release groups of {mbid}: {fetched.Outcome}.");
-                }
-
-                return null;
+                throw new InvalidOperationException(
+                    $"MusicBrainz could not browse the release groups of {mbid}: {fetched.Outcome}.");
             }
 
             var values = page.ReleaseGroups ?? [];
@@ -245,9 +247,7 @@ internal sealed class ContentMetadataProvider(
 
         if (releaseGroups.Count >= MaximumReleaseGroups && hasMore)
         {
-            logger.LogWarning(
-                "The extension kept only the first {Limit} release groups of this artist and " + "ignored the rest.",
-                MaximumReleaseGroups);
+            logger.LogWarning("MusicBrainz release groups truncated to {Limit}", MaximumReleaseGroups);
         }
 
         return new ContentHierarchyMetadataResult
@@ -271,7 +271,6 @@ internal sealed class ContentMetadataProvider(
         var groupEntity = await GetEntityAsync(
             EntityKind.ReleaseGroup,
             mbid,
-            LookupProfile.Hydration,
             settings,
             required: true,
             cancellationToken).ConfigureAwait(false);
@@ -287,7 +286,6 @@ internal sealed class ContentMetadataProvider(
             var releaseEntity = await GetEntityAsync(
                 EntityKind.Release,
                 releaseMbid,
-                LookupProfile.Hydration,
                 settings,
                 required: false,
                 cancellationToken).ConfigureAwait(false);
@@ -318,10 +316,25 @@ internal sealed class ContentMetadataProvider(
             return null;
         }
 
+        if (request.ExistingMetadata.IsTrackAppearance())
+        {
+            var (release, appearanceRecording) = await GetTrackAppearanceAsync(
+                mbid,
+                request.AncestorMetadata,
+                settings,
+                cancellationToken).ConfigureAwait(false);
+            var contribution = release.TrackContribution(
+                    mbid,
+                    appearanceRecording,
+                    timeProvider.GetUtcNow().UtcDateTime) ??
+                throw new InvalidOperationException(
+                    $"MusicBrainz release {release.Id} lists track {mbid} without a title.");
+            return new ContentHierarchyMetadataResult { Contribution = contribution };
+        }
+
         var entity = await GetEntityAsync(
             EntityKind.Recording,
             mbid,
-            LookupProfile.Hydration,
             settings,
             required: true,
             cancellationToken).ConfigureAwait(false);
@@ -336,20 +349,89 @@ internal sealed class ContentMetadataProvider(
         };
     }
 
+    private async Task<(ReleaseDto Release, RecordingDto Recording)> GetTrackAppearanceAsync(
+        string trackMbid,
+        IEnumerable<MetadataContribution> ancestorMetadata,
+        Settings settings,
+        CancellationToken cancellationToken)
+    {
+        var groupMbid = ancestorMetadata.FindReleaseGroupId() ??
+            throw new InvalidOperationException($"MusicBrainz track {trackMbid} has no release group.");
+        var groupEntity = await GetEntityAsync(
+            EntityKind.ReleaseGroup,
+            groupMbid,
+            settings,
+            required: true,
+            cancellationToken).ConfigureAwait(false);
+        var releaseMbid = groupEntity?.ReleaseGroup?.SelectRepresentativeRelease()?.Id ??
+            throw new InvalidOperationException($"MusicBrainz release group {groupMbid} has no release.");
+        var releaseEntity = await GetEntityAsync(
+            EntityKind.Release,
+            releaseMbid,
+            settings,
+            required: true,
+            cancellationToken).ConfigureAwait(false);
+        var release = releaseEntity?.Release ??
+            throw new InvalidOperationException($"MusicBrainz returned no Release {releaseMbid}.");
+        var recordingMbid = release.TrackRecordingMbid(trackMbid);
+        if (recordingMbid is null)
+        {
+            (release, recordingMbid) = await BrowseTrackReleaseAsync(
+                trackMbid,
+                settings,
+                cancellationToken).ConfigureAwait(false);
+        }
+
+        var recordingEntity = await GetEntityAsync(
+            EntityKind.Recording,
+            recordingMbid,
+            settings,
+            required: true,
+            cancellationToken).ConfigureAwait(false);
+        return recordingEntity?.Recording is { } recording
+            ? (release, recording)
+            : throw new InvalidOperationException($"MusicBrainz returned no Recording {recordingMbid}.");
+    }
+
+    private async Task<(ReleaseDto Release, string RecordingMbid)> BrowseTrackReleaseAsync(
+        string trackMbid,
+        Settings settings,
+        CancellationToken cancellationToken)
+    {
+        var fetched = await cache.GetTrackReleasesAsync(
+            trackMbid,
+            token => client.BrowseTrackReleasesAsync(trackMbid, settings, token),
+            cancellationToken).ConfigureAwait(false);
+        if (fetched.Outcome != FetchOutcome.Success)
+        {
+            throw new InvalidOperationException(
+                $"MusicBrainz could not browse the releases of track {trackMbid}: {fetched.Outcome}.");
+        }
+
+        foreach (var release in fetched.Value?.Releases ?? [])
+        {
+            if (release.TrackRecordingMbid(trackMbid) is { } recordingMbid)
+            {
+                return (release, recordingMbid);
+            }
+        }
+
+        throw new InvalidOperationException($"MusicBrainz has no release with track {trackMbid}.");
+    }
+
     private async Task<EntityResponseDto?> GetEntityAsync(
         EntityKind kind,
         string mbid,
-        LookupProfile profile,
         Settings settings,
         bool required,
         CancellationToken cancellationToken)
     {
-        var key = new EntityCacheKey { Kind = kind, Mbid = mbid, Profile = profile };
+        var key = new EntityCacheKey { Kind = kind, Mbid = mbid, Profile = LookupProfile.Hydration };
         var fetched = await cache.GetEntityAsync(
             key,
             token => client.GetEntityAsync(key, settings, token),
             cancellationToken).ConfigureAwait(false);
-        if (required && fetched.Outcome is not FetchOutcome.Success and not FetchOutcome.NotFound)
+        if (required && fetched.Outcome != FetchOutcome.Success)
         {
             throw new InvalidOperationException($"MusicBrainz could not read {kind} {mbid}: {fetched.Outcome}.");
         }

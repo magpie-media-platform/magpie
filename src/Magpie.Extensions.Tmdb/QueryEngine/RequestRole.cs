@@ -12,8 +12,6 @@ internal static class RequestRole
 
     internal const string Find = "find";
 
-    internal const string MovieCredits = "movie-credits";
-
     internal const string TvCredits = "tv-credits";
 
     internal const string MovieDetail = "movie-detail";

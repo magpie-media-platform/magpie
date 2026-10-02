@@ -1,8 +1,12 @@
-import { describe, it, expect, vi } from 'vitest';
+import { afterEach, describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 
 import { AppShell, AppShellHeader, AppShellSidebar, AppShellMain, AppShellBottomNav, useAppShell } from './AppShell';
+
+afterEach(() => {
+    vi.unstubAllGlobals();
+});
 
 describe('AppShell', () => {
     it('renders children', () => {
@@ -49,12 +53,6 @@ describe('AppShell', () => {
 
         fireEvent.click(screen.getByText('Toggle'));
         expect(onCollapsedChange).toHaveBeenCalledWith(true);
-    });
-
-    it('respects defaultSidebarCollapsed prop', () => {
-        render(<AppShell defaultSidebarCollapsed data-testid="shell" />);
-
-        expect(screen.getByTestId('shell')).toHaveAttribute('data-sidebar-collapsed', 'true');
     });
 
     it('sets data-sidebar-open to false by default', () => {
@@ -115,9 +113,19 @@ describe('AppShellSidebar', () => {
     });
 
     it('sets data-open based on sidebar state', () => {
+        vi.stubGlobal(
+            'matchMedia',
+            vi.fn((query: string) => ({
+                matches: query === '(max-width: 767px)',
+                media: query,
+                addEventListener: () => {},
+                removeEventListener: () => {},
+            })),
+        );
+
         function TestComponent() {
-            const { setSidebarOpen } = useAppShell();
-            return <button onClick={() => setSidebarOpen(true)}>Open</button>;
+            const { toggleSidebar } = useAppShell();
+            return <button onClick={toggleSidebar}>Open</button>;
         }
 
         render(
@@ -148,11 +156,21 @@ describe('AppShellSidebar', () => {
     });
 
     it('closes sidebar when backdrop is clicked', () => {
+        vi.stubGlobal(
+            'matchMedia',
+            vi.fn((query: string) => ({
+                matches: query === '(max-width: 767px)',
+                media: query,
+                addEventListener: () => {},
+                removeEventListener: () => {},
+            })),
+        );
+
         function TestComponent() {
-            const { setSidebarOpen, sidebarOpen } = useAppShell();
+            const { toggleSidebar, sidebarOpen } = useAppShell();
             return (
                 <>
-                    <button onClick={() => setSidebarOpen(true)}>Open</button>
+                    <button onClick={toggleSidebar}>Open</button>
                     <span data-testid="state">{sidebarOpen.toString()}</span>
                 </>
             );
@@ -245,35 +263,40 @@ describe('useAppShell', () => {
     });
 
     it('provides toggleSidebar function', () => {
+        const onSidebarCollapsedChange = vi.fn();
+
         function TestComponent() {
-            const { sidebarCollapsed, toggleSidebar } = useAppShell();
-            return (
-                <>
-                    <button onClick={toggleSidebar}>Toggle</button>
-                    <span data-testid="state">{sidebarCollapsed.toString()}</span>
-                </>
-            );
+            const { toggleSidebar } = useAppShell();
+            return <button onClick={toggleSidebar}>Toggle</button>;
         }
 
         render(
-            <AppShell>
+            <AppShell onSidebarCollapsedChange={onSidebarCollapsedChange}>
                 <TestComponent />
             </AppShell>,
         );
 
-        expect(screen.getByTestId('state')).toHaveTextContent('false');
-
         fireEvent.click(screen.getByText('Toggle'));
 
-        expect(screen.getByTestId('state')).toHaveTextContent('true');
+        expect(onSidebarCollapsedChange).toHaveBeenCalledWith(true);
     });
 
     it('provides closeSidebar function', () => {
+        vi.stubGlobal(
+            'matchMedia',
+            vi.fn((query: string) => ({
+                matches: query === '(max-width: 767px)',
+                media: query,
+                addEventListener: () => {},
+                removeEventListener: () => {},
+            })),
+        );
+
         function TestComponent() {
-            const { sidebarOpen, setSidebarOpen, closeSidebar } = useAppShell();
+            const { sidebarOpen, toggleSidebar, closeSidebar } = useAppShell();
             return (
                 <>
-                    <button onClick={() => setSidebarOpen(true)}>Open</button>
+                    <button onClick={toggleSidebar}>Open</button>
                     <button onClick={closeSidebar}>Close</button>
                     <span data-testid="state">{sidebarOpen.toString()}</span>
                 </>
@@ -294,74 +317,21 @@ describe('useAppShell', () => {
     });
 
     it('provides toggleSidebarCollapsed function', () => {
+        const onSidebarCollapsedChange = vi.fn();
+
         function TestComponent() {
-            const { sidebarCollapsed, toggleSidebarCollapsed } = useAppShell();
-            return (
-                <>
-                    <button onClick={toggleSidebarCollapsed}>Toggle Collapsed</button>
-                    <span data-testid="state">{sidebarCollapsed.toString()}</span>
-                </>
-            );
+            const { toggleSidebarCollapsed } = useAppShell();
+            return <button onClick={toggleSidebarCollapsed}>Toggle Collapsed</button>;
         }
 
         render(
-            <AppShell>
+            <AppShell onSidebarCollapsedChange={onSidebarCollapsedChange}>
                 <TestComponent />
             </AppShell>,
         );
-
-        expect(screen.getByTestId('state')).toHaveTextContent('false');
 
         fireEvent.click(screen.getByText('Toggle Collapsed'));
 
-        expect(screen.getByTestId('state')).toHaveTextContent('true');
-    });
-
-    it('provides setSidebarOpen function', () => {
-        function TestComponent() {
-            const { sidebarOpen, setSidebarOpen } = useAppShell();
-            return (
-                <>
-                    <button onClick={() => setSidebarOpen(true)}>Open</button>
-                    <span data-testid="state">{sidebarOpen.toString()}</span>
-                </>
-            );
-        }
-
-        render(
-            <AppShell>
-                <TestComponent />
-            </AppShell>,
-        );
-
-        expect(screen.getByTestId('state')).toHaveTextContent('false');
-
-        fireEvent.click(screen.getByText('Open'));
-
-        expect(screen.getByTestId('state')).toHaveTextContent('true');
-    });
-
-    it('provides setSidebarCollapsed function', () => {
-        function TestComponent() {
-            const { sidebarCollapsed, setSidebarCollapsed } = useAppShell();
-            return (
-                <>
-                    <button onClick={() => setSidebarCollapsed(true)}>Collapse</button>
-                    <span data-testid="state">{sidebarCollapsed.toString()}</span>
-                </>
-            );
-        }
-
-        render(
-            <AppShell>
-                <TestComponent />
-            </AppShell>,
-        );
-
-        expect(screen.getByTestId('state')).toHaveTextContent('false');
-
-        fireEvent.click(screen.getByText('Collapse'));
-
-        expect(screen.getByTestId('state')).toHaveTextContent('true');
+        expect(onSidebarCollapsedChange).toHaveBeenCalledWith(true);
     });
 });

@@ -88,19 +88,19 @@ public interface IDownloadRepository :
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Lists the downloads of a release.
+    /// Lists the downloads of releases.
     /// </summary>
-    /// <param name="releaseIdentityKeys">The identity keys of the release</param>
+    /// <param name="releases">The releases whose downloads to list</param>
     /// <param name="cancellationToken">The token that cancels the operation</param>
     Task<IReadOnlyList<Download>> ListByReleaseAsync(
-        IReadOnlyCollection<ReleaseIdentityKey> releaseIdentityKeys,
+        IReadOnlyCollection<Release> releases,
         CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Updates a download that is not in a terminal state from a fresh client status.
     /// </summary>
     /// <param name="downloadId">The id of the download</param>
-    /// <param name="status">The status that the client reports</param>
+    /// <param name="status">The status to store</param>
     /// <param name="statusReason">The text that explains the status</param>
     /// <param name="outputPath">The path that holds the downloaded files</param>
     /// <param name="dateCompleted">The UTC time when the download completed</param>
@@ -128,10 +128,56 @@ public interface IDownloadRepository :
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Updates the refreshed client state of a download without publishing its status.
+    /// </summary>
+    /// <param name="downloadId">The id of the download</param>
+    /// <param name="status">The unchanged status that the stored status must equal</param>
+    /// <param name="statusReason">The text that explains the status</param>
+    /// <param name="outputPath">The path that holds the downloaded files</param>
+    /// <param name="dateCompleted">The UTC time when the download completed</param>
+    /// <param name="progress">The percent of the download that is complete</param>
+    /// <param name="lastProgressAt">The UTC time of the last progress</param>
+    /// <param name="heldByPolicy">Whether the client holds the download</param>
+    /// <param name="failureReason">The reason for the failure</param>
+    /// <param name="failedAt">The UTC time of the failure</param>
+    /// <param name="now">The UTC time to record</param>
+    /// <param name="userId">The id of the user that starts the operation</param>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
+    /// <returns>
+    /// <see langword="true"/> when the row changed and <see cref="PublishRefreshedStatusAsync"/> must follow
+    /// </returns>
+    Task<bool> UpdateRefreshedClientStateAsync(
+        Guid downloadId,
+        DownloadStatus status,
+        string? statusReason,
+        string? outputPath,
+        DateTime? dateCompleted,
+        decimal? progress,
+        DateTime? lastProgressAt,
+        bool heldByPolicy,
+        DownloadFailureReason? failureReason,
+        DateTime? failedAt,
+        DateTime now,
+        Guid? userId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Publishes the refreshed status of the downloads.
+    /// </summary>
+    /// <param name="downloadIds">The downloads that <see cref="UpdateRefreshedClientStateAsync"/> changed</param>
+    /// <param name="userId">The id of the user that starts the operation</param>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
+    /// <returns>A task that completes after every content item and event is processed</returns>
+    Task PublishRefreshedStatusAsync(
+        IReadOnlyCollection<Guid> downloadIds,
+        Guid? userId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Updates an active download from a fresh client status.
     /// </summary>
     /// <param name="downloadId">The id of the download</param>
-    /// <param name="status">The status that the client reports</param>
+    /// <param name="status">The status to store</param>
     /// <param name="statusReason">The text that explains the status</param>
     /// <param name="outputPath">The path that holds the downloaded files</param>
     /// <param name="dateCompleted">The UTC time when the download completed</param>
@@ -221,7 +267,11 @@ public interface IDownloadRepository :
     /// <param name="now">The UTC time of the check</param>
     /// <param name="userId">The user that starts the check</param>
     /// <param name="cancellationToken">The token that cancels the operation</param>
-    Task SetImportCapacityReasonAsync(Guid downloadId, string? reason, DateTime now, Guid? userId,
+    Task SetImportCapacityReasonAsync(
+        Guid downloadId,
+        string? reason,
+        DateTime now,
+        Guid? userId,
         CancellationToken cancellationToken);
 
     /// <summary>
@@ -233,7 +283,12 @@ public interface IDownloadRepository :
     /// <param name="now">The UTC time of the update</param>
     /// <param name="userId">The user that starts the import</param>
     /// <param name="cancellationToken">The token that cancels the operation</param>
-    Task SetImportRecoveryStateAsync(Guid downloadId, string? state, string? reason, DateTime now, Guid? userId,
+    Task SetImportRecoveryStateAsync(
+        Guid downloadId,
+        string? state,
+        string? reason,
+        DateTime now,
+        Guid? userId,
         CancellationToken cancellationToken);
 
     /// <summary>
@@ -291,6 +346,9 @@ public interface IDownloadRepository :
     /// Marks a download as failed or faulted.
     /// </summary>
     /// <param name="downloadId">The id of the download</param>
+    /// <param name="status">
+    /// The status to store, <see cref="DownloadStatus.Failed"/> or <see cref="DownloadStatus.Faulted"/>
+    /// </param>
     /// <param name="reason">The reason for the failure</param>
     /// <param name="statusReason">The text that explains the status</param>
     /// <param name="auditOperation">The name of the operation in the audit entry</param>
@@ -301,6 +359,7 @@ public interface IDownloadRepository :
     /// <param name="cancellationToken">The token that cancels the operation</param>
     Task<bool> MarkFailedAsync(
         Guid downloadId,
+        DownloadStatus status,
         DownloadFailureReason reason,
         string statusReason,
         string auditOperation,

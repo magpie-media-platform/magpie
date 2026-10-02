@@ -103,20 +103,16 @@ export const statusFilterOptions: StatusFilterOption[] = [
 ];
 
 export function formatJobDateTime(dateStr: string): string {
-    try {
-        const date = new Date(dateStr);
-        if (isNaN(date.getTime())) {
-            return dateStr;
-        }
-        return date.toLocaleDateString(undefined, {
-            month: 'short',
-            day: 'numeric',
-            hour: '2-digit',
-            minute: '2-digit',
-        });
-    } catch {
+    const date = new Date(dateStr);
+    if (isNaN(date.getTime())) {
         return dateStr;
     }
+    return date.toLocaleDateString(undefined, {
+        month: 'short',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+    });
 }
 
 export function calculateDuration(
@@ -126,43 +122,35 @@ export function calculateDuration(
     if (!startedAt || !completedAt) {
         return '--';
     }
-    try {
-        const start = new Date(startedAt).getTime();
-        const end = new Date(completedAt).getTime();
-        const diffMs = end - start;
-        if (diffMs < 0) {
-            return '--';
-        }
-        const seconds = Math.floor(diffMs / 1000);
-        const minutes = Math.floor(seconds / 60);
-        const hours = Math.floor(minutes / 60);
-        if (hours > 0) {
-            return `${hours}h ${minutes % 60}m`;
-        }
-        if (minutes > 0) {
-            return `${minutes}m ${seconds % 60}s`;
-        }
-        if (seconds === 0) {
-            return '<1s';
-        }
-        return `${seconds}s`;
-    } catch {
+    const start = new Date(startedAt).getTime();
+    const end = new Date(completedAt).getTime();
+    const diffMs = end - start;
+    if (diffMs < 0) {
         return '--';
     }
+    const seconds = Math.floor(diffMs / 1000);
+    const minutes = Math.floor(seconds / 60);
+    const hours = Math.floor(minutes / 60);
+    if (hours > 0) {
+        return `${hours}h ${minutes % 60}m`;
+    }
+    if (minutes > 0) {
+        return `${minutes}m ${seconds % 60}s`;
+    }
+    if (seconds === 0) {
+        return '<1s';
+    }
+    return `${seconds}s`;
 }
 
 export function formatLogTime(timestamp: string): string {
-    try {
-        const date = new Date(timestamp);
-        if (isNaN(date.getTime())) {
-            return timestamp;
-        }
-        return date.toLocaleTimeString(undefined, {
-            hour: '2-digit',
-            minute: '2-digit',
-            second: '2-digit',
-        });
-    } catch {
+    const date = new Date(timestamp);
+    if (isNaN(date.getTime())) {
         return timestamp;
     }
+    return date.toLocaleTimeString(undefined, {
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+    });
 }

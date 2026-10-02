@@ -349,16 +349,12 @@ describe('useToast', () => {
         );
     }
 
-    function renderWithProvider() {
-        return render(
+    it('adds toast to list', async () => {
+        render(
             <ToastStateProvider>
                 <TestUseToastComponent />
             </ToastStateProvider>,
         );
-    }
-
-    it('adds toast to list', async () => {
-        renderWithProvider();
 
         expect(screen.getByTestId('toast-count')).toHaveTextContent('0');
 
@@ -374,7 +370,11 @@ describe('useToast', () => {
     });
 
     it('adds multiple toasts', async () => {
-        renderWithProvider();
+        render(
+            <ToastStateProvider>
+                <TestUseToastComponent />
+            </ToastStateProvider>,
+        );
 
         await act(async () => {
             screen.getByTestId('add-toast').click();
@@ -391,7 +391,11 @@ describe('useToast', () => {
     });
 
     it('dismisses single toast', async () => {
-        renderWithProvider();
+        render(
+            <ToastStateProvider>
+                <TestUseToastComponent />
+            </ToastStateProvider>,
+        );
 
         await act(async () => {
             screen.getByTestId('add-toast').click();
@@ -412,7 +416,11 @@ describe('useToast', () => {
     });
 
     it('dismisses all toasts', async () => {
-        renderWithProvider();
+        render(
+            <ToastStateProvider>
+                <TestUseToastComponent />
+            </ToastStateProvider>,
+        );
 
         await act(async () => {
             screen.getByTestId('add-toast').click();
@@ -435,7 +443,11 @@ describe('useToast', () => {
     });
 
     it('generates unique IDs for each toast', async () => {
-        renderWithProvider();
+        render(
+            <ToastStateProvider>
+                <TestUseToastComponent />
+            </ToastStateProvider>,
+        );
 
         await act(async () => {
             screen.getByTestId('add-toast').click();
@@ -456,7 +468,11 @@ describe('useToast', () => {
     });
 
     it('preserves toast variant', async () => {
-        renderWithProvider();
+        render(
+            <ToastStateProvider>
+                <TestUseToastComponent />
+            </ToastStateProvider>,
+        );
 
         await act(async () => {
             screen.getByTestId('add-success').click();
@@ -806,6 +822,92 @@ describe('ToastList', () => {
         expect(screen.getByRole('button', { name: 'Close' })).toBeInTheDocument();
     });
 
+    it('renders the action of a toast and announces its alternative text', async () => {
+        function ActionTrigger() {
+            const { toast } = useToast();
+            return (
+                <button
+                    data-testid="add-action"
+                    onClick={() =>
+                        toast({
+                            title: 'Scan complete',
+                            description: '"Movies": 4 files ready to import.',
+                            variant: 'info',
+                            action: { label: 'Import now', altText: 'Open the library import page', onClick: () => {} },
+                        })
+                    }
+                >
+                    Action
+                </button>
+            );
+        }
+
+        render(
+            <ToastProvider>
+                <ToastStateProvider>
+                    <ActionTrigger />
+                    <ToastList />
+                    <ToastViewport />
+                </ToastStateProvider>
+            </ToastProvider>,
+        );
+
+        await act(async () => {
+            screen.getByTestId('add-action').click();
+        });
+
+        const toast = screen.getByText('Scan complete').closest('[data-component="toast"]') as HTMLElement;
+        expect(within(toast).getByRole('button', { name: 'Import now' })).toBeInTheDocument();
+        expect(await screen.findByText(/Open the library import page/)).toBeInTheDocument();
+    });
+
+    it('runs the action of a toast and dismisses the toast when the action is clicked', async () => {
+        const user = userEvent.setup();
+        const handleAction = vi.fn();
+        function ActionTrigger() {
+            const { toast } = useToast();
+            return (
+                <button
+                    data-testid="add-action"
+                    onClick={() =>
+                        toast({
+                            title: 'Scan complete',
+                            description: '"Movies": 4 files ready to import.',
+                            variant: 'info',
+                            action: {
+                                label: 'Import now',
+                                altText: 'Open the library import page',
+                                onClick: handleAction,
+                            },
+                        })
+                    }
+                >
+                    Action
+                </button>
+            );
+        }
+
+        render(
+            <ToastProvider>
+                <ToastStateProvider>
+                    <ActionTrigger />
+                    <ToastList />
+                    <ToastViewport />
+                </ToastStateProvider>
+            </ToastProvider>,
+        );
+
+        await act(async () => {
+            screen.getByTestId('add-action').click();
+        });
+        await user.click(screen.getByRole('button', { name: 'Import now' }));
+
+        expect(handleAction).toHaveBeenCalledTimes(1);
+        await waitFor(() => {
+            expect(screen.queryByText('Scan complete')).not.toBeInTheDocument();
+        });
+    });
+
     it('renders nothing when no toasts', () => {
         render(
             <ToastProvider>
@@ -819,7 +921,7 @@ describe('ToastList', () => {
         expect(screen.queryByRole('status')).not.toBeInTheDocument();
     });
 
-    it('marks only the newest toast as stack-front, and only it as stack-peek, with 3 active toasts', async () => {
+    it('marks each toast with its depth behind the newest toast', async () => {
         render(
             <ToastProvider>
                 <ToastStateProvider>
@@ -844,15 +946,12 @@ describe('ToastList', () => {
         const middle = screen.getByText('Failed').closest('[data-component="toast"]');
         const newest = screen.getByText('Notice').closest('[data-component="toast"]');
 
-        expect(newest).toHaveAttribute('data-stack-front', 'true');
-        expect(newest).toHaveAttribute('data-stack-peek', 'true');
-        expect(middle).toHaveAttribute('data-stack-front', 'false');
-        expect(middle).toHaveAttribute('data-stack-peek', 'false');
-        expect(oldest).toHaveAttribute('data-stack-front', 'false');
-        expect(oldest).toHaveAttribute('data-stack-peek', 'false');
+        expect(newest).toHaveAttribute('data-stack-depth', '0');
+        expect(middle).toHaveAttribute('data-stack-depth', '1');
+        expect(oldest).toHaveAttribute('data-stack-depth', '2');
     });
 
-    it('promotes the next-newest toast to stack-front when the front toast is dismissed', async () => {
+    it('promotes the next-newest toast to the front when the front toast is dismissed', async () => {
         const user = userEvent.setup();
         render(
             <ToastProvider>
@@ -879,14 +978,136 @@ describe('ToastList', () => {
 
         await waitFor(() => {
             expect(screen.getByText('Failed').closest('[data-component="toast"]')).toHaveAttribute(
-                'data-stack-front',
-                'true',
+                'data-stack-depth',
+                '0',
             );
         });
-        expect(screen.getByText('Failed').closest('[data-component="toast"]')).toHaveAttribute(
-            'data-stack-peek',
-            'true',
+    });
+
+    it('conceals the toasts behind the front toast on the mobile stack and reveals the next on dismiss', async () => {
+        vi.stubGlobal('innerWidth', 390);
+        const user = userEvent.setup();
+        render(
+            <ToastProvider>
+                <ToastStateProvider>
+                    <TestToastListTrigger />
+                    <ToastList />
+                    <ToastViewport />
+                </ToastStateProvider>
+            </ToastProvider>,
         );
+
+        await act(async () => {
+            screen.getByTestId('add-success').click();
+        });
+        await act(async () => {
+            screen.getByTestId('add-error').click();
+        });
+        await act(async () => {
+            screen.getByTestId('add-default').click();
+        });
+
+        const front = screen.getByText('Notice').closest('[data-component="toast"]') as HTMLElement;
+        expect(front).not.toHaveAttribute('inert');
+        expect(screen.getByText('Failed').closest('[data-component="toast"]')).toHaveAttribute('inert');
+        expect(screen.getByText('Saved').closest('[data-component="toast"]')).toHaveAttribute('inert');
+
+        await user.click(within(front).getByRole('button', { name: 'Close' }));
+
+        await waitFor(() => {
+            expect(screen.getByText('Failed').closest('[data-component="toast"]')).not.toHaveAttribute('inert');
+        });
+        expect(screen.getByText('Saved').closest('[data-component="toast"]')).toHaveAttribute('inert');
+    });
+
+    it('conceals the toast behind the front toast at a width where the bottom navigation shows', async () => {
+        vi.stubGlobal('innerWidth', 700);
+        render(
+            <ToastProvider>
+                <ToastStateProvider>
+                    <TestToastListTrigger />
+                    <ToastList />
+                    <ToastViewport />
+                </ToastStateProvider>
+            </ToastProvider>,
+        );
+
+        await act(async () => {
+            screen.getByTestId('add-success').click();
+        });
+        await act(async () => {
+            screen.getByTestId('add-error').click();
+        });
+
+        expect(screen.getByText('Saved').closest('[data-component="toast"]')).toHaveAttribute('inert');
+        expect(screen.getByText('Failed').closest('[data-component="toast"]')).not.toHaveAttribute('inert');
+    });
+
+    it('keeps the dismiss timer of a toast concealed behind the front toast paused on the mobile stack', () => {
+        vi.useFakeTimers();
+        vi.stubGlobal('innerWidth', 390);
+        render(
+            <ToastProvider>
+                <ToastStateProvider>
+                    <TestToastListTrigger />
+                    <ToastList />
+                    <ToastViewport />
+                </ToastStateProvider>
+            </ToastProvider>,
+        );
+
+        act(() => {
+            screen.getByTestId('add-timed').click();
+        });
+        act(() => {
+            screen.getByTestId('add-blocker').click();
+        });
+        act(() => {
+            vi.advanceTimersByTime(6000);
+        });
+
+        expect(screen.getByText('Timed')).toBeInTheDocument();
+
+        act(() => {
+            within(screen.getByText('Blocker').closest('[data-component="toast"]') as HTMLElement)
+                .getByRole('button', { name: 'Close' })
+                .click();
+        });
+        act(() => {
+            vi.advanceTimersByTime(4999);
+        });
+        expect(screen.getByText('Timed')).toBeInTheDocument();
+        act(() => {
+            vi.advanceTimersByTime(1);
+        });
+        expect(screen.queryByText('Timed')).not.toBeInTheDocument();
+    });
+
+    it('leaves every toast reachable and timed off the mobile stack', () => {
+        vi.useFakeTimers();
+        render(
+            <ToastProvider>
+                <ToastStateProvider>
+                    <TestToastListTrigger />
+                    <ToastList />
+                    <ToastViewport />
+                </ToastStateProvider>
+            </ToastProvider>,
+        );
+
+        act(() => {
+            screen.getByTestId('add-timed').click();
+        });
+        act(() => {
+            screen.getByTestId('add-blocker').click();
+        });
+
+        expect(screen.getByText('Timed').closest('[data-component="toast"]')).not.toHaveAttribute('inert');
+
+        act(() => {
+            vi.advanceTimersByTime(5000);
+        });
+        expect(screen.queryByText('Timed')).not.toBeInTheDocument();
     });
 
     it('keeps the newest three toasts reachable on the mobile stack and hides only what is deeper', async () => {
@@ -1023,12 +1244,18 @@ describe('ToastList', () => {
         });
         expect(screen.getByText('Timed')).toBeInTheDocument();
 
-        for (let index = 0; index < 3; index += 1) {
-            const blocker = screen.getAllByText('Blocker')[0].closest('[data-component="toast"]') as HTMLElement;
-            act(() => {
-                within(blocker).getByRole('button', { name: 'Close' }).click();
-            });
-        }
+        const blocker1 = screen.getAllByText('Blocker')[0].closest('[data-component="toast"]') as HTMLElement;
+        act(() => {
+            within(blocker1).getByRole('button', { name: 'Close' }).click();
+        });
+        const blocker2 = screen.getAllByText('Blocker')[0].closest('[data-component="toast"]') as HTMLElement;
+        act(() => {
+            within(blocker2).getByRole('button', { name: 'Close' }).click();
+        });
+        const blocker3 = screen.getAllByText('Blocker')[0].closest('[data-component="toast"]') as HTMLElement;
+        act(() => {
+            within(blocker3).getByRole('button', { name: 'Close' }).click();
+        });
 
         expect(screen.getByText('Timed').closest('[data-component="toast"]')).toHaveAttribute(
             'data-stack-hidden',
@@ -1043,36 +1270,6 @@ describe('ToastList', () => {
         });
         expect(screen.queryByText('Timed')).not.toBeInTheDocument();
     });
-
-    it('drops the stacked-look marker once only one toast remains', async () => {
-        const user = userEvent.setup();
-        render(
-            <ToastProvider>
-                <ToastStateProvider>
-                    <TestToastListTrigger />
-                    <ToastList />
-                    <ToastViewport />
-                </ToastStateProvider>
-            </ToastProvider>,
-        );
-
-        await act(async () => {
-            screen.getByTestId('add-success').click();
-        });
-        await act(async () => {
-            screen.getByTestId('add-error').click();
-        });
-
-        const front = screen.getByText('Failed').closest('[data-component="toast"]') as HTMLElement;
-        await user.click(within(front).getByRole('button', { name: 'Close' }));
-
-        await waitFor(() => {
-            expect(screen.getAllByTestId('toast-title')).toHaveLength(1);
-        });
-        const remaining = screen.getByTestId('toast-title').closest('[data-component="toast"]');
-        expect(remaining).toHaveAttribute('data-stack-front', 'true');
-        expect(remaining).toHaveAttribute('data-stack-peek', 'false');
-    });
 });
 
 describe('ToastTray', () => {
@@ -1086,8 +1283,8 @@ describe('ToastTray', () => {
         );
     }
 
-    function renderWithTray() {
-        return render(
+    it('renders nothing with no toasts', () => {
+        render(
             <ToastProvider>
                 <ToastStateProvider>
                     <TestTrayTrigger />
@@ -1098,17 +1295,23 @@ describe('ToastTray', () => {
                 </ToastStateProvider>
             </ToastProvider>,
         );
-    }
-
-    it('renders nothing with no toasts', () => {
-        renderWithTray();
 
         expect(screen.queryByRole('button', { name: 'Clear all notifications' })).not.toBeInTheDocument();
         expect(document.querySelector('.toast-tray')).not.toBeInTheDocument();
     });
 
     it('renders nothing with a single toast', async () => {
-        renderWithTray();
+        render(
+            <ToastProvider>
+                <ToastStateProvider>
+                    <TestTrayTrigger />
+                    <ToastList />
+                    <ToastViewport>
+                        <ToastTray />
+                    </ToastViewport>
+                </ToastStateProvider>
+            </ToastProvider>,
+        );
 
         await act(async () => {
             screen.getByTestId('add-toast').click();
@@ -1120,7 +1323,17 @@ describe('ToastTray', () => {
     });
 
     it('shows the clear-all button with two toasts', async () => {
-        renderWithTray();
+        render(
+            <ToastProvider>
+                <ToastStateProvider>
+                    <TestTrayTrigger />
+                    <ToastList />
+                    <ToastViewport>
+                        <ToastTray />
+                    </ToastViewport>
+                </ToastStateProvider>
+            </ToastProvider>,
+        );
 
         await act(async () => {
             screen.getByTestId('add-toast').click();
@@ -1135,7 +1348,17 @@ describe('ToastTray', () => {
 
     it('dismisses all toasts when clicked', async () => {
         const user = userEvent.setup();
-        renderWithTray();
+        render(
+            <ToastProvider>
+                <ToastStateProvider>
+                    <TestTrayTrigger />
+                    <ToastList />
+                    <ToastViewport>
+                        <ToastTray />
+                    </ToastViewport>
+                </ToastStateProvider>
+            </ToastProvider>,
+        );
 
         await act(async () => {
             screen.getByTestId('add-toast').click();
@@ -1153,7 +1376,17 @@ describe('ToastTray', () => {
     });
 
     it('never renders an expand/collapse toggle', async () => {
-        renderWithTray();
+        render(
+            <ToastProvider>
+                <ToastStateProvider>
+                    <TestTrayTrigger />
+                    <ToastList />
+                    <ToastViewport>
+                        <ToastTray />
+                    </ToastViewport>
+                </ToastStateProvider>
+            </ToastProvider>,
+        );
 
         await act(async () => {
             screen.getByTestId('add-toast').click();

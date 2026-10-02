@@ -5,7 +5,6 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
-using Magpie.Abstractions;
 using Magpie.Abstractions.Repositories;
 using Magpie.Models;
 using Magpie.Models.Arguments;
@@ -33,7 +32,8 @@ internal sealed class MediaInfoExtractScanJob(
     {
         JobType = MagpieJobs.Types.MediaInfoExtractScan,
         DisplayName = "Media info extract scan",
-        Description = "Scans for missing or stale media information and queues them inspection.",
+        Description = "Queues media information extraction for the files of a target that the media info policy " +
+            "selects.",
         Category = "Metadata",
         Scope = JobScope.Content,
         Enabled = true,
@@ -50,14 +50,24 @@ internal sealed class MediaInfoExtractScanJob(
         [
             new(
                 MagpieJobs.Parameters.ContentHierarchyItemId,
-                "The content hierarchy item to scan again. Leave this parameter empty to scan missing and stale " +
-                "library content.",
+                "The content hierarchy item whose files to scan. Leave this parameter empty to scan the library.",
                 DataType.String,
                 false,
                 null)
             {
                 ValidateValue = value => string.IsNullOrWhiteSpace(value) || Guid.TryParse(value, out _)
                     ? null : "must be a valid GUID."
+            },
+            new(
+                MagpieJobs.Parameters.MediaInfoPolicy,
+                "The files to extract: Missing (no media info), MissingOrStale (no media info or older than " +
+                "maxAgeHours) or All.",
+                DataType.String,
+                false,
+                MagpieJobs.ParameterValues.MissingOrStaleMediaInfoPolicy)
+            {
+                ValidateValue = value => string.IsNullOrWhiteSpace(value) || ParseMediaInfoPolicy(value) is not null
+                    ? null : "must be Missing, MissingOrStale or All."
             },
             new(
                 MagpieJobs.Parameters.MaxAgeHours,
@@ -74,10 +84,24 @@ internal sealed class MediaInfoExtractScanJob(
 
     private const string NoExtractorMessage = "The scan stopped because no media information extractor is registered.";
 
-    private static bool IsAdministrativeTrigger(JobContext context)
+    private static string? ParseMediaInfoPolicy(string value) =>
+        new[]
+        {
+            MagpieJobs.ParameterValues.MissingMediaInfoPolicy,
+            MagpieJobs.ParameterValues.MissingOrStaleMediaInfoPolicy,
+            MagpieJobs.ParameterValues.AllMediaInfoPolicy
+        }.FirstOrDefault(policy => string.Equals(policy, value.Trim(), StringComparison.OrdinalIgnoreCase));
+
+    private static string ResolveMediaInfoPolicy(JobContext context)
     {
-        return context.ScheduleTriggerId is not null ||
-            (context.EventTriggerId is null && context.ManualTriggerUserId is null);
+        if (context.Parameters.TryGetValue(MagpieJobs.Parameters.MediaInfoPolicy, out var rawPolicy) &&
+            !string.IsNullOrWhiteSpace(rawPolicy))
+        {
+            return ParseMediaInfoPolicy(rawPolicy) ?? throw new ArgumentException(
+                $"The media info policy {rawPolicy} is not Missing, MissingOrStale or All.");
+        }
+
+        return MagpieJobs.ParameterValues.MissingOrStaleMediaInfoPolicy;
     }
 
     private static Guid? ResolveContentHierarchyItemId(JobContext context)
@@ -93,31 +117,13 @@ internal sealed class MediaInfoExtractScanJob(
             return parsed;
         }
 
-        if (context.Event is { Context: var eventContext } &&
-            eventContext.TryGetValue(MagpieEvents.Keys.ContentHierarchyItemId, out var rawEventValue) &&
-            !string.IsNullOrWhiteSpace(rawEventValue))
-        {
-            if (!Guid.TryParse(rawEventValue, out var parsed))
-            {
-                throw new ArgumentException("The job received an invalid content hierarchy item ID.");
-            }
-
-            return parsed;
-        }
-
         return null;
     }
 
     public async Task ExecuteAsync(JobContext context, CancellationToken cancellationToken = default)
     {
         var contentHierarchyItemId = ResolveContentHierarchyItemId(context);
-
-        if (contentHierarchyItemId is null && !IsAdministrativeTrigger(context))
-        {
-            throw new MagpieException(
-                "A library-wide media info extract scan requires a scheduled or system trigger; supply a content " +
-                "hierarchy item id to scan a single content target on demand.");
-        }
+        var policy = ResolveMediaInfoPolicy(context);
 
         progressReporter.Report(0, "The scan will load media files that need media information.");
 
@@ -128,9 +134,11 @@ internal sealed class MediaInfoExtractScanJob(
             return;
         }
 
-        var candidates = contentHierarchyItemId is { } targetId
-            ? await LoadTargetCandidatesAsync(targetId, cancellationToken).ConfigureAwait(false)
-            : await LoadLibraryCandidatesAsync(context.Parameters, cancellationToken).ConfigureAwait(false);
+        var candidates = await LoadCandidatesAsync(
+            contentHierarchyItemId,
+            policy,
+            context.Parameters,
+            cancellationToken).ConfigureAwait(false);
         if (candidates.Count == 0)
         {
             progressReporter.Report(1, "The media information scan completed because no file needs media information.");
@@ -150,9 +158,12 @@ internal sealed class MediaInfoExtractScanJob(
 
             var candidate = candidates[i];
 
-            var requireMissingMediaInfo =
-                (contentHierarchyItemId is null && candidate.MediaInfo is null) ||
-                context.Event?.Name == MagpieEvents.Names.ContentImported;
+            var requireMissingMediaInfo = policy switch
+            {
+                MagpieJobs.ParameterValues.MissingMediaInfoPolicy => true,
+                MagpieJobs.ParameterValues.MissingOrStaleMediaInfoPolicy => candidate.MediaInfo is null,
+                _ => false
+            };
             try
             {
                 await jobManager.ExecuteAsync(
@@ -189,28 +200,34 @@ internal sealed class MediaInfoExtractScanJob(
         progressReporter.Report(1, $"The media information scan completed and queued {enqueued} of {total} files.");
     }
 
-    private async Task<IReadOnlyList<MediaFile>> LoadLibraryCandidatesAsync(
+    private async Task<IReadOnlyList<MediaFile>> LoadCandidatesAsync(
+        Guid? contentHierarchyItemId,
+        string policy,
         IReadOnlyDictionary<string, string> parameters,
         CancellationToken cancellationToken)
     {
-        var maxAgeHours = ReadPositiveIntParameter(parameters);
-        var cutoff = timeProvider.GetUtcNow().UtcDateTime - TimeSpan.FromHours(maxAgeHours);
+        var query = new MediaFileQuery
+        {
+            ContentHierarchyItemId = contentHierarchyItemId,
+            MediaInfoStaleBefore = policy switch
+            {
+                MagpieJobs.ParameterValues.MissingMediaInfoPolicy => DateTime.MinValue,
+                MagpieJobs.ParameterValues.MissingOrStaleMediaInfoPolicy =>
+                    timeProvider.GetUtcNow().UtcDateTime - TimeSpan.FromHours(ReadPositiveIntParameter(parameters)),
+                _ => null
+            }
+        };
+        if (contentHierarchyItemId is not null || query.MediaInfoStaleBefore is null)
+        {
+            return await mediaFileRepository.QueryAllAsync(query, cancellationToken: cancellationToken)
+                .ConfigureAwait(false);
+        }
+
         return (await mediaFileRepository.QueryAsync(
-            new MediaFileQuery { MediaInfoStaleBefore = cutoff },
+            query,
             new() { PageNumber = 1, PageSize = MaxFilesPerRun },
             null,
             cancellationToken).ConfigureAwait(false)).Items.ToList();
-    }
-
-    private async Task<IReadOnlyList<MediaFile>> LoadTargetCandidatesAsync(
-        Guid contentHierarchyItemId,
-        CancellationToken cancellationToken)
-    {
-        var files = await mediaFileRepository.QueryAllAsync(
-            new MediaFileQuery { ContentHierarchyItemId = contentHierarchyItemId },
-            cancellationToken: cancellationToken).ConfigureAwait(false);
-
-        return files;
     }
 
     private int ReadPositiveIntParameter(IReadOnlyDictionary<string, string> parameters)

@@ -12,14 +12,12 @@ import { isSetOperator } from './criterionOperators';
 import type { ExclusionDraft } from './RulesEditor';
 import { normalizeExclusions } from './rulesEditorUtils';
 
-type TierCriterion = Criterion;
-
 export interface TierWithCriteria {
     id: string;
     name: string;
     isCutoff: boolean;
     criteriaCount: number;
-    criteria: TierCriterion[];
+    criteria: Criterion[];
     exclusions: ExclusionDraft[];
     sourceRules: ApiQualityTierRule[];
 }
@@ -30,13 +28,13 @@ interface TierListDetail {
     mimeTypes: string[];
     upgradeAllowed: boolean;
     tiers: TierWithCriteria[];
-    criteria: TierCriterion[];
+    criteria: Criterion[];
     exclusions: ExclusionDraft[];
     sourceRules: ApiQualityTierRule[];
     createdAt: string;
 }
 
-const operatorNames: Partial<Record<CriteriaValueOperator, TierCriterion['operator']>> = {
+const operatorNames: Partial<Record<CriteriaValueOperator, Criterion['operator']>> = {
     Equals: 'Equals',
     NotEquals: 'NotEquals',
     In: 'In',
@@ -55,26 +53,11 @@ const operatorNames: Partial<Record<CriteriaValueOperator, TierCriterion['operat
     LessThanOrEqual: 'LessThanOrEqual',
 };
 
-const operatorValues: Record<string, CriteriaValueOperator> = {
-    Equals: 'Equals',
-    NotEquals: 'NotEquals',
-    In: 'In',
-    NotIn: 'NotIn',
-    Contains: 'ContainsString',
-    NotContains: 'NotContainsString',
-    StartsWith: 'StartsWithString',
-    NotStartsWith: 'NotStartsWithString',
-    EndsWith: 'EndsWithString',
-    NotEndsWith: 'NotEndsWithString',
-    ContainsWord: 'ContainsWord',
-    Regex: 'Regex',
-    GreaterThan: 'GreaterThan',
-    GreaterThanOrEqual: 'GreaterThanOrEqual',
-    LessThan: 'LessThan',
-    LessThanOrEqual: 'LessThanOrEqual',
-};
+const operatorValues = Object.fromEntries(
+    Object.entries(operatorNames).map(([apiOperator, displayOperator]) => [displayOperator, apiOperator]),
+) as Record<string, CriteriaValueOperator>;
 
-function mapOperator(op: CriteriaValueOperator | undefined): TierCriterion['operator'] {
+function mapOperator(op: CriteriaValueOperator | undefined): Criterion['operator'] {
     if (op === undefined) {
         return 'Equals';
     }
@@ -113,8 +96,8 @@ export function mapCriteriaToApi(criteria: Criterion[]): QualityTierCriteria {
     return { and };
 }
 
-export function mapCriteriaToDisplay(criteria: QualityTierCriteria, tierId: string): TierCriterion[] {
-    const result: TierCriterion[] = [];
+export function mapCriteriaToDisplay(criteria: QualityTierCriteria, tierId: string): Criterion[] {
+    const result: Criterion[] = [];
     let index = 0;
 
     if (!criteria.and) {
@@ -317,7 +300,7 @@ export function mapTierListToDisplay(apiTierList: ApiQualityTierList): TierListD
     };
 }
 
-export function formatOperator(operator: TierCriterion['operator']): string {
+export function formatOperator(operator: Criterion['operator']): string {
     switch (operator) {
         case 'Equals':
             return '=';

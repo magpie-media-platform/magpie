@@ -67,15 +67,18 @@ internal sealed class MimeMappingRepository(
 
             await transactionManager.OnCommittedAsync(
                 token => eventBus.PublishAsync(
-                    MimeMappingEventBuilder.BuildMimeMappingCreatedEvent(model.Extension), token),
+                    MimeMappingEventBuilder.BuildMimeMappingCreatedEvent(model.Extension),
+                    token),
                 cancellationToken).ConfigureAwait(false);
 
             return model;
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "The MIME mapping repository failed to create MIME mapping " +
-                "{Extension}.", model.Extension);
+            logger.LogError(
+                ex,
+                "The MIME mapping repository failed to create MIME mapping {Extension}.",
+                model.Extension);
             throw;
         }
     }
@@ -100,7 +103,8 @@ internal sealed class MimeMappingRepository(
             {
                 await transactionManager.OnCommittedAsync(
                     token => eventBus.PublishAsync(
-                        MimeMappingEventBuilder.BuildMimeMappingUpdatedEvent(model.Extension, ["mimeType"]), token),
+                        MimeMappingEventBuilder.BuildMimeMappingUpdatedEvent(model.Extension, ["mimeType"]),
+                        token),
                     cancellationToken).ConfigureAwait(false);
             }
 
@@ -108,8 +112,10 @@ internal sealed class MimeMappingRepository(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "The MIME mapping repository failed to update MIME mapping " +
-                "{Extension}.", model.Extension);
+            logger.LogError(
+                ex,
+                "The MIME mapping repository failed to update MIME mapping {Extension}.",
+                model.Extension);
             throw;
         }
     }

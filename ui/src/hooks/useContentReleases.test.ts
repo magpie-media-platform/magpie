@@ -98,7 +98,6 @@ describe('useContentReleases', () => {
 
         renderHook(() => useContentReleases(undefined), { wrapper: Wrapper });
 
-        await new Promise((resolve) => setTimeout(resolve, 10));
         expect(mockApiGet).not.toHaveBeenCalled();
     });
 
@@ -108,7 +107,6 @@ describe('useContentReleases', () => {
 
         renderHook(() => useContentReleases('content-1', { enabled: false }), { wrapper: Wrapper });
 
-        await new Promise((resolve) => setTimeout(resolve, 10));
         expect(mockApiGet).not.toHaveBeenCalled();
     });
 });

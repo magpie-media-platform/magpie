@@ -104,8 +104,10 @@ internal sealed class QualityTierListRepository(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "The quality tier list repository failed to read quality tier list " +
-                "{QualityTierListId}.", id);
+            logger.LogError(
+                ex,
+                "The quality tier list repository failed to read quality tier list {QualityTierListId}.",
+                id);
             throw;
         }
     }
@@ -155,8 +157,10 @@ internal sealed class QualityTierListRepository(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "The quality tier list repository failed to create quality tier list " +
-                "{QualityTierListName}.", model.Name);
+            logger.LogError(
+                ex,
+                "The quality tier list repository failed to create quality tier list {QualityTierListName}.",
+                model.Name);
             throw;
         }
     }
@@ -222,7 +226,9 @@ internal sealed class QualityTierListRepository(
                         await transactionManager.OnCommittedAsync(
                             token => eventBus.PublishAsync(
                                 ConfigurationEventBuilder.BuildQualityTierListUpdatedEvent(
-                                    model.Id, changedFields), token),
+                                    model.Id,
+                                    changedFields),
+                                token),
                             cancellationToken).ConfigureAwait(false);
                     }
 
@@ -239,8 +245,10 @@ internal sealed class QualityTierListRepository(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "The quality tier list repository failed to update quality tier list " +
-                "{QualityTierListId}.", model.Id);
+            logger.LogError(
+                ex,
+                "The quality tier list repository failed to update quality tier list {QualityTierListId}.",
+                model.Id);
             throw;
         }
     }
@@ -323,8 +331,10 @@ internal sealed class QualityTierListRepository(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "The quality tier list repository failed to delete quality tier list " +
-                "{QualityTierListId}.", id);
+            logger.LogError(
+                ex,
+                "The quality tier list repository failed to delete quality tier list {QualityTierListId}.",
+                id);
             throw;
         }
     }
@@ -596,7 +606,8 @@ internal sealed class QualityTierListRepository(
                     token => eventBus.PublishAsync(
                         ConfigurationEventBuilder.BuildQualityTierListUpdatedEvent(
                             patch.Id,
-                            ChangedFields(patch)), token),
+                            ChangedFields(patch)),
+                        token),
                     cancellationToken).ConfigureAwait(false);
                 await contentHierarchyItemRepository.RecomputeAllEffectiveValuesAsync(cancellationToken)
                     .ConfigureAwait(false);
@@ -606,8 +617,10 @@ internal sealed class QualityTierListRepository(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "The quality tier list repository failed to patch quality tier list " +
-                "{QualityTierListId}.", patch.Id);
+            logger.LogError(
+                ex,
+                "The quality tier list repository failed to patch quality tier list {QualityTierListId}.",
+                patch.Id);
             throw;
         }
     }

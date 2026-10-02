@@ -13,6 +13,7 @@ using Magpie.Abstractions.Repositories;
 using Magpie.Core;
 using Magpie.Core.Jobs;
 using Magpie.Core.Observability;
+using Magpie.Core.Releases;
 using Magpie.Data;
 using Magpie.Models;
 using Magpie.Models.Arguments;
@@ -21,6 +22,7 @@ using Magpie.Models.Enums;
 using Magpie.Models.Paging;
 using Magpie.Models.Releases;
 using Magpie.Models.Storage;
+using Magpie.Sdk.Content;
 using Magpie.Sdk.Jobs;
 using Magpie.Sdk.Releases;
 using Magpie.Sdk.Services;
@@ -32,6 +34,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 
 using NUnit.Framework;
+using NUnit.Framework.Constraints;
 
 namespace Magpie.Test.Core.Jobs;
 
@@ -42,10 +45,12 @@ public sealed class DownloadImportItemJobTests
     private Mock<IAuditRecordRepository> _auditRecords = null!;
     private Mock<IMediaFileRepository> _mediaFiles = null!;
     private Mock<IFileSystem> _fileSystem = null!;
+    private Mock<IBlockedFileTypeRepository> _blocked = null!;
     private Mock<IContentFileService> _contentFiles = null!;
     private Mock<IContentTypeRegistry> _registry = null!;
     private Mock<IProgressReporter> _progress = null!;
     private Mock<IContentHierarchyItemRepository> _nodes = null!;
+    private Mock<IDownloadScopeRepository> _scopes = null!;
     private Mock<IReleaseEvaluationService> _evaluation = null!;
     private Mock<IContentService> _content = null!;
     private Mock<ILogger<DownloadImportItemJob>> _logger = null!;
@@ -58,6 +63,77 @@ public sealed class DownloadImportItemJobTests
     private RootFolder _rootFolder = null!;
     private IJob _subject = null!;
     private JobContext _jobContext = null!;
+
+    public static IEnumerable<TestCaseData> ScopedItemFiles()
+    {
+        yield return new TestCaseData(
+            new[] { "/downloads/Release/Show.S01E01.mkv", "/downloads/Release/Show.S01E02.mkv" },
+            Array.Empty<string>(),
+            "No file matched content that needs it. Skipped 2 files: 2 outside the download scope. " +
+            "Show.S01E01.mkv (Episode 1: outside the download scope); " +
+            "Show.S01E02.mkv (Episode 2: outside the download scope)",
+            Throws.InstanceOf<InvalidOperationException>());
+        yield return new TestCaseData(
+            new[] { "/downloads/Release/Show.S01E01.mkv", "/downloads/Release/Show.S01E03.mkv" },
+            new[] { "Show.S01E03.mkv" },
+            null,
+            Throws.Nothing);
+        yield return new TestCaseData(
+            new[]
+            {
+                "/downloads/Release/Show.S01E01.mkv",
+                "/downloads/Release/Show.S01E02.mkv",
+                "/downloads/Release/Show.S01.Gag.Reel.mkv"
+            },
+            Array.Empty<string>(),
+            "No file matched content that needs it. Skipped 3 files: 2 outside the download scope, " +
+            "1 matches no single item. Show.S01E01.mkv (Episode 1: outside the download scope); " +
+            "Show.S01E02.mkv (Episode 2: outside the download scope); " +
+            "Show.S01.Gag.Reel.mkv (matches no single item)",
+            Throws.InstanceOf<InvalidOperationException>());
+        yield return new TestCaseData(
+            new[] { "/downloads/Release/Show.S01.Gag.Reel.mkv", "/downloads/Release/Show.S01E03.mkv" },
+            new[] { "Show.S01E03.mkv" },
+            null,
+            Throws.Nothing);
+        yield return new TestCaseData(
+            new[]
+            {
+                "/downloads/Release/Show.S01E01.mkv",
+                "/downloads/Release/Show.S01E02.mkv",
+                "/downloads/Release/RARBG.com.mkv"
+            },
+            Array.Empty<string>(),
+            "No file matched content that needs it. Skipped 3 files: 2 outside the download scope, " +
+            "1 matches no single item. Show.S01E01.mkv (Episode 1: outside the download scope); " +
+            "Show.S01E02.mkv (Episode 2: outside the download scope); RARBG.com.mkv (matches no single item)",
+            Throws.InstanceOf<InvalidOperationException>());
+        yield return new TestCaseData(
+            new[] { "/downloads/Release/Show.S01E03.mkv", "/downloads/Release/RARBG.com.mkv" },
+            new[] { "Show.S01E03.mkv" },
+            null,
+            Throws.Nothing);
+        yield return new TestCaseData(
+            new[] { "/downloads/Release/01 - Chapter 1.mp3", "/downloads/Release/02 - Chapter 2.mp3" },
+            new[] { "01 - Chapter 1.mp3", "02 - Chapter 2.mp3" },
+            null,
+            Throws.Nothing);
+        yield return new TestCaseData(
+            new[] { "/downloads/Release/The Martian - 01.mp3", "/downloads/Release/The Martian - 02.mp3" },
+            new[] { "The Martian - 01.mp3", "The Martian - 02.mp3" },
+            null,
+            Throws.Nothing);
+        yield return new TestCaseData(
+            new[] { "/downloads/Release/Track 01.mp3", "/downloads/Release/Track 02.mp3" },
+            new[] { "Track 01.mp3", "Track 02.mp3" },
+            null,
+            Throws.Nothing);
+        yield return new TestCaseData(
+            new[] { "/downloads/Release/a8f3k2j9x.mkv" },
+            new[] { "a8f3k2j9x.mkv" },
+            null,
+            Throws.Nothing);
+    }
 
     [SetUp]
     public void SetUp()
@@ -120,14 +196,17 @@ public sealed class DownloadImportItemJobTests
         _downloadRepository.Setup(repository => repository.MarkImportingAsync(
                 _download.Id, It.IsAny<DateTime>(), It.IsAny<Guid?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(true);
+        _downloadRepository.Setup(repository => repository.ListTransferAttemptsAsync(
+                _download.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync([_download]);
         var releases = new Mock<IReleaseRepository> { CallBase = true };
         releases.Setup(repository => repository.GetByIdAsync(_release.Id, It.IsAny<CancellationToken>()))
             .ReturnsAsync(_release);
         _nodes = new Mock<IContentHierarchyItemRepository> { CallBase = true };
         _nodes.Setup(repository => repository.GetLineageAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync([_node]);
-        var scopes = new Mock<IDownloadScopeRepository> { CallBase = true };
-        scopes.Setup(repository => repository.QueryAsync(
+        _scopes = new Mock<IDownloadScopeRepository> { CallBase = true };
+        _scopes.Setup(repository => repository.QueryAsync(
                 It.IsAny<DownloadScopeQuery>(), It.IsAny<PagingParameter>(), null, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new PagedList<DownloadScope>
             {
@@ -153,8 +232,8 @@ public sealed class DownloadImportItemJobTests
             .ReturnsAsync(new PagedList<ContentItem>());
         var mappings = new Mock<IRemotePathMappingRepository> { CallBase = true };
         mappings.Setup(repository => repository.ListAllAsync(It.IsAny<CancellationToken>())).ReturnsAsync([]);
-        var blocked = new Mock<IBlockedFileTypeRepository> { CallBase = true };
-        blocked.Setup(repository => repository.ListAllAsync(It.IsAny<CancellationToken>())).ReturnsAsync([]);
+        _blocked = new Mock<IBlockedFileTypeRepository> { CallBase = true };
+        _blocked.Setup(repository => repository.ListAllAsync(It.IsAny<CancellationToken>())).ReturnsAsync([]);
         _fileSystem.Setup(fileSystem => fileSystem.FileExists(It.IsAny<string>())).Returns(true);
         _fileSystem.Setup(fileSystem => fileSystem.FileExists(new FileInfo("/library/new.mkv").FullName))
             .Returns(false);
@@ -174,6 +253,13 @@ public sealed class DownloadImportItemJobTests
                 _release, It.IsAny<IReadOnlyList<ContentFact>>(),
                 _node.Id, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new ReleaseScopeResolution([], []));
+        _evaluation.Setup(service => service.AssignFilesToLeavesAsync(
+                _release,
+                It.IsAny<ContentHierarchyItem>(),
+                It.IsAny<IReadOnlyList<ContentHierarchyItem>>(),
+                It.IsAny<IReadOnlyList<ReleaseFileRef>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
         _priorFile = new MediaFile
         {
             Id = Guid.NewGuid(),
@@ -194,19 +280,20 @@ public sealed class DownloadImportItemJobTests
             _mediaFiles.Object,
             releases.Object,
             Mock.Of<IReleaseScopeRepository>(),
-            scopes.Object,
+            _scopes.Object,
             Mock.Of<IJobExecutionRepository>(),
+            Mock.Of<IJobManager>(),
             _fileSystem.Object,
             _registry.Object,
             _contentFiles.Object,
-            blocked.Object,
+            _blocked.Object,
             mappings.Object,
             Mock.Of<IDownloadClientRepository>(),
             Mock.Of<IRemotePathMappingService>(),
             _transactions,
             Mock.Of<IQualityService>(),
             contentRepository.Object,
-            _content.Object,
+            _content.Object,
             Mock.Of<ILibraryImportService>(),
             Mock.Of<IEventBus>(),
             _evaluation.Object,
@@ -278,6 +365,68 @@ public sealed class DownloadImportItemJobTests
         _fileSystem.Verify(fileSystem => fileSystem.Copy(It.IsAny<string>(), It.IsAny<string>()), Times.Never);
     }
 
+    [TestCase(".mkv", null)]
+    [TestCase("mkv", null)]
+    [TestCase("*.mkv", null)]
+    [TestCase("video/x-matroska", "video/x-matroska")]
+    [TestCase("application/epub+zip", "application/epub+zip")]
+    public void ExecuteAsync_FailsTheDownload_WhenFileMatchesDenyListPattern(string pattern, string? mimeType)
+    {
+        // Arrange
+        _blocked.Setup(repository => repository.ListAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync([new BlockedFileType { Pattern = pattern }]);
+        _fileSystem.Setup(fileSystem => fileSystem.LookupMimeTypeAsync(
+                It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(mimeType);
+
+        // Act
+        var error = Assert.CatchAsync(() => _subject.ExecuteAsync(_jobContext));
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(error!.Message, Does.Contain("contains a blocked file type"));
+            _downloadRepository.Verify(repository => repository.MarkFailedAsync(
+                _download.Id,
+                DownloadStatus.Failed,
+                DownloadFailureReason.BlockedFileType,
+                It.IsAny<string>(),
+                It.IsAny<string>(),
+                It.IsAny<string>(),
+                It.IsAny<DateTime>(),
+                It.IsAny<Guid?>(),
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()), Times.Once);
+        }
+    }
+
+    [Test]
+    public async Task ExecuteAsync_ImportsTheFile_WhenDenyListPatternIsMimeWildcard()
+    {
+        // Arrange
+        _blocked.Setup(repository => repository.ListAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync([new BlockedFileType { Pattern = "video/*" }]);
+        _fileSystem.Setup(fileSystem => fileSystem.LookupMimeTypeAsync(
+                It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync("video/x-matroska");
+
+        // Act
+        await _subject.ExecuteAsync(_jobContext).ConfigureAwait(false);
+
+        // Assert
+        _downloadRepository.Verify(repository => repository.MarkFailedAsync(
+            It.IsAny<Guid>(),
+            It.IsAny<DownloadStatus>(),
+            DownloadFailureReason.BlockedFileType,
+            It.IsAny<string>(),
+            It.IsAny<string>(),
+            It.IsAny<string>(),
+            It.IsAny<DateTime>(),
+            It.IsAny<Guid?>(),
+            It.IsAny<Guid?>(),
+            It.IsAny<CancellationToken>()), Times.Never);
+    }
+
     [TestCase(false)]
     [TestCase(true)]
     public void ExecuteAsync_KeepsExistingFile_WhenOmittedPolicyResolvesToSkip(bool recovering)
@@ -296,8 +445,15 @@ public sealed class DownloadImportItemJobTests
         {
             Assert.That(error!.Message, Does.Contain("every planned operation collided under Skip collision mode"));
             _downloadRepository.Verify(repository => repository.MarkFailedAsync(
-                _download.Id, DownloadFailureReason.NoUsableContent, It.IsAny<string>(), It.IsAny<string>(),
-                It.IsAny<string>(), It.IsAny<DateTime>(), It.IsAny<Guid?>(), It.IsAny<Guid?>(),
+                _download.Id,
+                DownloadStatus.Failed,
+                DownloadFailureReason.NoUsableContent,
+                It.IsAny<string>(),
+                It.IsAny<string>(),
+                It.IsAny<string>(),
+                It.IsAny<DateTime>(),
+                It.IsAny<Guid?>(),
+                It.IsAny<Guid?>(),
                 It.IsAny<CancellationToken>()), Times.Once);
             _fileSystem.Verify(fileSystem => fileSystem.Move(It.IsAny<string>(), It.IsAny<string>()), Times.Never);
             _fileSystem.Verify(fileSystem => fileSystem.DeleteFile(It.IsAny<string>()), Times.Never);
@@ -990,75 +1146,14 @@ public sealed class DownloadImportItemJobTests
         }
     }
 
-    [TestCase("Movie.en.srt")]
-    [TestCase("Movie.en.srt", "Movie.fr.srt")]
-    [TestCase("Movie.en.forced.srt", "Movie.en.sdh.srt", "Movie.en.cc.srt", "Movie.en.srt")]
-    public async Task ExecuteAsync_KeepsSidecarSuffix_WhenMaskRenamesPrimary(params string[] sidecars)
+    [TestCase("Movie.en.srt", "Masked (1999).en.srt")]
+    [TestCase("Movie.fr.srt", "Masked (1999).fr.srt")]
+    [TestCase("Movie.en.forced.srt", "Masked (1999).en.forced.srt")]
+    [TestCase("Movie.en.sdh.srt", "Masked (1999).en.sdh.srt")]
+    [TestCase("Movie.en.cc.srt", "Masked (1999).en.cc.srt")]
+    public async Task ExecuteAsync_KeepsSidecarSuffix_WhenMaskRenamesPrimary(string sidecar, string expectedName)
     {
         // Arrange
-        var context = ArrangeSidecarDryRun("Movie.mkv", "/library/Masked (1999).mkv", sidecars);
-
-        // Act
-        await _subject.ExecuteAsync(context).ConfigureAwait(false);
-
-        // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            foreach (var sidecar in sidecars)
-            {
-                VerifyPlannedMove(sidecar, "Masked (1999)" + sidecar["Movie".Length..], Times.Once());
-            }
-
-            _contentFiles.Verify(service => service.PreviewRenameAsync(
-                _node.Id, It.IsAny<FileInfo>(), It.IsAny<MediaInfo?>(), It.IsAny<CancellationToken>()), Times.Once);
-        }
-    }
-
-    [Test]
-    public async Task ExecuteAsync_KeepsSidecarSuffix_WhenAPathProviderNamesThePrimaryWithoutAMask()
-    {
-        // Arrange
-        var context = ArrangeSidecarDryRun(
-            "Show.S01E01.mkv",
-            "/library/Show - S01E01 - Title.mkv",
-            ["Show.S01E01.en.srt"]);
-
-        // Act
-        await _subject.ExecuteAsync(context).ConfigureAwait(false);
-
-        // Assert
-        VerifyPlannedMove("Show.S01E01.en.srt", "Show - S01E01 - Title.en.srt", Times.Once());
-    }
-
-    [Test]
-    public async Task ExecuteAsync_LeavesUnrelatedSubtitles_WhenOnlyAFlagOrLanguageLooksAlike()
-    {
-        // Arrange
-        var context = ArrangeSidecarDryRun(
-            "Movie.mkv",
-            "/library/Masked (1999).mkv",
-            ["Movie.en.forced.srt", "Other.en.forced.srt", "Movie.en.forcedx.srt", "Movie Extras.en.sdh.srt"]);
-
-        // Act
-        await _subject.ExecuteAsync(context).ConfigureAwait(false);
-
-        // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            VerifyPlannedMove("Movie.en.forced.srt", "Masked (1999).en.forced.srt", Times.Once());
-            string[] unrelatedFiles = ["Other.en.forced.srt", "Movie.en.forcedx.srt", "Movie Extras.en.sdh.srt"];
-            foreach (var unrelated in unrelatedFiles)
-            {
-                _auditRecords.Verify(repository => repository.CreateAsync(
-                    It.Is<AuditRecord>(record => record.Operation == "ImportDryRun" &&
-                        record.Detail!.StartsWith($"Dry run: move /downloads/{unrelated} ", StringComparison.Ordinal)),
-                    It.IsAny<CancellationToken>()), Times.Never);
-            }
-        }
-    }
-
-    private JobContext ArrangeSidecarDryRun(string primary, string primaryDestination, IEnumerable<string> sidecars)
-    {
         _registry.Setup(registry => registry.GetDefinitionFor("type-a")).Returns(new ContentTypeDefinition
         {
             Slug = "type-a",
@@ -1081,28 +1176,164 @@ public sealed class DownloadImportItemJobTests
                 types?.Any(type => path.EndsWith(type, StringComparison.OrdinalIgnoreCase)) == true);
         _fileSystem.Setup(fileSystem => fileSystem.DirectoryExists("/downloads/new.mkv")).Returns(true);
         _fileSystem.Setup(fileSystem => fileSystem.EnumerateFiles("/downloads/new.mkv"))
-            .Returns(["/downloads/" + primary, .. sidecars.Select(sidecar => "/downloads/" + sidecar)]);
+            .Returns(["/downloads/Movie.mkv", $"/downloads/{sidecar}"]);
         _contentFiles.Setup(service => service.PreviewRenameAsync(
                 _node.Id, It.IsAny<FileInfo>(), It.IsAny<MediaInfo?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new ContentRename
             {
-                Original = new FileInfo("/downloads/" + primary),
-                Rename = new FileInfo(primaryDestination),
+                Original = new FileInfo("/downloads/Movie.mkv"),
+                Rename = new FileInfo("/library/Masked (1999).mkv"),
                 Item = _node
             });
-        return _jobContext with
+        var context = _jobContext with
         {
             Parameters = new Dictionary<string, string>(_jobContext.Parameters) { ["dryRun"] = "true" }
         };
+        var expected = new FileInfo($"/library/{expectedName}").FullName;
+
+        // Act
+        await _subject.ExecuteAsync(context).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            _auditRecords.Verify(repository => repository.CreateAsync(
+                It.Is<AuditRecord>(record => record.Operation == "ImportDryRun" &&
+                    record.Detail == $"Dry run: move /downloads/{sidecar} -> {expected}"),
+                It.IsAny<CancellationToken>()), Times.Once());
+            _contentFiles.Verify(service => service.PreviewRenameAsync(
+                _node.Id, It.IsAny<FileInfo>(), It.IsAny<MediaInfo?>(), It.IsAny<CancellationToken>()), Times.Once);
+        }
     }
 
-    private void VerifyPlannedMove(string sidecar, string expectedName, Times times)
+    [Test]
+    public async Task ExecuteAsync_KeepsSidecarSuffix_WhenAPathProviderNamesThePrimaryWithoutAMask()
     {
-        var expected = Path.Combine(new FileInfo("/library/x").DirectoryName!, expectedName);
+        // Arrange
+        _registry.Setup(registry => registry.GetDefinitionFor("type-a")).Returns(new ContentTypeDefinition
+        {
+            Slug = "type-a",
+            DisplayName = "Type A",
+            LevelDefinitions =
+            [
+                new()
+                {
+                    Slug = "leaf",
+                    DisplayName = "Leaf",
+                    CustomMetadataFields = [],
+                    AcceptedFileTypes = [".mkv"],
+                    AcceptedSidecarTypes = [".srt"]
+                }
+            ]
+        });
+        _fileSystem.Setup(fileSystem => fileSystem.MatchesAnyFileTypeAsync(
+                It.IsAny<string>(), It.IsAny<IReadOnlyList<string>?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((string path, IReadOnlyList<string>? types, CancellationToken _) =>
+                types?.Any(type => path.EndsWith(type, StringComparison.OrdinalIgnoreCase)) == true);
+        _fileSystem.Setup(fileSystem => fileSystem.DirectoryExists("/downloads/new.mkv")).Returns(true);
+        _fileSystem.Setup(fileSystem => fileSystem.EnumerateFiles("/downloads/new.mkv"))
+            .Returns(["/downloads/Show.S01E01.mkv", "/downloads/Show.S01E01.en.srt"]);
+        _contentFiles.Setup(service => service.PreviewRenameAsync(
+                _node.Id, It.IsAny<FileInfo>(), It.IsAny<MediaInfo?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ContentRename
+            {
+                Original = new FileInfo("/downloads/Show.S01E01.mkv"),
+                Rename = new FileInfo("/library/Show - S01E01 - Title.mkv"),
+                Item = _node
+            });
+        var context = _jobContext with
+        {
+            Parameters = new Dictionary<string, string>(_jobContext.Parameters) { ["dryRun"] = "true" }
+        };
+        var expected = new FileInfo("/library/Show - S01E01 - Title.en.srt").FullName;
+
+        // Act
+        await _subject.ExecuteAsync(context).ConfigureAwait(false);
+
+        // Assert
         _auditRecords.Verify(repository => repository.CreateAsync(
             It.Is<AuditRecord>(record => record.Operation == "ImportDryRun" &&
-                record.Detail == $"Dry run: move /downloads/{sidecar} -> {expected}"),
-            It.IsAny<CancellationToken>()), times);
+                record.Detail == $"Dry run: move /downloads/Show.S01E01.en.srt -> {expected}"),
+            It.IsAny<CancellationToken>()), Times.Once());
+    }
+
+    [Test]
+    public async Task ExecuteAsync_LeavesUnrelatedSubtitles_WhenOnlyAFlagOrLanguageLooksAlike()
+    {
+        // Arrange
+        _registry.Setup(registry => registry.GetDefinitionFor("type-a")).Returns(new ContentTypeDefinition
+        {
+            Slug = "type-a",
+            DisplayName = "Type A",
+            LevelDefinitions =
+            [
+                new()
+                {
+                    Slug = "leaf",
+                    DisplayName = "Leaf",
+                    CustomMetadataFields = [],
+                    AcceptedFileTypes = [".mkv"],
+                    AcceptedSidecarTypes = [".srt"]
+                }
+            ]
+        });
+        _fileSystem.Setup(fileSystem => fileSystem.MatchesAnyFileTypeAsync(
+                It.IsAny<string>(), It.IsAny<IReadOnlyList<string>?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((string path, IReadOnlyList<string>? types, CancellationToken _) =>
+                types?.Any(type => path.EndsWith(type, StringComparison.OrdinalIgnoreCase)) == true);
+        _fileSystem.Setup(fileSystem => fileSystem.DirectoryExists("/downloads/new.mkv")).Returns(true);
+        _fileSystem.Setup(fileSystem => fileSystem.EnumerateFiles("/downloads/new.mkv"))
+            .Returns(
+            [
+                "/downloads/Movie.mkv",
+                "/downloads/Movie.en.forced.srt",
+                "/downloads/Other.en.forced.srt",
+                "/downloads/Movie.en.forcedx.srt",
+                "/downloads/Movie Extras.en.sdh.srt"
+            ]);
+        _contentFiles.Setup(service => service.PreviewRenameAsync(
+                _node.Id, It.IsAny<FileInfo>(), It.IsAny<MediaInfo?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ContentRename
+            {
+                Original = new FileInfo("/downloads/Movie.mkv"),
+                Rename = new FileInfo("/library/Masked (1999).mkv"),
+                Item = _node
+            });
+        var context = _jobContext with
+        {
+            Parameters = new Dictionary<string, string>(_jobContext.Parameters) { ["dryRun"] = "true" }
+        };
+        var expected = new FileInfo("/library/Masked (1999).en.forced.srt").FullName;
+
+        // Act
+        await _subject.ExecuteAsync(context).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            _auditRecords.Verify(repository => repository.CreateAsync(
+                It.Is<AuditRecord>(record => record.Operation == "ImportDryRun" &&
+                    record.Detail == $"Dry run: move /downloads/Movie.en.forced.srt -> {expected}"),
+                It.IsAny<CancellationToken>()), Times.Once());
+            _auditRecords.Verify(repository => repository.CreateAsync(
+                It.Is<AuditRecord>(record => record.Operation == "ImportDryRun" &&
+                    record.Detail!.StartsWith(
+                        "Dry run: move /downloads/Other.en.forced.srt ",
+                        StringComparison.Ordinal)),
+                It.IsAny<CancellationToken>()), Times.Never);
+            _auditRecords.Verify(repository => repository.CreateAsync(
+                It.Is<AuditRecord>(record => record.Operation == "ImportDryRun" &&
+                    record.Detail!.StartsWith(
+                        "Dry run: move /downloads/Movie.en.forcedx.srt ",
+                        StringComparison.Ordinal)),
+                It.IsAny<CancellationToken>()), Times.Never);
+            _auditRecords.Verify(repository => repository.CreateAsync(
+                It.Is<AuditRecord>(record => record.Operation == "ImportDryRun" &&
+                    record.Detail!.StartsWith(
+                        "Dry run: move /downloads/Movie Extras.en.sdh.srt ",
+                        StringComparison.Ordinal)),
+                It.IsAny<CancellationToken>()), Times.Never);
+        }
     }
 
     [Test]
@@ -1227,6 +1458,557 @@ public sealed class DownloadImportItemJobTests
     }
 
     [Test]
+    public void ExecuteAsync_FailsWithNoUsableContent_WhenOnlyExtrasRemainAndAnotherAttemptOfTheTransferImported()
+    {
+        // Arrange
+        var imported = new Download
+        {
+            Id = new Guid("5c2e9a41-7b3d-4e68-a1f0-9d8c6b4e2f73"),
+            Title = "Release",
+            ExternalId = "external-id",
+            Status = DownloadStatus.Imported,
+            ReleaseId = _release.Id,
+            OutputPath = "/downloads/Release"
+        };
+        _download.OutputPath = "/downloads/Release";
+        _downloadRepository.Setup(repository => repository.ListTransferAttemptsAsync(
+                _download.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync([_download, imported]);
+        _fileSystem.Setup(fileSystem => fileSystem.DirectoryExists("/downloads/Release")).Returns(true);
+        _fileSystem.Setup(fileSystem => fileSystem.EnumerateFiles("/downloads/Release"))
+            .Returns(["/downloads/Release/Featurettes/Making Of.mkv"]);
+
+        // Act
+        Assert.CatchAsync<InvalidOperationException>(() => _subject.ExecuteAsync(_jobContext));
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            _downloadRepository.Verify(repository => repository.MarkFailedAsync(
+                _download.Id,
+                DownloadStatus.Failed,
+                DownloadFailureReason.NoUsableContent,
+                It.IsAny<string>(),
+                It.IsAny<string>(),
+                It.IsAny<string>(),
+                It.IsAny<DateTime>(),
+                It.IsAny<Guid?>(),
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()), Times.Once);
+            _downloadRepository.Verify(repository => repository.PatchAsync(
+                It.IsAny<DownloadPatch>(), It.IsAny<Guid?>(), It.IsAny<CancellationToken>()), Times.Never);
+        }
+    }
+
+    [TestCase(null)]
+    [TestCase(FulfillmentStatus.Upgradable)]
+    public void ExecuteAsync_FailsWithNoUsableContent_WhenThePackMissesAnEpisodeOfItsScope(
+        FulfillmentStatus? missingFulfillment)
+    {
+        // Arrange
+        _node.Level = "season";
+        var packed = new ContentHierarchyItem
+        {
+            Id = Guid.NewGuid(),
+            ParentId = _node.Id,
+            ContentType = "type-a",
+            Level = "episode",
+            Slug = "s01e01",
+            Name = "Episode 1",
+            EffectiveMonitoring = MonitoringMode.Monitored,
+            EffectiveRootFolderId = _node.EffectiveRootFolderId,
+            ContentItem = new ContentItem { Id = Guid.NewGuid(), Fulfillment = FulfillmentStatus.Fulfilled }
+        };
+        var missing = new ContentHierarchyItem
+        {
+            Id = Guid.NewGuid(),
+            ParentId = _node.Id,
+            ContentType = "type-a",
+            Level = "episode",
+            Slug = "s01e02",
+            Name = "Episode 2",
+            EffectiveMonitoring = MonitoringMode.Monitored,
+            EffectiveRootFolderId = _node.EffectiveRootFolderId,
+            ContentItem = missingFulfillment is { } fulfillment
+                ? new ContentItem { Id = Guid.NewGuid(), Fulfillment = fulfillment }
+                : null
+        };
+        var imported = new Download
+        {
+            Id = new Guid("5c2e9a41-7b3d-4e68-a1f0-9d8c6b4e2f73"),
+            Title = "Release",
+            ExternalId = "external-id",
+            Status = DownloadStatus.Imported,
+            ReleaseId = _release.Id,
+            OutputPath = "/downloads/Release"
+        };
+        _registry.Setup(registry => registry.GetDefinitionFor("type-a")).Returns(new ContentTypeDefinition
+        {
+            Slug = "type-a",
+            DisplayName = "Type A",
+            LevelDefinitions =
+            [
+                new()
+                {
+                    Slug = "season",
+                    DisplayName = "Season",
+                    CustomMetadataFields = []
+                },
+                new()
+                {
+                    Slug = "episode",
+                    DisplayName = "Episode",
+                    ParentSlug = "season",
+                    CustomMetadataFields = [],
+                    AcceptedFileTypes = [".mkv"]
+                }
+            ]
+        });
+        _nodes.Setup(repository => repository.QueryAsync(
+                It.IsAny<ContentHierarchyItemCriteria>(), It.IsAny<PagingParameter>(), It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<ContentHierarchyItem> { Items = [_node, packed, missing] });
+        _nodes.Setup(repository => repository.QueryIdsAsync(
+                It.IsAny<ContentHierarchyItemCriteria>(), It.IsAny<PagingParameter>(), It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
+        _nodes.Setup(repository => repository.QueryIdsAsync(
+                It.Is<ContentHierarchyItemCriteria>(criteria =>
+                    criteria.AncestorId == _node.Id &&
+                    criteria.Fulfillment.And.Single().Values!.Contains(
+                        missingFulfillment ?? FulfillmentStatus.Missing) &&
+                    (criteria.ExcludeIds == null || !criteria.ExcludeIds.Contains(missing.Id))),
+                It.IsAny<PagingParameter>(),
+                It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync([missing.Id]);
+        _evaluation.Setup(service => service.AssignFilesToLeavesAsync(
+                _release, _node, It.IsAny<IReadOnlyList<ContentHierarchyItem>>(),
+                It.IsAny<IReadOnlyList<ReleaseFileRef>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(
+            [
+                new ReleaseFileAssignment
+                {
+                    FileKey = "/downloads/Release/Show.S01E01.mkv",
+                    LeafContentHierarchyItemId = packed.Id
+                }
+            ]);
+        _download.OutputPath = "/downloads/Release";
+        _downloadRepository.Setup(repository => repository.ListTransferAttemptsAsync(
+                _download.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync([_download, imported]);
+        _downloadRepository.Setup(repository => repository.PatchAsync(
+                It.IsAny<DownloadPatch>(), It.IsAny<Guid?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        _fileSystem.Setup(fileSystem => fileSystem.DirectoryExists("/downloads/Release")).Returns(true);
+        _fileSystem.Setup(fileSystem => fileSystem.EnumerateFiles("/downloads/Release"))
+            .Returns(["/downloads/Release/Show.S01E01.mkv"]);
+
+        // Act
+        Assert.CatchAsync<InvalidOperationException>(() => _subject.ExecuteAsync(_jobContext));
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            _downloadRepository.Verify(repository => repository.MarkFailedAsync(
+                _download.Id,
+                DownloadStatus.Failed,
+                DownloadFailureReason.NoUsableContent,
+                It.IsAny<string>(),
+                It.IsAny<string>(),
+                It.IsAny<string>(),
+                It.IsAny<DateTime>(),
+                It.IsAny<Guid?>(),
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()), Times.Once);
+            _downloadRepository.Verify(repository => repository.PatchAsync(
+                It.IsAny<DownloadPatch>(), It.IsAny<Guid?>(), It.IsAny<CancellationToken>()), Times.Never);
+        }
+    }
+
+    [TestCase(FulfillmentStatus.Fulfilled)]
+    [TestCase(FulfillmentStatus.Upgradable)]
+    public async Task ExecuteAsync_EndsAsContentFulfilled_WhenAnotherAttemptOfTheTransferImportedItsWholeScope(
+        FulfillmentStatus packedFulfillment)
+    {
+        // Arrange
+        _node.Level = "season";
+        var packed = new ContentHierarchyItem
+        {
+            Id = Guid.NewGuid(),
+            ParentId = _node.Id,
+            ContentType = "type-a",
+            Level = "episode",
+            Slug = "s01e01",
+            Name = "Episode 1",
+            EffectiveMonitoring = MonitoringMode.Monitored,
+            EffectiveRootFolderId = _node.EffectiveRootFolderId,
+            ContentItem = new ContentItem { Id = Guid.NewGuid(), Fulfillment = packedFulfillment }
+        };
+        var fulfilled = new ContentHierarchyItem
+        {
+            Id = Guid.NewGuid(),
+            ParentId = _node.Id,
+            ContentType = "type-a",
+            Level = "episode",
+            Slug = "s01e02",
+            Name = "Episode 2",
+            EffectiveMonitoring = MonitoringMode.Monitored,
+            EffectiveRootFolderId = _node.EffectiveRootFolderId,
+            ContentItem = new ContentItem { Id = Guid.NewGuid(), Fulfillment = FulfillmentStatus.Fulfilled }
+        };
+        var imported = new Download
+        {
+            Id = new Guid("5c2e9a41-7b3d-4e68-a1f0-9d8c6b4e2f73"),
+            Title = "Release",
+            ExternalId = "external-id",
+            Status = DownloadStatus.Imported,
+            ReleaseId = _release.Id,
+            OutputPath = "/downloads/Release"
+        };
+        _registry.Setup(registry => registry.GetDefinitionFor("type-a")).Returns(new ContentTypeDefinition
+        {
+            Slug = "type-a",
+            DisplayName = "Type A",
+            LevelDefinitions =
+            [
+                new()
+                {
+                    Slug = "season",
+                    DisplayName = "Season",
+                    CustomMetadataFields = []
+                },
+                new()
+                {
+                    Slug = "episode",
+                    DisplayName = "Episode",
+                    ParentSlug = "season",
+                    CustomMetadataFields = [],
+                    AcceptedFileTypes = [".mkv"]
+                }
+            ]
+        });
+        _nodes.Setup(repository => repository.QueryAsync(
+                It.IsAny<ContentHierarchyItemCriteria>(), It.IsAny<PagingParameter>(), It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<ContentHierarchyItem> { Items = [_node, packed, fulfilled] });
+        _nodes.Setup(repository => repository.QueryIdsAsync(
+                It.IsAny<ContentHierarchyItemCriteria>(), It.IsAny<PagingParameter>(), It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
+        _nodes.Setup(repository => repository.QueryIdsAsync(
+                It.Is<ContentHierarchyItemCriteria>(criteria =>
+                    criteria.AncestorId == _node.Id &&
+                    criteria.Fulfillment.And.Single().Values!.Contains(packedFulfillment) &&
+                    (criteria.ExcludeIds == null || !criteria.ExcludeIds.Contains(packed.Id))),
+                It.IsAny<PagingParameter>(),
+                It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync([packed.Id]);
+        _evaluation.Setup(service => service.AssessForContentAsync(
+                _release,
+                It.IsAny<IReadOnlyList<ContentFact>>(),
+                packed.Id,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ReleaseAssessment { MatchResult = ReleaseMatchResult.Confident, IsAcceptable = false });
+        _evaluation.Setup(service => service.AssignFilesToLeavesAsync(
+                _release, _node, It.IsAny<IReadOnlyList<ContentHierarchyItem>>(),
+                It.IsAny<IReadOnlyList<ReleaseFileRef>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(
+            [
+                new ReleaseFileAssignment
+                {
+                    FileKey = "/downloads/Release/Show.S01E01.mkv",
+                    LeafContentHierarchyItemId = packed.Id
+                }
+            ]);
+        _download.OutputPath = "/downloads/Release";
+        _downloadRepository.Setup(repository => repository.ListTransferAttemptsAsync(
+                _download.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync([_download, imported]);
+        _downloadRepository.Setup(repository => repository.PatchAsync(
+                It.IsAny<DownloadPatch>(), It.IsAny<Guid?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        _fileSystem.Setup(fileSystem => fileSystem.DirectoryExists("/downloads/Release")).Returns(true);
+        _fileSystem.Setup(fileSystem => fileSystem.EnumerateFiles("/downloads/Release"))
+            .Returns(["/downloads/Release/Show.S01E01.mkv"]);
+
+        // Act
+        await _subject.ExecuteAsync(_jobContext).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            _downloadRepository.Verify(repository => repository.PatchAsync(
+                It.Is<DownloadPatch>(patch =>
+                    patch.Id == _download.Id &&
+                    patch.Status!.Value == DownloadStatus.Cancelled &&
+                    patch.StatusReason!.Value == "Content fulfilled"),
+                null,
+                It.IsAny<CancellationToken>()), Times.Once);
+            _downloadRepository.Verify(repository => repository.MarkFailedAsync(
+                It.IsAny<Guid>(),
+                It.IsAny<DownloadStatus>(),
+                It.IsAny<DownloadFailureReason>(),
+                It.IsAny<string>(),
+                It.IsAny<string>(),
+                It.IsAny<string>(),
+                It.IsAny<DateTime>(),
+                It.IsAny<Guid?>(),
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()), Times.Never);
+        }
+    }
+
+    [Test]
+    public void ExecuteAsync_FailsWithNoUsableContent_WhenNoOtherAttemptOfTheTransferImported()
+    {
+        // Arrange
+        _node.Level = "season";
+        var packed = new ContentHierarchyItem
+        {
+            Id = Guid.NewGuid(),
+            ParentId = _node.Id,
+            ContentType = "type-a",
+            Level = "episode",
+            Slug = "s01e01",
+            Name = "Episode 1",
+            EffectiveMonitoring = MonitoringMode.Monitored,
+            EffectiveRootFolderId = _node.EffectiveRootFolderId,
+            ContentItem = new ContentItem { Id = Guid.NewGuid(), Fulfillment = FulfillmentStatus.Fulfilled }
+        };
+        _registry.Setup(registry => registry.GetDefinitionFor("type-a")).Returns(new ContentTypeDefinition
+        {
+            Slug = "type-a",
+            DisplayName = "Type A",
+            LevelDefinitions =
+            [
+                new()
+                {
+                    Slug = "season",
+                    DisplayName = "Season",
+                    CustomMetadataFields = []
+                },
+                new()
+                {
+                    Slug = "episode",
+                    DisplayName = "Episode",
+                    ParentSlug = "season",
+                    CustomMetadataFields = [],
+                    AcceptedFileTypes = [".mkv"]
+                }
+            ]
+        });
+        _nodes.Setup(repository => repository.QueryAsync(
+                It.IsAny<ContentHierarchyItemCriteria>(), It.IsAny<PagingParameter>(), It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<ContentHierarchyItem> { Items = [_node, packed] });
+        _nodes.Setup(repository => repository.QueryIdsAsync(
+                It.IsAny<ContentHierarchyItemCriteria>(), It.IsAny<PagingParameter>(), It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
+        _evaluation.Setup(service => service.AssignFilesToLeavesAsync(
+                _release, _node, It.IsAny<IReadOnlyList<ContentHierarchyItem>>(),
+                It.IsAny<IReadOnlyList<ReleaseFileRef>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(
+            [
+                new ReleaseFileAssignment
+                {
+                    FileKey = "/downloads/Release/Show.S01E01.mkv",
+                    LeafContentHierarchyItemId = packed.Id
+                }
+            ]);
+        _download.OutputPath = "/downloads/Release";
+        _fileSystem.Setup(fileSystem => fileSystem.DirectoryExists("/downloads/Release")).Returns(true);
+        _fileSystem.Setup(fileSystem => fileSystem.EnumerateFiles("/downloads/Release"))
+            .Returns(["/downloads/Release/Show.S01E01.mkv"]);
+
+        // Act
+        Assert.CatchAsync<InvalidOperationException>(() => _subject.ExecuteAsync(_jobContext));
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            _downloadRepository.Verify(repository => repository.MarkFailedAsync(
+                _download.Id,
+                DownloadStatus.Failed,
+                DownloadFailureReason.NoUsableContent,
+                It.IsAny<string>(),
+                It.IsAny<string>(),
+                It.IsAny<string>(),
+                It.IsAny<DateTime>(),
+                It.IsAny<Guid?>(),
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()), Times.Once);
+            _downloadRepository.Verify(repository => repository.PatchAsync(
+                It.IsAny<DownloadPatch>(), It.IsAny<Guid?>(), It.IsAny<CancellationToken>()), Times.Never);
+        }
+    }
+
+    [Test]
+    public void ExecuteAsync_FailsWithNoUsableContent_WhenThePackHasNoFileForItsScopedEpisode()
+    {
+        // Arrange
+        _node.Level = "season";
+        var packed = new ContentHierarchyItem
+        {
+            Id = Guid.NewGuid(),
+            ParentId = _node.Id,
+            ContentType = "type-a",
+            Level = "episode",
+            Slug = "s01e01",
+            Name = "Episode 1",
+            EffectiveMonitoring = MonitoringMode.Monitored,
+            EffectiveRootFolderId = _node.EffectiveRootFolderId,
+            ContentItem = new ContentItem { Id = Guid.NewGuid(), Fulfillment = FulfillmentStatus.Fulfilled }
+        };
+        var scoped = new ContentHierarchyItem
+        {
+            Id = Guid.NewGuid(),
+            ParentId = _node.Id,
+            ContentType = "type-a",
+            Level = "episode",
+            Slug = "s01e02",
+            Name = "Episode 2",
+            EffectiveMonitoring = MonitoringMode.Monitored,
+            EffectiveRootFolderId = _node.EffectiveRootFolderId
+        };
+        var imported = new Download
+        {
+            Id = new Guid("5c2e9a41-7b3d-4e68-a1f0-9d8c6b4e2f73"),
+            Title = "Release",
+            ExternalId = "external-id",
+            Status = DownloadStatus.Imported,
+            ReleaseId = _release.Id,
+            OutputPath = "/downloads/Release"
+        };
+        _registry.Setup(registry => registry.GetDefinitionFor("type-a")).Returns(new ContentTypeDefinition
+        {
+            Slug = "type-a",
+            DisplayName = "Type A",
+            LevelDefinitions =
+            [
+                new()
+                {
+                    Slug = "season",
+                    DisplayName = "Season",
+                    CustomMetadataFields = []
+                },
+                new()
+                {
+                    Slug = "episode",
+                    DisplayName = "Episode",
+                    ParentSlug = "season",
+                    CustomMetadataFields = [],
+                    AcceptedFileTypes = [".mkv"]
+                }
+            ]
+        });
+        _scopes.Setup(repository => repository.QueryAsync(
+                It.IsAny<DownloadScopeQuery>(), It.IsAny<PagingParameter>(), null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<DownloadScope>
+            {
+                Items = [new DownloadScope { DownloadId = _download.Id, ContentHierarchyItemId = scoped.Id }]
+            });
+        _nodes.Setup(repository => repository.QueryAsync(
+                It.IsAny<ContentHierarchyItemCriteria>(), It.IsAny<PagingParameter>(), It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<ContentHierarchyItem> { Items = [_node, packed, scoped] });
+        _nodes.Setup(repository => repository.QueryIdsAsync(
+                It.IsAny<ContentHierarchyItemCriteria>(), It.IsAny<PagingParameter>(), It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
+        _nodes.Setup(repository => repository.QueryIdsAsync(
+                It.Is<ContentHierarchyItemCriteria>(criteria =>
+                    criteria.Ids != null &&
+                    criteria.Ids.Contains(scoped.Id) &&
+                    criteria.LeafOnly == true &&
+                    criteria.Fulfillment.And.Single().Values!.Contains(FulfillmentStatus.Missing)),
+                It.IsAny<PagingParameter>(),
+                It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync([scoped.Id]);
+        _evaluation.Setup(service => service.AssignFilesToLeavesAsync(
+                _release, _node, It.IsAny<IReadOnlyList<ContentHierarchyItem>>(),
+                It.IsAny<IReadOnlyList<ReleaseFileRef>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(
+            [
+                new ReleaseFileAssignment
+                {
+                    FileKey = "/downloads/Release/Show.S01E01.mkv",
+                    LeafContentHierarchyItemId = packed.Id
+                }
+            ]);
+        _download.OutputPath = "/downloads/Release";
+        _downloadRepository.Setup(repository => repository.ListTransferAttemptsAsync(
+                _download.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync([_download, imported]);
+        _fileSystem.Setup(fileSystem => fileSystem.DirectoryExists("/downloads/Release")).Returns(true);
+        _fileSystem.Setup(fileSystem => fileSystem.EnumerateFiles("/downloads/Release"))
+            .Returns(["/downloads/Release/Show.S01E01.mkv"]);
+
+        // Act
+        Assert.CatchAsync<InvalidOperationException>(() => _subject.ExecuteAsync(_jobContext));
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            _downloadRepository.Verify(repository => repository.MarkFailedAsync(
+                _download.Id,
+                DownloadStatus.Failed,
+                DownloadFailureReason.NoUsableContent,
+                It.IsAny<string>(),
+                It.IsAny<string>(),
+                It.IsAny<string>(),
+                It.IsAny<DateTime>(),
+                It.IsAny<Guid?>(),
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()), Times.Once);
+            _downloadRepository.Verify(repository => repository.PatchAsync(
+                It.IsAny<DownloadPatch>(), It.IsAny<Guid?>(), It.IsAny<CancellationToken>()), Times.Never);
+        }
+    }
+
+    [Test]
+    public async Task ExecuteAsync_LocksTheTransferAttemptsInTheirListedOrder_WhenTheImportStarts()
+    {
+        // Arrange
+        var sibling = new Download
+        {
+            Id = new Guid("5c2e9a41-7b3d-4e68-a1f0-9d8c6b4e2f73"),
+            Title = "Release",
+            ExternalId = "external-id",
+            Status = DownloadStatus.Imported,
+            ReleaseId = _release.Id,
+            OutputPath = "/downloads/new.mkv"
+        };
+        var calls = new List<string>();
+        _downloadRepository.Setup(repository => repository.ListTransferAttemptsAsync(
+                _download.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync([sibling, _download]);
+        _downloadRepository.Setup(repository => repository.LockAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .Callback((Guid id, CancellationToken _) => calls.Add(id.ToString("D")))
+            .Returns(Task.CompletedTask);
+        _downloadRepository.Setup(repository => repository.MarkImportingAsync(
+                _download.Id, It.IsAny<DateTime>(), It.IsAny<Guid?>(), It.IsAny<CancellationToken>()))
+            .Callback(() => calls.Add("MarkImporting"))
+            .ReturnsAsync(false);
+
+        // Act
+        await _subject.ExecuteAsync(_jobContext).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(
+            calls,
+            Is.EqualTo(
+            [
+                "5c2e9a41-7b3d-4e68-a1f0-9d8c6b4e2f73",
+                "3d7b1e88-2a4c-4f51-9a6d-0b8e5c4f2a19",
+                "MarkImporting"
+            ]));
+    }
+
+    [Test]
     public void ExecuteAsync_KeepsExistingFile_WhenDownloadHoldsOnlyExtras()
     {
         // Arrange
@@ -1247,6 +2029,7 @@ public sealed class DownloadImportItemJobTests
         {
             _downloadRepository.Verify(repository => repository.MarkFailedAsync(
                 _download.Id,
+                DownloadStatus.Failed,
                 DownloadFailureReason.NoUsableContent,
                 "No file matched content that needs it. Skipped 2 files: 2 extra. Making Of.mkv (extra); " +
                     "Interview.mkv (extra)",
@@ -1278,6 +2061,12 @@ public sealed class DownloadImportItemJobTests
     [TestCase("/downloads/Release/Movie-scene.mkv")]
     [TestCase("/downloads/Release/Movie-short.mkv")]
     [TestCase("/downloads/Release/Movie-other.mkv")]
+    [TestCase("/downloads/Release/Interviews/Director.mkv")]
+    [TestCase("/downloads/Release/Other/Clip.mkv")]
+    [TestCase("/downloads/Release/Scenes/Clip.mkv")]
+    [TestCase("/downloads/Release/Trailers/Teaser.mkv")]
+    [TestCase("/downloads/Release/Movie-behindthescenes.mkv")]
+    [TestCase("/downloads/Release/Movie-interview.mkv")]
     [TestCase("/downloads/Release/trailer.mkv")]
     [TestCase("/downloads/Release/Movie.sample.mkv")]
     [TestCase("/downloads/Release/Movie.sample.1080p.mkv")]
@@ -1768,48 +2557,245 @@ public sealed class DownloadImportItemJobTests
             1, "Dry run: move 1 file(s). The audit history of the download holds the plan."), Times.Once);
     }
 
-    [Test]
-    public void SummarizeSkippedFiles_ListsEveryFile_WhenTheListFitsTheLimit()
+    [TestCaseSource(nameof(ScopedItemFiles))]
+    public void ExecuteAsync_BindsOnlyTheScopedItemsFiles_WhenTheDownloadIsScopedToOneItem(
+        string[] files,
+        string[] expectedBound,
+        string? expectedFailure,
+        IResolveConstraint expectedOutcome)
     {
         // Arrange
-        (string File, string? ItemName, DownloadImportItemJob.SkipReason Reason)[] skipped =
-        [
-            ("a.mkv", "Episode 1", DownloadImportItemJob.SkipReason.Fulfilled),
-            ("b.nfo", null, DownloadImportItemJob.SkipReason.NoSingleItem),
-            ("c.mkv", "Episode 3", DownloadImportItemJob.SkipReason.Fulfilled),
-        ];
+        var season = new ContentHierarchyItem
+        {
+            Id = Guid.NewGuid(),
+            ContentType = "type-a",
+            Level = "season",
+            Slug = "s01",
+            Name = "Season 1",
+            EffectiveRootFolderId = _node.EffectiveRootFolderId
+        };
+        var first = new ContentHierarchyItem
+        {
+            Id = Guid.NewGuid(),
+            ParentId = season.Id,
+            ContentType = "type-a",
+            Level = "episode",
+            Slug = "s01e01",
+            Name = "Episode 1",
+            EffectiveRootFolderId = _node.EffectiveRootFolderId
+        };
+        var second = new ContentHierarchyItem
+        {
+            Id = Guid.NewGuid(),
+            ParentId = season.Id,
+            ContentType = "type-a",
+            Level = "episode",
+            Slug = "s01e02",
+            Name = "Episode 2",
+            EffectiveRootFolderId = _node.EffectiveRootFolderId
+        };
+        _node.ParentId = season.Id;
+        _node.Level = "episode";
+        _node.Slug = "s01e03";
+        _node.Name = "Episode 3";
+        var matcher = new Mock<IReleaseMatchContentTypeDefinitionProvider>();
+        matcher.Setup(provider => provider.IsMatch(
+                It.Is<ContentTarget>(target => target.Item.Id == first.Id),
+                It.IsAny<IReadOnlyList<IReadOnlyList<ContentFact>>>(),
+                It.Is<Release>(release => release.Title == "Show.S01E01.mkv"),
+                It.IsAny<IReadOnlyList<ContentFact>>()))
+            .Returns(ReleaseMatchResult.Confident);
+        matcher.Setup(provider => provider.IsMatch(
+                It.Is<ContentTarget>(target => target.Item.Id == second.Id),
+                It.IsAny<IReadOnlyList<IReadOnlyList<ContentFact>>>(),
+                It.Is<Release>(release => release.Title == "Show.S01E02.mkv"),
+                It.IsAny<IReadOnlyList<ContentFact>>()))
+            .Returns(ReleaseMatchResult.Confident);
+        matcher.Setup(provider => provider.IsMatch(
+                It.Is<ContentTarget>(target => target.Item.Id == _node.Id),
+                It.IsAny<IReadOnlyList<IReadOnlyList<ContentFact>>>(),
+                It.Is<Release>(release => release.Title == "Show.S01E03.mkv"),
+                It.IsAny<IReadOnlyList<ContentFact>>()))
+            .Returns(ReleaseMatchResult.Confident);
+        matcher.Setup(provider => provider.IsMatch(
+                It.IsAny<ContentTarget>(),
+                It.IsAny<IReadOnlyList<IReadOnlyList<ContentFact>>>(),
+                It.Is<Release>(release => release.Title == "Show.S01.Gag.Reel.mkv"),
+                It.IsAny<IReadOnlyList<ContentFact>>()))
+            .Returns(ReleaseMatchResult.Confident);
+        matcher.Setup(provider => provider.IsMatch(
+                It.IsAny<ContentTarget>(),
+                It.IsAny<IReadOnlyList<IReadOnlyList<ContentFact>>>(),
+                It.Is<Release>(release =>
+                    release.Title == "The Martian - 01.mp3" || release.Title == "The Martian - 02.mp3"),
+                It.IsAny<IReadOnlyList<ContentFact>>()))
+            .Returns(ReleaseMatchResult.Indeterminate);
+        _registry.Setup(registry => registry.FindProviderFor("type-a")).Returns(matcher.Object);
+        _registry.Setup(registry => registry.GetDefinitionFor("type-a")).Returns(new ContentTypeDefinition
+        {
+            Slug = "type-a",
+            DisplayName = "Type A",
+            LevelDefinitions =
+            [
+                new()
+                {
+                    Slug = "season",
+                    DisplayName = "Season",
+                    CustomMetadataFields = []
+                },
+                new()
+                {
+                    Slug = "episode",
+                    DisplayName = "Episode",
+                    ParentSlug = "season",
+                    CustomMetadataFields = [],
+                    AcceptedFileTypes = [".mkv", ".mp3"]
+                }
+            ]
+        });
+        _nodes.Setup(repository => repository.GetByIdAsync(season.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(season);
+        _nodes.Setup(repository => repository.GetLineageAsync(first.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync([first, season]);
+        _nodes.Setup(repository => repository.GetLineageAsync(second.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync([second, season]);
+        _nodes.Setup(repository => repository.GetLineageAsync(_node.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync([_node, season]);
+        _nodes.Setup(repository => repository.QueryAsync(
+                It.IsAny<ContentHierarchyItemCriteria>(),
+                It.IsAny<PagingParameter>(),
+                It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<ContentHierarchyItem> { Items = [first, second, _node] });
+        var metadata = new Mock<IMaterializedMetadataRepository>();
+        metadata.Setup(repository => repository.QueryAsync(
+                It.IsAny<MetadataCriteria>(),
+                It.IsAny<PagingParameter>(),
+                It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<MaterializedMetadata>());
+        var evaluation = new ReleaseEvaluationService(
+            _nodes.Object,
+            metadata.Object,
+            Mock.Of<IReleaseRepository>(),
+            _downloadRepository.Object,
+            Mock.Of<IQualityTierListRepository>(),
+            _registry.Object,
+            [],
+            TimeProvider.System,
+            _fileSystem.Object,
+            NullLogger<ReleaseEvaluationService>.Instance);
+        _evaluation.Setup(service => service.AssignFilesToLeavesAsync(
+                It.IsAny<Release>(),
+                season,
+                It.IsAny<IReadOnlyList<ContentHierarchyItem>>(),
+                It.IsAny<IReadOnlyList<ReleaseFileRef>>(),
+                It.IsAny<CancellationToken>()))
+            .Returns<
+                Release,
+                ContentHierarchyItem,
+                IReadOnlyList<ContentHierarchyItem>,
+                IReadOnlyList<ReleaseFileRef>,
+                CancellationToken>(evaluation.AssignFilesToLeavesAsync);
+        var bound = new List<string>();
+        _contentFiles.Setup(service => service.PreviewRenameAsync(
+                _node.Id,
+                It.IsAny<FileInfo>(),
+                It.IsAny<MediaInfo?>(),
+                It.IsAny<CancellationToken>()))
+            .Callback<Guid, FileInfo, MediaInfo?, CancellationToken>((_, file, _, _) => bound.Add(file.Name))
+            .ReturnsAsync(new ContentRename
+            {
+                Original = new FileInfo("/downloads/new.mkv"),
+                Rename = new FileInfo("/library/new.mkv"),
+                Item = _node
+            });
+        string? failure = null;
+        _downloadRepository.Setup(repository => repository.MarkFailedAsync(
+                _download.Id,
+                It.IsAny<DownloadStatus>(),
+                It.IsAny<DownloadFailureReason>(),
+                It.IsAny<string>(),
+                It.IsAny<string>(),
+                It.IsAny<string>(),
+                It.IsAny<DateTime>(),
+                It.IsAny<Guid?>(),
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()))
+            .Callback<
+                Guid,
+                DownloadStatus,
+                DownloadFailureReason,
+                string,
+                string,
+                string,
+                DateTime,
+                Guid?,
+                Guid?,
+                CancellationToken>((_, _, _, reason, _, _, _, _, _, _) => failure = reason)
+            .ReturnsAsync(true);
+        _download.OutputPath = "/downloads/Release";
+        _fileSystem.Setup(fileSystem => fileSystem.DirectoryExists("/downloads/Release")).Returns(true);
+        _fileSystem.Setup(fileSystem => fileSystem.EnumerateFiles("/downloads/Release"))
+            .Returns(files);
 
         // Act
-        var summary = DownloadImportItemJob.SummarizeSkippedFiles("No file matched. ", skipped);
-
-        // Assert
-        Assert.That(summary, Is.EqualTo(
-            "No file matched. Skipped 3 files: 2 already fulfilled, 1 matches no single item. " +
-            "a.mkv (Episode 1: already fulfilled); b.nfo (matches no single item); " +
-            "c.mkv (Episode 3: already fulfilled)"));
-    }
-
-    [Test]
-    public void SummarizeSkippedFiles_EndsWithTheRemainingCount_WhenTheListExceedsTheLimit()
-    {
-        // Arrange
-        (string File, string? ItemName, DownloadImportItemJob.SkipReason Reason)[] skipped =
-        [
-            .. Enumerable.Range(1, 40).Select(index => (
-                $"Show.Name.S01E{index:00}.Kontrollverlust.German.1080p.WEB.x264-GROUP.mkv",
-                $"Episode {index}",
-                DownloadImportItemJob.SkipReason.Fulfilled))
-        ];
-
-        // Act
-        var summary = DownloadImportItemJob.SummarizeSkippedFiles("No file matched. ", skipped);
+        Assert.That(() => _subject.ExecuteAsync(_jobContext), expectedOutcome);
 
         // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(summary, Has.Length.LessThanOrEqualTo(1024));
-            Assert.That(summary, Does.StartWith("No file matched. Skipped 40 files: 40 already fulfilled. "));
-            Assert.That(summary, Does.Match(@"\(Episode \d+: already fulfilled\) …and \d+ more$"));
+            Assert.That(bound, Is.EquivalentTo(expectedBound));
+            Assert.That(failure, Is.EqualTo(expectedFailure));
+        }
+    }
+
+    [Test]
+    public void ExecuteAsync_EndsFailureReasonWithTheRemainingCount_WhenTheSkippedFilesExceedTheLimit()
+    {
+        // Arrange
+        string? failure = null;
+        _downloadRepository.Setup(repository => repository.MarkFailedAsync(
+                _download.Id,
+                It.IsAny<DownloadStatus>(),
+                It.IsAny<DownloadFailureReason>(),
+                It.IsAny<string>(),
+                It.IsAny<string>(),
+                It.IsAny<string>(),
+                It.IsAny<DateTime>(),
+                It.IsAny<Guid?>(),
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()))
+            .Callback<
+                Guid,
+                DownloadStatus,
+                DownloadFailureReason,
+                string,
+                string,
+                string,
+                DateTime,
+                Guid?,
+                Guid?,
+                CancellationToken>((_, _, _, reason, _, _, _, _, _, _) => failure = reason)
+            .ReturnsAsync(true);
+        _download.OutputPath = "/downloads/Release";
+        _fileSystem.Setup(fileSystem => fileSystem.DirectoryExists("/downloads/Release")).Returns(true);
+        _fileSystem.Setup(fileSystem => fileSystem.EnumerateFiles("/downloads/Release"))
+            .Returns(
+            [
+                .. Enumerable.Range(1, 40).Select(index =>
+                    $"/downloads/Release/Featurettes/Show.Name.Kontrollverlust.German.1080p.x264-GROUP.{index:00}.mkv")
+            ]);
+
+        // Act
+        Assert.CatchAsync<InvalidOperationException>(() => _subject.ExecuteAsync(_jobContext));
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(failure, Has.Length.LessThanOrEqualTo(1024));
+            Assert.That(failure, Does.StartWith("No file matched content that needs it. Skipped 40 files: 40 extra. "));
+            Assert.That(failure, Does.Match(@"\(extra\) …and \d+ more$"));
         }
     }
 }

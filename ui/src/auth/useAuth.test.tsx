@@ -15,19 +15,15 @@ const mockContextValue: AuthContextValue = {
     hasPermission: () => true,
     getRequiredRole: () => undefined,
     hasRole: () => true,
-    signIn: () => {},
     signOut: async () => {},
     login: async () => {},
 };
 
-function createWrapper(value: AuthContextValue) {
-    return ({ children }: { children: React.ReactNode }) => createElement(AuthContext.Provider, { value }, children);
-}
-
 describe('useAuth', () => {
     it('returns context value when inside AuthProvider', () => {
         const { result } = renderHook(() => useAuth(), {
-            wrapper: createWrapper(mockContextValue),
+            wrapper: ({ children }: { children: React.ReactNode }) =>
+                createElement(AuthContext.Provider, { value: mockContextValue }, children),
         });
 
         expect(result.current.isAuthenticated).toBe(true);

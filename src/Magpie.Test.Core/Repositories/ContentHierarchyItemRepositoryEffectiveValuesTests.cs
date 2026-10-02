@@ -86,7 +86,6 @@ public sealed class ContentHierarchyItemRepositoryEffectiveValuesTests
     [TearDown]
     public void TearDown()
     {
-        _context.Database.CloseConnection();
         _context.Dispose();
     }
 
@@ -186,7 +185,7 @@ public sealed class ContentHierarchyItemRepositoryEffectiveValuesTests
             Path = "/library/type-a",
             ContentType = "type-a",
             IsDefault = true,
-            DefaultMonitoring = true,
+            DefaultMonitoring = MonitoringMode.Monitored,
             Defaults = new()
             {
                 ["root"] = new() { QualityTierListId = qualityTierList.Id },

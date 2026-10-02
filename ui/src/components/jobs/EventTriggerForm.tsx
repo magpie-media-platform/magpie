@@ -426,7 +426,7 @@ export function EventTriggerForm({
         Object.assign(newErrors, validateJobParameters(selectedTemplate?.parameters, values.parameters, canBind));
         if (!canBind) {
             for (const [name, value] of Object.entries(values.parameters)) {
-                if (value.includes('${')) {
+                if (getEventBindingKind(value) !== 'static') {
                     newErrors[jobParameterErrorKey(name)] = 'A user trigger must target a specific item.';
                 }
             }

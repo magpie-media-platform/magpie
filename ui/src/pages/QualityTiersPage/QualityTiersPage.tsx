@@ -158,7 +158,7 @@ export function QualityTiersPage() {
             }
             setCloningIds((current) => new Set([...current, tierList.id]));
             try {
-                await createTierList({
+                const created = await createTierList({
                     name: `${tierList.name} (Copy)`,
                     mimeTypes: tierList.mimeTypes,
                     upgradeAllowed: tierList.upgradeAllowed,
@@ -169,7 +169,11 @@ export function QualityTiersPage() {
                         isCutoff: rank.isCutoff,
                     })),
                 });
-                toast({ title: 'Cloned', description: `Created copy of "${tierList.name}"`, variant: 'success' });
+                toast({
+                    title: 'Cloned',
+                    description: `Created "${created.name}". It shares its tiers with "${tierList.name}".`,
+                    variant: 'success',
+                });
             } catch {
                 toast({ title: 'Clone failed', description: 'Failed to clone the tier list.', variant: 'error' });
             } finally {

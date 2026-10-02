@@ -149,16 +149,6 @@ function makeResult<T>(data: T, loading = false, error: Error | null = null) {
     return { data: loading ? undefined : data, isLoading: loading, error };
 }
 
-function setDefaultMocks() {
-    mockClientHealthResult.mockReturnValue(makeResult(defaultClientHealth));
-    mockServerHealthResult.mockReturnValue(makeResult(defaultServerHealth));
-    mockActiveDownloadsResult.mockReturnValue(makeResult(defaultActiveDownloads));
-    mockRecentJobsResult.mockReturnValue(makeResult(defaultRecentJobs));
-    mockContentCountsResult.mockReturnValue(makeResult(defaultContentCounts));
-    mockRecentContentResult.mockReturnValue(makeResult(defaultRecentContent));
-    mockUpcomingContentResult.mockReturnValue(makeResult(defaultUpcomingContent));
-}
-
 function setLoadingMocks() {
     mockClientHealthResult.mockReturnValue(makeResult(undefined, true));
     mockServerHealthResult.mockReturnValue(makeResult(undefined, true));
@@ -247,7 +237,13 @@ describe('DashboardPage', () => {
 
     beforeEach(() => {
         vi.clearAllMocks();
-        setDefaultMocks();
+        mockClientHealthResult.mockReturnValue(makeResult(defaultClientHealth));
+        mockServerHealthResult.mockReturnValue(makeResult(defaultServerHealth));
+        mockActiveDownloadsResult.mockReturnValue(makeResult(defaultActiveDownloads));
+        mockRecentJobsResult.mockReturnValue(makeResult(defaultRecentJobs));
+        mockContentCountsResult.mockReturnValue(makeResult(defaultContentCounts));
+        mockRecentContentResult.mockReturnValue(makeResult(defaultRecentContent));
+        mockUpcomingContentResult.mockReturnValue(makeResult(defaultUpcomingContent));
         mockOnboardingStatus.mockReturnValue({
             status: completeOnboarding,
             steps: deriveOnboardingSteps(completeOnboarding),
@@ -495,19 +491,25 @@ describe('DashboardPage', () => {
             expect(viewAllLink).toHaveAttribute('href', '/library');
         });
 
-        it('has link to filtered library for status', async () => {
+        it.each([
+            ['View 238 fulfilled items', '/library/all?fulfillment=fulfilled&levels=all'],
+            ['View 15 upgradable items', '/library/all?fulfillment=upgradable&levels=all'],
+            ['View 18 partial items', '/library/all?fulfillment=partial&levels=all'],
+            ['View 42 missing items', '/library/all?fulfillment=missing&levels=all'],
+            ['View 12 external items', '/library/all?fulfillment=fulfilledExternally&levels=all'],
+        ])('links "%s" to the library at every level', async (name, href) => {
+            // Arrange
             await renderDashboard();
-
             const statsSection = screen.getByRole('region', { name: /content overview/i });
             const contentWidget = within(statsSection)
                 .getByRole('heading', { name: 'Content' })
                 .closest<HTMLElement>('[data-component="content-stats-widget"]');
 
-            const missingLink = within(contentWidget!).getByRole('link', {
-                name: /view 42 missing items/i,
-            });
+            // Act
+            const link = within(contentWidget!).getByRole('link', { name });
 
-            expect(missingLink).toHaveAttribute('href', '/library/all?fulfillment=missing');
+            // Assert
+            expect(link).toHaveAttribute('href', href);
         });
     });
 

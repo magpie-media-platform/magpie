@@ -1,12 +1,4 @@
-import {
-    useState,
-    useCallback,
-    useEffect,
-    useRef,
-    forwardRef,
-    type ComponentPropsWithoutRef,
-    type KeyboardEvent,
-} from 'react';
+import { useState, useCallback, forwardRef, type ComponentPropsWithoutRef, type KeyboardEvent } from 'react';
 import {
     FunnelIcon,
     CaretDownIcon,
@@ -19,7 +11,6 @@ import {
 
 import { Button } from '@/components/ui/Button';
 import { Badge } from '@/components/ui/Badge';
-import { Select, SelectTrigger, SelectContent, SelectItem } from '@/components/ui/Select';
 import { SimpleFilterBuilder } from '@/components/filters/SimpleFilterBuilder';
 import { FilterQueryEditor } from '@/editor/FilterQueryEditor';
 import { useMediaQuery } from '@/hooks/ui/useMediaQuery';
@@ -29,14 +20,6 @@ import './FilterBar.css';
 import { LocalContentFilters } from './LocalContentFilters';
 
 export type FilterMode = 'simple' | 'advanced';
-
-export interface SavedFilterOption {
-    id: string;
-    name: string;
-    query: string;
-}
-
-const SAVED_FILTER_NONE = '__none__';
 
 export interface FilterBarProps extends Omit<ComponentPropsWithoutRef<'div'>, 'onChange' | 'onSubmit'> {
     value: string;
@@ -71,10 +54,6 @@ export interface FilterBarProps extends Omit<ComponentPropsWithoutRef<'div'>, 'o
 
     onExpandedChange?: (expanded: boolean) => void;
 
-    savedFilters?: SavedFilterOption[];
-
-    onApplySavedFilter?: (option: SavedFilterOption) => void;
-
     defaultContentType?: string;
 
     restrictContentType?: string;
@@ -107,8 +86,6 @@ export const FilterBar = forwardRef<HTMLDivElement, FilterBarProps>(
             tableLayoutQuery,
             expanded: controlledExpanded,
             onExpandedChange,
-            savedFilters,
-            onApplySavedFilter,
             defaultContentType,
             restrictContentType,
             lockContentLevel,
@@ -123,16 +100,9 @@ export const FilterBar = forwardRef<HTMLDivElement, FilterBarProps>(
         ref,
     ) => {
         const usesTableLayout = useMediaQuery(tableLayoutQuery);
-        const hasExplicitExpansion = useRef(defaultExpanded !== undefined);
-        const [internalExpanded, setInternalExpanded] = useState(() => defaultExpanded ?? usesTableLayout);
+        const [explicitExpanded, setExplicitExpanded] = useState(defaultExpanded);
         const isControlled = controlledExpanded !== undefined;
-        const isExpanded = !collapsible || (isControlled ? controlledExpanded : internalExpanded);
-
-        useEffect(() => {
-            if (!isControlled && !hasExplicitExpansion.current) {
-                setInternalExpanded(usesTableLayout);
-            }
-        }, [isControlled, usesTableLayout]);
+        const isExpanded = !collapsible || (isControlled ? controlledExpanded : (explicitExpanded ?? usesTableLayout));
 
         const canUseSimpleMode = isSimpleQuery(value, context);
         const [mode, setMode] = useState<FilterMode>(canUseSimpleMode ? 'simple' : 'advanced');
@@ -143,38 +113,13 @@ export const FilterBar = forwardRef<HTMLDivElement, FilterBarProps>(
 
         const handleExpandToggle = useCallback(() => {
             const newExpanded = !isExpanded;
-            hasExplicitExpansion.current = true;
-            if (!isControlled) {
-                setInternalExpanded(newExpanded);
-            }
+            setExplicitExpanded(newExpanded);
             onExpandedChange?.(newExpanded);
-        }, [isExpanded, isControlled, onExpandedChange]);
+        }, [isExpanded, onExpandedChange]);
 
         const handleClear = useCallback(() => {
             (onImmediateChange ?? onChange)('');
         }, [onChange, onImmediateChange]);
-
-        const handleSavedFilterChange = useCallback(
-            (value: string) => {
-                if (value === SAVED_FILTER_NONE) {
-                    return;
-                }
-                const filter = savedFilters?.find((f) => f.id === value);
-                if (filter?.query) {
-                    (onImmediateChange ?? onChange)(filter.query);
-                    onApplySavedFilter?.(filter);
-                    hasExplicitExpansion.current = true;
-
-                    if (!isControlled) {
-                        setInternalExpanded(true);
-                    }
-                    onExpandedChange?.(true);
-                }
-            },
-            [savedFilters, onChange, onImmediateChange, onApplySavedFilter, isControlled, onExpandedChange],
-        );
-
-        const hasSavedFilters = (savedFilters?.length ?? 0) > 0;
 
         const handleModeChange = useCallback(
             (newMode: FilterMode) => {
@@ -304,30 +249,6 @@ export const FilterBar = forwardRef<HTMLDivElement, FilterBarProps>(
                                     <span className="filter-bar__btn-label">Simple filter</span>
                                 </Button>
                             ))}
-                        {hasSavedFilters && (
-                            <Select
-                                value={SAVED_FILTER_NONE}
-                                onValueChange={handleSavedFilterChange}
-                                disabled={readOnly}
-                            >
-                                <SelectTrigger
-                                    size="sm"
-                                    aria-label="Apply saved filter"
-                                    className="filter-bar__saved-trigger"
-                                    data-action="apply-saved-filter"
-                                >
-                                    <FunnelIcon weight="bold" aria-hidden="true" />
-                                    <span className="filter-bar__btn-label">Saved</span>
-                                </SelectTrigger>
-                                <SelectContent>
-                                    {savedFilters!.map((f) => (
-                                        <SelectItem key={f.id} value={f.id}>
-                                            {f.name}
-                                        </SelectItem>
-                                    ))}
-                                </SelectContent>
-                            </Select>
-                        )}
                         {hasFilter && !readOnly && (
                             <Button
                                 variant="ghost"

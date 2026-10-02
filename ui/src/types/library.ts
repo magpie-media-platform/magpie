@@ -23,7 +23,6 @@ export interface LibraryLevelDefinition {
     standardMetadataFields?: LibraryStandardMetadataFieldDefinition[];
     standardFactFields: LibraryMetadataFieldDefinition[];
     acceptedFileTypes?: string[];
-    effectiveAcceptedMimeTypes?: string[];
     acceptedSidecarTypes?: string[];
     subfolder?: string | null;
 }

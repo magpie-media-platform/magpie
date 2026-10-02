@@ -149,7 +149,7 @@ test.describe.serial('Journey 16: administer and restore the application', () =>
             const row = page.getByRole('row').filter({ hasText: 'Administration notification updated' });
             await row.getByRole('button', { name: 'Test Administration notification updated' }).click();
             await mocks.notification.waitForCalls(1, { method: 'send' });
-            await expect(page.getByText('Test Dispatched', { exact: true })).toBeVisible();
+            await expect(page.getByText('Test Sent', { exact: true })).toBeVisible();
 
             await api.patch(`/api/notification-rules/${rule.id}`, { enabled: { value: false } });
             expect((await api.get<Provider>(`/api/notification-rules/${rule.id}`)).enabled).toBe(false);
@@ -327,7 +327,9 @@ test.describe.serial('Journey 16: administer and restore the application', () =>
             });
             await api.patch(`/api/media-servers/${media.id}`, { enabled: { value: true } });
 
-            const qualityList = (await api.get<Named[]>('/api/quality-tier-lists'))[0]!;
+            const qualityList = (await api.get<Named[]>('/api/quality-tier-lists')).find(
+                (list) => list.name === 'Video - HD',
+            )!;
             await mkdir(resolve(integrationEnvironment.paths.library, 'administration'), { recursive: true });
             const root = await api.post<Named>('/api/root-folders', {
                 name: 'Administration root',
@@ -643,7 +645,9 @@ test.describe.serial('Journey 16: administer and restore the application', () =>
                 settings: { target: 'mock://exactly-once', template: 'default' },
             });
             await mkdir(resolve(integrationEnvironment.paths.library, 'unrelated-notification'), { recursive: true });
-            const notificationQualityList = (await api.get<Named[]>('/api/quality-tier-lists'))[0]!;
+            const notificationQualityList = (await api.get<Named[]>('/api/quality-tier-lists')).find(
+                (list) => list.name === 'Video - HD',
+            )!;
             const root = await api.post<Named>('/api/root-folders', {
                 name: 'Unrelated notification root',
                 path: '/library/unrelated-notification',
@@ -788,7 +792,9 @@ test.describe.serial('Journey 16: administer and restore the application', () =>
                 JSON.stringify({ settings: { update: { instanceName: 'Later database change' } } }),
             ]);
             await mkdir(resolve(integrationEnvironment.paths.library, 'later-root'), { recursive: true });
-            const laterQualityList = (await api.get<Named[]>('/api/quality-tier-lists'))[0]!;
+            const laterQualityList = (await api.get<Named[]>('/api/quality-tier-lists')).find(
+                (list) => list.name === 'Video - HD',
+            )!;
             await api.post('/api/root-folders', {
                 name: 'Later root',
                 path: '/library/later-root',

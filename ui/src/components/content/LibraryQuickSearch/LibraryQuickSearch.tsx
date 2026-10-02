@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState, type KeyboardEvent } from 'react';
-import { Link, useLocation, useNavigate } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import { ArrowRightIcon, GlobeIcon, ListBulletsIcon, MagnifyingGlassIcon, XIcon } from '@phosphor-icons/react';
 
 import { DisabledTooltip, useAuth } from '@/auth';
@@ -70,7 +70,6 @@ function LibraryQuickSearchPanel() {
         { enabled: debouncedTitle !== '' },
     );
     const openPreview = useOpenLocalContentPreview();
-    const navigate = useNavigate();
     const { hasPermission } = useAuth();
     const { contentTypes } = useLibraryTypes();
     const typeIconName = useTypeIconName();
@@ -82,6 +81,7 @@ function LibraryQuickSearchPanel() {
     const activeMatch = matches[Math.min(activeIndex, matches.length - 1)];
     const titleFilter = setContentFilter('', 'title', title);
     const canSearchProviders = hasPermission('content.add');
+    const preloadState: LibraryAddPreloadState = { filterQuery: titleFilter };
 
     useEffect(() => {
         setActiveIndex(0);
@@ -214,19 +214,29 @@ function LibraryQuickSearchPanel() {
                         All library results
                     </Link>
                     <DisabledTooltip action="content.add">
-                        <Button
-                            variant="ghost"
-                            className="library-quick-search__action"
-                            disabled={!canSearchProviders}
-                            data-action="search-providers"
-                            onClick={() => {
-                                const state: LibraryAddPreloadState = { filterQuery: titleFilter };
-                                void navigate('/library/add', { state });
-                            }}
-                        >
-                            <GlobeIcon size={18} aria-hidden="true" />
-                            Search providers
-                        </Button>
+                        {canSearchProviders ? (
+                            <Button
+                                asChild
+                                variant="ghost"
+                                className="library-quick-search__action"
+                                data-action="search-providers"
+                            >
+                                <Link to="/library/add" state={preloadState}>
+                                    <GlobeIcon size={18} aria-hidden="true" />
+                                    Search providers
+                                </Link>
+                            </Button>
+                        ) : (
+                            <Button
+                                variant="ghost"
+                                className="library-quick-search__action"
+                                disabled
+                                data-action="search-providers"
+                            >
+                                <GlobeIcon size={18} aria-hidden="true" />
+                                Search providers
+                            </Button>
+                        )}
                     </DisabledTooltip>
                 </div>
             )}

@@ -1,5 +1,4 @@
 import { forwardRef, type ComponentPropsWithoutRef } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { SignOutIcon, CaretDownIcon } from '@phosphor-icons/react';
 
 import { useAuth } from '@/auth';
@@ -22,7 +21,6 @@ export interface UserMenuProps extends ComponentPropsWithoutRef<'div'> {
 
 const UserMenu = forwardRef<HTMLDivElement, UserMenuProps>(({ showUsername = true, className, ...props }, ref) => {
     const { user, signOut } = useAuth();
-    const navigate = useNavigate();
 
     const classes = ['user-menu', className].filter(Boolean).join(' ');
 
@@ -35,11 +33,6 @@ const UserMenu = forwardRef<HTMLDivElement, UserMenuProps>(({ showUsername = tru
         .map((word) => word.charAt(0).toUpperCase())
         .slice(0, 2)
         .join('');
-
-    const handleLogout = async () => {
-        await signOut();
-        void navigate('/login');
-    };
 
     return (
         <div ref={ref} className={classes} data-component="user-menu" {...props}>
@@ -59,7 +52,7 @@ const UserMenu = forwardRef<HTMLDivElement, UserMenuProps>(({ showUsername = tru
                 <DropdownMenuContent align="end" sideOffset={8}>
                     <DropdownMenuLabel>{user.username}</DropdownMenuLabel>
                     <DropdownMenuSeparator />
-                    <DropdownMenuItem onSelect={handleLogout} data-action="logout">
+                    <DropdownMenuItem onSelect={signOut} data-action="logout">
                         <SignOutIcon size={16} weight="duotone" aria-hidden="true" />
                         Log out
                     </DropdownMenuItem>

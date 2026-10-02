@@ -1,7 +1,6 @@
 import {
     createContext,
     forwardRef,
-    useCallback,
     useContext,
     useMemo,
     useState,
@@ -21,7 +20,6 @@ import './Sidebar.css';
 
 interface SidebarContextValue {
     collapsed: boolean;
-    setCollapsed: (collapsed: boolean) => void;
 }
 
 const SidebarContext = createContext<SidebarContextValue | null>(null);
@@ -38,43 +36,16 @@ export interface SidebarProps extends ComponentPropsWithoutRef<'aside'> {
     open?: boolean;
 
     collapsed?: boolean;
-
-    onCollapsedChange?: (collapsed: boolean) => void;
-
-    defaultCollapsed?: boolean;
 }
 
 const Sidebar = forwardRef<HTMLElement, SidebarProps>(
-    (
-        {
-            className,
-            open,
-            collapsed: controlledCollapsed,
-            onCollapsedChange,
-            defaultCollapsed = false,
-            children,
-            ...props
-        },
-        ref,
-    ) => {
-        const [internalCollapsed, setInternalCollapsed] = useState(defaultCollapsed);
-
+    ({ className, open, collapsed: controlledCollapsed, children, ...props }, ref) => {
         const isDesktop = useMediaQuery('(min-width: 768px)');
 
-        const collapsed = isDesktop ? (controlledCollapsed ?? internalCollapsed) : false;
-        const setCollapsed = useCallback(
-            (value: boolean) => {
-                if (controlledCollapsed === undefined) setInternalCollapsed(value);
-                onCollapsedChange?.(value);
-            },
-            [controlledCollapsed, onCollapsedChange],
-        );
+        const collapsed = isDesktop ? (controlledCollapsed ?? false) : false;
 
         const classes = ['sidebar', collapsed && 'sidebar--collapsed', className].filter(Boolean).join(' ');
-        const contextValue = useMemo<SidebarContextValue>(
-            () => ({ collapsed, setCollapsed }),
-            [collapsed, setCollapsed],
-        );
+        const contextValue = useMemo<SidebarContextValue>(() => ({ collapsed }), [collapsed]);
 
         return (
             <SidebarContext.Provider value={contextValue}>

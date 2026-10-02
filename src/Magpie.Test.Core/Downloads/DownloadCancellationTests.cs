@@ -265,8 +265,16 @@ public sealed class DownloadCancellationTests
         await _subject.CancelAsync(_download.Id).ConfigureAwait(false);
         await _subject.ApplyRefreshedClientStateAsync(_download, completed, null).ConfigureAwait(false);
         var importing = await _downloads.MarkImportingAsync(_download.Id, _now, null).ConfigureAwait(false);
-        var failed = await _downloads.MarkFailedAsync(_download.Id, DownloadFailureReason.ImportFailed,
-            "Stale import", "ImportFailed", "Stale import", _now, null, null).ConfigureAwait(false);
+        var failed = await _downloads.MarkFailedAsync(
+            _download.Id,
+            DownloadStatus.Faulted,
+            DownloadFailureReason.ImportFailed,
+            "Stale import",
+            "ImportFailed",
+            "Stale import",
+            _now,
+            null,
+            null).ConfigureAwait(false);
         var stored = await _downloads.GetByIdAsync(_download.Id).ConfigureAwait(false);
 
         // Assert

@@ -1537,7 +1537,7 @@ internal static class SparqlQueryBuilder
         AppendDateValuePattern(builder, indent, subject, propertyId, suffix, projectAs);
     }
 
-    private static IReadOnlyList<string> AcceptedTypes(EntityKind kind) => kind switch
+    internal static IReadOnlyList<string> AcceptedTypes(EntityKind kind) => kind switch
     {
         EntityKind.Movie =>
         [

@@ -65,10 +65,10 @@ internal sealed class JobExecutionRepository(
             : null;
     }
 
-    private static DateTime? ReconcileNotBeforeAt(
-        DateTime? existing,
-        DateTime? incoming,
-        DateTime now)
+    private static bool IsTrue(IReadOnlyDictionary<string, string> parameters, string field) =>
+        parameters.TryGetValue(field, out var raw) && bool.TryParse(raw, out var value) && value;
+
+    private static DateTime? ReconcileNotBeforeAt(DateTime? existing, DateTime? incoming, DateTime now)
     {
         if (existing is { } existingDeferral &&
             existingDeferral > now &&
@@ -398,20 +398,24 @@ internal sealed class JobExecutionRepository(
             .AsNoTracking()
             .Where(execution =>
                 distinct.Contains(EF.Property<string>(
-                    execution, JobExecutionReferenceColumns.ParameterContentHierarchyItemId)) ||
+                    execution,
+                    JobExecutionReferenceColumns.ParameterContentHierarchyItemId)) ||
                 distinct.Contains(EF.Property<string>(
-                    execution, JobExecutionReferenceColumns.ParameterContentItemId)) ||
-                distinct.Contains(EF.Property<string>(
-                    execution, JobExecutionReferenceColumns.ParameterDownloadId)) ||
+                    execution,
+                    JobExecutionReferenceColumns.ParameterContentItemId)) ||
+                distinct.Contains(EF.Property<string>(execution, JobExecutionReferenceColumns.ParameterDownloadId)) ||
                 (hierarchyItemTargetTypes.Contains(execution.JobType) &&
                     distinct.Contains(EF.Property<string>(
-                        execution, JobExecutionReferenceColumns.TriggerContextContentHierarchyItemId))) ||
+                        execution,
+                        JobExecutionReferenceColumns.TriggerContextContentHierarchyItemId))) ||
                 (contentItemTargetTypes.Contains(execution.JobType) &&
                     distinct.Contains(EF.Property<string>(
-                        execution, JobExecutionReferenceColumns.TriggerContextContentItemId))) ||
+                        execution,
+                        JobExecutionReferenceColumns.TriggerContextContentItemId))) ||
                 (downloadTargetTypes.Contains(execution.JobType) &&
                     distinct.Contains(EF.Property<string>(
-                        execution, JobExecutionReferenceColumns.TriggerContextDownloadId))));
+                        execution,
+                        JobExecutionReferenceColumns.TriggerContextDownloadId))));
     }
 
     private string[] ListEventTargetJobTypes(string eventContextKey) =>
@@ -446,7 +450,8 @@ internal sealed class JobExecutionRepository(
             if (onlyIfInactive && (string.IsNullOrWhiteSpace(model.LockPartition) ||
                 model.Status != JobExecutionStatus.Queued || model.ExecutionMode != JobExecutionMode.Queue))
             {
-                throw new ArgumentException("Inactive-only enqueue requires a queued execution and lock partition.",
+                throw new ArgumentException(
+                    "Inactive-only enqueue requires a queued execution and lock partition.",
                     nameof(model));
             }
 
@@ -458,7 +463,9 @@ internal sealed class JobExecutionRepository(
                     if (model.LockPartition is { } lockPartition)
                     {
                         coalescingLock = await AcquireCoalescingLockAsync(
-                            model.JobType, lockPartition, cancellationToken)
+                            model.JobType,
+                            lockPartition,
+                            cancellationToken)
                             .ConfigureAwait(false);
                     }
 
@@ -484,7 +491,11 @@ internal sealed class JobExecutionRepository(
                         if (model.LockPartition is { } partition)
                         {
                             var coalesced = await TryCoalesceAsync(
-                                model, partition, createdByUserId, onlyIfInactive, cancellationToken)
+                                model,
+                                partition,
+                                createdByUserId,
+                                onlyIfInactive,
+                                cancellationToken)
                                 .ConfigureAwait(false);
                             if (coalesced is not null)
                             {
@@ -606,12 +617,20 @@ internal sealed class JobExecutionRepository(
                     {
                         var impact = ParameterImpact(created);
                         await eventBus.PublishAsync(
-                            JobEventBuilder.BuildJobExecutionCreatedEvent(created.Id, impact, created.JobType),
+                            JobEventBuilder.BuildJobExecutionStateChangedEvent(
+                                MagpieEvents.Names.JobExecutionCreated,
+                                created.Id,
+                                impact,
+                                created.JobType),
                             token).ConfigureAwait(false);
                         if (created.Status is JobExecutionStatus.Queued)
                         {
                             await eventBus.PublishAsync(
-                                JobEventBuilder.BuildJobExecutionQueuedEvent(created.Id, impact, created.JobType),
+                                JobEventBuilder.BuildJobExecutionStateChangedEvent(
+                                    MagpieEvents.Names.JobExecutionQueued,
+                                    created.Id,
+                                    impact,
+                                    created.JobType),
                                 token).ConfigureAwait(false);
                         }
                     },
@@ -622,8 +641,10 @@ internal sealed class JobExecutionRepository(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "The job execution repository failed to create a job execution for " +
-                "{JobType}.", model.JobType);
+            logger.LogError(
+                ex,
+                "The job execution repository failed to create a job execution for {JobType}.",
+                model.JobType);
             throw;
         }
     }
@@ -663,10 +684,13 @@ internal sealed class JobExecutionRepository(
                 !incoming.Parameters.ContainsKey(ReleaseDownloadItemJob.CapacityPreviousDownloadId) ||
                 candidate.Parameters.GetValueOrDefault(ReleaseDownloadItemJob.CapacityPreviousDownloadId) ==
                     incoming.Parameters[ReleaseDownloadItemJob.CapacityPreviousDownloadId] &&
-                Guid.TryParse(candidate.Parameters.GetValueOrDefault(MagpieJobs.Parameters.ContentHierarchyItemId),
+                Guid.TryParse(
+                    candidate.Parameters.GetValueOrDefault(MagpieJobs.Parameters.ContentHierarchyItemId),
                     out var candidateTarget) &&
-                Guid.TryParse(incoming.Parameters.GetValueOrDefault(MagpieJobs.Parameters.ContentHierarchyItemId),
-                    out var incomingTarget) && candidateTarget == incomingTarget);
+                Guid.TryParse(
+                    incoming.Parameters.GetValueOrDefault(MagpieJobs.Parameters.ContentHierarchyItemId),
+                    out var incomingTarget) &&
+                candidateTarget == incomingTarget);
         }
         else
         {
@@ -683,34 +707,40 @@ internal sealed class JobExecutionRepository(
             return null;
         }
 
-        var upstreamDeferred = existing.StatusMessage == "The work is incomplete while its upstream is throttled.";
+        var upstreamDeferred = existing.StatusMessage == MagpieJobs.StatusMessages.UpstreamThrottled;
         var reconciled = upstreamDeferred ? existing.NotBeforeAt
             : ReconcileNotBeforeAt(existing.NotBeforeAt, incoming.NotBeforeAt, now);
         var sameTarget = string.Equals(
             existing.Parameters.GetValueOrDefault(MagpieJobs.Parameters.ContentHierarchyItemId),
             incoming.Parameters.GetValueOrDefault(MagpieJobs.Parameters.ContentHierarchyItemId),
             StringComparison.OrdinalIgnoreCase);
-        var statusMessage = sameTarget && !upstreamDeferred
-            ? incoming.StatusMessage ?? existing.StatusMessage : existing.StatusMessage;
+        var statusMessage = upstreamDeferred
+            ? MagpieJobs.Parameters.IsForced(incoming.Parameters) ? incoming.StatusMessage : existing.StatusMessage
+            : sameTarget ? incoming.StatusMessage ?? existing.StatusMessage : existing.StatusMessage;
 
-        var widened = incoming.JobType == MagpieJobs.Types.RootFolderContentDiscovery && !sameTarget &&
-            existing.Parameters.ContainsKey(MagpieJobs.Parameters.ContentHierarchyItemId);
-
-        var forced = incoming.JobType == MagpieJobs.Types.ReleaseSearchItem &&
-            MagpieJobs.Parameters.IsForced(incoming.Parameters) &&
-            !MagpieJobs.Parameters.IsForced(existing.Parameters);
-        if (reconciled != existing.NotBeforeAt || statusMessage != existing.StatusMessage || widened || forced)
+        jobRegistry.TryGetJobSpec(incoming.JobType, out var spec);
+        var trueWins = (spec?.CoalesceTrueWinsFields ?? [])
+            .Where(field => IsTrue(incoming.Parameters, field) && !IsTrue(existing.Parameters, field))
+            .ToList();
+        var widening = (spec?.CoalesceWideningFields ?? [])
+            .Where(field => existing.Parameters.TryGetValue(field, out var value) &&
+                !string.Equals(value, incoming.Parameters.GetValueOrDefault(field), StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        if (reconciled != existing.NotBeforeAt ||
+            statusMessage != existing.StatusMessage ||
+            trueWins.Count > 0 ||
+            widening.Count > 0)
         {
-            if (widened)
+            if (widening.Count > 0)
             {
                 existing.Parameters = existing.Parameters
-                    .Where(parameter => parameter.Key != MagpieJobs.Parameters.ContentHierarchyItemId)
+                    .Where(parameter => !widening.Contains(parameter.Key))
                     .ToDictionary(parameter => parameter.Key, parameter => parameter.Value);
             }
 
-            if (forced)
+            foreach (var field in trueWins)
             {
-                existing.Parameters[MagpieJobs.Parameters.Force] = "true";
+                existing.Parameters[field] = "true";
             }
 
             existing.NotBeforeAt = reconciled;
@@ -742,12 +772,14 @@ internal sealed class JobExecutionRepository(
                     Operation = "Coalesce",
                     EntityId = existing.Id.ToString(),
                     EntityType = nameof(JobExecution),
-                    Detail = $"Coalesced enqueue for {incoming.JobType} onto {existing.Id}; " + (forced
-                        ? "upgraded the search to forced"
-                        : widened
-                            ? "widened the run to the whole root folder"
+                    Detail = $"Coalesced enqueue for {incoming.JobType} onto {existing.Id}; " +
+                        (trueWins.Count > 0 || widening.Count > 0
+                            ? string.Join(
+                                ", ",
+                                trueWins.Select(field => $"set {field} to true")
+                                    .Concat(widening.Select(field => $"removed {field}")))
                             : "updated queue eligibility or the waiting reason"),
-                    Timestamp = existing.ModifiedAt!.Value,
+                    Timestamp = existing.ModifiedAt.Value,
                     UserId = createdByUserId,
                     CorrelationId = existing.CorrelationId
                 },
@@ -877,7 +909,7 @@ internal sealed class JobExecutionRepository(
         try
         {
             var now = _time.GetUtcNow().UtcDateTime;
-            var claimable = context.JobExecutions
+            var claimable = context.JobExecutions.AsNoTracking()
                 .Where(e => e.Status == JobExecutionStatus.Queued &&
                     e.NodeId == null &&
                     (e.NotBeforeAt == null || e.NotBeforeAt <= now) &&
@@ -1011,7 +1043,8 @@ internal sealed class JobExecutionRepository(
             {
                 await transactionManager.OnCommittedAsync(
                     token => eventBus.PublishAsync(
-                        JobEventBuilder.BuildJobExecutionStartedEvent(
+                        JobEventBuilder.BuildJobExecutionStateChangedEvent(
+                            MagpieEvents.Names.JobExecutionStarted,
                             executionId,
                             ParameterImpact(claimed),
                             claimed.JobType),
@@ -1023,8 +1056,11 @@ internal sealed class JobExecutionRepository(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "The job execution repository failed to claim job execution {ExecutionId} " +
-                "for node {NodeId}.", executionId, nodeId);
+            logger.LogError(
+                ex,
+                "The job execution repository failed to claim job execution {ExecutionId} for node {NodeId}.",
+                executionId,
+                nodeId);
             throw;
         }
     }
@@ -1096,7 +1132,13 @@ internal sealed class JobExecutionRepository(
             if (started)
             {
                 await transactionManager.OnCommittedAsync(
-                    token => eventBus.PublishAsync(JobEventBuilder.BuildJobExecutionStartedEvent(executionId), token),
+                    token => eventBus.PublishAsync(
+                        JobEventBuilder.BuildJobExecutionStateChangedEvent(
+                            MagpieEvents.Names.JobExecutionStarted,
+                            executionId,
+                            null,
+                            null),
+                        token),
                     cancellationToken).ConfigureAwait(false);
             }
 
@@ -1104,8 +1146,10 @@ internal sealed class JobExecutionRepository(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "The job execution repository failed to start job execution " +
-                "{ExecutionId}.", executionId);
+            logger.LogError(
+                ex,
+                "The job execution repository failed to start job execution {ExecutionId}.",
+                executionId);
             throw;
         }
     }
@@ -1130,7 +1174,13 @@ internal sealed class JobExecutionRepository(
             if (updated > 0)
             {
                 await transactionManager.OnCommittedAsync(
-                    token => eventBus.PublishAsync(JobEventBuilder.BuildJobExecutionCompletedEvent(executionId), token),
+                    token => eventBus.PublishAsync(
+                        JobEventBuilder.BuildJobExecutionStateChangedEvent(
+                            MagpieEvents.Names.JobExecutionCompleted,
+                            executionId,
+                            null,
+                            null),
+                        token),
                     cancellationToken).ConfigureAwait(false);
             }
 
@@ -1138,14 +1188,19 @@ internal sealed class JobExecutionRepository(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "The job execution repository failed to mark job execution {ExecutionId} " +
-                "complete.", executionId);
+            logger.LogError(
+                ex,
+                "The job execution repository failed to mark job execution {ExecutionId} complete.",
+                executionId);
             throw;
         }
     }
 
     /// <inheritdoc />
-    public async Task<bool> TryDeferRunningAsync(Guid executionId, string nodeId, DateTime notBeforeAt,
+    public async Task<bool> TryDeferRunningAsync(
+        Guid executionId,
+        string nodeId,
+        DateTime notBeforeAt,
         CancellationToken cancellationToken)
     {
         try
@@ -1161,16 +1216,23 @@ internal sealed class JobExecutionRepository(
                         .SetProperty(e => e.StartedAt, (DateTime?)null)
                         .SetProperty(e => e.LastHeartbeat, (DateTime?)null)
                         .SetProperty(e => e.NotBeforeAt, notBeforeAt)
-                        .SetProperty(e => e.StatusMessage, "The work is incomplete while its upstream is throttled.")
-                        .SetProperty(e => e.ModifiedAt, now), token).ConfigureAwait(false);
+                        .SetProperty(e => e.StatusMessage, MagpieJobs.StatusMessages.UpstreamThrottled)
+                        .SetProperty(e => e.ModifiedAt, now),
+                        token).ConfigureAwait(false);
                 if (updated == 0)
                 {
                     return false;
                 }
 
                 await transactionManager.OnCommittedAsync(
-                    eventToken => eventBus.PublishAsync(JobEventBuilder.BuildJobExecutionQueuedEvent(executionId),
-                        eventToken), token).ConfigureAwait(false);
+                    eventToken => eventBus.PublishAsync(
+                        JobEventBuilder.BuildJobExecutionStateChangedEvent(
+                            MagpieEvents.Names.JobExecutionQueued,
+                            executionId,
+                            null,
+                            null),
+                        eventToken),
+                    token).ConfigureAwait(false);
                 return true;
             }, cancellationToken).ConfigureAwait(false);
         }
@@ -1231,8 +1293,10 @@ internal sealed class JobExecutionRepository(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "The job execution repository failed to reclaim running job execution " +
-                "{ExecutionId}.", executionId);
+            logger.LogError(
+                ex,
+                "The job execution repository failed to reclaim running job execution {ExecutionId}.",
+                executionId);
             throw;
         }
     }
@@ -1261,8 +1325,10 @@ internal sealed class JobExecutionRepository(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "The job execution repository failed to fail queued job execution " +
-                "{ExecutionId}.", executionId);
+            logger.LogError(
+                ex,
+                "The job execution repository failed to fail queued job execution {ExecutionId}.",
+                executionId);
             throw;
         }
     }
@@ -1346,7 +1412,11 @@ internal sealed class JobExecutionRepository(
                         transactionToken).ConfigureAwait(false);
                     await transactionManager.OnCommittedAsync(
                         token => eventBus.PublishAsync(
-                            JobEventBuilder.BuildJobExecutionCancelledEvent(executionId),
+                            JobEventBuilder.BuildJobExecutionStateChangedEvent(
+                                MagpieEvents.Names.JobExecutionCancelled,
+                                executionId,
+                                null,
+                                null),
                             token),
                         transactionToken).ConfigureAwait(false);
 
@@ -1356,8 +1426,10 @@ internal sealed class JobExecutionRepository(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "The job execution repository failed to mark job execution {ExecutionId} " +
-                "cancelled.", executionId);
+            logger.LogError(
+                ex,
+                "The job execution repository failed to mark job execution {ExecutionId} cancelled.",
+                executionId);
             throw;
         }
     }
@@ -1365,20 +1437,12 @@ internal sealed class JobExecutionRepository(
     public Task<JobCancellation?> CancelAsync(
         Guid executionId,
         CancellationToken cancellationToken) =>
-        CancelExecutionAsync(
-            executionId,
-            checkModifiedAt: false,
-            modifiedAt: null,
-            cancellationToken);
+        CancelExecutionAsync(executionId, checkModifiedAt: false, modifiedAt: null, cancellationToken);
 
     public Task<JobCancellation?> CancelAsync(
         JobExecution execution,
         CancellationToken cancellationToken) =>
-        CancelExecutionAsync(
-            execution.Id,
-            checkModifiedAt: true,
-            execution.ModifiedAt,
-            cancellationToken);
+        CancelExecutionAsync(execution.Id, checkModifiedAt: true, execution.ModifiedAt, cancellationToken);
 
     private async Task<JobCancellation?> CancelExecutionAsync(
         Guid executionId,
@@ -1479,8 +1543,16 @@ internal sealed class JobExecutionRepository(
             if (result is not null)
             {
                 var magpieEvent = result.CancelledBeforeStart
-                    ? JobEventBuilder.BuildJobExecutionCancelledEvent(executionId)
-                    : JobEventBuilder.BuildJobExecutionCancellationRequestedEvent(executionId);
+                    ? JobEventBuilder.BuildJobExecutionStateChangedEvent(
+                        MagpieEvents.Names.JobExecutionCancelled,
+                        executionId,
+                        null,
+                        null)
+                    : JobEventBuilder.BuildJobExecutionStateChangedEvent(
+                        MagpieEvents.Names.JobExecutionCancellationRequested,
+                        executionId,
+                        null,
+                        null);
                 await transactionManager.OnCommittedAsync(
                     token => eventBus.PublishAsync(magpieEvent, token),
                     cancellationToken).ConfigureAwait(false);
@@ -1515,8 +1587,10 @@ internal sealed class JobExecutionRepository(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "The job execution repository failed to update the heartbeat of execution " +
-                "{ExecutionId}.", executionId);
+            logger.LogError(
+                ex,
+                "The job execution repository failed to update the heartbeat of execution {ExecutionId}.",
+                executionId);
             throw;
         }
     }
@@ -1545,7 +1619,11 @@ internal sealed class JobExecutionRepository(
             {
                 await transactionManager.OnCommittedAsync(
                     token => eventBus.PublishAsync(
-                        JobEventBuilder.BuildJobExecutionProgressChangedEvent(executionId),
+                        JobEventBuilder.BuildJobExecutionStateChangedEvent(
+                            MagpieEvents.Names.JobExecutionProgressChanged,
+                            executionId,
+                            null,
+                            null),
                         token),
                     cancellationToken).ConfigureAwait(false);
             }
@@ -1554,8 +1632,10 @@ internal sealed class JobExecutionRepository(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "The job execution repository failed to update the progress of execution " +
-                "{ExecutionId}.", executionId);
+            logger.LogError(
+                ex,
+                "The job execution repository failed to update the progress of execution {ExecutionId}.",
+                executionId);
             throw;
         }
     }
@@ -1659,8 +1739,10 @@ internal sealed class JobExecutionRepository(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "The job execution repository failed to read the lineage of execution " +
-                "{ExecutionId}.", executionId);
+            logger.LogError(
+                ex,
+                "The job execution repository failed to read the lineage of execution {ExecutionId}.",
+                executionId);
             throw;
         }
     }

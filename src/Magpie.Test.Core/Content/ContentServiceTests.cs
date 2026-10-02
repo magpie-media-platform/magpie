@@ -782,10 +782,13 @@ public sealed class ContentServiceTests
         var result = await subject.UnlinkFileAsync(contentId, mediaFileId, null).ConfigureAwait(false);
 
         // Assert
-        Assert.That(result, Is.True);
-        transactionManager.Verify(manager => manager.ExecuteWithTransactionAsync(
-            It.IsAny<Func<CancellationToken, Task<bool>>>(),
-            It.IsAny<CancellationToken>()), Times.Once);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result, Is.True);
+            transactionManager.Verify(manager => manager.ExecuteWithTransactionAsync(
+                It.IsAny<Func<CancellationToken, Task<bool>>>(),
+                It.IsAny<CancellationToken>()), Times.Once);
+        }
     }
 
     [Test]
@@ -1202,9 +1205,12 @@ public sealed class ContentServiceTests
         var result = await subject.MaterializeFulfillmentStatusAsync(leafId, null).ConfigureAwait(false);
 
         // Assert
-        Assert.That(result, Is.Not.Null);
-        content.Verify(repository => repository.ReconcileMediaStateAsync(
-            leafId, null, It.IsAny<CancellationToken>()), Times.Once);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result, Is.Not.Null);
+            content.Verify(repository => repository.ReconcileMediaStateAsync(
+                leafId, null, It.IsAny<CancellationToken>()), Times.Once);
+        }
     }
 
     [TestCaseSource(nameof(UnrepresentableFilters))]

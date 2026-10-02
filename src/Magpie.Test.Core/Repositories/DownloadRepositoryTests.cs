@@ -94,12 +94,10 @@ public sealed class DownloadRepositoryTests
         _userId = user.Id;
         _downloadClientId = downloadClient.Id;
 
-        var loggerFactory = NullLoggerFactory.Instance;
-
         var auditRecordRepository = new AuditRecordRepository(
             _context,
             Mock.Of<IEventBus>(),
-            loggerFactory.CreateLogger<AuditRecordRepository>(),
+            NullLogger<AuditRecordRepository>.Instance,
             new TransactionManager(_context, NullLogger<TransactionManager>.Instance),
             Mock.Of<IJobExecutionScopeFactory>(),
             timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
@@ -121,7 +119,7 @@ public sealed class DownloadRepositoryTests
             auditRecordRepository,
             _transactionManager,
             eventBus.Object,
-            loggerFactory.CreateLogger<DownloadRepository>(),
+            NullLogger<DownloadRepository>.Instance,
             _protector.Object,
             timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
     }
@@ -129,7 +127,6 @@ public sealed class DownloadRepositoryTests
     [TearDown]
     public void TearDown()
     {
-        _context.Database.CloseConnection();
         _context.Dispose();
     }
 
@@ -1665,6 +1662,7 @@ public sealed class DownloadRepositoryTests
         // Act
         var transitioned = await _subject.MarkFailedAsync(
             download.Id,
+            DownloadStatus.Faulted,
             DownloadFailureReason.ImportFailed,
             "Import failed",
             "ImportFailed",
@@ -1704,6 +1702,7 @@ public sealed class DownloadRepositoryTests
         // Act
         var transitioned = await _subject.MarkFailedAsync(
             download.Id,
+            DownloadStatus.Faulted,
             DownloadFailureReason.ImportFailed,
             "Import failed",
             "ImportFailed",
@@ -1730,6 +1729,7 @@ public sealed class DownloadRepositoryTests
     [TestCase(DownloadStatus.Cancelled)]
     [TestCase(DownloadStatus.Imported)]
     [TestCase(DownloadStatus.Importing)]
+    [TestCase(DownloadStatus.Failed)]
     public async Task UpdateRefreshedStatusAsync_ReturnsFalseAndKeepsStatus_WhenDownloadIsTerminal(
         DownloadStatus status)
     {
@@ -1814,6 +1814,126 @@ public sealed class DownloadRepositoryTests
             Assert.That(applied, Is.True);
             Assert.That(stored.Status, Is.EqualTo(DownloadStatus.Downloading));
             Assert.That(stored.Progress, Is.EqualTo(0.5m));
+            Assert.That(downloadEvents, Has.Count.EqualTo(1));
+            Assert.That(downloadEvents[0].Name, Is.EqualTo("download.updated"));
+            Assert.That(downloadEvents[0].Context["download.id"], Is.EqualTo(download.Id.ToString("D")));
+        }
+    }
+
+    [Test]
+    public async Task UpdateRefreshedClientStateAsync_ReturnsTrueAndPublishesNoEvent_WhenTheStoredStatusIsUnchanged()
+    {
+        // Arrange
+        var now = DateTime.UtcNow;
+        var download = new Download
+        {
+            DownloadClientId = _downloadClientId,
+            ExternalId = "unchanged-refresh",
+            Title = "Unchanged",
+            Status = DownloadStatus.Downloading,
+            CreatedAt = now
+        };
+        _context.Downloads.Add(download);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        // Act
+        var updated = await _subject.UpdateRefreshedClientStateAsync(
+            download.Id,
+            DownloadStatus.Downloading,
+            "client says downloading",
+            outputPath: null,
+            dateCompleted: null,
+            progress: 0.5m,
+            lastProgressAt: now,
+            heldByPolicy: false,
+            failureReason: null,
+            failedAt: null,
+            now,
+            _userId).ConfigureAwait(false);
+
+        // Assert
+        var stored = await _context.Downloads.AsNoTracking().SingleAsync(d => d.Id == download.Id)
+            .ConfigureAwait(false);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(updated, Is.True);
+            Assert.That(stored.Status, Is.EqualTo(DownloadStatus.Downloading));
+            Assert.That(stored.Progress, Is.EqualTo(0.5m));
+            Assert.That(stored.StatusReason, Is.EqualTo("client says downloading"));
+            Assert.That(
+                _publishedEvents.Where(e => e.Name.StartsWith("download.", StringComparison.Ordinal)),
+                Is.Empty);
+        }
+    }
+
+    [Test]
+    public async Task UpdateRefreshedClientStateAsync_ReturnsFalseAndKeepsRow_WhenTheStoredStatusDiffers()
+    {
+        // Arrange
+        var now = DateTime.UtcNow;
+        var download = new Download
+        {
+            DownloadClientId = _downloadClientId,
+            ExternalId = "changed-refresh",
+            Title = "Changed",
+            Status = DownloadStatus.Queued,
+            CreatedAt = now
+        };
+        _context.Downloads.Add(download);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        // Act
+        var updated = await _subject.UpdateRefreshedClientStateAsync(
+            download.Id,
+            DownloadStatus.Downloading,
+            "client says downloading",
+            outputPath: null,
+            dateCompleted: null,
+            progress: 0.5m,
+            lastProgressAt: now,
+            heldByPolicy: false,
+            failureReason: null,
+            failedAt: null,
+            now,
+            _userId).ConfigureAwait(false);
+
+        // Assert
+        var stored = await _context.Downloads.AsNoTracking().SingleAsync(d => d.Id == download.Id)
+            .ConfigureAwait(false);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(updated, Is.False);
+            Assert.That(stored.Status, Is.EqualTo(DownloadStatus.Queued));
+            Assert.That(stored.StatusReason, Is.Null);
+        }
+    }
+
+    [Test]
+    public async Task PublishRefreshedStatusAsync_PublishesUpdatedEventPerDownload_WhenDownloadIdsAreGiven()
+    {
+        // Arrange
+        var now = DateTime.UtcNow;
+        var download = new Download
+        {
+            DownloadClientId = _downloadClientId,
+            ExternalId = "publish-refresh",
+            Title = "Publish",
+            Status = DownloadStatus.Downloading,
+            CreatedAt = now
+        };
+        _context.Downloads.Add(download);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        // Act
+        await _subject.PublishRefreshedStatusAsync([download.Id], _userId, CancellationToken.None)
+            .ConfigureAwait(false);
+
+        // Assert
+        var downloadEvents = _publishedEvents
+            .Where(e => e.Name.StartsWith("download.", StringComparison.Ordinal))
+            .ToList();
+        using (Assert.EnterMultipleScope())
+        {
             Assert.That(downloadEvents, Has.Count.EqualTo(1));
             Assert.That(downloadEvents[0].Name, Is.EqualTo("download.updated"));
             Assert.That(downloadEvents[0].Context["download.id"], Is.EqualTo(download.Id.ToString("D")));
@@ -2415,50 +2535,129 @@ public sealed class DownloadRepositoryTests
     {
         // Arrange
         var chains = new Dictionary<string, (Guid ReleaseId, Guid ContentItemId, Guid HierarchyItemId, string Name)>();
-        foreach (var name in new[] { "Zebra", "Apple", "Mango" })
+        var container1 = new MetadataContainer { CreatedAt = DateTime.UtcNow };
+        _context.MetadataContainers.Add(container1);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        var hierarchyItem1 = new ContentHierarchyItem
         {
-            var container = new MetadataContainer { CreatedAt = DateTime.UtcNow };
-            _context.MetadataContainers.Add(container);
-            await _context.SaveChangesAsync().ConfigureAwait(false);
-            var hierarchyItem = new ContentHierarchyItem
-            {
-                MetadataContainerId = container.Id,
-                ContentType = "test",
-                Level = "level",
-                Slug = Guid.NewGuid().ToString("N"),
-                Name = name,
-                Monitoring = MonitoringMode.Monitored,
-                CreatedAt = DateTime.UtcNow
-            };
-            _context.ContentHierarchyItems.Add(hierarchyItem);
-            await _context.SaveChangesAsync().ConfigureAwait(false);
-            var contentItem = new ContentItem
-            {
-                ContentHierarchyItemId = hierarchyItem.Id,
-                Fulfillment = FulfillmentStatus.Missing,
-                CreatedAt = DateTime.UtcNow
-            };
-            _context.ContentItems.Add(contentItem);
-            await _context.SaveChangesAsync().ConfigureAwait(false);
-            var release = new Release
-            {
-                Protocol = "torrent",
-                Title = $"Release-{Guid.NewGuid():N}",
-                ExternalId = Guid.NewGuid().ToString("N"),
-                PublishDate = DateTime.UtcNow,
-                InfoUrl = null,
-                CreatedAt = DateTime.UtcNow
-            };
-            _context.Releases.Add(release);
-            await _context.SaveChangesAsync().ConfigureAwait(false);
-            var nodeId = await _context.ContentItems
-                .Where(c => c.Id == contentItem.Id)
-                .Select(c => c.ContentHierarchyItemId)
-                .FirstAsync().ConfigureAwait(false);
-            _context.ReleaseScopes.Add(new ReleaseScope { ReleaseId = release.Id, ContentHierarchyItemId = nodeId, });
-            await _context.SaveChangesAsync().ConfigureAwait(false);
-            chains.Add(name, (release.Id, contentItem.Id, hierarchyItem.Id, name));
-        }
+            MetadataContainerId = container1.Id,
+            ContentType = "test",
+            Level = "level",
+            Slug = Guid.NewGuid().ToString("N"),
+            Name = "Zebra",
+            Monitoring = MonitoringMode.Monitored,
+            CreatedAt = DateTime.UtcNow
+        };
+        _context.ContentHierarchyItems.Add(hierarchyItem1);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        var contentItem1 = new ContentItem
+        {
+            ContentHierarchyItemId = hierarchyItem1.Id,
+            Fulfillment = FulfillmentStatus.Missing,
+            CreatedAt = DateTime.UtcNow
+        };
+        _context.ContentItems.Add(contentItem1);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        var release1 = new Release
+        {
+            Protocol = "torrent",
+            Title = $"Release-{Guid.NewGuid():N}",
+            ExternalId = Guid.NewGuid().ToString("N"),
+            PublishDate = DateTime.UtcNow,
+            InfoUrl = null,
+            CreatedAt = DateTime.UtcNow
+        };
+        _context.Releases.Add(release1);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        var nodeId1 = await _context.ContentItems
+            .Where(c => c.Id == contentItem1.Id)
+            .Select(c => c.ContentHierarchyItemId)
+            .FirstAsync().ConfigureAwait(false);
+        _context.ReleaseScopes.Add(new ReleaseScope { ReleaseId = release1.Id, ContentHierarchyItemId = nodeId1, });
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        chains.Add("Zebra", (release1.Id, contentItem1.Id, hierarchyItem1.Id, "Zebra"));
+        var container2 = new MetadataContainer { CreatedAt = DateTime.UtcNow };
+        _context.MetadataContainers.Add(container2);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        var hierarchyItem2 = new ContentHierarchyItem
+        {
+            MetadataContainerId = container2.Id,
+            ContentType = "test",
+            Level = "level",
+            Slug = Guid.NewGuid().ToString("N"),
+            Name = "Apple",
+            Monitoring = MonitoringMode.Monitored,
+            CreatedAt = DateTime.UtcNow
+        };
+        _context.ContentHierarchyItems.Add(hierarchyItem2);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        var contentItem2 = new ContentItem
+        {
+            ContentHierarchyItemId = hierarchyItem2.Id,
+            Fulfillment = FulfillmentStatus.Missing,
+            CreatedAt = DateTime.UtcNow
+        };
+        _context.ContentItems.Add(contentItem2);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        var release2 = new Release
+        {
+            Protocol = "torrent",
+            Title = $"Release-{Guid.NewGuid():N}",
+            ExternalId = Guid.NewGuid().ToString("N"),
+            PublishDate = DateTime.UtcNow,
+            InfoUrl = null,
+            CreatedAt = DateTime.UtcNow
+        };
+        _context.Releases.Add(release2);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        var nodeId2 = await _context.ContentItems
+            .Where(c => c.Id == contentItem2.Id)
+            .Select(c => c.ContentHierarchyItemId)
+            .FirstAsync().ConfigureAwait(false);
+        _context.ReleaseScopes.Add(new ReleaseScope { ReleaseId = release2.Id, ContentHierarchyItemId = nodeId2, });
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        chains.Add("Apple", (release2.Id, contentItem2.Id, hierarchyItem2.Id, "Apple"));
+        var container3 = new MetadataContainer { CreatedAt = DateTime.UtcNow };
+        _context.MetadataContainers.Add(container3);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        var hierarchyItem3 = new ContentHierarchyItem
+        {
+            MetadataContainerId = container3.Id,
+            ContentType = "test",
+            Level = "level",
+            Slug = Guid.NewGuid().ToString("N"),
+            Name = "Mango",
+            Monitoring = MonitoringMode.Monitored,
+            CreatedAt = DateTime.UtcNow
+        };
+        _context.ContentHierarchyItems.Add(hierarchyItem3);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        var contentItem3 = new ContentItem
+        {
+            ContentHierarchyItemId = hierarchyItem3.Id,
+            Fulfillment = FulfillmentStatus.Missing,
+            CreatedAt = DateTime.UtcNow
+        };
+        _context.ContentItems.Add(contentItem3);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        var release3 = new Release
+        {
+            Protocol = "torrent",
+            Title = $"Release-{Guid.NewGuid():N}",
+            ExternalId = Guid.NewGuid().ToString("N"),
+            PublishDate = DateTime.UtcNow,
+            InfoUrl = null,
+            CreatedAt = DateTime.UtcNow
+        };
+        _context.Releases.Add(release3);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        var nodeId3 = await _context.ContentItems
+            .Where(c => c.Id == contentItem3.Id)
+            .Select(c => c.ContentHierarchyItemId)
+            .FirstAsync().ConfigureAwait(false);
+        _context.ReleaseScopes.Add(new ReleaseScope { ReleaseId = release3.Id, ContentHierarchyItemId = nodeId3, });
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        chains.Add("Mango", (release3.Id, contentItem3.Id, hierarchyItem3.Id, "Mango"));
 
         var zebra = chains["Zebra"];
         var apple = chains["Apple"];
@@ -2574,50 +2773,129 @@ public sealed class DownloadRepositoryTests
     {
         // Arrange
         var chains = new Dictionary<string, (Guid ReleaseId, Guid ContentItemId, Guid HierarchyItemId, string Name)>();
-        foreach (var name in new[] { "Low", "High", "Mid" })
+        var container1 = new MetadataContainer { CreatedAt = DateTime.UtcNow };
+        _context.MetadataContainers.Add(container1);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        var hierarchyItem1 = new ContentHierarchyItem
         {
-            var container = new MetadataContainer { CreatedAt = DateTime.UtcNow };
-            _context.MetadataContainers.Add(container);
-            await _context.SaveChangesAsync().ConfigureAwait(false);
-            var hierarchyItem = new ContentHierarchyItem
-            {
-                MetadataContainerId = container.Id,
-                ContentType = "test",
-                Level = "level",
-                Slug = Guid.NewGuid().ToString("N"),
-                Name = name,
-                Monitoring = MonitoringMode.Monitored,
-                CreatedAt = DateTime.UtcNow
-            };
-            _context.ContentHierarchyItems.Add(hierarchyItem);
-            await _context.SaveChangesAsync().ConfigureAwait(false);
-            var contentItem = new ContentItem
-            {
-                ContentHierarchyItemId = hierarchyItem.Id,
-                Fulfillment = FulfillmentStatus.Missing,
-                CreatedAt = DateTime.UtcNow
-            };
-            _context.ContentItems.Add(contentItem);
-            await _context.SaveChangesAsync().ConfigureAwait(false);
-            var release = new Release
-            {
-                Protocol = "torrent",
-                Title = $"Release-{Guid.NewGuid():N}",
-                ExternalId = Guid.NewGuid().ToString("N"),
-                PublishDate = DateTime.UtcNow,
-                InfoUrl = null,
-                CreatedAt = DateTime.UtcNow
-            };
-            _context.Releases.Add(release);
-            await _context.SaveChangesAsync().ConfigureAwait(false);
-            var nodeId = await _context.ContentItems
-                .Where(c => c.Id == contentItem.Id)
-                .Select(c => c.ContentHierarchyItemId)
-                .FirstAsync().ConfigureAwait(false);
-            _context.ReleaseScopes.Add(new ReleaseScope { ReleaseId = release.Id, ContentHierarchyItemId = nodeId, });
-            await _context.SaveChangesAsync().ConfigureAwait(false);
-            chains.Add(name, (release.Id, contentItem.Id, hierarchyItem.Id, name));
-        }
+            MetadataContainerId = container1.Id,
+            ContentType = "test",
+            Level = "level",
+            Slug = Guid.NewGuid().ToString("N"),
+            Name = "Low",
+            Monitoring = MonitoringMode.Monitored,
+            CreatedAt = DateTime.UtcNow
+        };
+        _context.ContentHierarchyItems.Add(hierarchyItem1);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        var contentItem1 = new ContentItem
+        {
+            ContentHierarchyItemId = hierarchyItem1.Id,
+            Fulfillment = FulfillmentStatus.Missing,
+            CreatedAt = DateTime.UtcNow
+        };
+        _context.ContentItems.Add(contentItem1);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        var release1 = new Release
+        {
+            Protocol = "torrent",
+            Title = $"Release-{Guid.NewGuid():N}",
+            ExternalId = Guid.NewGuid().ToString("N"),
+            PublishDate = DateTime.UtcNow,
+            InfoUrl = null,
+            CreatedAt = DateTime.UtcNow
+        };
+        _context.Releases.Add(release1);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        var nodeId1 = await _context.ContentItems
+            .Where(c => c.Id == contentItem1.Id)
+            .Select(c => c.ContentHierarchyItemId)
+            .FirstAsync().ConfigureAwait(false);
+        _context.ReleaseScopes.Add(new ReleaseScope { ReleaseId = release1.Id, ContentHierarchyItemId = nodeId1, });
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        chains.Add("Low", (release1.Id, contentItem1.Id, hierarchyItem1.Id, "Low"));
+        var container2 = new MetadataContainer { CreatedAt = DateTime.UtcNow };
+        _context.MetadataContainers.Add(container2);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        var hierarchyItem2 = new ContentHierarchyItem
+        {
+            MetadataContainerId = container2.Id,
+            ContentType = "test",
+            Level = "level",
+            Slug = Guid.NewGuid().ToString("N"),
+            Name = "High",
+            Monitoring = MonitoringMode.Monitored,
+            CreatedAt = DateTime.UtcNow
+        };
+        _context.ContentHierarchyItems.Add(hierarchyItem2);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        var contentItem2 = new ContentItem
+        {
+            ContentHierarchyItemId = hierarchyItem2.Id,
+            Fulfillment = FulfillmentStatus.Missing,
+            CreatedAt = DateTime.UtcNow
+        };
+        _context.ContentItems.Add(contentItem2);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        var release2 = new Release
+        {
+            Protocol = "torrent",
+            Title = $"Release-{Guid.NewGuid():N}",
+            ExternalId = Guid.NewGuid().ToString("N"),
+            PublishDate = DateTime.UtcNow,
+            InfoUrl = null,
+            CreatedAt = DateTime.UtcNow
+        };
+        _context.Releases.Add(release2);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        var nodeId2 = await _context.ContentItems
+            .Where(c => c.Id == contentItem2.Id)
+            .Select(c => c.ContentHierarchyItemId)
+            .FirstAsync().ConfigureAwait(false);
+        _context.ReleaseScopes.Add(new ReleaseScope { ReleaseId = release2.Id, ContentHierarchyItemId = nodeId2, });
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        chains.Add("High", (release2.Id, contentItem2.Id, hierarchyItem2.Id, "High"));
+        var container3 = new MetadataContainer { CreatedAt = DateTime.UtcNow };
+        _context.MetadataContainers.Add(container3);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        var hierarchyItem3 = new ContentHierarchyItem
+        {
+            MetadataContainerId = container3.Id,
+            ContentType = "test",
+            Level = "level",
+            Slug = Guid.NewGuid().ToString("N"),
+            Name = "Mid",
+            Monitoring = MonitoringMode.Monitored,
+            CreatedAt = DateTime.UtcNow
+        };
+        _context.ContentHierarchyItems.Add(hierarchyItem3);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        var contentItem3 = new ContentItem
+        {
+            ContentHierarchyItemId = hierarchyItem3.Id,
+            Fulfillment = FulfillmentStatus.Missing,
+            CreatedAt = DateTime.UtcNow
+        };
+        _context.ContentItems.Add(contentItem3);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        var release3 = new Release
+        {
+            Protocol = "torrent",
+            Title = $"Release-{Guid.NewGuid():N}",
+            ExternalId = Guid.NewGuid().ToString("N"),
+            PublishDate = DateTime.UtcNow,
+            InfoUrl = null,
+            CreatedAt = DateTime.UtcNow
+        };
+        _context.Releases.Add(release3);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        var nodeId3 = await _context.ContentItems
+            .Where(c => c.Id == contentItem3.Id)
+            .Select(c => c.ContentHierarchyItemId)
+            .FirstAsync().ConfigureAwait(false);
+        _context.ReleaseScopes.Add(new ReleaseScope { ReleaseId = release3.Id, ContentHierarchyItemId = nodeId3, });
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        chains.Add("Mid", (release3.Id, contentItem3.Id, hierarchyItem3.Id, "Mid"));
 
         var low = chains["Low"];
         var high = chains["High"];
@@ -3025,13 +3303,183 @@ public sealed class DownloadRepositoryTests
         // Act
         var result = await _subject.ListByReleaseAsync(
             [
-                new ReleaseIdentityKey { Authority = "hash", Value = "recent" },
-                new ReleaseIdentityKey { Authority = "guid", Value = "aged" },
-                new ReleaseIdentityKey { Authority = "provider", Value = "no-failed-at" }
+                new Release
+                {
+                    Protocol = "torrent",
+                    Title = "Keyed release",
+                    IdentityKeys =
+                    {
+                        new ReleaseIdentityKey { Authority = "hash", Value = "recent" },
+                        new ReleaseIdentityKey { Authority = "guid", Value = "aged" },
+                        new ReleaseIdentityKey { Authority = "provider", Value = "no-failed-at" }
+                    }
+                }
             ]).ConfigureAwait(false);
 
         // Assert
         Assert.That(result.Select(d => d.Id), Is.EquivalentTo([recentFailed.Id, agedFailed.Id, noFailedAt.Id]));
+    }
+
+    [Test]
+    public async Task ListByReleaseAsync_ReturnsTheDownloadsOfTheRelease_WhenTheReleaseHasNoIdentityKeys()
+    {
+        // Arrange
+        var now = DateTime.UtcNow;
+        var keyless = new Release
+        {
+            Protocol = "torrent",
+            Title = "Keyless release",
+            ExternalId = "keyless",
+            PublishDate = now,
+            CreatedAt = now
+        };
+        var unrelated = new Release
+        {
+            Protocol = "torrent",
+            Title = "Unrelated keyless release",
+            ExternalId = "unrelated",
+            PublishDate = now,
+            CreatedAt = now
+        };
+        var rejected = new Download
+        {
+            Release = keyless,
+            DownloadClientId = _downloadClientId,
+            ExternalId = "keyless-rejected",
+            Title = "Keyless release",
+            Status = DownloadStatus.Failed,
+            FailureReason = DownloadFailureReason.ClientRejected,
+            CreatedAt = now
+        };
+        var unrelatedRejected = new Download
+        {
+            Release = unrelated,
+            DownloadClientId = _downloadClientId,
+            ExternalId = "unrelated-rejected",
+            Title = "Unrelated keyless release",
+            Status = DownloadStatus.Failed,
+            FailureReason = DownloadFailureReason.ClientRejected,
+            CreatedAt = now
+        };
+        _context.Releases.AddRange(keyless, unrelated);
+        _context.Downloads.AddRange(rejected, unrelatedRejected);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.ChangeTracker.Clear();
+
+        // Act
+        var downloads = await _subject.ListByReleaseAsync([keyless]).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(downloads.Select(d => d.Id), Is.EqualTo([rejected.Id]));
+    }
+
+    [Test]
+    public async Task ListByReleaseAsync_ReturnsTheDownloadsOfAnotherRelease_WhenItHasTheSameIndexerAndExternalId()
+    {
+        // Arrange
+        var now = DateTime.UtcNow;
+        var indexer = new Indexer { ProviderType = "mock-indexer", Name = "Indexer", CreatedAt = now };
+        _context.Indexers.Add(indexer);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        var stored = new Release
+        {
+            IndexerId = indexer.Id,
+            Protocol = "torrent",
+            Title = "Stored row",
+            ExternalId = "shared",
+            PublishDate = now,
+            CreatedAt = now
+        };
+        var rejected = new Download
+        {
+            Release = stored,
+            DownloadClientId = _downloadClientId,
+            ExternalId = "shared-rejected",
+            Title = "Stored row",
+            Status = DownloadStatus.Failed,
+            FailureReason = DownloadFailureReason.ClientRejected,
+            CreatedAt = now
+        };
+        _context.Releases.Add(stored);
+        _context.Downloads.Add(rejected);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.ChangeTracker.Clear();
+        var otherRow = new Release
+        {
+            Id = Guid.Parse("e6b1c610-f9af-4cab-925e-0c7975a2aa4d"),
+            IndexerId = indexer.Id,
+            Protocol = "torrent",
+            Title = "Other row",
+            ExternalId = "shared"
+        };
+
+        // Act
+        var downloads = await _subject.ListByReleaseAsync([otherRow]).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(downloads.Select(d => d.Id), Is.EqualTo([rejected.Id]));
+    }
+
+    [Test]
+    public async Task ListByReleaseAsync_ReturnsNoDownload_WhenOnlyTheIndexerOrOnlyTheExternalIdMatches()
+    {
+        // Arrange
+        var now = DateTime.UtcNow;
+        var indexer = new Indexer { ProviderType = "mock-indexer", Name = "Indexer", CreatedAt = now };
+        _context.Indexers.Add(indexer);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        var stored = new Release
+        {
+            IndexerId = indexer.Id,
+            Protocol = "torrent",
+            Title = "Stored row",
+            ExternalId = "shared",
+            PublishDate = now,
+            CreatedAt = now
+        };
+        _context.Releases.Add(stored);
+        _context.Downloads.Add(new Download
+        {
+            Release = stored,
+            DownloadClientId = _downloadClientId,
+            ExternalId = "shared-rejected",
+            Title = "Stored row",
+            Status = DownloadStatus.Failed,
+            FailureReason = DownloadFailureReason.ClientRejected,
+            CreatedAt = now
+        });
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.ChangeTracker.Clear();
+        var noIndexer = new Release
+        {
+            Id = Guid.Parse("46d09b62-520a-4df2-ab55-ab77b87bc27f"),
+            Protocol = "torrent",
+            Title = "No indexer",
+            ExternalId = "shared"
+        };
+        var noExternalId = new Release
+        {
+            Id = Guid.Parse("fcd9b168-13a7-4543-8093-54867aa1eb3f"),
+            IndexerId = indexer.Id,
+            Protocol = "torrent",
+            Title = "No external id"
+        };
+        var otherExternalId = new Release
+        {
+            Id = Guid.Parse("e94ed591-5aa9-45b4-9630-3dc5d1a53b1d"),
+            IndexerId = indexer.Id,
+            Protocol = "torrent",
+            Title = "Other external id",
+            ExternalId = "other"
+        };
+
+        // Act
+        var downloads = await _subject
+            .ListByReleaseAsync([noIndexer, noExternalId, otherExternalId])
+            .ConfigureAwait(false);
+
+        // Assert
+        Assert.That(downloads, Is.Empty);
     }
 
     [TestCase(DownloadStatus.Failed)]
@@ -3370,27 +3818,42 @@ public sealed class DownloadRepositoryTests
         _context.ContentItems.Add(contentItem);
         await _context.SaveChangesAsync().ConfigureAwait(false);
         var releaseIds = new List<Guid>();
-        for (var i = 0; i < 2; i++)
+        var release1 = new Release
         {
-            var release = new Release
-            {
-                Protocol = "torrent",
-                Title = $"Release-{Guid.NewGuid():N}",
-                ExternalId = Guid.NewGuid().ToString("N"),
-                PublishDate = DateTime.UtcNow,
-                InfoUrl = null,
-                CreatedAt = DateTime.UtcNow
-            };
-            _context.Releases.Add(release);
-            await _context.SaveChangesAsync().ConfigureAwait(false);
-            var nodeId = await _context.ContentItems
-                .Where(c => c.Id == contentItem.Id)
-                .Select(c => c.ContentHierarchyItemId)
-                .FirstAsync().ConfigureAwait(false);
-            _context.ReleaseScopes.Add(new ReleaseScope { ReleaseId = release.Id, ContentHierarchyItemId = nodeId, });
-            await _context.SaveChangesAsync().ConfigureAwait(false);
-            releaseIds.Add(release.Id);
-        }
+            Protocol = "torrent",
+            Title = $"Release-{Guid.NewGuid():N}",
+            ExternalId = Guid.NewGuid().ToString("N"),
+            PublishDate = DateTime.UtcNow,
+            InfoUrl = null,
+            CreatedAt = DateTime.UtcNow
+        };
+        _context.Releases.Add(release1);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        var nodeId1 = await _context.ContentItems
+            .Where(c => c.Id == contentItem.Id)
+            .Select(c => c.ContentHierarchyItemId)
+            .FirstAsync().ConfigureAwait(false);
+        _context.ReleaseScopes.Add(new ReleaseScope { ReleaseId = release1.Id, ContentHierarchyItemId = nodeId1, });
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        releaseIds.Add(release1.Id);
+        var release2 = new Release
+        {
+            Protocol = "torrent",
+            Title = $"Release-{Guid.NewGuid():N}",
+            ExternalId = Guid.NewGuid().ToString("N"),
+            PublishDate = DateTime.UtcNow,
+            InfoUrl = null,
+            CreatedAt = DateTime.UtcNow
+        };
+        _context.Releases.Add(release2);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        var nodeId2 = await _context.ContentItems
+            .Where(c => c.Id == contentItem.Id)
+            .Select(c => c.ContentHierarchyItemId)
+            .FirstAsync().ConfigureAwait(false);
+        _context.ReleaseScopes.Add(new ReleaseScope { ReleaseId = release2.Id, ContentHierarchyItemId = nodeId2, });
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        releaseIds.Add(release2.Id);
 
         var failedReleaseId = releaseIds[0];
         var importedReleaseId = releaseIds[1];
@@ -3938,7 +4401,15 @@ public sealed class DownloadRepositoryTests
 
         // Act
         var downloads = await _subject
-            .ListByReleaseAsync([new ReleaseIdentityKey { Authority = " provider ", Value = "imported-key" }])
+            .ListByReleaseAsync(
+            [
+                new Release
+                {
+                    Protocol = "torrent",
+                    Title = "Keyed release",
+                    IdentityKeys = { new ReleaseIdentityKey { Authority = " provider ", Value = "imported-key" } }
+                }
+            ])
             .ConfigureAwait(false);
 
         // Assert
@@ -4294,16 +4765,13 @@ public sealed class DownloadRepositoryTests
         }
     }
 
-    [TestCase(DownloadFailureReason.DownloadStuck, DownloadStatus.Faulted)]
-    [TestCase(DownloadFailureReason.DownloadErrored, DownloadStatus.Faulted)]
-    [TestCase(DownloadFailureReason.AmbiguousDispatchFailure, DownloadStatus.Faulted)]
-    [TestCase(DownloadFailureReason.ImportFailed, DownloadStatus.Faulted)]
-    [TestCase(DownloadFailureReason.NoUsableContent, DownloadStatus.Failed)]
-    [TestCase(DownloadFailureReason.BlockedFileType, DownloadStatus.Failed)]
-    [TestCase(DownloadFailureReason.ClientRejected, DownloadStatus.Failed)]
-    public async Task MarkFailedAsync_StoresTheClassifiedStatusAndClearsTheActiveAcquisition_WhenTheDownloadFails(
-        DownloadFailureReason reason,
-        DownloadStatus expectedStatus)
+    [TestCase(DownloadStatus.Failed, DownloadFailureReason.ImportFailed)]
+    [TestCase(DownloadStatus.Faulted, DownloadFailureReason.ImportFailed)]
+    [TestCase(DownloadStatus.Failed, DownloadFailureReason.NoUsableContent)]
+    [TestCase(DownloadStatus.Faulted, DownloadFailureReason.NoUsableContent)]
+    public async Task MarkFailedAsync_StoresTheRequestedStatusAndClearsTheActiveAcquisition_WhenTheDownloadFails(
+        DownloadStatus status,
+        DownloadFailureReason reason)
     {
         // Arrange
         var node = new ContentHierarchyItem
@@ -4331,6 +4799,7 @@ public sealed class DownloadRepositoryTests
         // Act
         var transitioned = await _subject.MarkFailedAsync(
             download.Id,
+            status,
             reason,
             "Failure",
             "DownloadFailed",
@@ -4344,10 +4813,46 @@ public sealed class DownloadRepositoryTests
         {
             Assert.That(transitioned, Is.True);
             Assert.That(await _context.Downloads.AsNoTracking().Select(d => d.Status).SingleAsync()
-                .ConfigureAwait(false), Is.EqualTo(expectedStatus));
+                .ConfigureAwait(false), Is.EqualTo(status));
             Assert.That(await _context.ContentItems.AsNoTracking().Select(c => c.ActiveAcquisitionStatus)
                 .SingleAsync().ConfigureAwait(false), Is.Null);
             Assert.That(_publishedEvents.Select(e => e.Name), Does.Contain("download.failed"));
+        }
+    }
+
+    [TestCase(DownloadStatus.Cancelled)]
+    [TestCase(DownloadStatus.Imported)]
+    public async Task MarkFailedAsync_ThrowsAndKeepsStatus_WhenTheRequestedStatusIsNotAFailure(DownloadStatus status)
+    {
+        // Arrange
+        var download = new Download
+        {
+            DownloadClientId = _downloadClientId,
+            Title = "Not a failure",
+            ExternalId = "not-a-failure",
+            Status = DownloadStatus.Downloading
+        };
+        _context.Downloads.Add(download);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        // Act
+        var act = () => _subject.MarkFailedAsync(
+            download.Id,
+            status,
+            DownloadFailureReason.ImportFailed,
+            "Failure",
+            "DownloadFailed",
+            "Failure",
+            DateTime.UtcNow,
+            _userId,
+            correlationId: null);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => act());
+            Assert.That(await _context.Downloads.AsNoTracking().Select(d => d.Status).SingleAsync()
+                .ConfigureAwait(false), Is.EqualTo(DownloadStatus.Downloading));
         }
     }
 
@@ -4388,7 +4893,7 @@ public sealed class DownloadRepositoryTests
     }
 
     [Test]
-    public async Task UpdateRefreshedStatusAsync_StoresFaulted_WhenTheClientReportsAnError()
+    public async Task UpdateRefreshedStatusAsync_StoresTheRequestedStatus_WhenTheFailureReasonIsDownloadErrored()
     {
         // Arrange
         var now = DateTime.UtcNow;
@@ -4422,7 +4927,7 @@ public sealed class DownloadRepositoryTests
         {
             Assert.That(applied, Is.True);
             Assert.That(await _context.Downloads.AsNoTracking().Select(d => d.Status).SingleAsync()
-                .ConfigureAwait(false), Is.EqualTo(DownloadStatus.Faulted));
+                .ConfigureAwait(false), Is.EqualTo(DownloadStatus.Failed));
             Assert.That(_publishedEvents.Select(e => e.Name), Is.EqualTo(["download.failed"]));
         }
     }

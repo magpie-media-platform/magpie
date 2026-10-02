@@ -73,7 +73,6 @@ export function useContentReleases(contentId: string | null | undefined, options
             entityIds: relatedIds,
             exact: true,
             maxWaitMs: 800,
-            owner: 'content-releases',
         },
     );
 

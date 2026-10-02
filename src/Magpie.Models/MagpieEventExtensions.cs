@@ -73,7 +73,7 @@ public static class MagpieEventExtensions
     }
 
     /// <summary>
-    /// Converts a trigger-context dictionary into an event. If the dictionary holds no event, returns null.
+    /// Converts a trigger-context dictionary into an event.
     /// </summary>
     /// <param name="triggerContext">The trigger-context dictionary to convert</param>
     public static MagpieEvent? ToMagpieEvent(this IReadOnlyDictionary<string, string> triggerContext)

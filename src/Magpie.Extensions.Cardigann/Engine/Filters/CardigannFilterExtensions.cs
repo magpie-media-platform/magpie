@@ -232,7 +232,7 @@ internal static class CardigannFilterExtensions
             return data;
         }
 
-        var parts = data.Split(separator![0]);
+        var parts = data.Split(separator[0]);
         if (pos < 0)
         {
             pos += parts.Length;
@@ -253,7 +253,7 @@ internal static class CardigannFilterExtensions
             return data.Trim();
         }
 
-        return data.Trim(cutset![0]);
+        return data.Trim(cutset[0]);
     }
 
     private static string NormalizeWhitespace(string data)

@@ -19,7 +19,7 @@ public interface IJobExecutionRepository :
     IBulkDeleteRepository<JobExecution, JobExecutionQuery>
 {
     /// <summary>
-    /// Creates an execution or returns the unchanged queued or active owner of its lock partition.
+    /// Creates an execution for an inactive lock partition.
     /// </summary>
     /// <param name="model">The queued execution with a lock partition</param>
     /// <param name="createdByUserId">The id of the user that starts the execution</param>
@@ -73,7 +73,10 @@ public interface IJobExecutionRepository :
     /// <param name="nodeId">The node that owns the execution</param>
     /// <param name="notBeforeAt">The earliest UTC time to resume the work</param>
     /// <param name="cancellationToken">The token that cancels the operation</param>
-    Task<bool> TryDeferRunningAsync(Guid executionId, string nodeId, DateTime notBeforeAt,
+    Task<bool> TryDeferRunningAsync(
+        Guid executionId,
+        string nodeId,
+        DateTime notBeforeAt,
         CancellationToken cancellationToken = default);
 
     /// <summary>

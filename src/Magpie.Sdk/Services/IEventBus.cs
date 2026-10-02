@@ -22,5 +22,6 @@ public interface IEventBus
     /// </summary>
     /// <param name="eventName">The name of the only event to receive, or <see langword="null"/> for all</param>
     /// <param name="localOnly">Whether the listener receives only the events raised on this node</param>
-    IEventListener CreateListener(string? eventName = null, bool localOnly = false);
+    /// <param name="callSite">The name of the caller that owns the listener</param>
+    IEventListener CreateListener(string? eventName, bool localOnly, string callSite);
 }

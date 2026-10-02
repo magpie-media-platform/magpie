@@ -113,8 +113,6 @@ public sealed class MlfqJobConcurrencySchedulerTests
     {
         // Arrange
         var time = new FakeTimeProvider(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero));
-
-        // Act
         var scheduler = new MlfqJobConcurrencyScheduler(
             new JobRuntimeOptions
             {
@@ -128,9 +126,12 @@ public sealed class MlfqJobConcurrencySchedulerTests
         scheduler.CommitAdmission(jobOld);
         time.Advance(TimeSpan.FromSeconds(1));
         scheduler.CommitAdmission(jobYoung);
-
         time.Advance(TimeSpan.FromSeconds(2));
+
+        // Act
         var demoted = scheduler.Rebalance();
+
+        // Assert
         using (Assert.EnterMultipleScope())
         {
             Assert.That(demoted, Does.Contain(jobOld.Id));
@@ -222,7 +223,7 @@ public sealed class MlfqJobConcurrencySchedulerTests
     }
 
     [Test]
-    public void TryReserveSlot_LimitsTotalInFlight_WhenTheConfiguredCeilingIsReached()
+    public void TrySelectAdmission_LimitsTotalInFlight_WhenTheConfiguredCeilingIsReached()
     {
         // Arrange
         var time = new FakeTimeProvider(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero));
@@ -270,63 +271,6 @@ public sealed class MlfqJobConcurrencySchedulerTests
     }
 
     [Test]
-    public void TryReserveSlot_ReleasesAdmissionSlot_WhenTheReservationIsDisposed()
-    {
-        // Arrange
-        var scheduler = new MlfqJobConcurrencyScheduler(
-            new JobRuntimeOptions { PoolSize = 5 },
-            TimeProvider.System,
-            NullLogger<MlfqJobConcurrencyScheduler>.Instance);
-        var candidate = new JobClaimCandidate(Guid.NewGuid(), "ReleaseSearchItem", "rs:1");
-
-        // Act
-        var reserved = scheduler.TryReserveSlot(out var reservation);
-
-        // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(reserved, Is.True);
-            Assert.That(scheduler.InFlight, Is.EqualTo(1));
-            Assert.That(scheduler.HasAdmissionCapacity(), Is.False);
-            Assert.That(scheduler.TrySelectAdmission([candidate], new HashSet<Guid>(), out _), Is.False);
-        }
-
-        reservation.Dispose();
-
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(scheduler.InFlight, Is.EqualTo(0));
-            Assert.That(scheduler.HasAdmissionCapacity(), Is.True);
-            Assert.That(scheduler.TrySelectAdmission([candidate], new HashSet<Guid>(), out _), Is.True);
-        }
-    }
-
-    [Test]
-    public void TryReserveSlot_ReturnsFalse_WhenAllGeneralSlotsAreOccupied()
-    {
-        // Arrange
-        var scheduler = new MlfqJobConcurrencyScheduler(
-            new JobRuntimeOptions { PoolSize = 5 },
-            TimeProvider.System,
-            NullLogger<MlfqJobConcurrencyScheduler>.Instance);
-
-        // Act
-        for (var index = 0; index < 4; index++)
-        {
-            scheduler.TryReserveSlot(out _);
-        }
-
-        var denied = scheduler.TryReserveSlot(out _);
-
-        // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(denied, Is.False);
-            Assert.That(scheduler.InFlight, Is.EqualTo(4));
-        }
-    }
-
-    [Test]
     public void Release_AllowsFurtherAdmission_WhenAnOccupiedSlotIsFreed()
     {
         // Arrange
@@ -361,6 +305,41 @@ public sealed class MlfqJobConcurrencySchedulerTests
             Assert.That(scheduler.HasAdmissionCapacity(), Is.True);
             Assert.That(scheduler.InFlight, Is.EqualTo(admitted.Count - 1));
         }
+    }
+
+    [Test]
+    public async Task AcquireImmediateSlotAsync_ReleasesAdmissionSlot_WhenTheBorrowedSlotIsDisposed()
+    {
+        // Arrange
+        var scheduler = new MlfqJobConcurrencyScheduler(
+            new JobRuntimeOptions { PoolSize = 5 },
+            TimeProvider.System,
+            NullLogger<MlfqJobConcurrencyScheduler>.Instance);
+        var candidate = new JobClaimCandidate(Guid.NewGuid(), "ReleaseSearchItem", "rs:1");
+        var fast = await scheduler.AcquireImmediateSlotAsync(default).ConfigureAwait(false);
+
+        // Act
+        var borrowed = await scheduler.AcquireImmediateSlotAsync(default)
+            .WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(scheduler.InFlight, Is.EqualTo(2));
+            Assert.That(scheduler.HasAdmissionCapacity(), Is.False);
+            Assert.That(scheduler.TrySelectAdmission([candidate], new HashSet<Guid>(), out _), Is.False);
+        }
+
+        borrowed.Dispose();
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(scheduler.InFlight, Is.EqualTo(1));
+            Assert.That(scheduler.HasAdmissionCapacity(), Is.True);
+            Assert.That(scheduler.TrySelectAdmission([candidate], new HashSet<Guid>(), out _), Is.True);
+        }
+
+        fast.Dispose();
     }
 
     [Test]
@@ -624,11 +603,16 @@ public sealed class MlfqJobConcurrencySchedulerTests
         }
     }
 
-    [Test]
-    public void Constructor_SplitsCeilingIntoGeneralPoolAndFastLaneFloor_WhenCeilingIs16()
+    [TestCase(16, 2, 14)]
+    [TestCase(15, 1, 14)]
+    [TestCase(30, 3, 27)]
+    public void Constructor_SplitsCeilingIntoGeneralPoolAndFastLaneFloor_WhenCeilingIsSet(
+        int poolSize,
+        int fastLane,
+        int general)
     {
         // Arrange
-        var options = new JobRuntimeOptions { PoolSize = 16 };
+        var options = new JobRuntimeOptions { PoolSize = poolSize };
 
         // Act
         var scheduler = new MlfqJobConcurrencyScheduler(
@@ -639,54 +623,9 @@ public sealed class MlfqJobConcurrencySchedulerTests
         // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(scheduler.Total, Is.EqualTo(16));
-            Assert.That(scheduler.FastLaneCapacity, Is.EqualTo(2));
-            Assert.That(scheduler.GeneralCapacity, Is.EqualTo(14));
-            Assert.That(scheduler.GeneralCapacity + scheduler.FastLaneCapacity, Is.EqualTo(scheduler.Total));
-        }
-    }
-
-    [Test]
-    public void Constructor_SplitsCeilingIntoGeneralPoolAndFastLaneFloor_WhenCeilingIs15()
-    {
-        // Arrange
-        var options = new JobRuntimeOptions { PoolSize = 15 };
-
-        // Act
-        var scheduler = new MlfqJobConcurrencyScheduler(
-            options,
-            TimeProvider.System,
-            NullLogger<MlfqJobConcurrencyScheduler>.Instance);
-
-        // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(scheduler.Total, Is.EqualTo(15));
-            Assert.That(scheduler.FastLaneCapacity, Is.EqualTo(1));
-            Assert.That(scheduler.GeneralCapacity, Is.EqualTo(14));
-            Assert.That(scheduler.GeneralCapacity + scheduler.FastLaneCapacity, Is.EqualTo(scheduler.Total));
-        }
-    }
-
-    [Test]
-    public void Constructor_SplitsCeilingIntoGeneralPoolAndFastLaneFloor_WhenCeilingIs30()
-    {
-        // Arrange
-        var options = new JobRuntimeOptions { PoolSize = 30 };
-
-        // Act
-        var scheduler = new MlfqJobConcurrencyScheduler(
-            options,
-            TimeProvider.System,
-            NullLogger<MlfqJobConcurrencyScheduler>.Instance);
-
-        // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(scheduler.Total, Is.EqualTo(30));
-            Assert.That(scheduler.FastLaneCapacity, Is.EqualTo(3));
-            Assert.That(scheduler.GeneralCapacity, Is.EqualTo(27));
-            Assert.That(scheduler.GeneralCapacity + scheduler.FastLaneCapacity, Is.EqualTo(scheduler.Total));
+            Assert.That(scheduler.Total, Is.EqualTo(poolSize));
+            Assert.That(scheduler.FastLaneCapacity, Is.EqualTo(fastLane));
+            Assert.That(scheduler.GeneralCapacity, Is.EqualTo(general));
         }
     }
 
@@ -726,9 +665,9 @@ public sealed class MlfqJobConcurrencySchedulerTests
         // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(scheduler.Total, Is.EqualTo(options.PoolSize));
-            Assert.That(scheduler.FastLaneCapacity, Is.GreaterThanOrEqualTo(1));
-            Assert.That(scheduler.GeneralCapacity + scheduler.FastLaneCapacity, Is.EqualTo(scheduler.Total));
+            Assert.That(scheduler.Total, Is.EqualTo(50));
+            Assert.That(scheduler.FastLaneCapacity, Is.EqualTo(6));
+            Assert.That(scheduler.GeneralCapacity, Is.EqualTo(44));
         }
     }
 }

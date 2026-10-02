@@ -1,10 +1,9 @@
 import { render, screen } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
-import { HouseIcon, MagnifyingGlassIcon, DownloadSimpleIcon, GearIcon, ListIcon } from '@phosphor-icons/react';
+import { HouseIcon, MagnifyingGlassIcon, DownloadSimpleIcon, GearIcon } from '@phosphor-icons/react';
 
-import { BottomNav, BottomNavItem, BottomNavButton } from './BottomNav';
+import { BottomNav, BottomNavItem } from './BottomNav';
 
 function renderWithRouter(ui: React.ReactElement) {
     return render(<MemoryRouter>{ui}</MemoryRouter>);
@@ -39,21 +38,6 @@ describe('BottomNav', () => {
             </BottomNav>,
         );
         expect(screen.getByText('Home')).toBeInTheDocument();
-    });
-
-    it('renders slot content', () => {
-        render(<BottomNav slotContent={<div data-testid="slot">Extension</div>} />);
-        expect(screen.getByTestId('slot')).toBeInTheDocument();
-    });
-
-    it('renders children and slot content together', () => {
-        renderWithRouter(
-            <BottomNav slotContent={<div data-testid="slot">Extension</div>}>
-                <BottomNavItem icon={<HouseIcon />} label="Home" to="/" />
-            </BottomNav>,
-        );
-        expect(screen.getByText('Home')).toBeInTheDocument();
-        expect(screen.getByTestId('slot')).toBeInTheDocument();
     });
 
     it('has container div with correct class', () => {
@@ -113,13 +97,6 @@ describe('BottomNavItem', () => {
         renderWithRouter(<BottomNavItem icon={<HouseIcon />} label="Home" to="/" />);
         const label = screen.getByText('Home');
         expect(label).toHaveClass('bottom-nav-item__label');
-        expect(screen.getByRole('link')).toHaveAttribute('data-show-label', 'true');
-    });
-
-    it('hides label visually when showLabel is false', () => {
-        renderWithRouter(<BottomNavItem icon={<HouseIcon />} label="Home" to="/" showLabel={false} />);
-        screen.getByText('Home');
-        expect(screen.getByRole('link')).toHaveAttribute('data-show-label', 'false');
     });
 
     it('applies active class when active', () => {
@@ -158,54 +135,6 @@ describe('BottomNavItem', () => {
             <BottomNavItem icon={<HouseIcon />} label="Home" to="/" data-testid="nav-item" title="Go to home" />,
         );
         expect(screen.getByTestId('nav-item')).toHaveAttribute('title', 'Go to home');
-    });
-});
-
-describe('BottomNavButton', () => {
-    it('renders as a button element', () => {
-        render(<BottomNavButton icon={<ListIcon />} label="More" />);
-        const btn = screen.getByRole('button');
-        expect(btn.tagName).toBe('BUTTON');
-    });
-
-    it('applies bottom-nav-item class', () => {
-        render(<BottomNavButton icon={<ListIcon />} label="More" />);
-        expect(screen.getByRole('button')).toHaveClass('bottom-nav-item');
-    });
-
-    it('applies active class when active', () => {
-        render(<BottomNavButton icon={<ListIcon />} label="More" active />);
-        expect(screen.getByRole('button')).toHaveClass('bottom-nav-item--active');
-        expect(screen.getByRole('button')).toHaveAttribute('data-active', 'true');
-    });
-
-    it('sets aria-pressed when active', () => {
-        render(<BottomNavButton icon={<ListIcon />} label="More" active />);
-        expect(screen.getByRole('button')).toHaveAttribute('aria-pressed', 'true');
-    });
-
-    it('renders label visually by default', () => {
-        render(<BottomNavButton icon={<ListIcon />} label="More" />);
-        expect(screen.getByText('More')).toHaveClass('bottom-nav-item__label');
-    });
-
-    it('calls onClick when clicked', async () => {
-        const user = userEvent.setup();
-        const onClick = vi.fn();
-        render(<BottomNavButton icon={<ListIcon />} label="More" onClick={onClick} />);
-        await user.click(screen.getByRole('button'));
-        expect(onClick).toHaveBeenCalledTimes(1);
-    });
-
-    it('forwards ref', () => {
-        const ref = vi.fn();
-        render(<BottomNavButton ref={ref} icon={<ListIcon />} label="More" />);
-        expect(ref).toHaveBeenCalledWith(expect.any(HTMLButtonElement));
-    });
-
-    it('passes through additional props', () => {
-        render(<BottomNavButton icon={<ListIcon />} label="More" aria-label="Open menu" />);
-        expect(screen.getByRole('button')).toHaveAttribute('aria-label', 'Open menu');
     });
 });
 

@@ -70,8 +70,10 @@ internal sealed class IndexerConnectionRepository(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "The indexer connection repository failed to read indexer connection " +
-                "{IndexerConnectionId}.", id);
+            logger.LogError(
+                ex,
+                "The indexer connection repository failed to read indexer connection {IndexerConnectionId}.",
+                id);
             throw;
         }
     }
@@ -199,8 +201,10 @@ internal sealed class IndexerConnectionRepository(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "The indexer connection repository failed to create indexer connection " +
-                "{IndexerConnectionName}.", model.Name);
+            logger.LogError(
+                ex,
+                "The indexer connection repository failed to create indexer connection {IndexerConnectionName}.",
+                model.Name);
             throw;
         }
     }
@@ -255,8 +259,10 @@ internal sealed class IndexerConnectionRepository(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "The indexer connection repository failed to update indexer connection " +
-                "{IndexerConnectionId}.", model.Id);
+            logger.LogError(
+                ex,
+                "The indexer connection repository failed to update indexer connection {IndexerConnectionId}.",
+                model.Id);
             throw;
         }
     }
@@ -308,8 +314,10 @@ internal sealed class IndexerConnectionRepository(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "The indexer connection repository failed to delete indexer connection " +
-                "{IndexerConnectionId}.", id);
+            logger.LogError(
+                ex,
+                "The indexer connection repository failed to delete indexer connection {IndexerConnectionId}.",
+                id);
             throw;
         }
     }
@@ -502,8 +510,10 @@ internal sealed class IndexerConnectionRepository(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "The indexer connection repository failed to patch indexer connection " +
-                "{IndexerConnectionId}.", patch.Id);
+            logger.LogError(
+                ex,
+                "The indexer connection repository failed to patch indexer connection {IndexerConnectionId}.",
+                patch.Id);
             throw;
         }
     }

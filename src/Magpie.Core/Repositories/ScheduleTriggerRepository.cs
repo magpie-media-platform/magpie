@@ -31,9 +31,7 @@ internal sealed class ScheduleTriggerRepository(
 {
     private readonly TimeProvider _time = timeProvider;
 
-    private static void ApplyPatch(
-        IDictionary<string, string> values,
-        DictionaryPatch<string, string, string> patch)
+    private static void ApplyPatch(IDictionary<string, string> values, DictionaryPatch<string, string, string> patch)
     {
         if (patch.Add is not null)
         {
@@ -161,13 +159,6 @@ internal sealed class ScheduleTriggerRepository(
                 triggers = triggers.Where(t => t.Enabled == query.Enabled);
             }
 
-            if (query.HasNextRun is not null)
-            {
-                triggers = query.HasNextRun.Value
-                    ? triggers.Where(t => t.NextRunAt != null)
-                    : triggers.Where(t => t.NextRunAt == null);
-            }
-
             var totalCount = await triggers.CountAsync(cancellationToken).ConfigureAwait(false);
 
             var sortProperty = context.Model.FindEntityType(typeof(ScheduleTrigger))!.GetProperties()
@@ -228,8 +219,10 @@ internal sealed class ScheduleTriggerRepository(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "The schedule trigger repository failed to claim schedule trigger " +
-                "{TriggerId}.", triggerId);
+            logger.LogError(
+                ex,
+                "The schedule trigger repository failed to claim schedule trigger {TriggerId}.",
+                triggerId);
             throw;
         }
     }
@@ -276,8 +269,10 @@ internal sealed class ScheduleTriggerRepository(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "The schedule trigger repository failed to create schedule trigger " +
-                "{TriggerName}.", model.Name);
+            logger.LogError(
+                ex,
+                "The schedule trigger repository failed to create schedule trigger {TriggerName}.",
+                model.Name);
             throw;
         }
     }
@@ -333,8 +328,10 @@ internal sealed class ScheduleTriggerRepository(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "The schedule trigger repository failed to update schedule trigger " +
-                "{TriggerId}.", model.Id);
+            logger.LogError(
+                ex,
+                "The schedule trigger repository failed to update schedule trigger {TriggerId}.",
+                model.Id);
             throw;
         }
     }
@@ -410,12 +407,16 @@ internal sealed class ScheduleTriggerRepository(
             }
 
             await context.ScheduleTriggers.Where(trigger => trigger.Id == triggerId)
-                .ExecuteUpdateAsync(setters => setters.SetProperty(trigger => trigger.ModifiedAt,
-                    trigger => trigger.ModifiedAt), cancellationToken).ConfigureAwait(false);
+                .ExecuteUpdateAsync(
+                    setters => setters.SetProperty(trigger => trigger.ModifiedAt, trigger => trigger.ModifiedAt),
+                    cancellationToken)
+                .ConfigureAwait(false);
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "The schedule trigger repository failed to lock schedule trigger {TriggerId}.",
+            logger.LogError(
+                ex,
+                "The schedule trigger repository failed to lock schedule trigger {TriggerId}.",
                 triggerId);
             throw;
         }
@@ -520,8 +521,10 @@ internal sealed class ScheduleTriggerRepository(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "The schedule trigger repository failed to patch schedule trigger " +
-                "{TriggerId}.", patch.Id);
+            logger.LogError(
+                ex,
+                "The schedule trigger repository failed to patch schedule trigger {TriggerId}.",
+                patch.Id);
             throw;
         }
     }

@@ -6,6 +6,7 @@ import { createMemoryRouter, Link, RouterProvider } from 'react-router-dom';
 
 import { LiveAnnouncerProvider } from '@/components/ui/LiveAnnouncer';
 
+import type { EventStreamPayload } from '@/hooks/useEventStream';
 import { UnsavedChangesBlocker, UnsavedChangesGuardProvider } from '@/hooks/useUnsavedChangesGuard';
 
 import { MetadataInspector } from './MetadataInspector';
@@ -68,6 +69,13 @@ vi.mock('@/hooks/useLibraryTypes', async (importOriginal) => {
 
 vi.mock('@/components/ui/Toast', () => ({
     useToast: () => ({ toast: mockToast }),
+}));
+
+let streamHandler: ((event: EventStreamPayload) => void) | null = null;
+vi.mock('@/hooks/useEventStream', () => ({
+    useEventStream: (handler: (event: EventStreamPayload) => void) => {
+        streamHandler = handler;
+    },
 }));
 
 function userContribution(overrides: Record<string, unknown> = {}) {
@@ -153,6 +161,7 @@ function wrapper({ children }: { children: ReactNode }) {
 describe('MetadataInspector', () => {
     beforeEach(() => {
         vi.clearAllMocks();
+        streamHandler = null;
         mockContentDetailData = null;
         mockLibraryTypes = {
             contentTypes: [],
@@ -698,6 +707,263 @@ describe('MetadataInspector', () => {
         expect(screen.getByTestId('unsaved-changes')).toBeInTheDocument();
         saveChanges();
         expect(lastPatch().title).toEqual({ value: 'Operator Title' });
+    });
+
+    it('leaves no unsaved change or conflict after a new award is saved and refetched', async () => {
+        // Arrange
+        const saved = inspectorData([
+            userContribution({ awards: [{ id: 'award-1', body: 'QA awards body', name: 'QA award' }] }),
+            providerContribution({ title: 'Primary Title' }),
+        ]);
+        mockUseInspector.mockReturnValue({
+            ...inspectorData([providerContribution({ title: 'Primary Title' })]),
+            refetch: () => Promise.resolve({ status: 'success', data: saved.data }),
+        });
+        mockPatchMutate.mockImplementationOnce((_patch: unknown, options: { onSuccess: () => void }) => {
+            mockUseInspector.mockReturnValue(saved);
+            options.onSuccess();
+        });
+        render(<MetadataInspector contentId="c1" />, { wrapper });
+        const awards = document.querySelector('[data-subsection="awards"]') as HTMLElement;
+        fireEvent.click(within(awards).getByRole('button', { name: /add award/i }));
+        await waitFor(() => expect(screen.getByLabelText(/^Body/)).toBeInTheDocument());
+        fireEvent.change(screen.getByLabelText(/^Body/), { target: { value: 'QA awards body' } });
+        fireEvent.change(screen.getByLabelText(/^Name/), { target: { value: 'QA award' } });
+        fireEvent.click(screen.getByRole('button', { name: /^Add$/ }));
+
+        // Act
+        saveChanges();
+        act(() =>
+            streamHandler?.({ name: 'content.hierarchyItem.updated', context: { 'content.hierarchyItemId': 'c1' } }),
+        );
+
+        // Assert
+        await waitFor(() => expect(screen.getByTestId('no-changes')).toBeInTheDocument());
+        expect(screen.queryByText('Metadata changed elsewhere')).not.toBeInTheDocument();
+    });
+
+    it('sends one patch when Save is clicked again before the saved state is refetched', async () => {
+        // Arrange
+        const saved = inspectorData([
+            userContribution({ awards: [{ id: 'award-1', body: 'QA awards body', name: 'QA award' }] }),
+            providerContribution({ title: 'Primary Title' }),
+        ]);
+        mockUseInspector.mockReturnValue({
+            ...inspectorData([providerContribution({ title: 'Primary Title' })]),
+            refetch: () => new Promise(() => {}),
+        });
+        mockPatchMutate.mockImplementationOnce((_patch: unknown, options: { onSuccess: () => void }) => {
+            mockUseInspector.mockReturnValue(saved);
+            options.onSuccess();
+        });
+        render(<MetadataInspector contentId="c1" />, { wrapper });
+        const awards = document.querySelector('[data-subsection="awards"]') as HTMLElement;
+        fireEvent.click(within(awards).getByRole('button', { name: /add award/i }));
+        await waitFor(() => expect(screen.getByLabelText(/^Body/)).toBeInTheDocument());
+        fireEvent.change(screen.getByLabelText(/^Body/), { target: { value: 'QA awards body' } });
+        fireEvent.change(screen.getByLabelText(/^Name/), { target: { value: 'QA award' } });
+        fireEvent.click(screen.getByRole('button', { name: /^Add$/ }));
+        saveChanges();
+
+        // Act
+        saveChanges();
+
+        // Assert
+        expect(mockPatchMutate).toHaveBeenCalledTimes(1);
+        expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled();
+    });
+
+    it('keeps an edit made during the save unsaved without a conflict', async () => {
+        // Arrange
+        const saved = inspectorData([
+            userContribution({ awards: [{ id: 'award-1', body: 'QA awards body', name: 'QA award' }] }),
+            providerContribution({ title: 'Primary Title' }),
+        ]);
+        mockUseInspector.mockReturnValue({
+            ...inspectorData([providerContribution({ title: 'Primary Title' })]),
+            refetch: () => Promise.resolve({ status: 'success', data: saved.data }),
+        });
+        render(<MetadataInspector contentId="c1" />, { wrapper });
+        const awards = document.querySelector('[data-subsection="awards"]') as HTMLElement;
+        fireEvent.click(within(awards).getByRole('button', { name: /add award/i }));
+        await waitFor(() => expect(screen.getByLabelText(/^Body/)).toBeInTheDocument());
+        fireEvent.change(screen.getByLabelText(/^Body/), { target: { value: 'QA awards body' } });
+        fireEvent.change(screen.getByLabelText(/^Name/), { target: { value: 'QA award' } });
+        fireEvent.click(screen.getByRole('button', { name: /^Add$/ }));
+        saveChanges();
+        fireEvent.click(screen.getByRole('button', { name: 'Edit Title' }));
+        await waitFor(() => expect(screen.getByText('Override Title')).toBeInTheDocument());
+        fireEvent.change(screen.getByLabelText('Value'), { target: { value: 'Later Title' } });
+        fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+        act(() =>
+            streamHandler?.({ name: 'content.hierarchyItem.updated', context: { 'content.hierarchyItemId': 'c1' } }),
+        );
+
+        // Act
+        mockUseInspector.mockReturnValue(saved);
+        act(() => (mockPatchMutate.mock.calls[0]?.[1] as { onSuccess: () => void }).onSuccess());
+
+        // Assert
+        await waitFor(() => expect(screen.queryByText('Metadata changed elsewhere')).not.toBeInTheDocument());
+        await waitFor(() => expect(screen.getByTestId('unsaved-changes')).toHaveTextContent('1 unsaved change'));
+        await waitFor(() => expect(screen.getByRole('button', { name: 'Save changes' })).toBeEnabled());
+        saveChanges();
+        expect(mockPatchMutate.mock.calls[1]?.[0]).toEqual({ title: { value: 'Later Title' } });
+    });
+
+    it('keeps an edit of an existing award made during the save and sends it on the next save', async () => {
+        // Arrange
+        const saved = inspectorData([
+            userContribution({
+                title: 'Operator Title',
+                awards: [{ id: 'award-1', body: 'QA awards body', name: 'QA award' }],
+            }),
+            providerContribution({ title: 'Primary Title' }),
+        ]);
+        mockUseInspector.mockReturnValue({
+            ...inspectorData([
+                userContribution({ awards: [{ id: 'award-1', body: 'QA awards body', name: 'QA award' }] }),
+                providerContribution({ title: 'Primary Title' }),
+            ]),
+            refetch: () => Promise.resolve({ status: 'success', data: saved.data }),
+        });
+        render(<MetadataInspector contentId="c1" />, { wrapper });
+        fireEvent.click(screen.getByRole('button', { name: 'Edit Title' }));
+        await waitFor(() => expect(screen.getByText('Override Title')).toBeInTheDocument());
+        fireEvent.change(screen.getByLabelText('Value'), { target: { value: 'Operator Title' } });
+        fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+        saveChanges();
+        const awards = document.querySelector('[data-subsection="awards"]') as HTMLElement;
+        fireEvent.click(within(awards).getByRole('button', { name: /edit award/i }));
+        await waitFor(() => expect(screen.getByText('Edit award')).toBeInTheDocument());
+        fireEvent.change(screen.getByLabelText(/^Name/), { target: { value: 'Edited award' } });
+        fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
+
+        // Act
+        mockUseInspector.mockReturnValue(saved);
+        act(() => (mockPatchMutate.mock.calls[0]?.[1] as { onSuccess: () => void }).onSuccess());
+
+        // Assert
+        await waitFor(() => expect(screen.getByRole('button', { name: 'Save changes' })).toBeEnabled());
+        expect(within(awards).queryAllByText('QA awards body • QA award')).toHaveLength(0);
+        expect(within(awards).getAllByText('QA awards body • Edited award')).toHaveLength(1);
+        saveChanges();
+        expect(mockPatchMutate.mock.calls[1]?.[0]).toEqual({
+            awards: { update: [{ id: 'award-1', name: { value: 'Edited award' } }] },
+        });
+    });
+
+    it('keeps a delete of an existing award made during the save and sends it on the next save', async () => {
+        // Arrange
+        const saved = inspectorData([
+            userContribution({
+                title: 'Operator Title',
+                awards: [{ id: 'award-1', body: 'QA awards body', name: 'QA award' }],
+            }),
+            providerContribution({ title: 'Primary Title' }),
+        ]);
+        mockUseInspector.mockReturnValue({
+            ...inspectorData([
+                userContribution({ awards: [{ id: 'award-1', body: 'QA awards body', name: 'QA award' }] }),
+                providerContribution({ title: 'Primary Title' }),
+            ]),
+            refetch: () => Promise.resolve({ status: 'success', data: saved.data }),
+        });
+        render(<MetadataInspector contentId="c1" />, { wrapper });
+        fireEvent.click(screen.getByRole('button', { name: 'Edit Title' }));
+        await waitFor(() => expect(screen.getByText('Override Title')).toBeInTheDocument());
+        fireEvent.change(screen.getByLabelText('Value'), { target: { value: 'Operator Title' } });
+        fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+        saveChanges();
+        const awards = document.querySelector('[data-subsection="awards"]') as HTMLElement;
+        fireEvent.click(within(awards).getByRole('button', { name: /delete award/i }));
+
+        // Act
+        mockUseInspector.mockReturnValue(saved);
+        act(() => (mockPatchMutate.mock.calls[0]?.[1] as { onSuccess: () => void }).onSuccess());
+
+        // Assert
+        await waitFor(() => expect(screen.getByRole('button', { name: 'Save changes' })).toBeEnabled());
+        expect(within(awards).queryAllByText('QA awards body • QA award')).toHaveLength(0);
+        saveChanges();
+        expect(mockPatchMutate.mock.calls[1]?.[0]).toEqual({ awards: { remove: ['award-1'] } });
+    });
+
+    it('does not rebase another owner onto a save that completes after the owner changed', async () => {
+        // Arrange
+        let resolveRefetch: (result: unknown) => void = () => {};
+        mockUseInspector.mockReturnValue({
+            ...inspectorData([providerContribution({ title: 'Primary Title' })]),
+            refetch: () =>
+                new Promise((resolve) => {
+                    resolveRefetch = resolve;
+                }),
+        });
+        mockPatchMutate.mockImplementationOnce((_patch: unknown, options: { onSuccess: () => void }) =>
+            options.onSuccess(),
+        );
+        const { rerender } = render(<MetadataInspector contentId="c1" />, { wrapper });
+        const awards = document.querySelector('[data-subsection="awards"]') as HTMLElement;
+        fireEvent.click(within(awards).getByRole('button', { name: /add award/i }));
+        await waitFor(() => expect(screen.getByLabelText(/^Body/)).toBeInTheDocument());
+        fireEvent.change(screen.getByLabelText(/^Body/), { target: { value: 'QA awards body' } });
+        fireEvent.change(screen.getByLabelText(/^Name/), { target: { value: 'QA award' } });
+        fireEvent.click(screen.getByRole('button', { name: /^Add$/ }));
+        saveChanges();
+        mockUseInspector.mockReturnValue(inspectorData([providerContribution({ title: 'Second Title' })]));
+        rerender(<MetadataInspector contentId="c2" />);
+
+        // Act
+        await act(async () =>
+            resolveRefetch({
+                status: 'success',
+                data: inspectorData([
+                    userContribution({ awards: [{ id: 'award-1', body: 'QA awards body', name: 'QA award' }] }),
+                    providerContribution({ title: 'Primary Title' }),
+                ]).data,
+            }),
+        );
+
+        // Assert
+        expect(screen.getByTestId('no-changes')).toBeInTheDocument();
+        expect(screen.queryByText('QA awards body • QA award')).not.toBeInTheDocument();
+    });
+
+    it('marks an external change after the save window as a conflict', async () => {
+        // Arrange
+        const saved = inspectorData([
+            userContribution({ awards: [{ id: 'award-1', body: 'QA awards body', name: 'QA award' }] }),
+            providerContribution({ title: 'Primary Title' }),
+        ]);
+        mockUseInspector.mockReturnValue({
+            ...inspectorData([providerContribution({ title: 'Primary Title' })]),
+            refetch: () => Promise.resolve({ status: 'success', data: saved.data }),
+        });
+        mockPatchMutate.mockImplementationOnce((_patch: unknown, options: { onSuccess: () => void }) => {
+            mockUseInspector.mockReturnValue(saved);
+            options.onSuccess();
+        });
+        render(<MetadataInspector contentId="c1" />, { wrapper });
+        const awards = document.querySelector('[data-subsection="awards"]') as HTMLElement;
+        fireEvent.click(within(awards).getByRole('button', { name: /add award/i }));
+        await waitFor(() => expect(screen.getByLabelText(/^Body/)).toBeInTheDocument());
+        fireEvent.change(screen.getByLabelText(/^Body/), { target: { value: 'QA awards body' } });
+        fireEvent.change(screen.getByLabelText(/^Name/), { target: { value: 'QA award' } });
+        fireEvent.click(screen.getByRole('button', { name: /^Add$/ }));
+        saveChanges();
+        await waitFor(() => expect(screen.getByTestId('no-changes')).toBeInTheDocument());
+        fireEvent.click(screen.getByRole('button', { name: 'Edit Title' }));
+        await waitFor(() => expect(screen.getByText('Override Title')).toBeInTheDocument());
+        fireEvent.change(screen.getByLabelText('Value'), { target: { value: 'Operator Title' } });
+        fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+
+        // Act
+        act(() =>
+            streamHandler?.({ name: 'content.hierarchyItem.updated', context: { 'content.hierarchyItemId': 'c1' } }),
+        );
+
+        // Assert
+        expect(screen.getByText('Metadata changed elsewhere')).toBeInTheDocument();
     });
 
     it('clears the user layer locally and saves a removal patch', async () => {

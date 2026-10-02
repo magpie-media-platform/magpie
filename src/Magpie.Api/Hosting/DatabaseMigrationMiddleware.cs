@@ -50,10 +50,7 @@ internal sealed class DatabaseMigrationMiddleware(RequestDelegate next)
         }
         else
         {
-            result = Results.Problem(
-                detail: detail,
-                statusCode: StatusCodes.Status503ServiceUnavailable,
-                title: title);
+            result = Results.Problem(detail: detail, statusCode: StatusCodes.Status503ServiceUnavailable, title: title);
         }
 
         await result.ExecuteAsync(context).ConfigureAwait(false);

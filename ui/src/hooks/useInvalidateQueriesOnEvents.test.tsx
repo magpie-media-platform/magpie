@@ -40,7 +40,6 @@ describe('useInvalidateQueriesOnEvents', () => {
             () =>
                 useInvalidateQueriesOnEvents([], [['test-resources']], {
                     exact: true,
-                    owner: 'query:test-resources',
                 }),
             { wrapper: Wrapper },
         );
@@ -49,7 +48,6 @@ describe('useInvalidateQueriesOnEvents', () => {
             context: undefined,
             enabled: false,
             eventName: ['stream.reconnected'],
-            owner: 'query:test-resources',
         });
     });
 
@@ -67,7 +65,6 @@ describe('useInvalidateQueriesOnEvents', () => {
                 useInvalidateQueriesOnEvents(['subject.updated'], [['subjects', 'detail', 'subject-1']], {
                     entityIds: ['subject-1'],
                     exact: true,
-                    owner: 'subject-detail',
                 });
             },
             { wrapper: Wrapper },
@@ -99,7 +96,6 @@ describe('useInvalidateQueriesOnEvents', () => {
                 useInvalidateQueriesOnEvents(['subject.updated'], [['subjects', 'detail', 'subject-1']], {
                     entityIds: ['subject-1'],
                     exact: true,
-                    owner: 'subject-detail',
                 });
             },
             { wrapper: Wrapper },
@@ -136,7 +132,6 @@ describe('useInvalidateQueriesOnEvents', () => {
                     debounceMs: 100,
                     exact: true,
                     maxWaitMs: 400,
-                    owner: 'downloads-list',
                 });
             },
             { wrapper: Wrapper },
@@ -174,7 +169,6 @@ describe('useInvalidateQueriesOnEvents', () => {
                         entityIds: [],
                         exact: true,
                         failOpenEventNames: ['content.hierarchyItem.created'],
-                        owner: 'content:filtered-list',
                         predicate: (event) => event.context['content.impact.contentType'] === 'movies',
                         unprovableMembership: true,
                     },
@@ -210,7 +204,6 @@ describe('useInvalidateQueriesOnEvents', () => {
                     debounceMs: 100,
                     entityIds: [id],
                     exact: true,
-                    owner: `content-detail:${id}`,
                 });
             },
             { initialProps: { id: 'content-a' }, wrapper: Wrapper },
@@ -248,7 +241,6 @@ describe('useInvalidateQueriesOnEvents', () => {
                 useInvalidateQueriesOnEvents(['download.updated'], [['downloads', 'list', {}]], {
                     debounceMs: 100,
                     exact: true,
-                    owner: 'downloads-list',
                 });
             },
             { wrapper: Wrapper },
@@ -284,7 +276,6 @@ describe('useInvalidateQueriesOnEvents', () => {
                 useInvalidateQueriesOnEvents(['download.updated'], [['downloads', 'list']], {
                     debounceMs: 100,
                     exact: false,
-                    owner: 'downloads-list',
                 });
             },
             { wrapper: Wrapper },
@@ -311,7 +302,6 @@ describe('useInvalidateQueriesOnEvents', () => {
                 useInvalidateQueriesOnEvents(['download.updated'], [queryKey], {
                     entityIds: ['content-1'],
                     exact: true,
-                    owner: 'content-detail',
                 }),
             { wrapper: Wrapper },
         );
@@ -342,7 +332,6 @@ describe('useInvalidateQueriesOnEvents', () => {
                 useInvalidateQueriesOnEvents(['download.updated'], [['downloads', 'list', { status: 'Downloading' }]], {
                     debounceMs: 0,
                     exact: true,
-                    owner: 'downloads:filtered-list',
                     prePredicate: (event) => event.context['download.changedFields']?.toLowerCase() === 'status',
                     predicate,
                     unprovableMembership: true,
@@ -382,7 +371,6 @@ describe('useInvalidateQueriesOnEvents', () => {
                 });
                 useInvalidateQueriesOnEvents(['download.created'], [['downloads', 'list', {}]], {
                     exact: true,
-                    owner: 'downloads-list',
                 });
             },
             { wrapper: Wrapper },
@@ -412,11 +400,9 @@ describe('useInvalidateQueriesOnEvents', () => {
                 });
                 useInvalidateQueriesOnEvents(['status.updated'], [['shared-shell', 'status']], {
                     exact: true,
-                    owner: 'shell-a',
                 });
                 useInvalidateQueriesOnEvents(['health.updated'], [['shared-shell', 'status']], {
                     exact: true,
-                    owner: 'shell-b',
                 });
             },
             { wrapper: Wrapper },

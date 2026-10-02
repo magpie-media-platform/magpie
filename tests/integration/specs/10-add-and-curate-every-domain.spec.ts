@@ -37,7 +37,7 @@ interface RootFolder {
     path: string;
     contentType: string;
     isDefault: boolean;
-    defaultMonitoring: boolean | null;
+    defaultMonitoring: 'Unmonitored' | 'Monitored' | 'Shotgun' | null;
     defaults: Record<string, { qualityTierListId: string }>;
 }
 
@@ -265,11 +265,14 @@ const domains: DomainFixture[] = [
                     ordinal: number,
                     alignmentKey: `episode:curation:1:${number}`,
                     externalIds: { tvdb: `curation-episode-${number}` },
-                    initialContribution: contribution(
-                        `curation-episode-${number}`,
-                        `Curation Journey Episode ${number}`,
-                        number,
-                    ),
+                    initialContribution: {
+                        ...contribution(
+                            `curation-episode-${number}`,
+                            `Curation Journey Episode ${number}`,
+                            number,
+                        ),
+                        publishDate: '2025-04-05T00:00:00Z',
+                    },
                 })),
             },
         ],
@@ -315,7 +318,7 @@ test.describe.serial('Journey 10: bring four collections in and make the metadat
                 api = await restoreCheckpoint('configured-baseline', async (restored) => {
                     roots = await restored.get<RootFolder[]>('/api/root-folders');
                     expect(roots.map((root) => root.name).sort()).toEqual(['Books', 'Movies', 'Music', 'TV']);
-                    expect(roots.every((root) => root.isDefault && root.defaultMonitoring === true)).toBe(true);
+                    expect(roots.every((root) => root.isDefault && root.defaultMonitoring === 'Monitored')).toBe(true);
                     expect(roots.flatMap((root) => Object.keys(root.defaults)).sort()).toEqual([
                         'artist',
                         'audiobook',
@@ -433,7 +436,7 @@ test.describe.serial('Journey 10: bring four collections in and make the metadat
                     name: 'Journey 10 chosen movies',
                     path: `/library/${chosenRootDirectory}`,
                     contentType: 'movie',
-                    defaultMonitoring: true,
+                    defaultMonitoring: 'Monitored',
                     defaults: { movie: { qualityTierListId: movieRoot.defaults.movie!.qualityTierListId } },
                 });
                 return addNamedMovie(page, api, chosenTitle, chosenRoot.id);
@@ -1003,7 +1006,9 @@ async function acquireRelease(
     const candidates = await until(
         `${fixture.searchTitle} release search`,
         async () => {
-            const found = await api.post<InteractiveCandidate[]>(`/api/interactive-search/${fixture.contentId}`);
+            const { candidates: found } = await api.post<{ candidates: InteractiveCandidate[] }>(
+                `/api/interactive-search/${fixture.contentId}`,
+            );
             return found.some((candidate) => candidate.release.externalId === fixture.releaseExternalId)
                 ? found
                 : undefined;
@@ -1196,7 +1201,9 @@ async function proveRejectedConcurrentGrab(api: ApiClient, hierarchyItemId: stri
         release('Curation Default Policy Movie 2025 720p WEB-DL', guardReleaseExternalId, ['movies']),
     ]);
     const item = await api.get<ContentItem>(`/api/content/${hierarchyItemId}`);
-    const candidates = await api.post<InteractiveCandidate[]>(`/api/interactive-search/${hierarchyItemId}`);
+    const { candidates } = await api.post<{ candidates: InteractiveCandidate[] }>(
+        `/api/interactive-search/${hierarchyItemId}`,
+    );
     const candidate = candidates.find((entry) => entry.release.externalId === guardReleaseExternalId)!;
     const callsBefore = (await mocks.downloadClient.calls('DownloadReleaseAsync')).length;
     expect(await api.post<string>(`/api/interactive-search/${hierarchyItemId}/grab`, candidate.release)).toMatch(

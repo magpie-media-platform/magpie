@@ -13,6 +13,7 @@ using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
 using Magpie.Models.Paging;
+using Magpie.Sdk.Extensions;
 using Magpie.Sdk.Services;
 
 using Microsoft.EntityFrameworkCore;
@@ -287,7 +288,8 @@ internal sealed class ExtensionRepository(
                     {
                         await transactionManager.OnCommittedAsync(
                             token => eventBus.PublishAsync(
-                                ExtensionEventBuilder.BuildExtensionUpdatedEvent(model.Id, changedFields), token),
+                                ExtensionEventBuilder.BuildExtensionUpdatedEvent(model.Id, changedFields),
+                                token),
                             cancellationToken).ConfigureAwait(false);
                     }
 
@@ -393,6 +395,45 @@ internal sealed class ExtensionRepository(
         }
     }
 
+    public async Task RegisterLoadedExtensionsAsync(
+        IReadOnlyList<Extension> discovered,
+        IReadOnlyList<IExtension> loaded,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var extensions = discovered.Count > 0
+                ? discovered
+                : await context.Extensions.ToListAsync(cancellationToken).ConfigureAwait(false);
+
+            foreach (var extension in extensions)
+            {
+                var match = loaded.FirstOrDefault(candidate =>
+                    string.Equals(
+                        candidate.GetType().Assembly.GetName().Name,
+                        extension.AssemblyName,
+                        StringComparison.OrdinalIgnoreCase));
+
+                if (match is null)
+                {
+                    continue;
+                }
+
+                extension.Name = match.Name;
+                extension.Version = match.Version.ToString();
+                extension.TargetABI = match.TargetABI;
+            }
+
+            context.Extensions.AddRange(discovered);
+            await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "The extension repository failed to register the loaded extensions.");
+            throw;
+        }
+    }
+
     public async Task<bool> PatchAsync(
         ExtensionPatch patch,
         Guid? modifiedByUserId,
@@ -451,7 +492,8 @@ internal sealed class ExtensionRepository(
                     {
                         await transactionManager.OnCommittedAsync(
                             token => eventBus.PublishAsync(
-                                ExtensionEventBuilder.BuildExtensionUpdatedEvent(patch.Id, changedFields), token),
+                                ExtensionEventBuilder.BuildExtensionUpdatedEvent(patch.Id, changedFields),
+                                token),
                             cancellationToken).ConfigureAwait(false);
                     }
 

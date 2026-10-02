@@ -97,8 +97,7 @@ internal sealed class SentinelCommand : Command
             if (failedStarts >= MaxConsecutiveFailedStarts)
             {
                 logger.LogCritical(
-                    "The host exited unexpectedly {FailedStarts} times with exit code {ExitCode}, so the " +
-                    "sentinel stops",
+                    "Host exited unexpectedly {FailedStarts} times with exit code {ExitCode}, sentinel stops",
                     failedStarts,
                     exitCode);
 
@@ -107,8 +106,7 @@ internal sealed class SentinelCommand : Command
 
             var delay = ResolveRelaunchDelay(failedStarts);
             logger.LogError(
-                "The host exited unexpectedly with exit code {ExitCode}, so the sentinel will relaunch it in " +
-                "{DelaySeconds} seconds on attempt {Attempt} of {MaxAttempts}",
+                "Host exited with code {ExitCode}, relaunch in {DelaySeconds}s, attempt {Attempt} of {MaxAttempts}",
                 exitCode,
                 delay.TotalSeconds,
                 failedStarts,
@@ -139,34 +137,12 @@ internal sealed class SentinelCommand : Command
 
     private static Process StartChild()
     {
-        var startInfo = new ProcessStartInfo
-        {
-            FileName = ResolveProcessPath(),
-            UseShellExecute = false,
-            RedirectStandardInput = false,
-            RedirectStandardOutput = false,
-            RedirectStandardError = false
-        };
+        var startInfo = new ProcessStartInfo { FileName = ResolveProcessPath(), UseShellExecute = false };
 
         startInfo.ArgumentList.Add("run");
         startInfo.ArgumentList.Add("--sentinel-supervised");
 
-        var child = new Process { StartInfo = startInfo };
-        try
-        {
-            if (!child.Start())
-            {
-                child.Dispose();
-                throw new InvalidOperationException("Failed to start child host process.");
-            }
-        }
-        catch
-        {
-            child.Dispose();
-            throw;
-        }
-
-        return child;
+        return Process.Start(startInfo) ?? throw new InvalidOperationException("Failed to start child host process.");
     }
 
     private static void StopChild(Process child)
@@ -181,12 +157,6 @@ internal sealed class SentinelCommand : Command
 
     private static string ResolveProcessPath()
     {
-        if (!string.IsNullOrWhiteSpace(Environment.ProcessPath))
-        {
-            return Environment.ProcessPath;
-        }
-
-        using var current = Process.GetCurrentProcess();
-        return current.MainModule?.FileName ?? throw new InvalidOperationException("Unable to resolve process path.");
+        return Environment.ProcessPath ?? throw new InvalidOperationException("Unable to resolve process path.");
     }
 }

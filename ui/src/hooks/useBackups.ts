@@ -108,7 +108,6 @@ export function useBackups() {
     const queryClient = useQueryClient();
     useInvalidateQueriesOnEvents(['backup.completed', 'backup.failed', 'backup.deleted'], [backupQueryKeys.list()], {
         exact: true,
-        owner: 'backups',
     });
 
     const capabilitiesQuery = useQuery({

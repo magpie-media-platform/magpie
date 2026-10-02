@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { flushSync } from 'react-dom';
 import { PlayIcon, CornersOutIcon, StopIcon } from '@phosphor-icons/react';
 
 import { Scrubber } from './Scrubber';
@@ -25,6 +26,142 @@ export interface PosterPlayerProps {
 }
 
 export function PosterPlayer({ mimeType, directUrl, youTubeId, posterUrl, label, fit = 'wide' }: PosterPlayerProps) {
+    if (fit === 'poster') {
+        return (
+            <PlayablePoster
+                key={youTubeId ?? directUrl ?? ''}
+                mimeType={mimeType}
+                directUrl={directUrl}
+                youTubeId={youTubeId}
+                posterUrl={posterUrl}
+                label={label}
+            />
+        );
+    }
+
+    return (
+        <WidePosterPlayer
+            mimeType={mimeType}
+            directUrl={directUrl}
+            youTubeId={youTubeId}
+            posterUrl={posterUrl}
+            label={label}
+        />
+    );
+}
+
+function PlayablePoster({ mimeType, directUrl, youTubeId, posterUrl, label }: Omit<PosterPlayerProps, 'fit'>) {
+    const [playing, setPlaying] = useState(false);
+    const [failed, setFailed] = useState(false);
+    const handleEnded = useCallback(() => setPlaying(false), []);
+    const handleFailed = useCallback(() => {
+        setPlaying(false);
+        setFailed(true);
+    }, []);
+    // iOS starts a video only from play() inside the click, so the video mounts and starts before the click returns.
+    const handlePlay = useCallback(() => flushSync(() => setPlaying(true)), []);
+
+    return (
+        <div className="preview-player__poster-stage" data-testid="preview-player-poster-stage">
+            {posterUrl ? (
+                <img className="preview-player__thumbnail" src={posterUrl} alt="" loading="lazy" aria-hidden="true" />
+            ) : null}
+            {playing && youTubeId ? (
+                <div className="preview-player__yt-mount">
+                    {/* eslint-disable-next-line react/iframe-missing-sandbox -- allow-same-origin keeps the YouTube player on its own origin, which it needs for playback; the frame is cross-origin, so it still cannot reach Magpie. */}
+                    <iframe
+                        title={label}
+                        src={`https://www.youtube-nocookie.com/embed/${encodeURIComponent(youTubeId)}?autoplay=1&mute=1&controls=0&disablekb=1&fs=0&playsinline=1&rel=0`}
+                        sandbox="allow-scripts allow-same-origin allow-presentation"
+                        allow="autoplay; encrypted-media"
+                        tabIndex={-1}
+                        aria-hidden="true"
+                        referrerPolicy="strict-origin-when-cross-origin"
+                        data-testid="preview-player-iframe"
+                    />
+                </div>
+            ) : null}
+            {playing && !youTubeId ? (
+                <MutedPosterVideo
+                    url={directUrl ?? ''}
+                    mimeType={mimeType}
+                    onEnded={handleEnded}
+                    onFailed={handleFailed}
+                />
+            ) : null}
+            {failed ? null : (
+                <button
+                    type="button"
+                    className="preview-player__facade"
+                    onClick={handlePlay}
+                    aria-label={`Play ${label}`}
+                    aria-pressed={playing}
+                    data-testid="preview-player-facade"
+                >
+                    <span className="preview-player__play preview-player__play--hero" aria-hidden="true">
+                        <PlayIcon weight="fill" />
+                    </span>
+                </button>
+            )}
+        </div>
+    );
+}
+
+function MutedPosterVideo({
+    url,
+    mimeType,
+    onEnded,
+    onFailed,
+}: {
+    url: string;
+    mimeType?: string;
+    onEnded: () => void;
+    onFailed: () => void;
+}) {
+    const start = useCallback(
+        (video: HTMLVideoElement | null) => {
+            if (!video) {
+                return;
+            }
+            video.defaultMuted = true;
+            video.muted = true;
+            video.volume = 0;
+            video.play().catch(onFailed);
+        },
+        [onFailed],
+    );
+
+    return (
+        <video
+            ref={start}
+            className="preview-player__video preview-player__video--cover"
+            muted
+            autoPlay
+            playsInline
+            controls={false}
+            tabIndex={-1}
+            aria-hidden="true"
+            disablePictureInPicture
+            disableRemotePlayback
+            data-testid="preview-player-video"
+            onVolumeChange={(event) => {
+                const video = event.currentTarget;
+                if (!video.muted) {
+                    video.muted = true;
+                }
+                if (video.volume !== 0) {
+                    video.volume = 0;
+                }
+            }}
+            onEnded={onEnded}
+            onError={onFailed}
+        >
+            <source src={url} type={mimeType} onError={onFailed} />
+        </video>
+    );
+}
+
+function WidePosterPlayer({ mimeType, directUrl, youTubeId, posterUrl, label }: Omit<PosterPlayerProps, 'fit'>) {
     const [playing, setPlaying] = useState(false);
     const facadeRef = useRef<HTMLButtonElement>(null);
     const startedRef = useRef(false);
@@ -60,8 +197,7 @@ export function PosterPlayer({ mimeType, directUrl, youTubeId, posterUrl, label,
         );
     }
 
-    const thumbnail =
-        posterUrl ?? (fit === 'wide' && youTubeId ? `https://i.ytimg.com/vi/${youTubeId}/hqdefault.jpg` : undefined);
+    const thumbnail = posterUrl ?? (youTubeId ? `https://i.ytimg.com/vi/${youTubeId}/hqdefault.jpg` : undefined);
 
     return (
         <div className="preview-player__poster-stage" data-testid="preview-player-poster-stage">
@@ -82,18 +218,10 @@ export function PosterPlayer({ mimeType, directUrl, youTubeId, posterUrl, label,
                         aria-hidden="true"
                     />
                 ) : null}
-                {fit === 'poster' ? (
-                    <span className="preview-player__play preview-player__play--hero" aria-hidden="true">
-                        <PlayIcon weight="fill" />
-                    </span>
-                ) : (
-                    <>
-                        <span className="preview-player__play" aria-hidden="true">
-                            <PlayIcon weight="fill" />
-                        </span>
-                        <span className="preview-player__label">{label}</span>
-                    </>
-                )}
+                <span className="preview-player__play" aria-hidden="true">
+                    <PlayIcon weight="fill" />
+                </span>
+                <span className="preview-player__label">{label}</span>
             </button>
         </div>
     );

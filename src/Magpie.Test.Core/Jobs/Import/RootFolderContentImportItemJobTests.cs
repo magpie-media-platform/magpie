@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -9,14 +10,16 @@ using Magpie.Abstractions.Repositories;
 using Magpie.Core.Jobs;
 using Magpie.Models;
 using Magpie.Models.Api;
+using Magpie.Models.Arguments;
+using Magpie.Models.Data;
 using Magpie.Models.Enums;
 using Magpie.Models.Import;
 using Magpie.Models.Jobs;
+using Magpie.Models.Paging;
 using Magpie.Sdk.Jobs;
 using Magpie.Sdk.Services;
 
 using Microsoft.Extensions.Logging.Abstractions;
-using Microsoft.Extensions.Time.Testing;
 
 using Moq;
 
@@ -29,6 +32,7 @@ public sealed class RootFolderContentImportItemJobTests
 {
     private static readonly Guid CandidateId = Guid.Parse("55555555-5555-5555-5555-555555555555");
     private static readonly Guid UserId = Guid.Parse("66666666-6666-6666-6666-666666666666");
+    private static readonly Guid WaitedItemId = Guid.Parse("88888888-8888-8888-8888-888888888888");
 
     private Mock<ILibraryImportService> _importService = null!;
     private Mock<ILibraryImportCandidateRepository> _candidateRepository = null!;
@@ -48,12 +52,11 @@ public sealed class RootFolderContentImportItemJobTests
             _candidateRepository.Object,
             _jobManager.Object,
             _progressReporter.Object,
-            new FakeTimeProvider(new DateTimeOffset(2026, 3, 1, 12, 0, 0, TimeSpan.Zero)),
             NullLogger<RootFolderContentImportItemJob>.Instance);
     }
 
     [Test]
-    public async Task ExecuteAsync_QueuesDelayedSuccessorWithoutFailingCandidate_WhenImportIsWaiting()
+    public async Task ExecuteAsync_QueuesOnlyTheRefreshOfTheItem_WhenImportIsWaiting()
     {
         // Arrange
         _importService
@@ -67,7 +70,8 @@ public sealed class RootFolderContentImportItemJobTests
             .ReturnsAsync(new LibraryImportCompletionResult
             {
                 Status = LibraryImportCompletionStatus.Waiting,
-                Message = "The import is waiting until the episode level below season 'Season 1' exists."
+                Message = "The import is waiting until the episode level below season 'Season 1' exists.",
+                ContentHierarchyItemId = WaitedItemId
             });
         var context = new JobContext(
             Guid.NewGuid(), null, null, UserId, JobExecutionMode.Queue,
@@ -83,26 +87,295 @@ public sealed class RootFolderContentImportItemJobTests
         // Assert
         using (Assert.EnterMultipleScope())
         {
+            _candidateRepository.Verify(repository => repository.TryUpdateTargetAsync(
+                CandidateId, WaitedItemId, UserId, It.IsAny<CancellationToken>()), Times.Once);
             _jobManager.Verify(manager => manager.ExecuteAsync(
                 It.Is<JobEnqueueRequest>(request =>
-                    request.JobType == "RootFolderContentImportItem" &&
-                    request.Mode == JobExecutionMode.Queue &&
-                    request.IsSuccessor &&
-                    request.UserId == UserId &&
-                    request.CorrelationId == Guid.Parse("77777777-7777-7777-7777-777777777777") &&
-                    request.NotBeforeAt == new DateTime(2026, 3, 1, 12, 1, 0, DateTimeKind.Utc) &&
-                    request.Parameters!.Count == 2 &&
-                    request.Parameters["candidateId"] == "55555555-5555-5555-5555-555555555555" &&
-                    request.Parameters["monitoringMode"] == "Future"),
+                    request.JobType == "ContentMetadataRefreshItem" &&
+                    !request.OnlyIfInactive &&
+                    request.NotBeforeAt == null &&
+                    request.Parameters!["contentHierarchyItemId"] == "88888888-8888-8888-8888-888888888888"),
+                It.IsAny<CancellationToken>()), Times.Once);
+            _jobManager.Verify(manager => manager.ExecuteAsync(
+                It.IsAny<JobEnqueueRequest>(),
                 It.IsAny<CancellationToken>()), Times.Once);
             _progressReporter.Verify(reporter => reporter.Report(1,
-                "The import is waiting until the episode level below season 'Season 1' exists. " +
-                "The import will try again in 1 minute."), Times.Once);
+                "The import is waiting until the episode level below season 'Season 1' exists."), Times.Once);
             _candidateRepository.Verify(repository => repository.MarkImportFailedAsync(
                 It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<Guid?>(), It.IsAny<CancellationToken>()),
                 Times.Never);
             _candidateRepository.Verify(repository => repository.TryResetImportAsync(
                 It.IsAny<Guid>(), It.IsAny<string?>(), It.IsAny<Guid?>(), It.IsAny<CancellationToken>()), Times.Never);
+        }
+    }
+
+    [Test]
+    public async Task ExecuteAsync_RecordsTheWaitedItemBeforeItQueuesTheRefresh_WhenImportIsWaiting()
+    {
+        // Arrange
+        var candidateRepository = new Mock<ILibraryImportCandidateRepository>(MockBehavior.Strict);
+        var jobManager = new Mock<IJobManager>(MockBehavior.Strict);
+        var sequence = new MockSequence();
+        _importService
+            .InSequence(sequence)
+            .Setup(s => s.ImportCandidateAsync(
+                CandidateId,
+                0,
+                LibraryImportMonitoringMode.Inherit,
+                UserId,
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new LibraryImportCompletionResult
+            {
+                Status = LibraryImportCompletionStatus.Waiting,
+                Message = "The import is waiting until the episode level below season 'Season 1' exists.",
+                ContentHierarchyItemId = WaitedItemId
+            });
+        candidateRepository
+            .InSequence(sequence)
+            .Setup(repository => repository.TryUpdateTargetAsync(
+                CandidateId, WaitedItemId, UserId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        jobManager
+            .InSequence(sequence)
+            .Setup(manager => manager.ExecuteAsync(
+                It.Is<JobEnqueueRequest>(request => request.JobType == "ContentMetadataRefreshItem"),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Guid.Empty);
+        var subject = new RootFolderContentImportItemJob(
+            _importService.Object,
+            candidateRepository.Object,
+            jobManager.Object,
+            _progressReporter.Object,
+            NullLogger<RootFolderContentImportItemJob>.Instance);
+        var context = new JobContext(
+            Guid.NewGuid(), null, null, UserId, JobExecutionMode.Queue,
+            new Dictionary<string, string> { ["candidateId"] = CandidateId.ToString("D") }, null);
+
+        // Act
+        await subject.ExecuteAsync(context).ConfigureAwait(false);
+
+        // Assert
+        jobManager.Verify(manager => manager.ExecuteAsync(
+            It.Is<JobEnqueueRequest>(request => request.JobType == "ContentMetadataRefreshItem"),
+            It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [TestCase(JobExecutionStatus.Failed, "A metadata provider failed.",
+        "The metadata refresh that the import waited for ended with status Failed: A metadata provider failed.")]
+    [TestCase(JobExecutionStatus.Completed, "No metadata provider returned metadata, so the refresh made no changes.",
+        "The metadata refresh that the import waited for ended with status Completed: No metadata provider returned " +
+        "metadata, so the refresh made no changes.")]
+    [TestCase(JobExecutionStatus.Cancelled, null,
+        "The metadata refresh that the import waited for ended with status Cancelled.")]
+    public void ExecuteAsync_FailsWithTheRefreshReasonAndQueuesNothing_WhenTheWaitedRefreshHasEnded(
+        JobExecutionStatus refreshStatus,
+        string? refreshMessage,
+        string expectedReason)
+    {
+        // Arrange
+        _importService
+            .Setup(s => s.ImportCandidateAsync(
+                CandidateId,
+                0,
+                LibraryImportMonitoringMode.Inherit,
+                UserId,
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new LibraryImportCompletionResult
+            {
+                Status = LibraryImportCompletionStatus.Waiting,
+                Message = "The import is waiting until the episode level below season 'Season 1' exists.",
+                ContentHierarchyItemId = WaitedItemId
+            });
+        _jobManager
+            .Setup(manager => manager.QueryExecutionsAsync(
+                It.Is<JobExecutionQuery>(query =>
+                    query.JobType == "ContentMetadataRefreshItem" &&
+                    query.Statuses!.Contains(refreshStatus) &&
+                    query.ParameterValueReferences!.Contains("88888888-8888-8888-8888-888888888888")),
+                It.IsAny<PagingParameter>(),
+                It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<JobExecution>
+            {
+                Items =
+                [
+                    new JobExecution
+                    {
+                        JobType = "ContentMetadataRefreshItem",
+                        Status = refreshStatus,
+                        StatusMessage = refreshMessage
+                    }
+                ]
+            });
+        var context = new JobContext(
+            Guid.NewGuid(), null, null, UserId, JobExecutionMode.Queue,
+            new Dictionary<string, string>
+            {
+                ["candidateId"] = CandidateId.ToString("D"),
+                ["metadataRefreshEndedItemId"] = WaitedItemId.ToString("D")
+            }, null);
+
+        // Act
+        var exception = Assert.ThrowsAsync<MagpieException>(() => _subject.ExecuteAsync(context));
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(exception!.Message, Is.EqualTo(expectedReason));
+            _candidateRepository.Verify(repository => repository.MarkImportFailedAsync(
+                CandidateId, expectedReason, UserId, It.IsAny<CancellationToken>()), Times.Once);
+            _jobManager.Verify(manager => manager.ExecuteAsync(
+                It.IsAny<JobEnqueueRequest>(),
+                It.IsAny<CancellationToken>()), Times.Never);
+            _candidateRepository.Verify(repository => repository.TryUpdateTargetAsync(
+                It.IsAny<Guid>(), It.IsNotNull<Guid?>(), It.IsAny<Guid?>(), It.IsAny<CancellationToken>()),
+                Times.Never);
+            _candidateRepository.Verify(repository => repository.TryUpdateTargetAsync(
+                CandidateId, null, UserId, CancellationToken.None), Times.Once);
+        }
+    }
+
+    [Test]
+    public void ExecuteAsync_ClearsTheWaitedItemAfterTheReset_WhenTheResumedImportIsCancelled()
+    {
+        // Arrange
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+        var candidateRepository = new Mock<ILibraryImportCandidateRepository>(MockBehavior.Strict);
+        var sequence = new MockSequence();
+        _importService
+            .InSequence(sequence)
+            .Setup(s => s.ImportCandidateAsync(
+                CandidateId,
+                0,
+                LibraryImportMonitoringMode.Inherit,
+                UserId,
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new OperationCanceledException(cancellation.Token));
+        candidateRepository
+            .InSequence(sequence)
+            .Setup(repository => repository.TryResetImportAsync(CandidateId, null, UserId, CancellationToken.None))
+            .ReturnsAsync(true);
+        candidateRepository
+            .InSequence(sequence)
+            .Setup(repository => repository.TryUpdateTargetAsync(CandidateId, null, UserId, CancellationToken.None))
+            .ReturnsAsync(true);
+        var subject = new RootFolderContentImportItemJob(
+            _importService.Object,
+            candidateRepository.Object,
+            _jobManager.Object,
+            _progressReporter.Object,
+            NullLogger<RootFolderContentImportItemJob>.Instance);
+        var context = new JobContext(
+            Guid.NewGuid(), null, null, UserId, JobExecutionMode.Queue,
+            new Dictionary<string, string>
+            {
+                ["candidateId"] = CandidateId.ToString("D"),
+                ["metadataRefreshEndedItemId"] = WaitedItemId.ToString("D")
+            }, null);
+
+        // Act
+        Assert.ThrowsAsync<OperationCanceledException>(() => subject.ExecuteAsync(context, cancellation.Token));
+
+        // Assert
+        candidateRepository.Verify(repository => repository.TryUpdateTargetAsync(
+            CandidateId, null, UserId, CancellationToken.None), Times.Once);
+    }
+
+    [Test]
+    public async Task ExecuteAsync_ClearsTheWaitedItemAfterTheImport_WhenTheResumedImportKeepsAnotherCopy()
+    {
+        // Arrange
+        var candidateRepository = new Mock<ILibraryImportCandidateRepository>(MockBehavior.Strict);
+        var sequence = new MockSequence();
+        _importService
+            .InSequence(sequence)
+            .Setup(s => s.ImportCandidateAsync(
+                CandidateId,
+                0,
+                LibraryImportMonitoringMode.Inherit,
+                UserId,
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new LibraryImportCompletionResult
+            {
+                Status = LibraryImportCompletionStatus.Skipped,
+                Message = "The item keeps another copy of the file, so no file was attached."
+            });
+        candidateRepository
+            .InSequence(sequence)
+            .Setup(repository => repository.TryUpdateTargetAsync(CandidateId, null, UserId, CancellationToken.None))
+            .ReturnsAsync(true);
+        var subject = new RootFolderContentImportItemJob(
+            _importService.Object,
+            candidateRepository.Object,
+            _jobManager.Object,
+            _progressReporter.Object,
+            NullLogger<RootFolderContentImportItemJob>.Instance);
+        var context = new JobContext(
+            Guid.NewGuid(), null, null, UserId, JobExecutionMode.Queue,
+            new Dictionary<string, string>
+            {
+                ["candidateId"] = CandidateId.ToString("D"),
+                ["metadataRefreshEndedItemId"] = WaitedItemId.ToString("D")
+            }, null);
+
+        // Act
+        await subject.ExecuteAsync(context).ConfigureAwait(false);
+
+        // Assert
+        candidateRepository.Verify(repository => repository.TryUpdateTargetAsync(
+            CandidateId, null, UserId, CancellationToken.None), Times.Once);
+    }
+
+    [Test]
+    public async Task ExecuteAsync_WaitsOnTheNewItem_WhenTheEndedRefreshWasForAnotherItem()
+    {
+        // Arrange
+        _importService
+            .Setup(s => s.ImportCandidateAsync(
+                CandidateId,
+                0,
+                LibraryImportMonitoringMode.Inherit,
+                UserId,
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new LibraryImportCompletionResult
+            {
+                Status = LibraryImportCompletionStatus.Waiting,
+                Message = "The import is waiting until the episode level below season 'Season 1' exists.",
+                ContentHierarchyItemId = WaitedItemId
+            });
+        var context = new JobContext(
+            Guid.NewGuid(), null, null, UserId, JobExecutionMode.Queue,
+            new Dictionary<string, string>
+            {
+                ["candidateId"] = CandidateId.ToString("D"),
+                ["metadataRefreshEndedItemId"] = "99999999-9999-9999-9999-999999999999"
+            }, null);
+
+        // Act
+        await _subject.ExecuteAsync(context).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            _candidateRepository.Verify(repository => repository.TryUpdateTargetAsync(
+                CandidateId, WaitedItemId, UserId, It.IsAny<CancellationToken>()), Times.Once);
+            _jobManager.Verify(manager => manager.ExecuteAsync(
+                It.Is<JobEnqueueRequest>(request =>
+                    request.JobType == "ContentMetadataRefreshItem" &&
+                    request.Parameters!["contentHierarchyItemId"] == "88888888-8888-8888-8888-888888888888"),
+                It.IsAny<CancellationToken>()), Times.Once);
+            _jobManager.Verify(manager => manager.ExecuteAsync(
+                It.Is<JobEnqueueRequest>(request => request.JobType == "RootFolderContentImportResume"),
+                It.IsAny<CancellationToken>()), Times.Never);
+            _candidateRepository.Verify(repository => repository.MarkImportFailedAsync(
+                It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<Guid?>(), It.IsAny<CancellationToken>()),
+                Times.Never);
         }
     }
 
@@ -188,13 +461,43 @@ public sealed class RootFolderContentImportItemJobTests
             Guid.NewGuid(), null, null, UserId, JobExecutionMode.Queue,
             new Dictionary<string, string> { ["candidateId"] = CandidateId.ToString("D") }, null, null);
 
-        // Assert
+        // Act and Assert
         Assert.That(async () => await _subject.ExecuteAsync(context).ConfigureAwait(false),
             Throws.TypeOf<OperationCanceledException>());
         _candidateRepository.Verify(repository => repository.TryResetImportAsync(
             CandidateId, null, UserId, CancellationToken.None), Times.Once);
         _candidateRepository.Verify(repository => repository.MarkImportFailedAsync(
             It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<Guid?>(), It.IsAny<CancellationToken>()), Times.Never);
+        _candidateRepository.Verify(repository => repository.TryUpdateTargetAsync(
+            It.IsAny<Guid>(), It.IsAny<Guid?>(), It.IsAny<Guid?>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Test]
+    public void ExecuteAsync_LeavesTheCandidateImporting_WhenTheUpstreamIsThrottled()
+    {
+        // Arrange
+        var retryAt = new DateTimeOffset(2026, 3, 1, 12, 30, 0, TimeSpan.Zero);
+        _importService
+            .Setup(s => s.ImportCandidateAsync(
+                It.IsAny<Guid>(), It.IsAny<int>(), It.IsAny<LibraryImportMonitoringMode>(), It.IsAny<Guid?>(),
+                It.IsAny<Guid?>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new UpstreamThrottledException(retryAt));
+        var context = new JobContext(
+            Guid.NewGuid(), null, null, UserId, JobExecutionMode.Queue,
+            new Dictionary<string, string> { ["candidateId"] = CandidateId.ToString("D") }, null, null);
+
+        // Act
+        var exception = Assert.ThrowsAsync<UpstreamThrottledException>(() => _subject.ExecuteAsync(context));
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(exception!.RetryAt, Is.EqualTo(retryAt));
+            _candidateRepository.Verify(repository => repository.MarkImportFailedAsync(
+                It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<Guid?>(), It.IsAny<CancellationToken>()), Times.Never);
+            _candidateRepository.Verify(repository => repository.TryResetImportAsync(
+                It.IsAny<Guid>(), It.IsAny<string?>(), It.IsAny<Guid?>(), It.IsAny<CancellationToken>()), Times.Never);
+        }
     }
 
     [Test]
@@ -209,7 +512,7 @@ public sealed class RootFolderContentImportItemJobTests
                 ["monitoringMode"] = "invalid"
             }, null, null);
 
-        // Assert
+        // Act and Assert
         Assert.That(async () => await _subject.ExecuteAsync(context).ConfigureAwait(false),
             Throws.TypeOf<ArgumentException>());
         _candidateRepository.Verify(repository => repository.MarkImportFailedAsync(
@@ -229,7 +532,7 @@ public sealed class RootFolderContentImportItemJobTests
             Guid.NewGuid(), null, null, UserId, JobExecutionMode.Queue,
             new Dictionary<string, string> { ["candidateId"] = CandidateId.ToString("D") }, null, null);
 
-        // Assert
+        // Act and Assert
         Assert.That(async () => await _subject.ExecuteAsync(context).ConfigureAwait(false),
             Throws.TypeOf<InvalidOperationException>());
         _candidateRepository.Verify(repository => repository.MarkImportFailedAsync(
@@ -355,14 +658,14 @@ public sealed class RootFolderContentImportItemJobTests
             Event: null,
             CorrelationId: null);
 
-        // Assert
+        // Act and Assert
         Assert.That(
             async () => await _subject.ExecuteAsync(context).ConfigureAwait(false),
             Throws.TypeOf<MagpieException>());
     }
 
     [Test]
-    public async Task ExecuteAsync_DoesNotThrow_WhenCandidateSkipped()
+    public void ExecuteAsync_DoesNotThrow_WhenCandidateSkipped()
     {
         // Arrange
         _importService
@@ -393,8 +696,8 @@ public sealed class RootFolderContentImportItemJobTests
             Event: null,
             CorrelationId: null);
 
-        // Act
-        await _subject.ExecuteAsync(context).ConfigureAwait(false);
+        // Act and Assert
+        Assert.DoesNotThrowAsync(async () => await _subject.ExecuteAsync(context).ConfigureAwait(false));
     }
 
     [Test]
@@ -411,7 +714,7 @@ public sealed class RootFolderContentImportItemJobTests
             Event: null,
             CorrelationId: null);
 
-        // Assert
+        // Act and Assert
         Assert.That(
             async () => await _subject.ExecuteAsync(context).ConfigureAwait(false),
             Throws.TypeOf<ArgumentException>());

@@ -27,8 +27,11 @@ public interface IUpstreamCooldown
     /// <param name="authenticationScope">The stable authentication identity, or null for anonymous access</param>
     /// <param name="send">The transport operation</param>
     /// <param name="cancellationToken">The token that cancels the operation</param>
-    Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, string? authenticationScope,
-        Func<CancellationToken, Task<HttpResponseMessage>> send, CancellationToken cancellationToken);
+    Task<HttpResponseMessage> SendAsync(
+        HttpRequestMessage request,
+        string? authenticationScope,
+        Func<CancellationToken, Task<HttpResponseMessage>> send,
+        CancellationToken cancellationToken);
 
     /// <summary>
     /// Records a throttle reported in an upstream response body.
@@ -36,6 +39,8 @@ public interface IUpstreamCooldown
     /// <param name="request">The request with an absolute target URI</param>
     /// <param name="authenticationScope">The stable authentication identity, or null for anonymous access</param>
     /// <param name="response">The response that contains the retry time</param>
-    UpstreamThrottledException RecordThrottle(HttpRequestMessage request, string? authenticationScope,
+    UpstreamThrottledException RecordThrottle(
+        HttpRequestMessage request,
+        string? authenticationScope,
         HttpResponseMessage response);
 }

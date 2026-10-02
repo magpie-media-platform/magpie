@@ -79,9 +79,7 @@ internal sealed class ContentHierarchyItemRepository(
         GlobalMonitoring
     }
 
-    private static void ApplyPatch(
-        IDictionary<string, string> values,
-        DictionaryPatch<string, string, string> patch)
+    private static void ApplyPatch(IDictionary<string, string> values, DictionaryPatch<string, string, string> patch)
     {
         if (patch.Add is not null)
         {
@@ -132,8 +130,8 @@ internal sealed class ContentHierarchyItemRepository(
     private static IQueryable<ContentHierarchyItem> IncludeReadModel(IQueryable<ContentHierarchyItem> query)
     {
         var withIncludes = query
-            .Include(i => i.ContentItem)
-            .ThenInclude(i => i!.MediaFiles)
+            .Include(i => i.ContentItem).ThenInclude(i => i!.MediaFiles).ThenInclude(f => f.Coverage)
+            .Include(i => i.ContentItem).ThenInclude(i => i!.CoveringMediaFiles).ThenInclude(f => f.Coverage)
             .Include(i => i.MetadataContainer).ThenInclude(c => c!.Contributions).ThenInclude(c => c.AlternateTexts)
             .Include(i => i.MetadataContainer).ThenInclude(c => c!.Contributions).ThenInclude(c => c.Awards)
             .Include(i => i.MetadataContainer).ThenInclude(c => c!.Contributions).ThenInclude(c => c.ContentRatings)
@@ -158,7 +156,7 @@ internal sealed class ContentHierarchyItemRepository(
             where targetIds.Contains(item.Id) && (item.ContentItem == null ||
                 (item.ContentItem.MediaReconciledAt != null
                     ? item.ContentItem.PrimaryMediaFileCount == 0
-                    : !item.ContentItem.MediaFiles.Any()))
+                    : !item.ContentItem.MediaFiles.Any() && !item.ContentItem.CoveringMediaFiles.Any()))
             select item.Id;
     }
 
@@ -195,9 +193,7 @@ internal sealed class ContentHierarchyItemRepository(
                 select new { ContainerId = container.Id, tag.Name })
             .ToListAsync(cancellationToken)
             .ConfigureAwait(false);
-        var namesByContainer = tagged.ToLookup(
-            row => row.ContainerId,
-            row => row.Name);
+        var namesByContainer = tagged.ToLookup(row => row.ContainerId, row => row.Name);
         foreach (var item in items)
         {
             item.Tags = [.. namesByContainer[item.MetadataContainerId].Order(StringComparer.Ordinal)];
@@ -446,19 +442,27 @@ internal sealed class ContentHierarchyItemRepository(
 
     public async Task RecomputeAllEffectiveValuesAsync(CancellationToken cancellationToken = default)
     {
-        var recompute = new EffectiveRecompute(
-            new Dictionary<Guid, IReadOnlyCollection<string>>(),
-            new Dictionary<Guid, EffectiveNode>());
-        await transactionManager.ExecuteWithTransactionAsync(
-            async _ =>
-            {
-                recompute = await RecomputeEffectiveValuesAsync(
-                    new EffectiveValueTrigger(EffectiveValueTriggerKind.Full),
-                    cancellationToken).ConfigureAwait(false);
-            },
-            cancellationToken).ConfigureAwait(false);
+        try
+        {
+            var recompute = new EffectiveRecompute(
+                new Dictionary<Guid, IReadOnlyCollection<string>>(),
+                new Dictionary<Guid, EffectiveNode>());
+            await transactionManager.ExecuteWithTransactionAsync(
+                async _ =>
+                {
+                    recompute = await RecomputeEffectiveValuesAsync(
+                        new EffectiveValueTrigger(EffectiveValueTriggerKind.Full),
+                        cancellationToken).ConfigureAwait(false);
+                },
+                cancellationToken).ConfigureAwait(false);
 
-        await PublishEffectiveChangesAsync(recompute, cancellationToken).ConfigureAwait(false);
+            await PublishEffectiveChangesAsync(recompute, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "The hierarchy item repository failed to recompute all effective values");
+            throw;
+        }
     }
 
     private static HashSet<Guid> ResolveTargetIds(
@@ -560,12 +564,7 @@ internal sealed class ContentHierarchyItemRepository(
             .ToDictionary(group => group.Key, group => group.Select(node => node.Id).ToList());
         var resolved = nodes.ToDictionary(
             node => node.Id,
-            node => ResolveEffectiveValues(
-                node,
-                nodesById,
-                rootFolders,
-                globalMonitoring,
-                contentTypeRegistry));
+            node => ResolveEffectiveValues(node, nodesById, rootFolders, globalMonitoring, contentTypeRegistry));
         var targetIds = ResolveTargetIds(trigger, nodes, childrenByParent, resolved);
         var changed = new Dictionary<Guid, IReadOnlyCollection<string>>();
         var updates = new List<(Guid Id, EffectiveValues Values)>();
@@ -616,9 +615,7 @@ internal sealed class ContentHierarchyItemRepository(
                     setters => setters
                         .SetProperty(item => item.EffectiveMonitoring, values.Monitoring)
                         .SetProperty(item => item.EffectiveRootFolderId, values.RootFolderId!.Value)
-                        .SetProperty(
-                            item => item.EffectiveQualityTierListId,
-                            values.QualityTierListId),
+                        .SetProperty(item => item.EffectiveQualityTierListId, values.QualityTierListId),
                     cancellationToken)
                 .ConfigureAwait(false);
         }
@@ -713,8 +710,8 @@ internal sealed class ContentHierarchyItemRepository(
 
             var message = databaseException.Message;
             var hierarchyIdentity = message.Contains(
-                    "IX_content_hierarchyItem_ContentType_Level_Slug",
-                    StringComparison.Ordinal) ||
+                "IX_content_hierarchyItem_ContentType_Level_Slug",
+                StringComparison.Ordinal) ||
                 message.Contains(
                     "IX_content_hierarchyItem_ContentType_ParentId_Level_Slug",
                     StringComparison.Ordinal) ||
@@ -954,7 +951,8 @@ internal sealed class ContentHierarchyItemRepository(
                             if (requestedValues.Contains(value))
                             {
                                 matches.TryAdd(
-                                    (scope.Key.ContentType, scope.Key.Level, scope.Key.Source, value), row.Id);
+                                    (scope.Key.ContentType, scope.Key.Level, scope.Key.Source, value),
+                                    row.Id);
                             }
                         }
                     }
@@ -977,7 +975,7 @@ internal sealed class ContentHierarchyItemRepository(
     private static void OrderMediaFiles(IEnumerable<ContentHierarchyItem> items)
     {
         foreach (var mediaFiles in items
-            .Select(item => item.ContentItem?.MediaFiles)
+            .SelectMany(item => new[] { item.ContentItem?.MediaFiles, item.ContentItem?.CoveringMediaFiles })
             .OfType<ICollection<MediaFile>>())
         {
             var ordered = mediaFiles.OrderBy(file => file.FilePath, MediaFilePathComparer).ToList();
@@ -1001,8 +999,10 @@ internal sealed class ContentHierarchyItemRepository(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "The hierarchy item repository failed to create item " +
-                "{ContentHierarchyItemName}.", model.Name);
+            logger.LogError(
+                ex,
+                "The hierarchy item repository failed to create item {ContentHierarchyItemName}.",
+                model.Name);
             throw;
         }
     }
@@ -1165,11 +1165,15 @@ internal sealed class ContentHierarchyItemRepository(
                             .ConfigureAwait(false);
                         nodes = new(recompute.Nodes);
                         MergeChanges(publishedChanges, recompute.Changes);
-                        await contentRepository.ReconcileMediaStateAsync(model.Id, modifiedByUserId,
+                        await contentRepository.ReconcileMediaStateAsync(
+                            model.Id,
+                            modifiedByUserId,
                             cancellationToken).ConfigureAwait(false);
                         if (current.ParentId is { } priorParent && current.ParentId != model.ParentId)
                         {
-                            await contentRepository.ReconcileMediaStateAsync(priorParent, modifiedByUserId,
+                            await contentRepository.ReconcileMediaStateAsync(
+                                priorParent,
+                                modifiedByUserId,
                                 cancellationToken).ConfigureAwait(false);
                         }
                     }
@@ -1189,8 +1193,10 @@ internal sealed class ContentHierarchyItemRepository(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "The hierarchy item repository failed to update item " +
-                "{ContentHierarchyItemId}.", model.Id);
+            logger.LogError(
+                ex,
+                "The hierarchy item repository failed to update item {ContentHierarchyItemId}.",
+                model.Id);
             throw;
         }
     }
@@ -1244,7 +1250,9 @@ internal sealed class ContentHierarchyItemRepository(
                     var subtreeIds = await RemoveSubtreeAsync(id, cancellationToken).ConfigureAwait(false);
                     if (model.ParentId is { } parentId)
                     {
-                        await contentRepository.ReconcileMediaStateAsync(parentId, deletedByUserId,
+                        await contentRepository.ReconcileMediaStateAsync(
+                            parentId,
+                            deletedByUserId,
                             cancellationToken).ConfigureAwait(false);
                     }
 
@@ -1497,7 +1505,7 @@ internal sealed class ContentHierarchyItemRepository(
                 .ConfigureAwait(false);
             if (targetIds.Count == 0)
             {
-                return new BulkResult { Count = 0 };
+                return new() { Count = 0 };
             }
 
             var patchedIds = new List<Guid>();
@@ -1584,9 +1592,7 @@ internal sealed class ContentHierarchyItemRepository(
         return [.. targetIds];
     }
 
-    private async Task<IReadOnlyList<Guid>> RemoveSubtreeAsync(
-        Guid id,
-        CancellationToken cancellationToken)
+    private async Task<IReadOnlyList<Guid>> RemoveSubtreeAsync(Guid id, CancellationToken cancellationToken)
     {
         var lineage = await GetLineageAsync(id, cancellationToken).ConfigureAwait(false);
         if (lineage.Count > 0)
@@ -1643,11 +1649,35 @@ internal sealed class ContentHierarchyItemRepository(
             .ExecuteDeleteAsync(cancellationToken)
             .ConfigureAwait(false);
 
+        var subtreeContentItemIds = context.ContentItems
+            .Where(i => subtreeIds.Contains(i.ContentHierarchyItemId))
+            .Select(i => i.Id);
+        var remainingCoverage = await (
+            from coverage in context.MediaFileCoverages.AsNoTracking()
+            join file in context.MediaFiles.AsNoTracking() on coverage.MediaFileId equals file.Id
+            join item in context.ContentItems.AsNoTracking() on coverage.ContentItemId equals item.Id
+            join node in context.ContentHierarchyItems.AsNoTracking() on item.ContentHierarchyItemId equals node.Id
+            where subtreeContentItemIds.Contains(file.ContentItemId) && !subtreeIds.Contains(node.Id)
+            select new { coverage.MediaFileId, coverage.ContentItemId, node.Ordinal })
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+        foreach (var owner in remainingCoverage.GroupBy(coverage => coverage.MediaFileId)
+            .Select(group => group.OrderBy(coverage => coverage.Ordinal ?? int.MaxValue)
+                .ThenBy(coverage => coverage.ContentItemId)
+                .First()))
+        {
+            await context.MediaFiles
+                .Where(f => f.Id == owner.MediaFileId)
+                .ExecuteUpdateAsync(s => s.SetProperty(f => f.ContentItemId, owner.ContentItemId), cancellationToken)
+                .ConfigureAwait(false);
+            await context.MediaFileCoverages
+                .Where(c => c.MediaFileId == owner.MediaFileId && c.ContentItemId == owner.ContentItemId)
+                .ExecuteDeleteAsync(cancellationToken)
+                .ConfigureAwait(false);
+        }
+
         await context.MediaFiles
-            .Where(f => context.ContentItems
-                .Where(i => subtreeIds.Contains(i.ContentHierarchyItemId))
-                .Select(i => i.Id)
-                .Contains(f.ContentItemId))
+            .Where(f => subtreeContentItemIds.Contains(f.ContentItemId))
             .ExecuteDeleteAsync(cancellationToken)
             .ConfigureAwait(false);
 
@@ -1716,8 +1746,10 @@ internal sealed class ContentHierarchyItemRepository(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "The hierarchy item repository failed to patch item " +
-                "{ContentHierarchyItemId}.", patch.Id);
+            logger.LogError(
+                ex,
+                "The hierarchy item repository failed to patch item {ContentHierarchyItemId}.",
+                patch.Id);
             throw;
         }
     }
@@ -1754,7 +1786,8 @@ internal sealed class ContentHierarchyItemRepository(
                 CriteriaValueOperator.In => query.Where(i => uris.Contains(i.Url)),
                 CriteriaValueOperator.NotIn => query.Where(i => !uris.Contains(i.Url)),
                 var op => throw new ArgumentException(
-                    $"Operator {op} is not supported for image URL.", nameof(criteria))
+                    $"Operator {op} is not supported for image URL.",
+                    nameof(criteria))
             };
         }
 
@@ -2335,11 +2368,7 @@ internal sealed class ContentHierarchyItemRepository(
         var rootFolder = rootFolderId is { } resolvedRootFolderId
             ? rootFolders.FirstOrDefault(folder => folder.Id == resolvedRootFolderId)
             : null;
-        if (monitoring is null && rootFolder?.DefaultMonitoring is { } defaultMonitoring)
-        {
-            monitoring = ToMonitoringMode(defaultMonitoring);
-        }
-
+        monitoring ??= rootFolder?.DefaultMonitoring;
         var usesGlobalMonitoring = monitoring is null;
         monitoring ??= ToMonitoringMode(globalMonitoring);
         var usesLevelDefaultQualityTierList = qualityTierListId is null;
@@ -2370,7 +2399,7 @@ internal sealed class ContentHierarchyItemRepository(
             }
         }
 
-        return new EffectiveValues(
+        return new(
             monitoring.Value,
             rootFolderId,
             qualityTierListId,
@@ -2790,12 +2819,7 @@ internal sealed class ContentHierarchyItemRepository(
         nodesById[ownNode.Id] = ownNode;
         await AddAncestorNodesAsync(nodesById, cancellationToken).ConfigureAwait(false);
         var globalMonitoring = await ResolveGlobalMonitoringAsync(cancellationToken).ConfigureAwait(false);
-        var values = ResolveEffectiveValues(
-            ownNode,
-            nodesById,
-            rootFolders,
-            globalMonitoring,
-            contentTypeRegistry);
+        var values = ResolveEffectiveValues(ownNode, nodesById, rootFolders, globalMonitoring, contentTypeRegistry);
         if (values.RootFolderId is null)
         {
             throw new MagpieException($"Defaults could not be determined for content type {model.ContentType}.");
@@ -3143,7 +3167,9 @@ internal sealed class ContentHierarchyItemRepository(
 
         query = ApplyFulfillmentCriteria(query, criteria.Fulfillment);
         query = ApplyMediaTotalCriteria(query, criteria.PrimaryMediaSize, nameof(ContentItem.PrimaryMediaSize));
-        query = ApplyMediaTotalCriteria(query, criteria.PrimaryMediaFileCount,
+        query = ApplyMediaTotalCriteria(
+            query,
+            criteria.PrimaryMediaFileCount,
             nameof(ContentItem.PrimaryMediaFileCount));
         query = ApplyAcquisitionStatusCriteria(query, criteria.ActiveAcquisitionStatus);
         query = ApplyQualityStatusCriteria(query, criteria.QualityStatus);
@@ -3203,6 +3229,11 @@ internal sealed class ContentHierarchyItemRepository(
             query = query.Where(i => !excludeIds.Contains(i.Id));
         }
 
+        if (criteria.AfterId is { } afterId)
+        {
+            query = query.Where(i => i.Id.CompareTo(afterId) > 0);
+        }
+
         return query;
     }
 
@@ -3230,12 +3261,13 @@ internal sealed class ContentHierarchyItemRepository(
 
     private IQueryable<Guid> MatchingContentItemIds(MediaFileCriteria criteria)
     {
-        return context.MediaFiles.AsNoTracking()
+        var files = context.MediaFiles.AsNoTracking()
             .ApplyCriteriaSet(criteria.FileKind, nameof(MediaFile.FileKind))
             .ApplyCriteriaSet(criteria.MimeType, nameof(MediaFile.MimeType))
             .ApplyCriteriaSet(criteria.FilePath, nameof(MediaFile.FilePath))
-            .ApplyCriteriaSet(criteria.FileSize, nameof(MediaFile.FileSize))
-            .Select(file => file.ContentItemId);
+            .ApplyCriteriaSet(criteria.FileSize, nameof(MediaFile.FileSize));
+        return files.Select(file => file.ContentItemId)
+            .Concat(files.SelectMany(file => file.Coverage).Select(coverage => coverage.ContentItemId));
     }
 
     private IQueryable<ContentHierarchyItem> ApplyMetadataCriteria(
@@ -3611,7 +3643,8 @@ internal sealed class ContentHierarchyItemRepository(
             var matchingContainerIds =
                 from t in context.Tags.AsNoTracking()
                     .ApplyCriteriaSet(
-                        new CriteriaSet<PropertyCriterion<string>> { And = [criterion] }, nameof(Tag.Name))
+                        new CriteriaSet<PropertyCriterion<string>> { And = [criterion] },
+                        nameof(Tag.Name))
                 from mc in t.MetadataContainers
                 select mc.Id;
 

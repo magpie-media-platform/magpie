@@ -52,15 +52,12 @@ public sealed class TagRepositoryTests
             .UseSqlite(connection, contextOwnsConnection: true)
             .Options);
 
-        var loggerFactory = NullLoggerFactory.Instance;
-
-        _subject = new TagRepository(_context, loggerFactory.CreateLogger<TagRepository>());
+        _subject = new TagRepository(_context, NullLogger<TagRepository>.Instance);
     }
 
     [TearDown]
     public void TearDown()
     {
-        _context.Database.CloseConnection();
         _context.Dispose();
     }
 
@@ -213,6 +210,55 @@ public sealed class TagRepositoryTests
             Assert.That(result.Items, Has.Exactly(2).Items);
             Assert.That(result.Items, Has.One.Property(nameof(Tag.Name)).EqualTo("genre:action"));
             Assert.That(result.Items, Has.One.Property(nameof(Tag.Name)).EqualTo("quality:hd"));
+        }
+    }
+
+    [Test]
+    public async Task QueryAsync_ReturnsTags_WhenSubjectMatches()
+    {
+        // Arrange
+        var container = new MetadataContainer { CreatedAt = DateTime.UtcNow };
+        var otherContainer = new MetadataContainer { CreatedAt = DateTime.UtcNow };
+        _context.MetadataContainers.AddRange(container, otherContainer);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        var subject = new Subject
+        {
+            MetadataContainerId = container.Id,
+            Kind = "kind-a",
+            CreatedAt = DateTime.UtcNow
+        };
+        var otherSubject = new Subject
+        {
+            MetadataContainerId = otherContainer.Id,
+            Kind = "kind-a",
+            CreatedAt = DateTime.UtcNow
+        };
+        _context.Subjects.AddRange(subject, otherSubject);
+
+        var tag1 = new Tag { Name = "genre:drama" };
+        var tag2 = new Tag { Name = "qa-crosshatch" };
+        var otherSubjectTag = new Tag { Name = "other-subject" };
+
+        tag1.MetadataContainers.Add(container);
+        tag2.MetadataContainers.Add(container);
+        otherSubjectTag.MetadataContainers.Add(otherContainer);
+
+        _context.Tags.AddRange(tag1, tag2, otherSubjectTag);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        // Act
+        var result = await _subject.QueryAsync(new TagQuery { EntityId = subject.Id },
+            new() { PageNumber = 1, PageSize = 100 },
+            null)
+            .ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.Items, Has.Exactly(2).Items);
+            Assert.That(result.Items, Has.One.Property(nameof(Tag.Name)).EqualTo("genre:drama"));
+            Assert.That(result.Items, Has.One.Property(nameof(Tag.Name)).EqualTo("qa-crosshatch"));
         }
     }
 

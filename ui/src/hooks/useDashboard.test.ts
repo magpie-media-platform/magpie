@@ -295,8 +295,6 @@ describe('useDashboard hooks', () => {
 
             expect(predicate?.(statusChangedEvent)).toBe(true);
             expect(countPredicate?.(statusChangedEvent)).toBe(true);
-            expect(dashboardInvalidation?.[2]?.owner).toBe('dashboard:downloads');
-            expect(countInvalidation?.[2]?.owner).toBe('downloads:status-counts');
             expect(
                 predicate?.({
                     name: 'download.updated',

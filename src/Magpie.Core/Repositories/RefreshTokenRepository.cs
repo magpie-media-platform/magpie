@@ -25,13 +25,16 @@ internal sealed class RefreshTokenRepository(
 
     /// <inheritdoc />
     public async Task<RefreshToken?> GetRenewalAsync(
-        string tokenHash, string renewalKeyHash, CancellationToken cancellationToken = default)
+        string tokenHash,
+        string renewalKeyHash,
+        CancellationToken cancellationToken = default)
     {
         try
         {
             return await context.RefreshTokens.AsNoTracking()
                 .FirstOrDefaultAsync(rt => rt.RenewalKeyHash == renewalKeyHash &&
-                    (rt.PreviousTokenHash == tokenHash || rt.TokenHash == tokenHash), cancellationToken)
+                    (rt.PreviousTokenHash == tokenHash || rt.TokenHash == tokenHash),
+                    cancellationToken)
                 .ConfigureAwait(false);
         }
         catch (Exception ex)
@@ -53,7 +56,8 @@ internal sealed class RefreshTokenRepository(
                         .SetProperty(rt => rt.PreviousTokenHash, token.PreviousTokenHash)
                         .SetProperty(rt => rt.RenewalKeyHash, token.RenewalKeyHash)
                         .SetProperty(rt => rt.ProtectedRenewal, token.ProtectedRenewal)
-                        .SetProperty(rt => rt.RenewalExpiresAt, token.RenewalExpiresAt), ct)
+                        .SetProperty(rt => rt.RenewalExpiresAt, token.RenewalExpiresAt),
+                        ct)
                     .ConfigureAwait(false);
                 await auditRecordRepository.CreateAsync(new()
                 {
@@ -108,8 +112,10 @@ internal sealed class RefreshTokenRepository(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "The refresh token repository failed to create a refresh token for user " +
-                "{UserId}.", token.UserId);
+            logger.LogError(
+                ex,
+                "The refresh token repository failed to create a refresh token for user {UserId}.",
+                token.UserId);
             throw;
         }
     }
@@ -130,9 +136,7 @@ internal sealed class RefreshTokenRepository(
         }
     }
 
-    public async Task<RefreshToken?> GetByAccessTokenJtiAsync(
-        string jti,
-        CancellationToken cancellationToken = default)
+    public async Task<RefreshToken?> GetByAccessTokenJtiAsync(string jti, CancellationToken cancellationToken = default)
     {
         try
         {
@@ -238,8 +242,10 @@ internal sealed class RefreshTokenRepository(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "The refresh token repository failed to delete the refresh tokens of user " +
-                "{UserId}.", userId);
+            logger.LogError(
+                ex,
+                "The refresh token repository failed to delete the refresh tokens of user {UserId}.",
+                userId);
             throw;
         }
     }

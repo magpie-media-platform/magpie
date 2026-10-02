@@ -104,7 +104,6 @@ public sealed class ContentHierarchyItemRepositoryShotgunTests
     [TearDown]
     public void TearDown()
     {
-        _context.Database.CloseConnection();
         _context.Dispose();
     }
 
@@ -221,6 +220,38 @@ public sealed class ContentHierarchyItemRepositoryShotgunTests
             Assert.That(result, Is.True);
             Assert.That(storedParent.Monitoring, Is.EqualTo(monitoring));
             Assert.That(storedChild.EffectiveMonitoring, Is.EqualTo(expectedChildMonitoring));
+        }
+    }
+
+    [TestCase(MonitoringMode.Unmonitored, MonitoringMode.Unmonitored)]
+    [TestCase(MonitoringMode.Shotgun, MonitoringMode.Shotgun)]
+    public async Task CreateAsync_ResolvesTheRootFolderDefaultMonitoring_WhenTopLevelItemInherits(
+        MonitoringMode defaultMonitoring,
+        MonitoringMode expectedMonitoring)
+    {
+        // Arrange
+        _rootFolder.DefaultMonitoring = defaultMonitoring;
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        var item = new ContentHierarchyItem
+        {
+            MetadataContainer = new MetadataContainer { CreatedAt = DateTime.UtcNow },
+            ContentType = "type-a",
+            Level = "root",
+            Slug = "new-top-level",
+            Name = "New top-level",
+            Monitoring = null
+        };
+
+        // Act
+        await _subject.CreateAsync(item, _userId).ConfigureAwait(false);
+
+        // Assert
+        var stored = await _context.ContentHierarchyItems.AsNoTracking()
+            .SingleAsync(candidate => candidate.Id == item.Id).ConfigureAwait(false);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(stored.Monitoring, Is.Null);
+            Assert.That(stored.EffectiveMonitoring, Is.EqualTo(expectedMonitoring));
         }
     }
 

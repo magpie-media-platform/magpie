@@ -3,28 +3,28 @@ using System.Collections.Generic;
 namespace Magpie.Models.Paging;
 
 /// <summary>
-/// A single page of items along with paging metadata.
+/// One page of items with its paging data.
 /// </summary>
-/// <typeparam name="T">Type of the items in the page.</typeparam>
+/// <typeparam name="T">The type of the items in the page.</typeparam>
 public sealed record PagedList<T>
 {
     /// <summary>
-    /// Items in the current page.
+    /// The items in the current page.
     /// </summary>
     public IEnumerable<T> Items { get; init; } = [];
 
     /// <summary>
-    /// Current page number.
+    /// The current page number.
     /// </summary>
     public int? PageNumber { get; init; }
 
     /// <summary>
-    /// Number of items per page.
+    /// The number of items per page.
     /// </summary>
     public int? PageSize { get; init; }
 
     /// <summary>
-    /// Total number of items across all pages.
+    /// The total number of items across all pages.
     /// </summary>
     public int TotalItems { get; init; }
 }

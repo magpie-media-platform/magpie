@@ -409,15 +409,18 @@ public sealed class MetadataSearchServiceTests
         var results = await subject.SearchAsync("anything", "type-b", cancellationToken: default).ConfigureAwait(false);
 
         // Assert
-        Assert.That(results.Matches, Is.Empty);
-        tvOnly.Verify(
-            s => s.SearchAsync(
-                It.IsAny<ContentHierarchyLevelDefinition>(),
-                It.IsAny<string>(),
-                It.IsAny<string>(),
-                It.IsAny<int>(),
-                It.IsAny<CancellationToken>()),
-            Times.Never);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(results.Matches, Is.Empty);
+            tvOnly.Verify(
+                s => s.SearchAsync(
+                    It.IsAny<ContentHierarchyLevelDefinition>(),
+                    It.IsAny<string>(),
+                    It.IsAny<string>(),
+                    It.IsAny<int>(),
+                    It.IsAny<CancellationToken>()),
+                Times.Never);
+        }
     }
 
     [Test]
@@ -851,25 +854,28 @@ public sealed class MetadataSearchServiceTests
         await subject.SearchAsync("anything", "type-e", cancellationToken: default).ConfigureAwait(false);
 
         // Assert
-        searcher.Verify(
-            s => s.SearchAsync(
-                It.IsAny<ContentHierarchyLevelDefinition>(),
-                It.IsAny<string>(),
-                It.IsAny<string>(),
-                It.IsAny<int>(),
-                It.IsAny<CancellationToken>()),
-            Times.Exactly(3),
-            "Search must invoke the searcher once per root level of a multi-root content type.");
-        foreach (var slug in new[] { "type-e-root-a", "type-e-root-b", "type-e-root-c" })
+        using (Assert.EnterMultipleScope())
         {
             searcher.Verify(
                 s => s.SearchAsync(
-                    It.Is<ContentHierarchyLevelDefinition>(l => l.Slug == slug),
+                    It.IsAny<ContentHierarchyLevelDefinition>(),
                     It.IsAny<string>(),
                     It.IsAny<string>(),
                     It.IsAny<int>(),
                     It.IsAny<CancellationToken>()),
-                Times.Once);
+                Times.Exactly(3),
+                "Search must invoke the searcher once per root level of a multi-root content type.");
+            foreach (var slug in new[] { "type-e-root-a", "type-e-root-b", "type-e-root-c" })
+            {
+                searcher.Verify(
+                    s => s.SearchAsync(
+                        It.Is<ContentHierarchyLevelDefinition>(l => l.Slug == slug),
+                        It.IsAny<string>(),
+                        It.IsAny<string>(),
+                        It.IsAny<int>(),
+                        It.IsAny<CancellationToken>()),
+                    Times.Once);
+            }
         }
     }
 
@@ -4188,10 +4194,13 @@ public sealed class MetadataSearchServiceTests
             subject.SearchCandidatesAsync(new(), "type-a", page));
 
         // Assert
-        Assert.That(exception!.Message, Is.EqualTo("Start a new search at page one."));
-        searcher.Verify(provider => provider.ContinueSearchAsync(
-            It.IsAny<string>(), It.IsAny<ContentHierarchyItemCriteria>(), It.IsAny<int>(),
-            It.IsAny<string>(), It.IsAny<object?>(), It.IsAny<CancellationToken>()), Times.Never);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(exception!.Message, Is.EqualTo("A continuation is required for a page after page one."));
+            searcher.Verify(provider => provider.ContinueSearchAsync(
+                It.IsAny<string>(), It.IsAny<ContentHierarchyItemCriteria>(), It.IsAny<int>(),
+                It.IsAny<string>(), It.IsAny<object?>(), It.IsAny<CancellationToken>()), Times.Never);
+        }
     }
 
     [Test]
@@ -4856,9 +4865,12 @@ public sealed class MetadataSearchServiceTests
                 change == "page" ? 2 : 1, change == "unknown" ? "missing" : first.Continuation));
 
         // Assert
-        Assert.That(exception, Is.Not.Null);
-        searcher.Verify(value => value.ContinueSearchAsync(It.IsAny<string>(),
-            It.IsAny<ContentHierarchyItemCriteria>(), It.IsAny<int>(), It.IsAny<string>(),
-            It.IsAny<object?>(), It.IsAny<CancellationToken>()), Times.Once);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(exception, Is.Not.Null);
+            searcher.Verify(value => value.ContinueSearchAsync(It.IsAny<string>(),
+                It.IsAny<ContentHierarchyItemCriteria>(), It.IsAny<int>(), It.IsAny<string>(),
+                It.IsAny<object?>(), It.IsAny<CancellationToken>()), Times.Once);
+        }
     }
 }

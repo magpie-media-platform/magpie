@@ -16,14 +16,6 @@
         }
     }
 
-    .content-detail-page__tabs-placeholder {
-        padding: var(--space-lg);
-        background-color: var(--bg-secondary);
-        border: 1px dashed var(--border-default);
-        border-radius: var(--radius-lg);
-        text-align: center;
-    }
-
     .content-detail-page__tabs {
         display: flex;
         flex-direction: column;

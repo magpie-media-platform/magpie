@@ -287,7 +287,7 @@ internal static class RelationshipMappingExtensions
         var characterQids =
             from relationship in pending
             where relationship.CharacterQid is not null
-            select relationship.CharacterQid!;
+            select relationship.CharacterQid;
         return
         [
             .. pending.Select(relationship => relationship.SubjectQid)
@@ -318,7 +318,7 @@ internal static class RelationshipMappingExtensions
             .. from statement in entity.TruthyStatements(propertyId)
                 let value = statement.Mainsnak.StringValue()
                 where value is not null
-                select value!
+                select value
         ];
     }
 
@@ -329,7 +329,7 @@ internal static class RelationshipMappingExtensions
             .. from statement in entity.TruthyStatements(propertyId)
                 let value = statement.Mainsnak.EntityId()
                 where value is not null
-                select value!
+                select value
         ];
     }
 
@@ -363,11 +363,11 @@ internal static class RelationshipMappingExtensions
             from value in values
             let text = value.StringValue()
             where text is not null
-            select text!;
+            select text;
         return [.. strings.Distinct(StringComparer.Ordinal)];
     }
 
-    private static IReadOnlyList<string> QualifierEntityIds(StatementDto statement, string propertyId)
+    internal static IReadOnlyList<string> QualifierEntityIds(StatementDto statement, string propertyId)
     {
         if (statement.Qualifiers is null || !statement.Qualifiers.TryGetValue(propertyId, out var values))
         {
@@ -378,7 +378,7 @@ internal static class RelationshipMappingExtensions
             from value in values
             let qid = value.EntityId()
             where qid is not null
-            select qid!;
+            select qid;
         return [.. qids.Distinct(StringComparer.OrdinalIgnoreCase)];
     }
 }

@@ -22,9 +22,9 @@ public static class FilterQueryExtensions
     public static ParseResult<ContentFilterCriteria> ParseContentFilter(this string query)
     {
         var parseResult = query.ParseFilterQuery();
-        if (!parseResult.IsSuccess)
+        if (parseResult.Error is { } error)
         {
-            return ParseResult<ContentFilterCriteria>.Failure(parseResult.Error!.Value);
+            return ParseResult<ContentFilterCriteria>.Failure(error);
         }
 
         return parseResult.Value!.ToContentFilterCriteria();
@@ -37,9 +37,9 @@ public static class FilterQueryExtensions
     public static ParseResult<SubjectFilterCriteria> ParseSubjectFilter(this string query)
     {
         var parseResult = query.ParseFilterQuery();
-        if (!parseResult.IsSuccess)
+        if (parseResult.Error is { } error)
         {
-            return ParseResult<SubjectFilterCriteria>.Failure(parseResult.Error!.Value);
+            return ParseResult<SubjectFilterCriteria>.Failure(error);
         }
 
         return parseResult.Value!.ToSubjectFilterCriteria();

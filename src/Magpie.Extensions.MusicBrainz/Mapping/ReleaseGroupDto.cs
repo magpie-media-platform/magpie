@@ -14,15 +14,6 @@ internal sealed record ReleaseGroupDto
     [JsonPropertyName("first-release-date")]
     public string? FirstReleaseDate { get; init; }
 
-    [JsonPropertyName("primary-type")]
-    public string? PrimaryType { get; init; }
-
-    [JsonPropertyName("secondary-types")]
-    public IReadOnlyList<string>? SecondaryTypes { get; init; }
-
-    [JsonPropertyName("score")]
-    public int? Score { get; init; }
-
     [JsonPropertyName("disambiguation")]
     public string? Disambiguation { get; init; }
 

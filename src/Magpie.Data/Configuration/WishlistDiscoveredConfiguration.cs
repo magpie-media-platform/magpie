@@ -10,8 +10,6 @@ internal sealed class WishlistDiscoveredConfiguration : IEntityTypeConfiguration
     public void Configure(EntityTypeBuilder<WishlistDiscovered> builder)
     {
         builder.ToTable("wishlist_discovered");
-        builder.HasKey(e => e.Id);
-        builder.Property(e => e.Id).ValueGeneratedOnAdd();
         builder.Property(e => e.ExternalIdSource).IsRequired().HasMaxLength(255);
         builder.Property(e => e.ExternalId).IsRequired().HasMaxLength(255);
         builder.Property(e => e.Title).HasMaxLength(1024);

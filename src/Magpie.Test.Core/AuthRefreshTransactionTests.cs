@@ -126,14 +126,32 @@ public sealed class AuthRefreshTransactionTests
             .AnyAsync(token => token.TokenHash == "old-refresh").ConfigureAwait(false), Is.True);
     }
 
-    [TestCase(false, false)]
-    [TestCase(true, true)]
-    public async Task RefreshAsync_RejectsAndConsumesTheRefreshToken_WhenTheAccountIsRestricted(
-        bool enabled, bool locked)
+    [Test]
+    public async Task RefreshAsync_RejectsAndConsumesTheRefreshToken_WhenTheAccountIsDisabled()
     {
         // Arrange
-        _user.Enabled = enabled;
-        _user.LockedUntil = locked ? new DateTime(2099, 1, 1, 0, 0, 0, DateTimeKind.Utc) : null;
+        _user.Enabled = false;
+
+        // Act
+        var session = await _auth.RefreshAsync("old-refresh").ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(session, Is.Null);
+            Assert.That(await _context.RefreshTokens.AsNoTracking().AnyAsync().ConfigureAwait(false), Is.False);
+        }
+
+        _tokens.Verify(tokens => tokens.GenerateAccessTokenAsync(It.IsAny<User>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Test]
+    public async Task RefreshAsync_RejectsAndConsumesTheRefreshToken_WhenTheAccountIsLocked()
+    {
+        // Arrange
+        _user.Enabled = true;
+        _user.LockedUntil = new DateTime(2099, 1, 1, 0, 0, 0, DateTimeKind.Utc);
 
         // Act
         var session = await _auth.RefreshAsync("old-refresh").ConfigureAwait(false);

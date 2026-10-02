@@ -190,8 +190,6 @@ internal sealed class SubjectMetadataRefreshScanJob(
             },
             cancellationToken).ConfigureAwait(false);
 
-        logger.LogDebug(
-            "The subject metadata refresh scan enqueued a refresh for subject {SubjectId}",
-            subjectId);
+        logger.LogDebug("The subject metadata refresh scan enqueued a refresh for subject {SubjectId}", subjectId);
     }
 }

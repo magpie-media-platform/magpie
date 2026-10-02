@@ -30,7 +30,7 @@ public interface IRecoverableDatabaseManagementProvider : IDatabaseManagementPro
     Task<bool> StageRestoreAsync(string backupId, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// If a backup is marked for restore, restores the database from it.
+    /// Restores the database from the backup marked for restore.
     /// </summary>
     /// <param name="cancellationToken">The token that cancels the operation</param>
     /// <returns><see langword="true"/> when a restore ran, otherwise <see langword="false"/></returns>

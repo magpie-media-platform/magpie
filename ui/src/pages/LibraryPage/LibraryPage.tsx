@@ -2,7 +2,7 @@ import { Link } from 'react-router-dom';
 import { ArrowLeftIcon, GridFourIcon, ListIcon } from '@phosphor-icons/react';
 
 import { BulkActionsToolbar } from '@/components/ui/BulkActionsToolbar';
-import { ContentListSlot } from '@/components/ui/Slot/ContentSlots';
+import { Slot } from '@/components/ui/Slot';
 import { CdnPhosphorIcon } from '@/components/ui/CdnPhosphorIcon';
 import { PullToRefresh } from '@/components/ui/PullToRefresh';
 import { PageHeader } from '@/components/ui/PageHeader';
@@ -23,22 +23,23 @@ import './LibraryPage.css';
 
 export function LibraryPage() {
     const library = useLibraryPage();
-    const { currentContentType, selectedLevel, routeContentTypeSlug, pageTitle, pageIconName } = library;
+    const { route, filters, content, bulk, pagination, selection } = library;
+    const { currentContentType, selectedLevel, routeContentTypeSlug, pageTitle, pageIconName } = route;
     const [storedView, setStoredView] = usePersistentState<string>('library-view', 'list');
     const view = storedView === 'gallery' ? 'gallery' : 'list';
 
-    if (library.hasInvalidContentTypeSlug) {
+    if (route.hasInvalidContentTypeSlug) {
         return null;
     }
 
-    if (library.showTypePicker && currentContentType) {
-        return <LibraryTypePicker contentType={currentContentType} rootLevels={library.rootLevels} />;
+    if (route.showTypePicker && currentContentType) {
+        return <LibraryTypePicker contentType={currentContentType} rootLevels={route.rootLevels} />;
     }
 
     return (
         <div className="library-page" data-page="library">
             <PullToRefresh onRefresh={library.handleRefresh} className="library-page__pull-to-refresh">
-                <ContentListSlot>
+                <Slot slot="content.list">
                     {selectedLevel && routeContentTypeSlug && (
                         <Link
                             to={`/library/content/${routeContentTypeSlug}`}
@@ -84,134 +85,134 @@ export function LibraryPage() {
                     />
 
                     <LibraryFilters
-                        filterQuery={library.filterQuery}
-                        isRestoringFilter={library.isRestoringFilter}
-                        filterRestoreError={library.filterRestoreError}
-                        onRetrySavedFilter={library.retrySavedFilters}
-                        onClearFilters={library.handleClearSearchAndFilters}
-                        onFilterQueryChange={library.handleFilterQueryChange}
-                        showSaveControl={library.showSaveControl}
-                        saveControlLabel={library.saveControlLabel}
-                        onOpenSaveFilter={library.handleOpenSaveFilter}
-                        isSavingFilter={library.isSavingFilter}
-                        filterBarExpanded={library.filterBarExpanded}
-                        onFilterBarExpandedChange={library.setFilterBarExpanded}
+                        filterQuery={filters.filterQuery}
+                        isRestoringFilter={filters.isRestoringFilter}
+                        filterRestoreError={filters.filterRestoreError}
+                        onRetrySavedFilter={filters.retrySavedFilters}
+                        onClearFilters={filters.handleClearSearchAndFilters}
+                        onFilterQueryChange={filters.handleFilterQueryChange}
+                        showSaveControl={filters.showSaveControl}
+                        saveControlLabel={filters.saveControlLabel}
+                        onOpenSaveFilter={filters.handleOpenSaveFilter}
+                        isSavingFilter={filters.isSavingFilter}
+                        filterBarExpanded={filters.filterBarExpanded}
+                        onFilterBarExpandedChange={filters.setFilterBarExpanded}
                         tableLayoutQuery={TABLE_LAYOUT_QUERY}
                         defaultContentType={routeContentTypeSlug}
                         restrictContentType={routeContentTypeSlug}
                         lockContentLevel={selectedLevel?.slug}
-                        referencedSavedFilter={library.referencedSavedFilter}
-                        isAppliedFilterDirty={library.isAppliedFilterDirty}
+                        referencedSavedFilter={filters.referencedSavedFilter}
+                        isAppliedFilterDirty={filters.isAppliedFilterDirty}
                     />
 
                     {library.hasBulkActions && (
                         <BulkActionsToolbar
-                            selection={library.selection}
+                            selection={selection.selection}
                             label="Library selection actions"
                             itemNounPlural="items"
-                            onClear={library.handleClearSelection}
+                            onClear={selection.selection.clear}
                         >
                             <LibraryBulkActionButtons
                                 canEditContent={library.canEditContent}
                                 canManageContent={library.canManageContent}
                                 canDeleteContent={library.canDeleteContent}
-                                onOpenBulkTags={library.handleOpenBulkTags}
-                                onBulkSetMonitoring={library.handleBulkSetMonitoring}
-                                isSettingMonitoring={library.isSettingMonitoring}
-                                onOpenBulkRootFolder={library.openBulkRootFolder}
-                                onOpenBulkQualityTierList={library.openBulkQualityTierList}
-                                onOpenBulkDelete={library.openBulkDeleteConfirm}
+                                onOpenBulkTags={bulk.handleOpenBulkTags}
+                                onBulkSetMonitoring={bulk.handleBulkSetMonitoring}
+                                isSettingMonitoring={bulk.isSettingMonitoring}
+                                onOpenBulkRootFolder={bulk.openBulkRootFolder}
+                                onOpenBulkQualityTierList={bulk.openBulkQualityTierList}
+                                onOpenBulkDelete={bulk.openBulkDeleteConfirm}
                             />
                         </BulkActionsToolbar>
                     )}
 
-                    {!library.filterRestoreError && (
+                    {!filters.filterRestoreError && (
                         <LibraryContentSection
                             isLoading={library.isLoading}
-                            contentTypeValidationPending={library.contentTypeValidationPending}
-                            error={library.error}
-                            onRetry={() => library.refetch()}
-                            onEditFilter={() => library.setFilterBarExpanded(true)}
-                            contentItems={library.contentItems}
-                            totalItems={library.totalItems}
-                            onContentClick={library.handleContentClick}
-                            sorting={library.sorting}
-                            onSortingChange={library.handleSortingChange}
-                            pagination={library.pagination}
-                            onPaginationChange={library.handlePaginationChange}
-                            headerFilters={library.headerFilters}
-                            headerFilterHandlers={library.headerFilterHandlers}
+                            contentTypeValidationPending={route.contentTypeValidationPending}
+                            error={content.error}
+                            onRetry={() => content.refetch()}
+                            onEditFilter={() => filters.setFilterBarExpanded(true)}
+                            contentItems={content.contentItems}
+                            totalItems={content.totalItems}
+                            onContentClick={route.handleContentClick}
+                            sorting={filters.sorting}
+                            onSortingChange={filters.handleSortingChange}
+                            pagination={pagination.pagination}
+                            onPaginationChange={pagination.handlePaginationChange}
+                            headerFilters={filters.headerFilters}
+                            headerFilterHandlers={filters.headerFilterHandlers}
                             hasBulkActions={library.hasBulkActions}
-                            selection={library.selection}
+                            selection={selection.selection}
                             selectionMode={library.selectionMode}
                             onEnterSelectionMode={library.enterSelectionMode}
                             onExitSelectionMode={library.exitSelectionMode}
                             onBeginCardSelection={library.beginCardSelection}
-                            hasActiveSearchOrFilter={library.hasActiveSearchOrFilter}
+                            hasActiveSearchOrFilter={filters.hasActiveSearchOrFilter}
                             pageCount={library.pageCount}
-                            currentPage={library.currentPage}
-                            goToPage={library.goToPage}
+                            currentPage={pagination.pageNumber}
+                            goToPage={pagination.goToPage}
                             canAddContent={library.canAddContent}
-                            addContentTo={library.addContentTo}
-                            onClearSearchAndFilters={library.handleClearSearchAndFilters}
+                            addContentTo={route.addContentTo}
+                            onClearSearchAndFilters={filters.handleClearSearchAndFilters}
                             view={view}
                         />
                     )}
-                </ContentListSlot>
+                </Slot>
             </PullToRefresh>
 
             {library.hasBulkActions && library.selectionMode && (
                 <LibraryMobileSelectionBar
-                    selection={library.selection}
-                    onClearSelection={library.handleClearSelection}
+                    selection={selection.selection}
+                    onClearSelection={selection.selection.clear}
                     canEditContent={library.canEditContent}
                     canManageContent={library.canManageContent}
                     canDeleteContent={library.canDeleteContent}
-                    onOpenBulkTags={library.handleOpenBulkTags}
-                    onBulkSetMonitoring={library.handleBulkSetMonitoring}
-                    isSettingMonitoring={library.isSettingMonitoring}
-                    onOpenBulkRootFolder={library.openBulkRootFolder}
-                    onOpenBulkQualityTierList={library.openBulkQualityTierList}
-                    onOpenBulkDelete={library.openBulkDeleteConfirm}
+                    onOpenBulkTags={bulk.handleOpenBulkTags}
+                    onBulkSetMonitoring={bulk.handleBulkSetMonitoring}
+                    isSettingMonitoring={bulk.isSettingMonitoring}
+                    onOpenBulkRootFolder={bulk.openBulkRootFolder}
+                    onOpenBulkQualityTierList={bulk.openBulkQualityTierList}
+                    onOpenBulkDelete={bulk.openBulkDeleteConfirm}
                 />
             )}
 
             <LibraryDialogs
-                bulkTagsOpen={library.bulkTagsOpen}
-                onCloseBulkTags={library.closeBulkTags}
-                bulkTags={library.bulkTags}
-                selectedItems={library.selectedItems}
-                selectedCount={library.selectedCount}
-                onApplyTags={library.handleApplyTags}
-                isApplyingTags={library.isApplyingTags}
-                bulkRootFolderOpen={library.bulkRootFolderOpen}
-                onCloseBulkRootFolder={library.closeBulkRootFolder}
-                rootFolderOptions={library.rootFolderOptions}
-                onApplyRootFolder={library.handleApplyRootFolder}
-                isApplyingRootFolder={library.isApplyingRootFolder}
-                bulkQualityTierListOpen={library.bulkQualityTierListOpen}
-                onCloseBulkQualityTierList={library.closeBulkQualityTierList}
-                qualityTierListOptions={library.qualityTierListOptions}
-                onApplyQualityTierList={library.handleApplyQualityTierList}
-                isApplyingQualityTierList={library.isApplyingQualityTierList}
-                saveFilterDialogOpen={library.saveFilterDialogOpen}
-                onCloseSaveFilter={library.closeSaveFilterDialog}
-                onSaveFilter={library.handleSaveFilter}
-                canOfferUpdate={library.canOfferUpdate}
-                onUpdateFilter={library.handleUpdateFilter}
-                referencedSavedFilter={library.referencedSavedFilter}
-                isSavingFilter={library.isSavingFilter}
-                isUpdatingFilter={library.isUpdatingFilter}
-                filterQuery={library.filterQuery}
-                saveFilterError={library.saveFilterError}
-                saveFilterQueryError={library.saveFilterQueryError}
-                existingFilterNames={library.savedContentFilters.map((f) => f.name)}
-                bulkDeleteConfirmOpen={library.bulkDeleteConfirmOpen}
-                onConfirmBulkDelete={library.handleConfirmBulkDelete}
-                onCancelBulkDelete={library.closeBulkDeleteConfirm}
-                bulkDeleteFiles={library.bulkDeleteFiles}
-                onBulkDeleteFilesChange={library.setBulkDeleteFiles}
-                isDeleting={library.isDeleting}
+                bulkTagsOpen={bulk.bulkTagsOpen}
+                onCloseBulkTags={bulk.closeBulkTags}
+                bulkTags={bulk.bulkTags}
+                selectedItems={selection.selectedItems}
+                selectedCount={selection.selection.selectedCount}
+                onApplyTags={bulk.handleApplyTags}
+                isApplyingTags={bulk.isApplyingTags}
+                bulkRootFolderOpen={bulk.bulkRootFolderOpen}
+                onCloseBulkRootFolder={bulk.closeBulkRootFolder}
+                rootFolderOptions={bulk.rootFolderOptions}
+                onApplyRootFolder={bulk.handleApplyRootFolder}
+                isApplyingRootFolder={bulk.isApplyingRootFolder}
+                bulkQualityTierListOpen={bulk.bulkQualityTierListOpen}
+                onCloseBulkQualityTierList={bulk.closeBulkQualityTierList}
+                qualityTierListOptions={bulk.qualityTierListOptions}
+                onApplyQualityTierList={bulk.handleApplyQualityTierList}
+                isApplyingQualityTierList={bulk.isApplyingQualityTierList}
+                saveFilterDialogOpen={filters.saveFilterDialogOpen}
+                onCloseSaveFilter={filters.closeSaveFilterDialog}
+                onSaveFilter={filters.handleSaveFilter}
+                canOfferUpdate={filters.canOfferUpdate}
+                onUpdateFilter={filters.handleUpdateFilter}
+                referencedSavedFilter={filters.referencedSavedFilter}
+                isSavingFilter={filters.isSavingFilter}
+                isUpdatingFilter={filters.isUpdatingFilter}
+                filterQuery={filters.filterQuery}
+                saveFilterError={filters.saveFilterError}
+                saveFilterQueryError={filters.saveFilterQueryError}
+                existingFilterNames={filters.savedContentFilters.map((f) => f.name)}
+                bulkDeleteConfirmOpen={bulk.bulkDeleteConfirmOpen}
+                onConfirmBulkDelete={bulk.handleConfirmBulkDelete}
+                onCancelBulkDelete={bulk.closeBulkDeleteConfirm}
+                bulkDeleteFiles={bulk.bulkDeleteFiles}
+                onBulkDeleteFilesChange={bulk.setBulkDeleteFiles}
+                isDeleting={bulk.isDeleting}
             />
         </div>
     );

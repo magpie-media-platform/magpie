@@ -28,6 +28,7 @@ internal sealed class ReleaseSearchItemJob(
         RequesterTriggerModes = [JobTriggerMode.Schedule, JobTriggerMode.Event],
         ConcurrencyScope = ConcurrencyScope.PerTarget,
         LockPartitionFields = [MagpieJobs.Parameters.ContentHierarchyItemId],
+        CoalesceTrueWinsFields = [MagpieJobs.Parameters.Force],
         Parameters =
         [
             new(

@@ -22,6 +22,14 @@ internal sealed class MusicContentTypeDefinitionProvider :
         @"(?<![A-Za-z0-9])(?:track|trk|t)[\s._-]*0*(?<track>\d{1,3})(?![A-Za-z0-9])",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
+    private static readonly Regex BareTrackPattern = new(
+        @"\s-\s0*(?<track>\d{1,3})\s-\s",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.RightToLeft);
+
+    private static readonly Regex FilesystemSubstitutePattern = new(
+        @"[/\\:*?""<>|+\-\s]+",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
     private static readonly ContentTypeDefinition MusicDefinition = new()
     {
         Slug = ContentTypeSlug,
@@ -150,7 +158,9 @@ internal sealed class MusicContentTypeDefinitionProvider :
             return ReleaseMatchResult.Indeterminate;
         }
 
-        var trackMatch = TrackPattern.Match(release.Title);
+        var trackMatch = TrackPattern.Match(release.Title) is { Success: true } prefixedTrack
+            ? prefixedTrack
+            : BareTrackPattern.Match(release.Title);
         int? releaseTrack = trackMatch.Success &&
             int.TryParse(
                 trackMatch.Groups["track"].Value,
@@ -174,14 +184,14 @@ internal sealed class MusicContentTypeDefinitionProvider :
             return ReleaseMatchResult.Indeterminate;
         }
 
-        var normalizedRelease = " " + release.Title.NormalizeMediaFilename() + " ";
+        var normalizedRelease = " " + MatchText(release.Title) + " ";
         var hadCompleteAlternative = false;
         foreach (var factSet in contentFacts)
         {
             var values = (
                 from fact in factSet
                 where !string.IsNullOrWhiteSpace(fact.Value)
-                let value = fact.Value?.NormalizeMediaFilename()
+                let value = MatchText(fact.Value ?? string.Empty)
                 where value.Length > 0
                 select value).ToArray();
             if (!values.Any() || factSet.Any(fact => fact.Facets.Count > 0))
@@ -209,7 +219,7 @@ internal sealed class MusicContentTypeDefinitionProvider :
             from item in requiredItems
             let title = TitleOf(target, item)
             where title is not null
-            select title.NormalizeMediaFilename()).ToArray();
+            select MatchText(title)).ToArray();
         if (!requiredTitles.Any())
         {
             return hadCompleteAlternative ? ReleaseMatchResult.NoMatch : ReleaseMatchResult.Indeterminate;
@@ -221,6 +231,9 @@ internal sealed class MusicContentTypeDefinitionProvider :
             ? ReleaseMatchResult.Confident
             : ReleaseMatchResult.NoMatch;
     }
+
+    private static string MatchText(string value) =>
+        FilesystemSubstitutePattern.Replace(value.NormalizeMediaFilename(), " ").Trim();
 
     private static string? TitleOf(ContentTarget target, ContentHierarchyItem item)
     {

@@ -9,7 +9,7 @@ namespace Magpie.Api;
 /// <param name="routePrefix">The API route prefix of the command group</param>
 /// <param name="description">The description text of the generated CLI command group</param>
 [AttributeUsage(AttributeTargets.Class)]
-public sealed class MagpieCommandGroupAttribute(string name, string routePrefix, string description) : Attribute
+internal sealed class MagpieCommandGroupAttribute(string name, string routePrefix, string description) : Attribute
 {
     /// <summary>
     /// The name of the generated CLI command group.

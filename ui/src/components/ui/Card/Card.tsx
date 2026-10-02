@@ -15,10 +15,6 @@ export interface CardBodyProps extends HTMLAttributes<HTMLDivElement> {
     children: ReactNode;
 }
 
-export interface CardFooterProps extends HTMLAttributes<HTMLDivElement> {
-    children: ReactNode;
-}
-
 export const Card = forwardRef<HTMLDivElement, CardProps>(
     ({ interactive = false, className, children, ...props }, ref) => {
         const classes = ['card', interactive && 'card--interactive', className].filter(Boolean).join(' ');
@@ -62,17 +58,5 @@ export const CardBody = forwardRef<HTMLDivElement, CardBodyProps>(({ className, 
 });
 
 CardBody.displayName = 'CardBody';
-
-export const CardFooter = forwardRef<HTMLDivElement, CardFooterProps>(({ className, children, ...props }, ref) => {
-    const classes = ['card-footer', className].filter(Boolean).join(' ');
-
-    return (
-        <div ref={ref} className={classes} data-component="card-footer" {...props}>
-            {children}
-        </div>
-    );
-});
-
-CardFooter.displayName = 'CardFooter';
 
 export default Card;

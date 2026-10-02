@@ -18,13 +18,7 @@ public sealed class TvExtension : IExtensionLifecycle
     public Guid Id => ExtensionId;
 
     /// <inheritdoc />
-    public Version Version => new(1, 0, 0);
-
-    /// <inheritdoc />
     public string Name => "TV";
-
-    /// <inheritdoc />
-    public string? TargetABI => "[1.0.0,)";
 
     /// <inheritdoc />
     public void RegisterServices(IServiceCollection services)

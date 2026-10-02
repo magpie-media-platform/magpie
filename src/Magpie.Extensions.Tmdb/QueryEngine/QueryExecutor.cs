@@ -23,19 +23,21 @@ internal sealed class QueryExecutor(
     IQueryCoordinator cache,
     ILogger<QueryExecutor> logger) : IQueryExecutor
 {
+    private static readonly SubjectResolutionSet EmptySubjectSet = new()
+    {
+        Groups = [],
+        Warnings = [],
+        RequiredGroupUnresolved = false,
+        HadRemoteFailure = false
+    };
+
     private sealed record PageResult(IReadOnlyList<SearchHit> Hits, int TotalPages, int TotalResults);
 
     private sealed class ExecutionState
     {
         internal HashSet<int> ResolvedNodeIds { get; } = [];
 
-        internal SubjectResolutionSet SubjectSet { get; set; } = new()
-        {
-            Groups = [],
-            Warnings = [],
-            RequiredGroupUnresolved = false,
-            HadRemoteFailure = false
-        };
+        internal SubjectResolutionSet SubjectSet { get; set; } = EmptySubjectSet;
 
         internal IReadOnlyDictionary<string, int> GenreIds { get; set; } =
             new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
@@ -92,7 +94,7 @@ internal sealed class QueryExecutor(
                 });
                 if (progress.ResolvedSources is not null && progress.ResolvedSources != resolved)
                 {
-                    throw new MetadataSearchContinuationException("TMDb resolved sources changed. Start a new search.");
+                    throw new MetadataSearchContinuationException("TMDb resolved sources changed.");
                 }
 
                 progress.ResolvedSources = resolved;
@@ -134,29 +136,9 @@ internal sealed class QueryExecutor(
         }
     }
 
-    private IReadOnlyList<SearchHit> MapCredits(ContentRoute route, CreditResponse response, ResolvedSubject subject)
+    private IReadOnlyList<SearchHit> MapCredits(CreditResponse response, ResolvedSubject subject)
     {
         var hits = new List<SearchHit>();
-        if (route == ContentRoute.Movie)
-        {
-            if (subject.Role is SubjectRole.Person or SubjectRole.Cast && response.Movie?.Cast is not null)
-            {
-                hits.AddRange(response.Movie.Cast.Select((hit, index) =>
-                    hit.FromMovieCredit(subject, cast: true, index)));
-            }
-
-            if (subject.Role is SubjectRole.Person or SubjectRole.Crew
-                or SubjectRole.Director or SubjectRole.Writer &&
-                response.Movie?.Crew is not null)
-            {
-                hits.AddRange(response.Movie.Crew
-                    .Where(hit => JobMatches(subject.Role, hit.Job))
-                    .Select((hit, index) => hit.FromMovieCredit(subject, cast: false, index)));
-            }
-
-            return hits;
-        }
-
         if (subject.Role is SubjectRole.Person or SubjectRole.Cast && response.Tv?.Cast is not null)
         {
             hits.AddRange(response.Tv.Cast.Select((hit, index) => hit.FromTvCredit(subject, cast: true, index)));
@@ -520,22 +502,7 @@ internal sealed class QueryExecutor(
             return true;
         }
 
-        foreach (var group in subjects)
-        {
-            if (applied?.AppliedSubjectGroups.Contains(group, ResolvedSubjectGroupComparer.Instance) == true)
-            {
-                continue;
-            }
-
-            var knownMatch = hit.SubjectReferences.Any(reference => group.Subjects.Any(subject =>
-                reference.MatchesSubjectReference(subject)));
-            if (group.Excluded || !knownMatch)
-            {
-                return true;
-            }
-        }
-
-        return false;
+        return subjects.Any(group => NeedsSubjectDetails(group, hit));
     }
 
     private bool NeedsCreditsForHit(SearchHit hit, IReadOnlyList<ResolvedSubjectGroup> subjects)
@@ -555,7 +522,7 @@ internal sealed class QueryExecutor(
         }
 
         var knownMatch = hit.SubjectReferences.Any(reference => group.Subjects.Any(subject =>
-            reference.MatchesSubjectReference(subject)));
+            reference.MatchesSubject(subject)));
         return group.Excluded || !knownMatch;
     }
 
@@ -563,66 +530,6 @@ internal sealed class QueryExecutor(
     {
         return filter.ElementFilters.Any(criterion => criterion.Family == family &&
             hit.AppliedCriteria?.AppliedElementFilters.Contains(criterion) != true);
-    }
-
-    private bool CanApplyOriginalLanguage(TextFilter filter)
-    {
-        return filter.Field == TextField.Language &&
-        !filter.Negate &&
-        filter.Operator == CriteriaValueOperator.Equals &&
-        filter.Values.Count == 1;
-    }
-
-    private bool CanApplyPublishDate(TemporalFilter filter)
-    {
-        return !filter.Negate &&
-        filter.Values.Count == 1 &&
-        filter.Operator is CriteriaValueOperator.Equals
-            or CriteriaValueOperator.GreaterThan
-            or CriteriaValueOperator.GreaterThanOrEqual
-            or CriteriaValueOperator.LessThan
-            or CriteriaValueOperator.LessThanOrEqual;
-    }
-
-    private bool CanApplyRuntime(DurationFilter filter)
-    {
-        if (filter.Negate || filter.Values.Count != 1)
-        {
-            return false;
-        }
-
-        var totalMinutes = filter.Values[0].TotalMinutes;
-        if (totalMinutes is < 0 or > int.MaxValue)
-        {
-            return false;
-        }
-
-        var floorMinutes = (int)Math.Floor(totalMinutes);
-        var ceilingMinutes = (int)Math.Ceiling(totalMinutes);
-        return filter.Operator switch
-        {
-            CriteriaValueOperator.Equals => floorMinutes == ceilingMinutes,
-            CriteriaValueOperator.GreaterThan => floorMinutes < int.MaxValue,
-            CriteriaValueOperator.GreaterThanOrEqual => true,
-            CriteriaValueOperator.LessThan => ceilingMinutes > 0,
-            CriteriaValueOperator.LessThanOrEqual => true,
-            _ => false
-        };
-    }
-
-    private bool CanApplyCertification(ContentRoute route, ElementFilter filter)
-    {
-        return route == ContentRoute.Movie &&
-        !filter.Excluded &&
-        filter.Family == ElementFamily.ContentRating &&
-        filter.Alternatives.Count == 1 &&
-        TryReadCertificationPair(filter.Alternatives[0], out _, out _);
-    }
-
-    private Request BuildSearch(FetchPlanNode fetch, string language, int page)
-    {
-        var term = SearchTerms(fetch).FirstOrDefault();
-        return BuildSearch(fetch, language, page, term);
     }
 
     private Request BuildSearch(FetchPlanNode fetch, string language, int page, string? searchTerm)
@@ -733,14 +640,11 @@ internal sealed class QueryExecutor(
             ResponseProfile.Query);
     }
 
-    private Request BuildPersonCredits(ContentRoute route, int personId, string language)
+    private Request BuildPersonCredits(int personId, string language)
     {
         return Create(
-            route == ContentRoute.Movie ? RequestRole.MovieCredits : RequestRole.TvCredits,
-            string.Format(
-                CultureInfo.InvariantCulture,
-                route == ContentRoute.Movie ? "3/person/{0}/movie_credits" : "3/person/{0}/tv_credits",
-                personId),
+            RequestRole.TvCredits,
+            string.Format(CultureInfo.InvariantCulture, "3/person/{0}/tv_credits", personId),
             [("language", language)],
             ResponseProfile.Query);
     }
@@ -814,7 +718,7 @@ internal sealed class QueryExecutor(
         List<(string Key, string Value)> query,
         ISet<TextFilter> appliedFilters)
     {
-        var filter = fetch.TextFilters.FirstOrDefault(CanApplyOriginalLanguage);
+        var filter = fetch.TextFilters.FirstOrDefault();
         var value = filter?.Values[0];
         if (value is null)
         {
@@ -834,7 +738,7 @@ internal sealed class QueryExecutor(
     {
         var prefix = fetch.Route == ContentRoute.Movie ? "primary_release_date" : "first_air_date";
         var yearKey = fetch.Route == ContentRoute.Movie ? "primary_release_year" : "first_air_date_year";
-        var filters = fetch.PublishDateFilters.Where(CanApplyPublishDate).ToList();
+        var filters = fetch.PublishDateFilters;
         if (filters.Count == 0)
         {
             return;
@@ -856,7 +760,6 @@ internal sealed class QueryExecutor(
             var value = filter.Values[0];
             var start = value.PeriodStart().Date;
             var end = value.PeriodEndExclusive().Date;
-            var applied = true;
             switch (filter.Operator)
             {
                 case CriteriaValueOperator.Equals:
@@ -875,15 +778,9 @@ internal sealed class QueryExecutor(
                 case CriteriaValueOperator.LessThanOrEqual:
                     upper = Min(upper, end.AddDays(-1));
                     break;
-                default:
-                    applied = false;
-                    break;
             }
 
-            if (applied)
-            {
-                appliedFilters.Add(filter);
-            }
+            appliedFilters.Add(filter);
         }
 
         if (lower is { } lowerValue)
@@ -904,44 +801,32 @@ internal sealed class QueryExecutor(
     {
         var lower = default(int?);
         var upper = default(int?);
-        foreach (var filter in fetch.DurationFilters.Where(CanApplyRuntime))
+        foreach (var filter in fetch.DurationFilters)
         {
             var totalMinutes = filter.Values[0].TotalMinutes;
-            if (totalMinutes is < 0 or > int.MaxValue)
-            {
-                continue;
-            }
-
             var floorMinutes = (int)Math.Floor(totalMinutes);
             var ceilingMinutes = (int)Math.Ceiling(totalMinutes);
-            var applied = true;
             switch (filter.Operator)
             {
-                case CriteriaValueOperator.Equals when floorMinutes == ceilingMinutes:
+                case CriteriaValueOperator.Equals:
                     lower = Max(lower, floorMinutes);
                     upper = Min(upper, floorMinutes);
                     break;
-                case CriteriaValueOperator.GreaterThan when floorMinutes < int.MaxValue:
+                case CriteriaValueOperator.GreaterThan:
                     lower = Max(lower, floorMinutes + 1);
                     break;
                 case CriteriaValueOperator.GreaterThanOrEqual:
                     lower = Max(lower, ceilingMinutes);
                     break;
-                case CriteriaValueOperator.LessThan when ceilingMinutes > 0:
+                case CriteriaValueOperator.LessThan:
                     upper = Min(upper, ceilingMinutes - 1);
                     break;
                 case CriteriaValueOperator.LessThanOrEqual:
                     upper = Min(upper, floorMinutes);
                     break;
-                default:
-                    applied = false;
-                    continue;
             }
 
-            if (applied)
-            {
-                appliedFilters.Add(filter);
-            }
+            appliedFilters.Add(filter);
         }
 
         if (lower is { } lowerValue)
@@ -1001,7 +886,7 @@ internal sealed class QueryExecutor(
                 continue;
             }
 
-            var resolved = clauses.Select(group => group!).ToList();
+            var resolved = clauses.ToList();
             var ids = resolved.SelectMany(group => group.Subjects).Select(subject => subject.Id)
                 .Where(id => id > 0).Distinct().ToList();
             if (parameter.Name.Equals("with_networks", StringComparison.Ordinal) && ids.Count != 1)
@@ -1041,8 +926,7 @@ internal sealed class QueryExecutor(
 
         foreach (var filter in fetch.ElementFilters)
         {
-            if (!CanApplyCertification(fetch.Route, filter) ||
-                !TryReadCertificationPair(filter.Alternatives[0], out var country, out var rating))
+            if (!TryReadCertificationPair(filter.Alternatives[0], out var country, out var rating))
             {
                 continue;
             }
@@ -1098,24 +982,16 @@ internal sealed class QueryExecutor(
                 .Select(id => id.ToString(CultureInfo.InvariantCulture)));
     }
 
-    private DateTime Max(DateTime? current, DateTime candidate)
+    private T Max<T>(T? current, T candidate)
+        where T : struct, IComparable<T>
     {
-        return current is null || candidate > current ? candidate : current.Value;
+        return current is null || candidate.CompareTo(current.Value) > 0 ? candidate : current.Value;
     }
 
-    private DateTime Min(DateTime? current, DateTime candidate)
+    private T Min<T>(T? current, T candidate)
+        where T : struct, IComparable<T>
     {
-        return current is null || candidate < current ? candidate : current.Value;
-    }
-
-    private int Max(int? current, int candidate)
-    {
-        return current is null || candidate > current ? candidate : current.Value;
-    }
-
-    private int Min(int? current, int candidate)
-    {
-        return current is null || candidate < current ? candidate : current.Value;
+        return current is null || candidate.CompareTo(current.Value) < 0 ? candidate : current.Value;
     }
 
     private Request Create(
@@ -1142,7 +1018,7 @@ internal sealed class QueryExecutor(
     {
         if (!string.IsNullOrWhiteSpace(value))
         {
-            query.Add((key, value!));
+            query.Add((key, value));
         }
     }
 
@@ -1177,7 +1053,7 @@ internal sealed class QueryExecutor(
                     .Where(hit => hit.Id > 0 &&
                         !string.IsNullOrWhiteSpace(hit.Name) &&
                         (exact
-                            ? NormalizeName(hit.Name!) == normalized
+                            ? NormalizeName(hit.Name) == normalized
                             : !identity.Negate &&
                                 hit.Name.MatchesText(identity.Operator, [requestedName])))
                     .GroupBy(hit => hit.Id)
@@ -1603,18 +1479,17 @@ internal sealed class QueryExecutor(
             return [];
         }
 
-        var bindings = fetch.SubjectBindings.Count == 0 ? [] : fetch.SubjectBindings;
-        return [.. bindings.Select(binding => subjects.FirstOrDefault(group =>
+        return [.. fetch.SubjectBindings.Select(binding => subjects.FirstOrDefault(group =>
             group.BindingKey.Equals(binding.Key, StringComparison.Ordinal)))
             .Where(group => group is not null)
             .Select(item =>
             {
                 var selectedRoles = fetch.SubjectRoleSelections
-                    .FirstOrDefault(selection => selection.SubjectBindingKey == item!.BindingKey)?.Roles
+                    .FirstOrDefault(selection => selection.SubjectBindingKey == item.BindingKey)?.Roles
                     ?? fetch.SubjectRoles;
                 return selectedRoles.Count == 0
                     ? item!
-                    : item! with
+                    : item with
                     {
                         Subjects = [.. item.Subjects.Where(subject => selectedRoles.Contains(subject.Role))],
                         Alternatives = [.. item.Alternatives.Where(alternative =>
@@ -1636,8 +1511,7 @@ internal sealed class QueryExecutor(
 
         return [.. fetch.SubjectBindings.Select(binding => subjects.FirstOrDefault(group =>
             group.BindingKey.Equals(binding.Key, StringComparison.Ordinal)))
-            .Where(group => group is not null)
-            .Select(group => group!)];
+            .OfType<ResolvedSubjectGroup>()];
     }
 
     private async IAsyncEnumerable<SearchHit> NormalizeFetchHitsAsync(
@@ -1879,7 +1753,7 @@ internal sealed class QueryExecutor(
         activity?.SetTag("magpie.query.node.id", resolve.Id);
         var resolveContext = context with { PlanNodeId = resolve.Id };
         var subjectSet = resolve.SubjectBindings.Count == 0
-            ? EmptySubjectSet()
+            ? EmptySubjectSet
             : await ResolveAsync(resolve, resolveContext, cancellationToken).ConfigureAwait(false);
         warnings.AddRange(subjectSet.Warnings);
         state.SubjectSet = subjectSet;
@@ -1925,17 +1799,6 @@ internal sealed class QueryExecutor(
         };
     }
 
-    private SubjectResolutionSet EmptySubjectSet()
-    {
-        return new()
-        {
-            Groups = [],
-            Warnings = [],
-            RequiredGroupUnresolved = false,
-            HadRemoteFailure = false
-        };
-    }
-
     private async Task<QueryExecution> ExecuteSearchAsync(
         FetchPlanNode fetch,
         RequestContext context,
@@ -1946,7 +1809,11 @@ internal sealed class QueryExecutor(
     {
         if (fetch.OrdinarySearchTerm is not null)
         {
-            var request = BuildSearch(fetch, context.Language, fetch.RequestedPage);
+            var request = BuildSearch(
+                fetch,
+                context.Language,
+                fetch.RequestedPage,
+                SearchTerms(fetch).FirstOrDefault());
             var page = await FetchPageAsync(fetch.Route, context, request, cancellationToken).ConfigureAwait(false);
             return SourceResult(page.Hits, warnings, fetch.RequestedPage, fetch.RequestedPage < page.TotalPages);
         }
@@ -1985,7 +1852,7 @@ internal sealed class QueryExecutor(
         if (context.Progress is null && !fetch.RequiresLogicalStream &&
             !fetch.IsIntersectionBranch &&
             sources.Count == 1 &&
-            SelectDiscoverMode(fetch, discover, source.Subjects) == DiscoverMode.Direct)
+            IsFullyApplied(fetch, discover, source.Subjects))
         {
             var page = await FetchPageAsync(fetch.Route, context, discover.Request, cancellationToken)
                 .ConfigureAwait(false);
@@ -2030,9 +1897,9 @@ internal sealed class QueryExecutor(
             foreach (var subject in group.Subjects.Where(subject =>
                 subject.Role is not SubjectRole.Company and not SubjectRole.Network))
             {
-                var credits = await GetCreditsAsync(fetch.Route, subject, context, cancellationToken)
+                var credits = await GetCreditsAsync(subject, context, cancellationToken)
                     .ConfigureAwait(false);
-                alternatives.AddRange(MapCredits(fetch.Route, credits, subject));
+                alternatives.AddRange(MapCredits(credits, subject));
             }
 
             groupHits.Add(MergeHits(alternatives));
@@ -2097,8 +1964,7 @@ internal sealed class QueryExecutor(
         }).ToList();
         var lookups = await Task.WhenAll(tasks).ConfigureAwait(false);
         var resolved = lookups
-            .Where(hit => hit is not null)
-            .Select(hit => hit!)
+            .OfType<SearchHit>()
             .ToList();
         var hits = resolved
             .GroupBy(hit => hit.Id)
@@ -2270,8 +2136,7 @@ internal sealed class QueryExecutor(
         var signature = ContinuedSourceSignature(fetch, context, genreIds, subjects, discover);
         if (state.Signature is not null && state.Signature != signature)
         {
-            throw new MetadataSearchContinuationException(
-                "TMDb source order or identities changed. Start a new search.");
+            throw new MetadataSearchContinuationException("TMDb source order or identities changed.");
         }
 
         state.Signature = signature;
@@ -2300,7 +2165,12 @@ internal sealed class QueryExecutor(
                 }
 
                 var applied = discover
-                    ? BuildDiscover(fetch, context.Language, genreIds, sources[index].Subjects, state.Page,
+                    ? BuildDiscover(
+                        fetch,
+                        context.Language,
+                        genreIds,
+                        sources[index].Subjects,
+                        state.Page,
                         sources[index].GenreSelections)
                     : null;
                 if (applied is not null)
@@ -2369,12 +2239,15 @@ internal sealed class QueryExecutor(
     {
         if (node is FetchPlanNode fetch && context.Progress!.Sources.TryGetValue(fetch.Id, out var source))
         {
-            var signature = ContinuedSourceSignature(fetch, context, execution.GenreIds,
-                execution.SubjectSet.Groups, fetch.AnchorKind == QueryAnchorKind.Discover);
+            var signature = ContinuedSourceSignature(
+                fetch,
+                context,
+                execution.GenreIds,
+                execution.SubjectSet.Groups,
+                fetch.AnchorKind == QueryAnchorKind.Discover);
             if (source.Signature != signature)
             {
-                throw new MetadataSearchContinuationException(
-                    "TMDb source order or identities changed. Start a new search.");
+                throw new MetadataSearchContinuationException("TMDb source order or identities changed.");
             }
         }
 
@@ -2395,7 +2268,12 @@ internal sealed class QueryExecutor(
         var sources = discover ? DiscoverSources(fetch, subjects, genreIds) : [];
         var count = discover ? sources.Count : terms.Count;
         return JsonSerializer.Serialize(Enumerable.Range(0, count).Select(index => discover
-            ? BuildDiscover(fetch, context.Language, genreIds, sources[index].Subjects, 1,
+            ? BuildDiscover(
+                fetch,
+                context.Language,
+                genreIds,
+                sources[index].Subjects,
+                1,
                 sources[index].GenreSelections).Request.CacheKey
             : BuildSearch(fetch, context.Language, 1, terms[index]).CacheKey));
     }
@@ -2452,7 +2330,7 @@ internal sealed class QueryExecutor(
     {
         if (route == ContentRoute.Movie)
         {
-            var envelope = await FetchAsync<SearchEnvelopeDto<MovieSearchHitDto>>(
+            var envelope = await client.GetAsync<SearchEnvelopeDto<MovieSearchHitDto>>(
                 context,
                 request,
                 cancellationToken).ConfigureAwait(false);
@@ -2464,7 +2342,7 @@ internal sealed class QueryExecutor(
                 Math.Max(0, envelope?.TotalResults ?? 0));
         }
 
-        var tvEnvelope = await FetchAsync<SearchEnvelopeDto<TvSearchHitDto>>(
+        var tvEnvelope = await client.GetAsync<SearchEnvelopeDto<TvSearchHitDto>>(
             context,
             request,
             cancellationToken).ConfigureAwait(false);
@@ -2477,28 +2355,21 @@ internal sealed class QueryExecutor(
     }
 
     private async Task<CreditResponse> GetCreditsAsync(
-        ContentRoute route,
         ResolvedSubject subject,
         RequestContext context,
         CancellationToken cancellationToken)
     {
-        var request = BuildPersonCredits(route, subject.Id, context.Language);
+        var request = BuildPersonCredits(subject.Id, context.Language);
         var key = request.CacheKey;
         return await cache.GetCreditsAsync(
             key,
-            route == ContentRoute.Movie ? RequestRole.MovieCredits : RequestRole.TvCredits,
-            (Executor: this, Context: context, Request: request, Route: route),
-            static async (state, token) => state.Route == ContentRoute.Movie
-                ? new CreditResponse
-                {
-                    Movie = await state.Executor.FetchAsync<PersonMovieCreditsDto>(state.Context, state.Request, token)
-                        .ConfigureAwait(false)
-                }
-                : new CreditResponse
-                {
-                    Tv = await state.Executor.FetchAsync<PersonTvCreditsDto>(state.Context, state.Request, token)
-                        .ConfigureAwait(false)
-                },
+            RequestRole.TvCredits,
+            (Client: client, Context: context, Request: request),
+            static async (state, token) => new CreditResponse
+            {
+                Tv = await state.Client.GetAsync<PersonTvCreditsDto>(state.Context, state.Request, token)
+                    .ConfigureAwait(false)
+            },
             cancellationToken).ConfigureAwait(false);
     }
 
@@ -2509,11 +2380,6 @@ internal sealed class QueryExecutor(
         bool appendCredits,
         CancellationToken cancellationToken)
     {
-        if (hit.DetailsLoaded)
-        {
-            return hit;
-        }
-
         var request = BuildDetail(
             filter.Route,
             hit.Id,
@@ -2528,12 +2394,12 @@ internal sealed class QueryExecutor(
             appendImages: NeedsElementDetails(filter, hit, ElementFamily.Image));
         if (filter.Route == ContentRoute.Movie)
         {
-            var detail = await FetchAsync<MovieDetailDto>(context, request, cancellationToken)
+            var detail = await client.GetAsync<MovieDetailDto>(context, request, cancellationToken)
                 .ConfigureAwait(false);
             return detail is null ? null : MergeHit(hit, detail.FromMovieDetail());
         }
 
-        var tv = await FetchAsync<TvDetailDto>(context, request, cancellationToken).ConfigureAwait(false);
+        var tv = await client.GetAsync<TvDetailDto>(context, request, cancellationToken).ConfigureAwait(false);
         return tv is null ? null : MergeHit(hit, tv.FromTvDetail());
     }
 
@@ -2566,14 +2432,14 @@ internal sealed class QueryExecutor(
                 appendImages: HasElementFamily(fetch.ElementFilters, ElementFamily.Image));
             if (fetch.Route == ContentRoute.Movie)
             {
-                var detail = await FetchAsync<MovieDetailDto>(context, request, cancellationToken)
+                var detail = await client.GetAsync<MovieDetailDto>(context, request, cancellationToken)
                     .ConfigureAwait(false);
                 return detail is null
                     ? null
                     : detail.FromMovieDetail() with { SourceOrder = sourceOrder };
             }
 
-            var tv = await FetchAsync<TvDetailDto>(context, request, cancellationToken).ConfigureAwait(false);
+            var tv = await client.GetAsync<TvDetailDto>(context, request, cancellationToken).ConfigureAwait(false);
             return tv is null ? null : tv.FromTvDetail() with { SourceOrder = sourceOrder };
         }
 
@@ -2583,7 +2449,7 @@ internal sealed class QueryExecutor(
         }
 
         var find = BuildFind(contentId.Value, externalSource, context.Language);
-        var envelope = await FetchAsync<FindEnvelopeDto>(context, find, cancellationToken).ConfigureAwait(false);
+        var envelope = await client.GetAsync<FindEnvelopeDto>(context, find, cancellationToken).ConfigureAwait(false);
         var hit = fetch.Route == ContentRoute.Movie
             ? envelope?.MovieResults?.Select((item, index) => item.ToSearchHit(sourceOrder + index))
                 .FirstOrDefault()
@@ -2606,11 +2472,6 @@ internal sealed class QueryExecutor(
         RequestContext context,
         CancellationToken cancellationToken)
     {
-        if (resolve.GenreFilters.Count == 0)
-        {
-            return new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-        }
-
         var request = BuildGenreList(resolve.Route, context.Language);
         return await cache.GetGenreMapAsync(context, request, client, cancellationToken).ConfigureAwait(false);
     }
@@ -2680,23 +2541,12 @@ internal sealed class QueryExecutor(
         }
     }
 
-    private async Task<T?> FetchAsync<T>(RequestContext context, Request request, CancellationToken cancellationToken)
-        where T : class
-    {
-        return await client.GetAsync<T>(context, request, cancellationToken).ConfigureAwait(false);
-    }
-
-    private DiscoverMode SelectDiscoverMode(
+    private bool IsFullyApplied(
         FetchPlanNode fetch,
         DiscoverRequest request,
         IReadOnlyList<ResolvedSubjectGroup> subjects)
     {
-        if (fetch.RequiresLogicalStream)
-        {
-            return DiscoverMode.Scan;
-        }
-
-        var fullyApplied = fetch.TextFilters.All(request.AppliedTextFilters.Contains) &&
+        return fetch.TextFilters.All(request.AppliedTextFilters.Contains) &&
             fetch.PublishDateFilters.All(request.AppliedPublishDateFilters.Contains) &&
             fetch.DurationFilters.All(request.AppliedDurationFilters.Contains) &&
             fetch.GenreFilters.All(request.AppliedGenreFilters.Contains) &&
@@ -2705,7 +2555,6 @@ internal sealed class QueryExecutor(
                 group,
                 ResolvedSubjectGroupComparer.Instance)) &&
             fetch.ContentIdFilters.Count == 0;
-        return fullyApplied ? DiscoverMode.Direct : DiscoverMode.Scan;
     }
 
     private async Task<SubjectResolutionSet> ResolveAsync(
@@ -2881,7 +2730,7 @@ internal sealed class QueryExecutor(
         if (!string.IsNullOrWhiteSpace(identity.ExternalIdSource) && !string.IsNullOrWhiteSpace(identity.ExternalId))
         {
             if (role is SubjectRole.Company or SubjectRole.Network ||
-                !TryExternalSource(identity.ExternalIdSource!, out var source))
+                !TryExternalSource(identity.ExternalIdSource, out var source))
             {
                 return [new SubjectResolution
                 {
@@ -2889,14 +2738,14 @@ internal sealed class QueryExecutor(
                 }];
             }
 
-            var request = BuildFind(identity.ExternalId!, source, context.Language);
-            var key = "find|" + role + "|" + source + "|" + identity.ExternalId!.ToLowerInvariant();
+            var request = BuildFind(identity.ExternalId, source, context.Language);
+            var key = "find|" + role + "|" + source + "|" + identity.ExternalId.ToLowerInvariant();
             var external = await cache.GetSubjectResolutionAsync(
                 key,
                 (
                     Request: request,
-                    ExternalIdSource: identity.ExternalIdSource!.Trim(),
-                    ExternalId: identity.ExternalId!,
+                    ExternalIdSource: identity.ExternalIdSource.Trim(),
+                    ExternalId: identity.ExternalId,
                     Context: context),
                 (state, token) => ResolveExternalAsync(
                     state.Request,
@@ -2913,7 +2762,7 @@ internal sealed class QueryExecutor(
             return [new SubjectResolution { Kind = SubjectResolutionKind.NotFound }];
         }
 
-        var normalized = NormalizeName(identity.Name!);
+        var normalized = NormalizeName(identity.Name);
         var nameKey = string.Format(
             CultureInfo.InvariantCulture,
             "name|{0}|{1}|{2}|{3}|{4}",

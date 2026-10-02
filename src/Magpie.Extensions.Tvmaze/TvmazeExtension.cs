@@ -21,19 +21,13 @@ public sealed class TvmazeExtension : IExtension
     public Guid Id => Constants.ExtensionId;
 
     /// <inheritdoc />
-    public Version Version => new(1, 0, 0);
-
-    /// <inheritdoc />
     public string Name => "TVmaze";
-
-    /// <inheritdoc />
-    public string? TargetABI => "[1.0.0,)";
 
     /// <inheritdoc />
     public void RegisterServices(IServiceCollection services)
     {
         services.AddHttpClient(TvmazeClient.HttpClientName)
-            .AddUpstreamCooldown()
+            .AddUpstreamCooldown(followRedirects: true)
             .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
             {
                 AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate,

@@ -193,7 +193,7 @@ internal sealed class UsersEndpointGroup : IApiEndpointGroup
         var apiKeys = await apiKeyService.ListForUserAsync(id, enabled, expired, cancellationToken)
             .ConfigureAwait(false);
 
-        return Results.Ok(CreateApiKeysResponse(apiKeys));
+        return Results.Ok(ApiKeysEndpointGroup.CreateResponse(apiKeys));
     }
 
     internal async Task<IResult> ChangeUserPasswordAsync(
@@ -236,25 +236,4 @@ internal sealed class UsersEndpointGroup : IApiEndpointGroup
             TotalItems = users.TotalItems,
         };
     }
-
-    private static IReadOnlyList<ApiKeyResponse> CreateApiKeysResponse(IReadOnlyList<ApiKey> apiKeys)
-    {
-        return [.. apiKeys.Select(CreateApiKeyResponse)];
-    }
-
-    private static ApiKeyResponse CreateApiKeyResponse(ApiKey apiKey) =>
-        new()
-        {
-            Id = apiKey.Id,
-            UserId = apiKey.UserId,
-            Name = apiKey.Name,
-            KeyPrefix = apiKey.KeyPrefix,
-            Enabled = apiKey.Enabled,
-            ExpiresAt = apiKey.ExpiresAt,
-            LastUsedAt = apiKey.LastUsedAt,
-            CreatedAt = apiKey.CreatedAt,
-            CreatedByUserId = apiKey.CreatedByUserId,
-            ModifiedAt = apiKey.ModifiedAt,
-            ModifiedByUserId = apiKey.ModifiedByUserId,
-        };
 }

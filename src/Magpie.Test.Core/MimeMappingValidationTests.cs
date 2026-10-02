@@ -84,4 +84,17 @@ public sealed class MimeMappingValidationTests
         // Assert
         Assert.That(mapping.MimeType, Is.EqualTo(expected));
     }
+
+    [Test]
+    public void GetStorageCapacity_ReturnsNull_WhenPathIsInvalid()
+    {
+        // Arrange
+        const string path = "invalid\0path";
+
+        // Act
+        var capacity = _subject.GetStorageCapacity(path);
+
+        // Assert
+        Assert.That(capacity, Is.Null);
+    }
 }

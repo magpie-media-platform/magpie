@@ -18,7 +18,7 @@ public sealed record MetadataSearchPage
     };
 
     /// <summary>
-    /// Warnings for failed or incomplete searches, not valid empty results.
+    /// The warnings for failed or incomplete searches.
     /// </summary>
     public IReadOnlyList<string> Warnings { get; set; } = [];
 
@@ -28,12 +28,12 @@ public sealed record MetadataSearchPage
     public required bool Supported { get; set; }
 
     /// <summary>
-    /// Search candidates.
+    /// The search candidates.
     /// </summary>
     public required IReadOnlyList<MetadataSearchCandidate> Matches { get; set; }
 
     /// <summary>
-    /// Paging state.
+    /// The paging state of the search.
     /// </summary>
     public required ProviderSearchPageInfo PageInfo { get; set; }
 }

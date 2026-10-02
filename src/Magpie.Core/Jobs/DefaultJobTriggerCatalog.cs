@@ -50,6 +50,10 @@ public static class DefaultJobTriggerCatalog
                     Scope = JobScope.Content,
                     Name = "Release search scan schedule",
                     Schedule = "*/30 * * * *",
+                    Parameters = new Dictionary<string, string>
+                    {
+                        [MagpieJobs.Parameters.LeadTimeDays] = "1"
+                    },
                     ExecutionMode = JobExecutionMode.Queue,
                     Enabled = true,
                     CreatedAt = now,
@@ -245,6 +249,12 @@ public static class DefaultJobTriggerCatalog
                     Scope = JobScope.Content,
                     Name = "Media info extract on import",
                     EventFilter = SingleEventFilter(MagpieEvents.Names.ContentImported),
+                    Parameters = new Dictionary<string, string>
+                    {
+                        [MagpieJobs.Parameters.ContentHierarchyItemId] =
+                            $"${{event.{MagpieEvents.Keys.ContentHierarchyItemId}}}",
+                        [MagpieJobs.Parameters.MediaInfoPolicy] = MagpieJobs.ParameterValues.MissingMediaInfoPolicy
+                    },
                     Enabled = true,
                     CreatedAt = now,
                 },
@@ -418,7 +428,7 @@ public static class DefaultJobTriggerCatalog
             },
             EventContext = new DictionaryCriteria<PropertyCriterion<string>>
             {
-                Items = new Dictionary<string, PropertyCriterion<string>>()
+                Items = new()
                 {
                     [MagpieEvents.Keys.ContentChangedFields] = new()
                     {

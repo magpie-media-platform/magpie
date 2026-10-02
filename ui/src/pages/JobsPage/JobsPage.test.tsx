@@ -363,12 +363,6 @@ function defaultApiGetResponse(url: string) {
     return Promise.reject(new Error(`Unmocked URL: ${url}`));
 }
 
-function setupDefaultMocks() {
-    mockApiGet.mockImplementation(defaultApiGetResponse);
-    mockApiPatch.mockResolvedValue(undefined);
-    mockApiPost.mockResolvedValue('new-job-id');
-}
-
 function cleanupRadixBodyState() {
     document.querySelectorAll('[data-radix-focus-guard]').forEach((element) => element.remove());
     document.body.style.pointerEvents = '';
@@ -381,7 +375,9 @@ function cleanupRadixBodyState() {
 beforeEach(() => {
     vi.clearAllMocks();
     cleanupRadixBodyState();
-    setupDefaultMocks();
+    mockApiGet.mockImplementation(defaultApiGetResponse);
+    mockApiPatch.mockResolvedValue(undefined);
+    mockApiPost.mockResolvedValue('new-job-id');
 });
 
 afterEach(() => {

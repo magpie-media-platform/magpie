@@ -10,8 +10,6 @@ internal sealed class SettingsGroupConfiguration : IEntityTypeConfiguration<Sett
     public void Configure(EntityTypeBuilder<SettingsGroup> builder)
     {
         builder.ToTable("configuration_settingsGroup");
-        builder.HasKey(e => e.Id);
-        builder.Property(e => e.Id).ValueGeneratedOnAdd();
         builder.HasIndex(e => new { e.ExtensionId, e.Name }).IsUnique();
         builder.HasOne<Extension>()
             .WithMany()

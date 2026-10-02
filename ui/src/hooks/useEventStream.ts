@@ -14,7 +14,6 @@ interface UseEventStreamOptions {
     entityIds?: readonly string[];
     context?: Readonly<Record<string, string>>;
     enabled?: boolean;
-    owner?: string;
 }
 
 interface EventSubscription {
@@ -22,47 +21,12 @@ interface EventSubscription {
     entityIds: Set<string>;
     context: Readonly<Record<string, string>>;
     handler: (event: EventStreamPayload) => void;
-    owner: string;
 }
 
 const NO_ENTITY_IDS: readonly string[] = [];
 
 const subscriptions = new Map<number, EventSubscription>();
 let nextSubscriptionId = 0;
-
-interface ActiveEventSubscription {
-    context: Readonly<Record<string, string>>;
-    entityIds: readonly string[];
-    eventNames: readonly string[];
-    id: number;
-    owner: string;
-}
-
-export interface MagpieEventDiagnostics {
-    getActiveEventSubscriptionCount: typeof getActiveEventSubscriptionCount;
-    getActiveEventSubscriptions: typeof getActiveEventSubscriptions;
-}
-
-export function getActiveEventSubscriptionCount(): number {
-    return subscriptions.size;
-}
-
-export function getActiveEventSubscriptions(): readonly ActiveEventSubscription[] {
-    return [...subscriptions.entries()].map(([id, subscription]) => ({
-        context: subscription.context,
-        entityIds: [...subscription.entityIds],
-        eventNames: [...subscription.eventNames],
-        id,
-        owner: subscription.owner,
-    }));
-}
-
-if (import.meta.env.DEV && typeof window !== 'undefined') {
-    (window as typeof window & { __magpieEventDiagnostics?: MagpieEventDiagnostics }).__magpieEventDiagnostics = {
-        getActiveEventSubscriptionCount,
-        getActiveEventSubscriptions,
-    };
-}
 
 function dispatchPayload(payload: EventStreamPayload): void {
     for (const subscription of subscriptions.values()) {
@@ -105,14 +69,7 @@ export function useEventStream(
     onEvent: (event: EventStreamPayload) => void,
     options: UseEventStreamOptions = {},
 ): void {
-    const {
-        eventName,
-        entityId,
-        entityIds = NO_ENTITY_IDS,
-        context = {},
-        enabled = true,
-        owner = 'event-stream',
-    } = options;
+    const { eventName, entityId, entityIds = NO_ENTITY_IDS, context = {}, enabled = true } = options;
     const eventNames = Array.isArray(eventName) ? eventName : eventName ? [eventName] : [];
     const eventNamesKey = eventNames.join(',');
     const entityIdsKey = useMemo(
@@ -135,11 +92,10 @@ export function useEventStream(
             entityIds: new Set(entityIdsKey ? entityIdsKey.split(',') : []),
             context: Object.fromEntries(JSON.parse(contextKey) as [string, string][]),
             handler: (event) => handlerRef.current(event),
-            owner,
         });
 
         return () => {
             subscriptions.delete(subscriptionId);
         };
-    }, [contextKey, enabled, entityIdsKey, eventNamesKey, owner]);
+    }, [contextKey, enabled, entityIdsKey, eventNamesKey]);
 }

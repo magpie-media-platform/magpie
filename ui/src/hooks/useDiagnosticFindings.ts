@@ -73,7 +73,7 @@ export function useDiagnosticFindings(): UseDiagnosticFindingsResult {
     useInvalidateQueriesOnEvents(
         isAuthenticated ? ['diagnostic.finding.raised', 'diagnostic.finding.updated', 'diagnostic.scan.completed'] : [],
         [diagnosticQueryKeys.findings],
-        { debounceMs: 250, exact: true, maxWaitMs: 1000, owner: 'diagnostics-findings' },
+        { debounceMs: 250, exact: true, maxWaitMs: 1000 },
     );
 
     const scanMutation = useMutation({

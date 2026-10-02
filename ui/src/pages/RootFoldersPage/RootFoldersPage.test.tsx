@@ -61,37 +61,27 @@ const mockContentTypes = [
     {
         slug: 'movies',
         displayName: 'Movies',
-        levelDefinitions: [
-            { slug: 'movie', displayName: 'Movie', parentSlug: null, effectiveAcceptedMimeTypes: ['video/*'] },
-        ],
+        levelDefinitions: [{ slug: 'movie', displayName: 'Movie', parentSlug: null, acceptedFileTypes: ['video/*'] }],
     },
     {
         slug: 'shows',
         displayName: 'TV Shows',
-        levelDefinitions: [
-            { slug: 'series', displayName: 'Series', parentSlug: null, effectiveAcceptedMimeTypes: ['video/*'] },
-        ],
+        levelDefinitions: [{ slug: 'series', displayName: 'Series', parentSlug: null, acceptedFileTypes: ['video/*'] }],
     },
     {
         slug: 'music',
         displayName: 'Music',
-        levelDefinitions: [
-            { slug: 'album', displayName: 'Album', parentSlug: null, effectiveAcceptedMimeTypes: ['audio/*'] },
-        ],
+        levelDefinitions: [{ slug: 'album', displayName: 'Album', parentSlug: null, acceptedFileTypes: ['audio/*'] }],
     },
     {
         slug: 'books',
         displayName: 'Books',
-        levelDefinitions: [
-            { slug: 'book', displayName: 'Book', parentSlug: null, effectiveAcceptedMimeTypes: ['text/*'] },
-        ],
+        levelDefinitions: [{ slug: 'book', displayName: 'Book', parentSlug: null, acceptedFileTypes: ['text/*'] }],
     },
     {
         slug: 'anime',
         displayName: 'Anime',
-        levelDefinitions: [
-            { slug: 'anime', displayName: 'Anime', parentSlug: null, effectiveAcceptedMimeTypes: ['video/*'] },
-        ],
+        levelDefinitions: [{ slug: 'anime', displayName: 'Anime', parentSlug: null, acceptedFileTypes: ['video/*'] }],
     },
 ];
 
@@ -104,7 +94,7 @@ const mockApiFolders: ApiRootFolder[] = [
         path: '/media/movies',
         contentType: 'movies',
         isDefault: true,
-        defaultMonitoring: true,
+        defaultMonitoring: 'Monitored',
         upgradeFileHandling: 'Replace',
         autoImport: false,
         defaults: { movie: { qualityTierListId: 'quality-default' } },
@@ -116,7 +106,7 @@ const mockApiFolders: ApiRootFolder[] = [
         path: '/media/tv',
         contentType: 'shows',
         isDefault: true,
-        defaultMonitoring: true,
+        defaultMonitoring: 'Monitored',
         upgradeFileHandling: 'Replace',
         autoImport: false,
         defaults: { series: { qualityTierListId: 'quality-default' } },
@@ -140,7 +130,7 @@ const mockApiFolders: ApiRootFolder[] = [
         path: '/media/anime',
         contentType: 'anime',
         isDefault: false,
-        defaultMonitoring: false,
+        defaultMonitoring: 'Unmonitored',
         upgradeFileHandling: 'Replace',
         autoImport: false,
         defaults: { anime: { qualityTierListId: 'quality-default' } },
@@ -152,7 +142,7 @@ const mockApiFolders: ApiRootFolder[] = [
         path: '/media/books',
         contentType: 'books',
         isDefault: true,
-        defaultMonitoring: true,
+        defaultMonitoring: 'Monitored',
         upgradeFileHandling: 'Replace',
         autoImport: false,
         defaults: { book: { qualityTierListId: 'quality-default' } },
@@ -445,11 +435,11 @@ describe('RootFoldersPage table rows', () => {
         render(<RootFoldersPage />, { wrapper: createTestWrapper() });
 
         await waitFor(() => {
-            const activeRow = document.querySelector('[data-row-id="folder-1"]');
-            expect(within(activeRow as HTMLElement).getByText('Active')).toBeInTheDocument();
+            const monitoredRow = document.querySelector('[data-row-id="folder-1"]');
+            expect(within(monitoredRow as HTMLElement).getByText('Monitored')).toBeInTheDocument();
 
-            const inheritRow = document.querySelector('[data-row-id="folder-3"]');
-            expect(within(inheritRow as HTMLElement).getByText('Inherit')).toBeInTheDocument();
+            const systemDefaultRow = document.querySelector('[data-row-id="folder-3"]');
+            expect(within(systemDefaultRow as HTMLElement).getByText('System default')).toBeInTheDocument();
         });
     });
 });
@@ -567,7 +557,7 @@ describe('RootFoldersPage actions', () => {
             path: '/media/new-movies',
             contentType: 'movies',
             isDefault: false,
-            defaultMonitoring: true,
+            defaultMonitoring: 'Monitored',
             upgradeFileHandling: 'Replace',
             autoImport: false,
             defaults: { movie: { qualityTierListId: 'quality-default' } },
@@ -635,6 +625,30 @@ describe('RootFoldersPage actions', () => {
         await user.click(screen.getByRole('button', { name: /save/i }));
 
         expect(await screen.findByText('Save failed')).toBeInTheDocument();
+        expect(screen.getByText('Add Root Folder')).toBeInTheDocument();
+    });
+
+    it('shows the server message when the default tier list is rejected as incompatible', async () => {
+        const user = userEvent.setup();
+        const rejection = 'Quality tier list Default (quality-default) is not compatible with level Movie (movie).';
+        mockApiPost.mockRejectedValue(new Error(rejection));
+
+        render(<RootFoldersPage />, { wrapper: createTestWrapper() });
+
+        await waitFor(() => {
+            expect(screen.getAllByRole('button', { name: /add folder/i }).length).toBeGreaterThanOrEqual(1);
+        });
+
+        await user.click(screen.getAllByRole('button', { name: /add folder/i })[0]);
+        await user.type(screen.getByLabelText(/^Name/i), 'New Movies');
+        await user.type(document.querySelector('[data-field="path"]') as HTMLElement, '/media/new-movies');
+        await user.click(document.querySelector('[data-field="content-type"]') as HTMLElement);
+        await user.click(await screen.findByRole('option', { name: 'Movies' }));
+        await user.click(document.querySelector('[data-field="default-quality-profile"]') as HTMLElement);
+        await user.click(await screen.findByRole('option', { name: /Default/ }));
+        await user.click(screen.getByRole('button', { name: /save/i }));
+
+        expect(await screen.findByText(rejection)).toBeInTheDocument();
         expect(screen.getByText('Add Root Folder')).toBeInTheDocument();
     });
 
@@ -886,7 +900,7 @@ describe('RootFoldersPage unknown content type badge', () => {
                 path: '/media/unknown',
                 contentType: 'nonexistent-type',
                 isDefault: false,
-                defaultMonitoring: true,
+                defaultMonitoring: 'Monitored',
                 upgradeFileHandling: 'Replace',
                 autoImport: false,
                 defaults: {},

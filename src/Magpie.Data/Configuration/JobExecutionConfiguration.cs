@@ -19,8 +19,6 @@ internal sealed class JobExecutionConfiguration : IEntityTypeConfiguration<JobEx
     public void Configure(EntityTypeBuilder<JobExecution> builder)
     {
         builder.ToTable("job_execution");
-        builder.HasKey(e => e.Id);
-        builder.Property(e => e.Id).ValueGeneratedOnAdd();
         builder.Property(e => e.Parameters).UseStringDictionaryConversion();
         builder.Property(e => e.TriggerContext).UseStringDictionaryConversion();
         builder.HasOne<ScheduleTrigger>()

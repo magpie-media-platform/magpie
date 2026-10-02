@@ -34,7 +34,7 @@ internal static class TvReleaseTitleParsingExtensions
             return new ParsedTvRelease([], [], null, []);
         }
 
-        var source = title!;
+        var source = title;
 
         IReadOnlyList<int> seasons = [];
         IReadOnlyList<int> episodes = [];
@@ -48,17 +48,13 @@ internal static class TvReleaseTitleParsingExtensions
         if (sxxEyy.Success)
         {
             seasons = [int.Parse(sxxEyy.Groups["season"].Value, CultureInfo.InvariantCulture)];
-            var episode = int.Parse(sxxEyy.Groups["episode"].Value, CultureInfo.InvariantCulture);
-            var endEpisode = ParseOptionalInt(sxxEyy.Groups["end"].Value);
-            episodes = ExpandOrSingleton(episode, endEpisode);
+            episodes = sxxEyy.ParseEpisodes();
             signalIndex = sxxEyy.Index;
         }
         else if (numX.Success)
         {
             seasons = [int.Parse(numX.Groups["season"].Value, CultureInfo.InvariantCulture)];
-            var episode = int.Parse(numX.Groups["episode"].Value, CultureInfo.InvariantCulture);
-            var endEpisode = ParseOptionalInt(numX.Groups["end"].Value);
-            episodes = ExpandOrSingleton(episode, endEpisode);
+            episodes = numX.ParseEpisodes();
             signalIndex = numX.Index;
         }
         else if (longForm.Success)
@@ -93,7 +89,12 @@ internal static class TvReleaseTitleParsingExtensions
     }
 
     internal static IReadOnlyList<string> TokeniseName(this string? name) =>
-        string.IsNullOrWhiteSpace(name) ? [] : Tokenise(StripYear(Normalise(name!)));
+        string.IsNullOrWhiteSpace(name) ? [] : Tokenise(StripYear(Normalise(name)));
+
+    internal static IReadOnlyList<int> ParseEpisodes(this Match match) =>
+        ExpandOrSingleton(
+            int.Parse(match.Groups["episode"].Value, CultureInfo.InvariantCulture),
+            ParseOptionalInt(match.Groups["end"].Value));
 
     private static int? ParseOptionalInt(string value) =>
         int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed) ? parsed : null;

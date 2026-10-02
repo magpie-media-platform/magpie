@@ -58,7 +58,6 @@ public sealed class DiagnosticFindingRepositoryTests
     [TearDown]
     public void TearDown()
     {
-        _context.Database.CloseConnection();
         _context.Dispose();
     }
 

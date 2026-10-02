@@ -7,7 +7,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ToastProvider, ToastStateProvider, ToastViewport } from '@/components/ui/Toast';
 import { ToastList } from '@/components/ui/Toast/ToastList';
 import { TooltipProvider } from '@/components/ui/Tooltip';
-import type { LibraryImportCandidate } from '@/hooks/useLibraryImportCandidates';
 
 const apiGet = vi.fn();
 const apiPost = vi.fn();
@@ -28,50 +27,6 @@ vi.mock('@/hooks/useStartRootFolderContentDiscovery', () => ({
 
 import { PendingFileAssociations, PendingFilesIndicator } from './PendingFileAssociations';
 
-function candidate(id: string, status: LibraryImportCandidate['status'] = 'Pending'): LibraryImportCandidate {
-    return {
-        id,
-        rootFolderId: 'root-1',
-        scanRunId: 'scan-1',
-        filePath: `/media/tv/Bluey/${id}.mkv`,
-        contentType: 'tv',
-        status,
-        matches: [
-            {
-                confidence: 1,
-                providerType: 'tvmaze',
-                externalIdKey: 'tvmaze',
-                externalId: '44796',
-                title: 'Bluey',
-            },
-        ],
-        matchCount: 1,
-        contentHierarchyItemId: 'episode-1',
-        createdAt: '2026-09-24T00:00:00Z',
-    };
-}
-
-function wrapper({ children }: { children: ReactNode }) {
-    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
-    return (
-        <QueryClientProvider client={queryClient}>
-            <TooltipProvider>
-                <ToastStateProvider>
-                    <ToastProvider>{children}</ToastProvider>
-                </ToastStateProvider>
-            </TooltipProvider>
-        </QueryClientProvider>
-    );
-}
-
-function rowFor(path: string): HTMLElement {
-    const row = screen.getByTitle(path).closest('tr');
-    if (!row) {
-        throw new Error(`No row found for ${path}`);
-    }
-    return row;
-}
-
 describe('PendingFileAssociations', () => {
     beforeEach(() => {
         apiPost.mockResolvedValue({ queued: [], skipped: [], count: 1 });
@@ -84,9 +39,82 @@ describe('PendingFileAssociations', () => {
     it('shows the pending file count and opens the files on click', async () => {
         const user = userEvent.setup();
         const onOpen = vi.fn();
-        apiGet.mockResolvedValue([candidate('a'), candidate('b'), candidate('c', 'Queued')]);
+        apiGet.mockResolvedValue([
+            {
+                id: 'a',
+                rootFolderId: 'root-1',
+                scanRunId: 'scan-1',
+                filePath: '/media/tv/Bluey/a.mkv',
+                contentType: 'tv',
+                status: 'Pending',
+                matches: [
+                    {
+                        confidence: 1,
+                        providerType: 'tvmaze',
+                        externalIdKey: 'tvmaze',
+                        externalId: '44796',
+                        title: 'Bluey',
+                    },
+                ],
+                matchCount: 1,
+                contentHierarchyItemId: 'episode-1',
+                createdAt: '2026-09-24T00:00:00Z',
+            },
+            {
+                id: 'b',
+                rootFolderId: 'root-1',
+                scanRunId: 'scan-1',
+                filePath: '/media/tv/Bluey/b.mkv',
+                contentType: 'tv',
+                status: 'Pending',
+                matches: [
+                    {
+                        confidence: 1,
+                        providerType: 'tvmaze',
+                        externalIdKey: 'tvmaze',
+                        externalId: '44796',
+                        title: 'Bluey',
+                    },
+                ],
+                matchCount: 1,
+                contentHierarchyItemId: 'episode-1',
+                createdAt: '2026-09-24T00:00:00Z',
+            },
+            {
+                id: 'c',
+                rootFolderId: 'root-1',
+                scanRunId: 'scan-1',
+                filePath: '/media/tv/Bluey/c.mkv',
+                contentType: 'tv',
+                status: 'Queued',
+                matches: [
+                    {
+                        confidence: 1,
+                        providerType: 'tvmaze',
+                        externalIdKey: 'tvmaze',
+                        externalId: '44796',
+                        title: 'Bluey',
+                    },
+                ],
+                matchCount: 1,
+                contentHierarchyItemId: 'episode-1',
+                createdAt: '2026-09-24T00:00:00Z',
+            },
+        ]);
 
-        render(<PendingFilesIndicator contentHierarchyItemId="item-1" onOpen={onOpen} />, { wrapper });
+        render(
+            <QueryClientProvider
+                client={new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })}
+            >
+                <TooltipProvider>
+                    <ToastStateProvider>
+                        <ToastProvider>
+                            <PendingFilesIndicator contentHierarchyItemId="item-1" onOpen={onOpen} />
+                        </ToastProvider>
+                    </ToastStateProvider>
+                </TooltipProvider>
+            </QueryClientProvider>,
+        );
 
         await user.click(await screen.findByRole('button', { name: '2 pending files' }));
         expect(apiGet).toHaveBeenCalledWith('/import/content/item-1/candidates');
@@ -96,9 +124,19 @@ describe('PendingFileAssociations', () => {
     it('shows no indicator when no file waits for the item', async () => {
         apiGet.mockResolvedValue([]);
 
-        const { container } = render(<PendingFilesIndicator contentHierarchyItemId="item-1" onOpen={vi.fn()} />, {
-            wrapper,
-        });
+        const { container } = render(
+            <QueryClientProvider
+                client={new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })}
+            >
+                <TooltipProvider>
+                    <ToastStateProvider>
+                        <ToastProvider>
+                            <PendingFilesIndicator contentHierarchyItemId="item-1" onOpen={vi.fn()} />
+                        </ToastProvider>
+                    </ToastStateProvider>
+                </TooltipProvider>
+            </QueryClientProvider>,
+        );
 
         await waitFor(() => expect(apiGet).toHaveBeenCalledTimes(1));
         expect(container).toBeEmptyDOMElement();
@@ -106,21 +144,100 @@ describe('PendingFileAssociations', () => {
 
     it('accepts, rejects, and accepts all only the files that no association owns', async () => {
         const user = userEvent.setup();
-        apiGet.mockResolvedValue([candidate('a'), candidate('b'), candidate('c', 'Importing')]);
+        apiGet.mockResolvedValue([
+            {
+                id: 'a',
+                rootFolderId: 'root-1',
+                scanRunId: 'scan-1',
+                filePath: '/media/tv/Bluey/a.mkv',
+                contentType: 'tv',
+                status: 'Pending',
+                matches: [
+                    {
+                        confidence: 1,
+                        providerType: 'tvmaze',
+                        externalIdKey: 'tvmaze',
+                        externalId: '44796',
+                        title: 'Bluey',
+                    },
+                ],
+                matchCount: 1,
+                contentHierarchyItemId: 'episode-1',
+                createdAt: '2026-09-24T00:00:00Z',
+            },
+            {
+                id: 'b',
+                rootFolderId: 'root-1',
+                scanRunId: 'scan-1',
+                filePath: '/media/tv/Bluey/b.mkv',
+                contentType: 'tv',
+                status: 'Pending',
+                matches: [
+                    {
+                        confidence: 1,
+                        providerType: 'tvmaze',
+                        externalIdKey: 'tvmaze',
+                        externalId: '44796',
+                        title: 'Bluey',
+                    },
+                ],
+                matchCount: 1,
+                contentHierarchyItemId: 'episode-1',
+                createdAt: '2026-09-24T00:00:00Z',
+            },
+            {
+                id: 'c',
+                rootFolderId: 'root-1',
+                scanRunId: 'scan-1',
+                filePath: '/media/tv/Bluey/c.mkv',
+                contentType: 'tv',
+                status: 'Importing',
+                matches: [
+                    {
+                        confidence: 1,
+                        providerType: 'tvmaze',
+                        externalIdKey: 'tvmaze',
+                        externalId: '44796',
+                        title: 'Bluey',
+                    },
+                ],
+                matchCount: 1,
+                contentHierarchyItemId: 'episode-1',
+                createdAt: '2026-09-24T00:00:00Z',
+            },
+        ]);
 
         render(
-            <PendingFileAssociations contentHierarchyItemId="item-1" rootFolderId="root-1" title="Bluey" canManage />,
-            { wrapper },
+            <QueryClientProvider
+                client={new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })}
+            >
+                <TooltipProvider>
+                    <ToastStateProvider>
+                        <ToastProvider>
+                            <PendingFileAssociations
+                                contentHierarchyItemId="item-1"
+                                rootFolderId="root-1"
+                                title="Bluey"
+                                canManage
+                            />
+                        </ToastProvider>
+                    </ToastStateProvider>
+                </TooltipProvider>
+            </QueryClientProvider>,
         );
 
         await screen.findByText('/media/tv/Bluey/a.mkv');
-        const first = rowFor('/media/tv/Bluey/a.mkv');
-        const inFlight = rowFor('/media/tv/Bluey/c.mkv');
+        const first = screen.getByTitle('/media/tv/Bluey/a.mkv').closest('tr') as HTMLElement;
+        const inFlight = screen.getByTitle('/media/tv/Bluey/c.mkv').closest('tr') as HTMLElement;
         expect(within(inFlight).getByRole('button', { name: 'Associating' })).toBeDisabled();
         expect(within(inFlight).queryByRole('button', { name: 'Accept' })).toBeNull();
 
         await user.click(within(first).getByRole('button', { name: 'Accept' }));
-        await user.click(within(rowFor('/media/tv/Bluey/b.mkv')).getByRole('button', { name: 'Reject' }));
+        await user.click(
+            within(screen.getByTitle('/media/tv/Bluey/b.mkv').closest('tr') as HTMLElement).getByRole('button', {
+                name: 'Reject',
+            }),
+        );
         await user.click(screen.getByRole('button', { name: 'Accept all (2)' }));
 
         expect(apiPost.mock.calls).toEqual([
@@ -131,14 +248,51 @@ describe('PendingFileAssociations', () => {
     });
 
     it('keeps the row actions mounted when the panel re-renders', async () => {
-        apiGet.mockResolvedValue([candidate('a')]);
+        apiGet.mockResolvedValue([
+            {
+                id: 'a',
+                rootFolderId: 'root-1',
+                scanRunId: 'scan-1',
+                filePath: '/media/tv/Bluey/a.mkv',
+                contentType: 'tv',
+                status: 'Pending',
+                matches: [
+                    {
+                        confidence: 1,
+                        providerType: 'tvmaze',
+                        externalIdKey: 'tvmaze',
+                        externalId: '44796',
+                        title: 'Bluey',
+                    },
+                ],
+                matchCount: 1,
+                contentHierarchyItemId: 'episode-1',
+                createdAt: '2026-09-24T00:00:00Z',
+            },
+        ]);
+        const queryClient = new QueryClient({
+            defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+        });
         const { rerender } = render(
             <PendingFileAssociations contentHierarchyItemId="item-1" rootFolderId="root-1" title="Bluey" canManage />,
-            { wrapper },
+            {
+                wrapper: ({ children }: { children: ReactNode }) => (
+                    <QueryClientProvider client={queryClient}>
+                        <TooltipProvider>
+                            <ToastStateProvider>
+                                <ToastProvider>{children}</ToastProvider>
+                            </ToastStateProvider>
+                        </TooltipProvider>
+                    </QueryClientProvider>
+                ),
+            },
         );
 
         await screen.findByText('/media/tv/Bluey/a.mkv');
-        const accept = within(rowFor('/media/tv/Bluey/a.mkv')).getByRole('button', { name: 'Accept' });
+        const accept = within(screen.getByTitle('/media/tv/Bluey/a.mkv').closest('tr') as HTMLElement).getByRole(
+            'button',
+            { name: 'Accept' },
+        );
         rerender(
             <PendingFileAssociations contentHierarchyItemId="item-1" rootFolderId="root-1" title="Bluey" canManage />,
         );
@@ -151,8 +305,22 @@ describe('PendingFileAssociations', () => {
         apiGet.mockResolvedValue([]);
 
         render(
-            <PendingFileAssociations contentHierarchyItemId="item-1" rootFolderId="root-1" title="Bluey" canManage />,
-            { wrapper },
+            <QueryClientProvider
+                client={new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })}
+            >
+                <TooltipProvider>
+                    <ToastStateProvider>
+                        <ToastProvider>
+                            <PendingFileAssociations
+                                contentHierarchyItemId="item-1"
+                                rootFolderId="root-1"
+                                title="Bluey"
+                                canManage
+                            />
+                        </ToastProvider>
+                    </ToastStateProvider>
+                </TooltipProvider>
+            </QueryClientProvider>,
         );
 
         const section = await screen.findByRole('region', { name: 'No pending files' });
@@ -170,17 +338,26 @@ describe('PendingFileAssociations', () => {
         startDiscovery.mockImplementationOnce((_variables, options: { onSuccess: () => void }) => options.onSuccess());
 
         render(
-            <>
-                <PendingFileAssociations
-                    contentHierarchyItemId="item-1"
-                    rootFolderId="root-1"
-                    title="Bluey"
-                    canManage
-                />
-                <ToastList />
-                <ToastViewport />
-            </>,
-            { wrapper },
+            <QueryClientProvider
+                client={new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })}
+            >
+                <TooltipProvider>
+                    <ToastStateProvider>
+                        <ToastProvider>
+                            <>
+                                <PendingFileAssociations
+                                    contentHierarchyItemId="item-1"
+                                    rootFolderId="root-1"
+                                    title="Bluey"
+                                    canManage
+                                />
+                                <ToastList />
+                                <ToastViewport />
+                            </>
+                        </ToastProvider>
+                    </ToastStateProvider>
+                </TooltipProvider>
+            </QueryClientProvider>,
         );
         const section = await screen.findByRole('region', { name: 'No pending files' });
         await user.click(within(section).getByRole('button', { name: 'Find missing files' }));
@@ -192,8 +369,22 @@ describe('PendingFileAssociations', () => {
         apiGet.mockResolvedValue([]);
 
         render(
-            <PendingFileAssociations contentHierarchyItemId="item-1" rootFolderId="root-1" title="Bluey" canManage />,
-            { wrapper },
+            <QueryClientProvider
+                client={new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })}
+            >
+                <TooltipProvider>
+                    <ToastStateProvider>
+                        <ToastProvider>
+                            <PendingFileAssociations
+                                contentHierarchyItemId="item-1"
+                                rootFolderId="root-1"
+                                title="Bluey"
+                                canManage
+                            />
+                        </ToastProvider>
+                    </ToastStateProvider>
+                </TooltipProvider>
+            </QueryClientProvider>,
         );
 
         const section = await screen.findByRole('region', { name: 'No pending files' });
@@ -209,22 +400,71 @@ describe('PendingFileAssociations', () => {
         apiGet.mockImplementation(response);
 
         render(
-            <PendingFileAssociations contentHierarchyItemId="item-1" rootFolderId="root-1" title="Bluey" canManage />,
-            { wrapper },
+            <QueryClientProvider
+                client={new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })}
+            >
+                <TooltipProvider>
+                    <ToastStateProvider>
+                        <ToastProvider>
+                            <PendingFileAssociations
+                                contentHierarchyItemId="item-1"
+                                rootFolderId="root-1"
+                                title="Bluey"
+                                canManage
+                            />
+                        </ToastProvider>
+                    </ToastStateProvider>
+                </TooltipProvider>
+            </QueryClientProvider>,
         );
 
         const section = await screen.findByRole('region', { name: 'Pending files' });
-        await new Promise((resolve) => setTimeout(resolve, 50));
+        await waitFor(() => expect(apiGet).toHaveBeenCalled());
         expect(screen.queryByText('No pending files')).toBeNull();
         expect(within(section).getByRole('button', { name: 'Find missing files' })).toBeInTheDocument();
     });
 
     it('explains pending files and lists them when some wait', async () => {
-        apiGet.mockResolvedValue([candidate('a')]);
+        apiGet.mockResolvedValue([
+            {
+                id: 'a',
+                rootFolderId: 'root-1',
+                scanRunId: 'scan-1',
+                filePath: '/media/tv/Bluey/a.mkv',
+                contentType: 'tv',
+                status: 'Pending',
+                matches: [
+                    {
+                        confidence: 1,
+                        providerType: 'tvmaze',
+                        externalIdKey: 'tvmaze',
+                        externalId: '44796',
+                        title: 'Bluey',
+                    },
+                ],
+                matchCount: 1,
+                contentHierarchyItemId: 'episode-1',
+                createdAt: '2026-09-24T00:00:00Z',
+            },
+        ]);
 
         render(
-            <PendingFileAssociations contentHierarchyItemId="item-1" rootFolderId="root-1" title="Bluey" canManage />,
-            { wrapper },
+            <QueryClientProvider
+                client={new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })}
+            >
+                <TooltipProvider>
+                    <ToastStateProvider>
+                        <ToastProvider>
+                            <PendingFileAssociations
+                                contentHierarchyItemId="item-1"
+                                rootFolderId="root-1"
+                                title="Bluey"
+                                canManage
+                            />
+                        </ToastProvider>
+                    </ToastStateProvider>
+                </TooltipProvider>
+            </QueryClientProvider>,
         );
 
         const section = await screen.findByRole('region', { name: 'Pending files' });
@@ -233,16 +473,46 @@ describe('PendingFileAssociations', () => {
     });
 
     it('offers no actions to a user who cannot manage content', async () => {
-        apiGet.mockResolvedValue([candidate('a')]);
+        apiGet.mockResolvedValue([
+            {
+                id: 'a',
+                rootFolderId: 'root-1',
+                scanRunId: 'scan-1',
+                filePath: '/media/tv/Bluey/a.mkv',
+                contentType: 'tv',
+                status: 'Pending',
+                matches: [
+                    {
+                        confidence: 1,
+                        providerType: 'tvmaze',
+                        externalIdKey: 'tvmaze',
+                        externalId: '44796',
+                        title: 'Bluey',
+                    },
+                ],
+                matchCount: 1,
+                contentHierarchyItemId: 'episode-1',
+                createdAt: '2026-09-24T00:00:00Z',
+            },
+        ]);
 
         render(
-            <PendingFileAssociations
-                contentHierarchyItemId="item-1"
-                rootFolderId="root-1"
-                title="Bluey"
-                canManage={false}
-            />,
-            { wrapper },
+            <QueryClientProvider
+                client={new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })}
+            >
+                <TooltipProvider>
+                    <ToastStateProvider>
+                        <ToastProvider>
+                            <PendingFileAssociations
+                                contentHierarchyItemId="item-1"
+                                rootFolderId="root-1"
+                                title="Bluey"
+                                canManage={false}
+                            />
+                        </ToastProvider>
+                    </ToastStateProvider>
+                </TooltipProvider>
+            </QueryClientProvider>,
         );
 
         await screen.findByText('/media/tv/Bluey/a.mkv');

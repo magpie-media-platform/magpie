@@ -52,9 +52,7 @@ describe('MonitoringControl', () => {
 
         const options = screen.getAllByRole('radio');
         expect(options.map((option) => option.textContent)).toEqual(['Inherit', 'Unmonitored', 'Monitored', 'Shotgun']);
-        for (const option of options) {
-            expect(option.querySelector('svg')).toBeInTheDocument();
-        }
+        expect(options.map((option) => option.querySelector('svg') !== null)).toEqual([true, true, true, true]);
     });
 
     it('marks the inherited override active and keeps the effective value clean', () => {
@@ -88,18 +86,21 @@ describe('MonitoringControl', () => {
         mockIsPending = true;
         renderControl('Monitored', 'Monitored');
 
-        for (const option of screen.getAllByRole('radio')) {
-            expect(option).toBeDisabled();
-        }
+        expect(screen.getAllByRole('radio').map((option) => (option as HTMLButtonElement).disabled)).toEqual([
+            true,
+            true,
+            true,
+            true,
+        ]);
     });
 
     it.each([
-        ['monitoring-control__option-true', 'Monitored'],
-        ['monitoring-control__option-false', 'Unmonitored'],
-        ['monitoring-control__option-inherit', null],
-    ] as const)('patches monitoring via %s', async (testId, monitoring) => {
+        ['monitoring-control__option-true', 'Monitored', 'Unmonitored'],
+        ['monitoring-control__option-false', 'Unmonitored', 'Monitored'],
+        ['monitoring-control__option-inherit', null, 'Monitored'],
+    ] as const)('patches monitoring via %s', async (testId, monitoring, initialMonitoring) => {
         const user = userEvent.setup();
-        renderControl(monitoring === 'Monitored' ? 'Unmonitored' : 'Monitored', 'Monitored');
+        renderControl(initialMonitoring, 'Monitored');
 
         await user.click(screen.getByTestId(testId));
 

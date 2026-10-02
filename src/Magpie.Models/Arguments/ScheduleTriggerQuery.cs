@@ -26,9 +26,4 @@ public sealed record ScheduleTriggerQuery
     /// The enabled state to match.
     /// </summary>
     public bool? Enabled { get; init; }
-
-    /// <summary>
-    /// Whether a trigger has a next run, where <see langword="false"/> selects the triggers with no next run.
-    /// </summary>
-    public bool? HasNextRun { get; init; }
 }

@@ -36,13 +36,11 @@ internal sealed class ReleaseEvaluationService(
     IFileSystem fileSystem,
     ILogger<ReleaseEvaluationService> logger) : IReleaseEvaluationService
 {
+    private static readonly TimeSpan RegexTimeout = TimeSpan.FromMilliseconds(100);
+
     private readonly Dictionary<Guid, Guid?> _qualityTierListIdsByContentHierarchyItem = [];
 
     private readonly Dictionary<Guid, QualityTierList?> _qualityTierListsById = [];
-
-    private const int QueryPageSize = 200;
-
-    private static readonly TimeSpan RegexTimeout = TimeSpan.FromMilliseconds(100);
 
     public bool IsAcceptableUpgradeOverCurrentFile(
         ReleaseAssessment assessment,
@@ -63,14 +61,6 @@ internal sealed class ReleaseEvaluationService(
 
         return isHigherTier || isSameTierProperUpgrade;
     }
-
-    internal static async Task<Release> ResolveDownloadReleaseAsync(
-        IReleaseRepository releaseRepository,
-        Download download,
-        CancellationToken cancellationToken) =>
-        (download.ReleaseId is { } releaseId
-            ? await releaseRepository.GetByIdAsync(releaseId, cancellationToken).ConfigureAwait(false)
-            : null) ?? new Release { Title = download.Title, Protocol = string.Empty };
 
     private static bool IsSameGroup(string? left, string? right) =>
         !string.IsNullOrWhiteSpace(left) &&
@@ -310,13 +300,18 @@ internal sealed class ReleaseEvaluationService(
                 .FirstOrDefault(candidate => candidate.Slug == currentItem.Level);
         var primaryFiles = new List<MediaFile>();
         foreach (var file in (currentItem?.ContentItem?.MediaFiles ?? [])
+            .Concat(currentItem?.ContentItem?.CoveringMediaFiles ?? [])
             .OrderBy(file => file.FilePath, StringComparer.Ordinal))
         {
             if (level is not null && (level.AcceptedFileTypes.Count > 0
                 ? await fileSystem.MatchesAnyFileTypeAsync(
-                    file.FilePath, level.AcceptedFileTypes, cancellationToken).ConfigureAwait(false)
+                    file.FilePath,
+                    level.AcceptedFileTypes,
+                    cancellationToken).ConfigureAwait(false)
                 : !await fileSystem.MatchesAnyFileTypeAsync(
-                    file.FilePath, level.AcceptedSidecarTypes, cancellationToken).ConfigureAwait(false)))
+                    file.FilePath,
+                    level.AcceptedSidecarTypes,
+                    cancellationToken).ConfigureAwait(false)))
             {
                 primaryFiles.Add(file);
             }
@@ -355,27 +350,32 @@ internal sealed class ReleaseEvaluationService(
             {
                 var download = await downloadRepository.GetByIdAsync(downloadId, cancellationToken)
                     .ConfigureAwait(false);
-                var release = download is null
-                    ? null
-                    : await ResolveDownloadReleaseAsync(releaseRepository, download, cancellationToken)
-                        .ConfigureAwait(false);
-                int? rank = null;
-                try
-                {
-                    rank = release is null ? null : Score(release, qualityTierList, null).MatchedRankOrdinal;
-                }
-                catch (Exception ex)
-                {
-                    logger.LogDebug(ex, "Imported release {ReleaseId} scoring failed for current-quality basis",
-                        release!.Id);
-                }
-
-                if (release is null || rank is null || rank >= currentFileQualityRank)
+                if (download is null)
                 {
                     continue;
                 }
 
-                var parsedTitle = new ParsedReleaseTitle(release.Title);
+                var (properties, _) = await BuildDownloadPropertyBagAsync(download, cancellationToken)
+                    .ConfigureAwait(false);
+                int? rank = null;
+                try
+                {
+                    rank = Score(properties, qualityTierList, null).MatchedRankOrdinal;
+                }
+                catch (Exception ex)
+                {
+                    logger.LogDebug(
+                        ex,
+                        "Imported download {DownloadId} scoring failed for current-quality basis",
+                        downloadId);
+                }
+
+                if (rank is null || rank >= currentFileQualityRank)
+                {
+                    continue;
+                }
+
+                var parsedTitle = new ParsedReleaseTitle(properties["Title"]);
                 currentFileQualityRank = rank;
                 currentFileGroup = parsedTitle.Group;
                 currentFileRevision = parsedTitle.Revision;
@@ -393,26 +393,24 @@ internal sealed class ReleaseEvaluationService(
                 orderby download.CreatedAt descending
                 select download).FirstOrDefault();
 
-            var importedRelease = importedDownload is null
-                ? null
-                : await ResolveDownloadReleaseAsync(releaseRepository, importedDownload, cancellationToken)
-                    .ConfigureAwait(false);
-            if (importedRelease is not null)
+            if (importedDownload is not null)
             {
+                var (properties, _) = await BuildDownloadPropertyBagAsync(importedDownload, cancellationToken)
+                    .ConfigureAwait(false);
                 try
                 {
-                    currentFileQualityRank = Score(importedRelease, qualityTierList, null).MatchedRankOrdinal;
+                    currentFileQualityRank = Score(properties, qualityTierList, null).MatchedRankOrdinal;
                 }
                 catch (Exception ex)
                 {
                     logger.LogDebug(
                         ex,
-                        "Imported release {ReleaseId} scoring failed for current-quality basis, cutoff uses " +
+                        "Imported download {DownloadId} scoring failed for current-quality basis, cutoff uses " +
                         "per-release scoring",
-                        importedRelease.Id);
+                        importedDownload.Id);
                 }
 
-                var parsedTitle = new ParsedReleaseTitle(importedRelease.Title);
+                var parsedTitle = new ParsedReleaseTitle(properties["Title"]);
                 currentFileGroup = parsedTitle.Group;
                 currentFileRevision = parsedTitle.Revision;
             }
@@ -533,22 +531,6 @@ internal sealed class ReleaseEvaluationService(
         var searchedContext = await CreateEvaluationContextAsync(contentHierarchyItemId, cancellationToken)
             .ConfigureAwait(false);
         var searchedMatch = AssessMatch(release, releaseFacts, searchedContext);
-        return await ResolveScopeAsync(
-            release,
-            releaseFacts,
-            searchedContext,
-            searchedMatch,
-            cancellationToken).ConfigureAwait(false);
-    }
-
-    internal async Task<ReleaseScopeResolution> ResolveScopeAsync(
-        Release release,
-        IReadOnlyList<ContentFact> releaseFacts,
-        ReleaseEvaluationContext searchedContext,
-        ReleaseAssessment searchedMatch,
-        CancellationToken cancellationToken = default)
-    {
-        var contentHierarchyItemId = searchedContext.ContentHierarchyItemId;
         List<object>? scopeTrace = logger.IsEnabled(LogLevel.Trace) ? [] : null;
         if (scopeTrace is not null)
         {
@@ -814,6 +796,28 @@ internal sealed class ReleaseEvaluationService(
     }
 
     /// <inheritdoc />
+    public async Task<ReleaseAssessment?> ScoreDownloadForContentAsync(
+        Download download,
+        Guid contentHierarchyItemId,
+        CancellationToken cancellationToken = default)
+    {
+        var listId = await ResolveQualityTierListIdForContentAsync(contentHierarchyItemId, cancellationToken)
+            .ConfigureAwait(false);
+        var list = listId is { } id
+            ? await GetQualityTierListAsync(id, cancellationToken).ConfigureAwait(false)
+            : null;
+        if (list is null)
+        {
+            return null;
+        }
+
+        var (properties, titleOnly) = await BuildDownloadPropertyBagAsync(download, cancellationToken)
+            .ConfigureAwait(false);
+        var score = Score(properties, list, currentQualityOrdinal: null);
+        return titleOnly && score.MatchedRankOrdinal is null ? null : score;
+    }
+
+    /// <inheritdoc />
     public async Task<ReleaseAssessment?> ScoreFileForContentAsync(
         MediaFile mediaFile,
         Guid contentHierarchyItemId,
@@ -882,13 +886,17 @@ internal sealed class ReleaseEvaluationService(
             mediaFile.DownloadId is { } downloadId
             ? await downloadRepository.GetByIdAsync(downloadId, cancellationToken).ConfigureAwait(false)
             : null;
-        var release = download is null
-            ? null
-            : await ResolveDownloadReleaseAsync(releaseRepository, download, cancellationToken).ConfigureAwait(false);
-        var imported = release is null ? null : Score(release, list, currentQualityOrdinal: null);
-        return imported?.MatchedRankOrdinal is null
+        if (download is null)
+        {
+            return (score, Path.GetFileNameWithoutExtension(mediaFile.FilePath));
+        }
+
+        var (importedProperties, _) = await BuildDownloadPropertyBagAsync(download, cancellationToken)
+            .ConfigureAwait(false);
+        var imported = Score(importedProperties, list, currentQualityOrdinal: null);
+        return imported.MatchedRankOrdinal is null
             ? (score, Path.GetFileNameWithoutExtension(mediaFile.FilePath))
-            : (imported, release!.Title);
+            : (imported, importedProperties["Title"]);
     }
 
     private Guid? ResolveLeaf(
@@ -1188,7 +1196,8 @@ internal sealed class ReleaseEvaluationService(
         var ranks = (
             from rank in list.QualityTierRanks
             where rank.QualityTier is not null
-            orderby rank.Ordinal, rank.QualityTier!.Id
+            orderby rank.Ordinal,
+            rank.QualityTier!.Id
             select rank).ToList();
 
         var matched = new List<QualityTierListRank>();
@@ -1244,6 +1253,18 @@ internal sealed class ReleaseEvaluationService(
             isExcluded: false,
             isCutoffMet,
             reasons);
+    }
+
+    private async Task<(Dictionary<string, string> Properties, bool TitleOnly)> BuildDownloadPropertyBagAsync(
+        Download download,
+        CancellationToken cancellationToken)
+    {
+        var release = download.ReleaseId is { } releaseId
+            ? await releaseRepository.GetByIdAsync(releaseId, cancellationToken).ConfigureAwait(false)
+            : null;
+        return release is null
+            ? (new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { ["Title"] = download.Title }, true)
+            : (BuildPropertyBag(release), false);
     }
 
     private Dictionary<string, string> BuildPropertyBag(Release release)

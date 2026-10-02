@@ -3,7 +3,6 @@ import { describe, expect, it } from 'vitest';
 import contentFieldCatalog from './content-field-catalog.txt?raw';
 import {
     contentFieldRegistry,
-    getAllFieldNames,
     getCollectionField,
     getOperatorsForType,
     getScalarField,
@@ -53,19 +52,13 @@ describe('Field Registry', () => {
             productionStatus: 'string',
         };
 
-        it('has all expected content scalar fields', () => {
-            for (const fieldName of Object.keys(expectedContentScalarFields)) {
+        it.each(Object.entries(expectedContentScalarFields))(
+            'has the content scalar field %s with type %s',
+            (fieldName, expectedType) => {
                 const field = getScalarField(contentFieldRegistry, fieldName);
-                expect(field, `Missing scalar field: ${fieldName}`).toBeDefined();
-            }
-        });
-
-        it('has correct types for content scalar fields', () => {
-            for (const [fieldName, expectedType] of Object.entries(expectedContentScalarFields)) {
-                const field = getScalarField(contentFieldRegistry, fieldName);
-                expect(field?.type, `Field ${fieldName} has wrong type`).toBe(expectedType);
-            }
-        });
+                expect(field?.type).toBe(expectedType);
+            },
+        );
 
         it('has no extra content scalar fields', () => {
             const expectedNames = Object.keys(expectedContentScalarFields);
@@ -86,7 +79,6 @@ describe('Field Registry', () => {
                 'Fulfilled',
                 'FulfilledExternally',
             ]);
-            expect(getAllFieldNames(contentFieldRegistry)).toContain('fulfillment');
         });
     });
 
@@ -195,58 +187,32 @@ describe('Field Registry', () => {
             },
         ];
 
-        it('has all expected content collection fields', () => {
-            for (const expected of expectedContentCollectionFields) {
-                const field = getCollectionField(contentFieldRegistry, expected.name);
-                expect(field, `Missing collection field: ${expected.name}`).toBeDefined();
-            }
+        it.each(expectedContentCollectionFields)('$name has the expected aliases', (expected) => {
+            const field = getCollectionField(contentFieldRegistry, expected.name);
+            expect(field?.aliases).toEqual(expected.aliases);
         });
 
-        it('collection fields have correct aliases', () => {
-            for (const expected of expectedContentCollectionFields) {
-                const field = getCollectionField(contentFieldRegistry, expected.name);
-                expect(field?.aliases, `Field ${expected.name} has wrong aliases`).toEqual(expected.aliases);
-            }
+        it.each(expectedContentCollectionFields)('$name has the expected primary field', (expected) => {
+            const field = getCollectionField(contentFieldRegistry, expected.name);
+            expect(field?.primaryField).toBe(expected.primaryField);
         });
 
-        it('collection fields have correct primary field', () => {
-            for (const expected of expectedContentCollectionFields) {
-                const field = getCollectionField(contentFieldRegistry, expected.name);
-                expect(field?.primaryField, `Field ${expected.name} has wrong primaryField`).toBe(
-                    expected.primaryField,
-                );
-            }
+        it.each(expectedContentCollectionFields)('$name has the expected item fields', (expected) => {
+            const field = getCollectionField(contentFieldRegistry, expected.name);
+            const actualNames = field?.itemFields.map((f) => f.name).sort();
+            expect(actualNames).toEqual([...expected.itemFieldNames].sort());
         });
 
-        it('collection fields have correct item fields', () => {
-            for (const expected of expectedContentCollectionFields) {
-                const field = getCollectionField(contentFieldRegistry, expected.name);
-                const actualNames = field?.itemFields.map((f) => f.name).sort();
-                expect(actualNames, `Field ${expected.name} has wrong item fields`).toEqual(
-                    expected.itemFieldNames.sort(),
-                );
-            }
+        it.each(expectedContentCollectionFields)('$name has the expected item field types', (expected) => {
+            const field = getCollectionField(contentFieldRegistry, expected.name);
+            expect(Object.fromEntries((field?.itemFields ?? []).map((item) => [item.name, item.type]))).toEqual(
+                expected.itemFieldTypes,
+            );
         });
 
-        it('collection item fields have correct types', () => {
-            for (const expected of expectedContentCollectionFields) {
-                const field = getCollectionField(contentFieldRegistry, expected.name);
-                for (const itemField of field?.itemFields ?? []) {
-                    const expectedType = expected.itemFieldTypes[itemField.name];
-                    expect(itemField.type, `Field ${expected.name}.${itemField.name} has wrong type`).toBe(
-                        expectedType,
-                    );
-                }
-            }
-        });
-
-        it('aliases resolve to correct collection fields', () => {
-            for (const expected of expectedContentCollectionFields) {
-                for (const alias of expected.aliases) {
-                    const field = getCollectionField(contentFieldRegistry, alias);
-                    expect(field?.name, `Alias ${alias} resolves to wrong field`).toBe(expected.name);
-                }
-            }
+        it.each(expectedContentCollectionFields)('$name resolves from each of its aliases', (expected) => {
+            const resolved = expected.aliases.map((alias) => getCollectionField(contentFieldRegistry, alias)?.name);
+            expect(resolved).toEqual(expected.aliases.map(() => expected.name));
         });
 
         it('has no extra content collection fields', () => {
@@ -262,19 +228,13 @@ describe('Field Registry', () => {
             title: 'string',
         };
 
-        it('has all expected subject scalar fields', () => {
-            for (const fieldName of Object.keys(expectedSubjectScalarFields)) {
+        it.each(Object.entries(expectedSubjectScalarFields))(
+            'has the subject scalar field %s with type %s',
+            (fieldName, expectedType) => {
                 const field = getScalarField(subjectFieldRegistry, fieldName);
-                expect(field, `Missing scalar field: ${fieldName}`).toBeDefined();
-            }
-        });
-
-        it('has correct types for subject scalar fields', () => {
-            for (const [fieldName, expectedType] of Object.entries(expectedSubjectScalarFields)) {
-                const field = getScalarField(subjectFieldRegistry, fieldName);
-                expect(field?.type, `Field ${fieldName} has wrong type`).toBe(expectedType);
-            }
-        });
+                expect(field?.type).toBe(expectedType);
+            },
+        );
 
         it('has no extra subject scalar fields', () => {
             const expectedNames = Object.keys(expectedSubjectScalarFields);
@@ -300,13 +260,6 @@ describe('Field Registry', () => {
             },
         ];
 
-        it('has all expected subject collection fields', () => {
-            for (const expected of expectedSubjectCollectionFields) {
-                const field = getCollectionField(subjectFieldRegistry, expected.name);
-                expect(field, `Missing collection field: ${expected.name}`).toBeDefined();
-            }
-        });
-
         it('advertises tag but not genre or contentRating collections', () => {
             expect(getCollectionField(subjectFieldRegistry, 'tag')).toBeDefined();
             expect(getCollectionField(subjectFieldRegistry, 'tags')).toBeDefined();
@@ -316,30 +269,27 @@ describe('Field Registry', () => {
             expect(getCollectionField(subjectFieldRegistry, 'contentRatings')).toBeUndefined();
         });
 
-        it('collection fields have correct aliases', () => {
-            for (const expected of expectedSubjectCollectionFields) {
-                const field = getCollectionField(subjectFieldRegistry, expected.name);
-                expect(field?.aliases, `Field ${expected.name} has wrong aliases`).toEqual(expected.aliases);
-            }
+        it.each(expectedSubjectCollectionFields)('$name has the expected aliases', (expected) => {
+            const field = getCollectionField(subjectFieldRegistry, expected.name);
+            expect(field?.aliases).toEqual(expected.aliases);
         });
 
-        it('collection fields have correct primary field', () => {
-            for (const expected of expectedSubjectCollectionFields) {
-                const field = getCollectionField(subjectFieldRegistry, expected.name);
-                expect(field?.primaryField, `Field ${expected.name} has wrong primaryField`).toBe(
-                    expected.primaryField,
-                );
-            }
+        it.each(expectedSubjectCollectionFields)('$name has the expected primary field', (expected) => {
+            const field = getCollectionField(subjectFieldRegistry, expected.name);
+            expect(field?.primaryField).toBe(expected.primaryField);
         });
 
-        it('collection fields have correct item fields', () => {
-            for (const expected of expectedSubjectCollectionFields) {
-                const field = getCollectionField(subjectFieldRegistry, expected.name);
-                const actualNames = field?.itemFields.map((f) => f.name).sort();
-                expect(actualNames, `Field ${expected.name} has wrong item fields`).toEqual(
-                    expected.itemFieldNames.sort(),
-                );
-            }
+        it.each(expectedSubjectCollectionFields)('$name has the expected item fields', (expected) => {
+            const field = getCollectionField(subjectFieldRegistry, expected.name);
+            const actualNames = field?.itemFields.map((f) => f.name).sort();
+            expect(actualNames).toEqual([...expected.itemFieldNames].sort());
+        });
+
+        it.each(expectedSubjectCollectionFields)('$name has the expected item field types', (expected) => {
+            const field = getCollectionField(subjectFieldRegistry, expected.name);
+            expect(Object.fromEntries((field?.itemFields ?? []).map((item) => [item.name, item.type]))).toEqual(
+                expected.itemFieldTypes,
+            );
         });
 
         it('has no extra subject collection fields', () => {
@@ -406,41 +356,6 @@ describe('Field Registry', () => {
             expect(subFieldNames).toContain('kind');
             expect(subFieldNames).toContain('qualifier');
             expect(subFieldNames).toContain('subject');
-        });
-    });
-
-    describe('getAllFieldNames', () => {
-        it('returns all scalar and collection field names for content', () => {
-            const names = getAllFieldNames(contentFieldRegistry);
-            expect(names).toContain('name');
-            expect(names).not.toContain('fileSize');
-            expect(names).toContain('monitoring');
-            expect(names).toContain('genre');
-            expect(names).toContain('tag');
-            expect(names).toContain('award');
-            expect(names).toContain('genres');
-            expect(names).toContain('tags');
-            expect(names).toContain('awards');
-            expect(names).toContain('relationship');
-            expect(names).toContain('relationships');
-        });
-
-        it('returns correct count for content registry', () => {
-            const names = getAllFieldNames(contentFieldRegistry);
-            expect(names.length).toBe(39);
-        });
-
-        it('returns all scalar and collection field names for subject', () => {
-            const names = getAllFieldNames(subjectFieldRegistry);
-            expect(names).toContain('kind');
-            expect(names).toContain('title');
-            expect(names).toContain('tag');
-            expect(names).toContain('tags');
-        });
-
-        it('returns correct count for subject registry', () => {
-            const names = getAllFieldNames(subjectFieldRegistry);
-            expect(names.length).toBe(4);
         });
     });
 
@@ -526,99 +441,12 @@ describe('Field Registry', () => {
         });
     });
 
-    describe('Registry Completeness Cross-Check', () => {
-        it('content registry supports the advertised query fields', () => {
-            const queriedContentFields = [
-                'name',
-                'monitoring',
-                'contentType',
-                'title',
-                'publishDate',
-                'duration',
-                'overview',
-                'parentId',
-                'genre',
-                'genres',
-                'tag',
-                'tags',
-                'award',
-                'awards',
-                'externalId',
-                'externalIds',
-                'image',
-                'images',
-                'contentRating',
-                'contentRatings',
-            ];
-
-            for (const fieldName of queriedContentFields) {
-                const scalar = getScalarField(contentFieldRegistry, fieldName);
-                const collection = getCollectionField(contentFieldRegistry, fieldName);
-                expect(
-                    scalar !== undefined || collection !== undefined,
-                    `Field ${fieldName} used in grammar tests but missing from content registry`,
-                ).toBe(true);
-            }
-        });
-
-        it('subject registry supports all curated fields advertised on the people page', () => {
-            const queriedSubjectFields = ['kind', 'title', 'tag', 'tags'];
-
-            for (const fieldName of queriedSubjectFields) {
-                const scalar = getScalarField(subjectFieldRegistry, fieldName);
-                const collection = getCollectionField(subjectFieldRegistry, fieldName);
-                expect(
-                    scalar !== undefined || collection !== undefined,
-                    `Field ${fieldName} used in grammar tests but missing from subject registry`,
-                ).toBe(true);
-            }
-        });
-    });
-
     describe('Type Mapping Validation', () => {
-        it('all scalar fields have valid types', () => {
-            const validTypes: FieldType[] = ['string', 'number', 'long', 'date', 'timespan', 'guid', 'boolean', 'enum'];
-
-            for (const field of contentFieldRegistry.scalarFields) {
-                expect(validTypes, `Field ${field.name} has invalid type ${field.type}`).toContain(field.type);
-            }
-
-            for (const field of subjectFieldRegistry.scalarFields) {
-                expect(validTypes, `Field ${field.name} has invalid type ${field.type}`).toContain(field.type);
-            }
-        });
-
-        it('all collection item fields have valid types', () => {
-            const validTypes: FieldType[] = ['string', 'number', 'long', 'date', 'timespan', 'guid', 'boolean', 'enum'];
-
-            for (const collection of contentFieldRegistry.collectionFields) {
-                for (const field of collection.itemFields) {
-                    expect(
-                        validTypes,
-                        `Collection ${collection.name}.${field.name} has invalid type ${field.type}`,
-                    ).toContain(field.type);
-                }
-            }
-
-            for (const collection of subjectFieldRegistry.collectionFields) {
-                for (const field of collection.itemFields) {
-                    expect(
-                        validTypes,
-                        `Collection ${collection.name}.${field.name} has invalid type ${field.type}`,
-                    ).toContain(field.type);
-                }
-            }
-        });
-
-        it('enum fields have enumValues array', () => {
-            for (const field of contentFieldRegistry.scalarFields) {
-                if (field.type === 'enum') {
-                    expect(field.enumValues, `Enum field ${field.name} missing enumValues`).toBeDefined();
-                    expect(field.enumValues?.length, `Enum field ${field.name} has empty enumValues`).toBeGreaterThan(
-                        0,
-                    );
-                }
-            }
-        });
+        it.each(['monitoring', 'fulfillment', 'activeAcquisitionStatus', 'qualityStatus'])(
+            'enum field %s has a non-empty enumValues array',
+            (fieldName) => {
+                expect(getScalarField(contentFieldRegistry, fieldName)?.enumValues?.length).toBeGreaterThan(0);
+            },
+        );
     });
 });

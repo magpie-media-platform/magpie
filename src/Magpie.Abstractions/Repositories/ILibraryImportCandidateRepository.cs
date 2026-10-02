@@ -32,7 +32,7 @@ public interface ILibraryImportCandidateRepository :
         CancellationToken cancellationToken);
 
     /// <summary>
-    /// Reclaims an old import candidate only when no queued or active import execution owns it.
+    /// Reclaims an inactive import candidate.
     /// </summary>
     /// <param name="candidateId">The id of the import candidate</param>
     /// <param name="inactivityCutoff">The latest candidate activity time eligible for recovery</param>
@@ -135,7 +135,7 @@ public interface ILibraryImportCandidateRepository :
         CancellationToken cancellationToken);
 
     /// <summary>
-    /// Saves the existing library item of a pending or failed candidate with one match.
+    /// Saves the library target of an import candidate.
     /// </summary>
     /// <param name="candidateId">The id of the import candidate</param>
     /// <param name="contentHierarchyItemId">The id of the existing library item, or <c>null</c> when there is none</param>

@@ -190,12 +190,6 @@
         }
     }
 
-    .event-trigger-form__filter-errors {
-        display: flex;
-        flex-direction: column;
-        gap: var(--space-2xs);
-    }
-
     .event-trigger-form__add-filter {
         align-self: flex-start;
     }

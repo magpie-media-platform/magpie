@@ -28,18 +28,6 @@ public sealed class CronScheduleTests
         }
     }
 
-    [TestCase("0 * * * *", true)]
-    [TestCase("", false)]
-    [TestCase("99 99 * * *", false)]
-    public void IsValid_ReportsValidity_WhenScheduleSyntaxVaries(string schedule, bool expected)
-    {
-        // Act
-        var valid = CronSchedule.IsValid(schedule);
-
-        // Assert
-        Assert.That(valid, Is.EqualTo(expected));
-    }
-
     [Test]
     public void NextOccurrence_UsesUtc_WhenSourceTimeIsUnspecified()
     {

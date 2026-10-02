@@ -19,13 +19,7 @@ public sealed class MagpieCoreApiExtension : IExtension
     public Guid Id => ExtensionId;
 
     /// <inheritdoc />
-    public Version Version => GetType().Assembly.GetName().Version ?? new Version(1, 0);
-
-    /// <inheritdoc />
     public string Name => "Magpie API";
-
-    /// <inheritdoc />
-    public string? TargetABI => "[1.0.0,)";
 
     /// <inheritdoc />
     public void RegisterServices(IServiceCollection services)

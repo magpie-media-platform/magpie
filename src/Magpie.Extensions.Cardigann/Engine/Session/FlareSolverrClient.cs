@@ -25,6 +25,7 @@ internal sealed class FlareSolverrClient(
     ILogger<FlareSolverrClient> logger,
     IUpstreamCooldown cooldown,
     SolverQueue queue,
+    IMagpieSystem magpieSystem,
     TimeProvider timeProvider) : ICloudflareSolver
 {
     public const string HttpClientName = "magpie.cardigann.flaresolverr";
@@ -35,6 +36,7 @@ internal sealed class FlareSolverrClient(
 
     private const string EndpointSuffix = "/v1";
     private const int SolverTimeoutMilliseconds = 60000;
+    private const int SessionTtlMinutes = 60;
 
     public static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(120);
 
@@ -60,15 +62,21 @@ internal sealed class FlareSolverrClient(
             MaximumEntries = 64,
         });
 
-    private static HttpContent BuildCommand(Uri target)
+    private static HttpContent BuildCommand(string command, string session, Uri? target = null)
     {
         using var buffer = new MemoryStream();
         using (var writer = new Utf8JsonWriter(buffer))
         {
             writer.WriteStartObject();
-            writer.WriteString("cmd", "request.get");
-            writer.WriteString("url", target.AbsoluteUri);
-            writer.WriteNumber("maxTimeout", SolverTimeoutMilliseconds);
+            writer.WriteString("cmd", command);
+            writer.WriteString("session", session);
+            if (target is not null)
+            {
+                writer.WriteString("url", target.AbsoluteUri);
+                writer.WriteNumber("maxTimeout", SolverTimeoutMilliseconds);
+                writer.WriteNumber("session_ttl_minutes", SessionTtlMinutes);
+            }
+
             writer.WriteEndObject();
         }
 
@@ -78,13 +86,18 @@ internal sealed class FlareSolverrClient(
     }
 
     public async Task<CloudflareClearance?> SolveAsync(
-        Uri target, bool reuse, CancellationToken cancellationToken, string? authenticationScope = null)
+        Uri target,
+        bool reuse,
+        CancellationToken cancellationToken,
+        string? authenticationScope = null)
     {
-        var endpoint = await ResolveEndpointAsync(cancellationToken).ConfigureAwait(false);
-        if (endpoint is null)
+        var solver = await ResolveSolverAsync(cancellationToken).ConfigureAwait(false);
+        if (solver is null)
         {
             return null;
         }
+
+        var (endpoint, session) = solver.Value;
 
         using var activity = Telemetry.Source.StartActivity("cardigann.cloudflare.solve");
         activity?.SetTag("magpie.request.role", "cloudflareClearance");
@@ -116,7 +129,7 @@ internal sealed class FlareSolverrClient(
             {
                 outcome = "busy";
                 logger.LogWarning(
-                    "FlareSolverr at {Endpoint} was busy for {QueueWait}, so the challenge of {Target} stands",
+                    "FlareSolverr at {Endpoint} was busy for {QueueWait} for the challenge of {Target}",
                     endpoint,
                     queue.Wait,
                     target.GetLeftPart(UriPartial.Authority));
@@ -174,10 +187,11 @@ internal sealed class FlareSolverrClient(
 
                 CloudflareClearance? clearance = null;
                 var challengeFailed = false;
+                var solverFailed = false;
                 using var request = new HttpRequestMessage(HttpMethod.Get, target);
                 using var admitted = await cooldown.SendAsync(request, authenticationScope, async token =>
                 {
-                    using var content = BuildCommand(target);
+                    using var content = BuildCommand("request.get", session, target);
                     using var response = await clientFactory
                         .CreateClient(HttpClientName)
                         .PostAsync(endpoint, content, token)
@@ -185,6 +199,7 @@ internal sealed class FlareSolverrClient(
                     var payload = await response.Content.ReadAsStringAsync(token).ConfigureAwait(false);
                     if (!response.IsSuccessStatusCode)
                     {
+                        solverFailed = true;
                         challengeFailed = IsChallengeFailure(payload);
                         logger.LogWarning(
                             "FlareSolverr at {Endpoint} returned HTTP {Status}",
@@ -242,7 +257,17 @@ internal sealed class FlareSolverrClient(
                     Remember(target, clearance);
                 }
 
+                if (solverFailed)
+                {
+                    await DestroySessionAsync(endpoint, session).ConfigureAwait(false);
+                }
+
                 return (clearance, clearance is null ? "rejected" : "solved");
+            }
+            catch (TaskCanceledException)
+            {
+                await DestroySessionAsync(endpoint, session).ConfigureAwait(false);
+                throw;
             }
             finally
             {
@@ -273,6 +298,34 @@ internal sealed class FlareSolverrClient(
 
     private static string MemoKey(Uri target) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(target.AbsoluteUri)));
+
+    private async Task DestroySessionAsync(Uri endpoint, string session)
+    {
+        try
+        {
+            using var content = BuildCommand("sessions.destroy", session);
+            using var response = await clientFactory
+                .CreateClient(HttpClientName)
+                .PostAsync(endpoint, content, CancellationToken.None)
+                .ConfigureAwait(false);
+            if (!response.IsSuccessStatusCode)
+            {
+                logger.LogDebug(
+                    "FlareSolverr at {Endpoint} did not destroy session {Session} and returned HTTP {Status}",
+                    endpoint,
+                    session,
+                    (int)response.StatusCode);
+            }
+        }
+        catch (Exception exception) when (exception is HttpRequestException or TaskCanceledException)
+        {
+            logger.LogDebug(
+                exception,
+                "FlareSolverr at {Endpoint} could not be reached to destroy session {Session}",
+                endpoint,
+                session);
+        }
+    }
 
     private void LogAbandoned(Task<(CloudflareClearance? Clearance, string Outcome)> solving, object? target)
     {
@@ -360,21 +413,23 @@ internal sealed class FlareSolverrClient(
         };
     }
 
-    private async Task<Uri?> ResolveEndpointAsync(CancellationToken cancellationToken)
+    private async Task<(Uri Endpoint, string Session)?> ResolveSolverAsync(CancellationToken cancellationToken)
     {
         var detail = await settingsService
             .GetExtensionGroupAsync(Constants.ExtensionId, SettingsGroupName, cancellationToken)
             .ConfigureAwait(false);
-        var configured = string.Empty;
-        if (detail is not null)
+        if (detail is null)
         {
-            foreach (var setting in detail.Group.Settings)
+            return null;
+        }
+
+        var configured = string.Empty;
+        foreach (var setting in detail.Group.Settings)
+        {
+            if (string.Equals(setting.Key, UrlSettingKey, StringComparison.OrdinalIgnoreCase) &&
+                !string.IsNullOrWhiteSpace(setting.Value))
             {
-                if (string.Equals(setting.Key, UrlSettingKey, StringComparison.OrdinalIgnoreCase) &&
-                    !string.IsNullOrWhiteSpace(setting.Value))
-                {
-                    configured = setting.Value.Trim();
-                }
+                configured = setting.Value.Trim();
             }
         }
 
@@ -391,7 +446,7 @@ internal sealed class FlareSolverrClient(
 
         if (Uri.TryCreate(normalized, UriKind.Absolute, out var endpoint) && endpoint.Scheme is "http" or "https")
         {
-            return endpoint;
+            return (endpoint, $"magpie-{detail.Group.Id:N}-{magpieSystem.NodeId}");
         }
 
         logger.LogWarning(

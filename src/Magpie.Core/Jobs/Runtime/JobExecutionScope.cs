@@ -24,10 +24,7 @@ internal sealed class JobExecutionScope : IJobExecutionScope, IJobExecutionScope
     private Guid? _previousCorrelationId;
     private bool _hasParentContext;
 
-    public JobExecutionScope(
-        IServiceScopeFactory scopeFactory,
-        IJobRegistry registry,
-        ILoggerFactory loggerFactory)
+    public JobExecutionScope(IServiceScopeFactory scopeFactory, IJobRegistry registry, ILoggerFactory loggerFactory)
         : this(scopeFactory, registry, loggerFactory, scope: null, new(), new())
     {
     }

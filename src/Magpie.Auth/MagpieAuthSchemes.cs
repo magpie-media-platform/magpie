@@ -3,7 +3,7 @@ namespace Magpie.Auth;
 /// <summary>
 /// The authentication scheme names for Magpie.
 /// </summary>
-public static class MagpieAuthSchemes
+internal static class MagpieAuthSchemes
 {
     /// <summary>
     /// The name of the Magpie authentication scheme.

@@ -10,8 +10,6 @@ internal sealed class RemotePathMappingConfiguration : IEntityTypeConfiguration<
     public void Configure(EntityTypeBuilder<RemotePathMapping> builder)
     {
         builder.ToTable("download_remotePathMapping");
-        builder.HasKey(e => e.Id);
-        builder.Property(e => e.Id).ValueGeneratedOnAdd();
         builder.HasIndex(e => e.Host);
     }
 }

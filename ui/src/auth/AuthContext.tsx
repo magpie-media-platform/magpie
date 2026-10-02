@@ -33,8 +33,6 @@ export interface AuthContextValue extends AuthState {
 
     hasRole: (minRole: Role) => boolean;
 
-    signIn: (user: User) => void;
-
     signOut: () => Promise<void>;
 
     login: (username: string, password: string) => Promise<void>;
@@ -47,7 +45,6 @@ const defaultContextValue: AuthContextValue = {
     hasPermission: () => false,
     getRequiredRole: () => undefined,
     hasRole: () => false,
-    signIn: () => {},
     signOut: async () => {},
     login: async () => {},
 };
@@ -138,7 +135,6 @@ export function AuthProvider({
             eventName: ['user.updated', 'user.deleted', 'user.lockedOut', 'user.unlocked'],
             entityId: user?.id,
             enabled: isAuthenticated,
-            owner: 'auth-permissions',
         },
     );
 
@@ -171,11 +167,7 @@ export function AuthProvider({
             if (!isTokenExpired(TOKEN_REFRESH_BUFFER_MS / 1000)) {
                 const existing = getCurrentUserFromToken();
                 if (existing) {
-                    setUser({
-                        id: existing.id,
-                        username: existing.username,
-                        role: existing.role,
-                    });
+                    setUser(existing);
                     setIsLoading(false);
                     return;
                 }
@@ -183,11 +175,7 @@ export function AuthProvider({
 
             const jwtUser = await refreshAccessToken();
             if (generation !== sessionGenerationRef.current || storedGeneration !== sessionGeneration()) return;
-            setUser({
-                id: jwtUser.id,
-                username: jwtUser.username,
-                role: jwtUser.role,
-            });
+            setUser(jwtUser);
             setIsLoading(false);
         } catch (error) {
             if (generation !== sessionGenerationRef.current || storedGeneration !== sessionGeneration()) return;
@@ -255,32 +243,26 @@ export function AuthProvider({
                 }
 
                 const sessionGeneration = sessionGenerationRef.current;
-                {
-                    const jwtUser = getCurrentUserFromToken();
-                    if (jwtUser) {
-                        try {
-                            await queryClient.fetchQuery({
-                                queryKey: permissionsQueryKey(jwtUser.id, cacheRevision),
-                                queryFn: fetchEffectivePermissions,
-                                retry: false,
-                                staleTime: Infinity,
-                            });
-                        } catch (error) {
-                            if (isAuthenticationFailure(error) && sessionGeneration === sessionGenerationRef.current) {
-                                clearAuthStorage();
-                                return;
-                            }
+                const jwtUser = getCurrentUserFromToken();
+                if (jwtUser) {
+                    try {
+                        await queryClient.fetchQuery({
+                            queryKey: permissionsQueryKey(jwtUser.id, cacheRevision),
+                            queryFn: fetchEffectivePermissions,
+                            retry: false,
+                            staleTime: Infinity,
+                        });
+                    } catch (error) {
+                        if (isAuthenticationFailure(error) && sessionGeneration === sessionGenerationRef.current) {
+                            clearAuthStorage();
+                            return;
                         }
-                        if (sessionGeneration === sessionGenerationRef.current && hasStoredSession()) {
-                            setUser({
-                                id: jwtUser.id,
-                                username: jwtUser.username,
-                                role: jwtUser.role,
-                            });
-                        }
-                    } else {
-                        clearAuthStorage();
                     }
+                    if (sessionGeneration === sessionGenerationRef.current && hasStoredSession()) {
+                        setUser(jwtUser);
+                    }
+                } else {
+                    clearAuthStorage();
                 }
             } finally {
                 setIsLoading(false);
@@ -327,11 +309,7 @@ export function AuthProvider({
                     clearSessionCache();
                 }
                 cacheSessionRef.current = { generation, userId: updated.id };
-                setUser({
-                    id: updated.id,
-                    username: updated.username,
-                    role: updated.role,
-                });
+                setUser(updated);
                 setIsLoading(false);
             } else if (
                 hasStoredSession() &&
@@ -402,17 +380,6 @@ export function AuthProvider({
         [effectiveUser],
     );
 
-    const signIn = useCallback(
-        (newUser: User) => {
-            sessionGenerationRef.current += 1;
-            cacheSessionRef.current = { generation: sessionGeneration(), userId: newUser.id };
-            clearSessionCache();
-            setUser(newUser);
-            setIsLoading(false);
-        },
-        [clearSessionCache],
-    );
-
     const signOut = useCallback(async () => {
         sessionGenerationRef.current += 1;
         if (refreshTimerRef.current) {
@@ -436,11 +403,7 @@ export function AuthProvider({
             cacheSessionRef.current = { generation: sessionGeneration(), userId: jwtUser.id };
             if (replacesSession) clearSessionCache();
             else restartAnonymousQueries();
-            setUser({
-                id: jwtUser.id,
-                username: jwtUser.username,
-                role: jwtUser.role,
-            });
+            setUser(jwtUser);
             setIsLoading(false);
         },
         [clearSessionCache, restartAnonymousQueries, user],
@@ -454,21 +417,10 @@ export function AuthProvider({
             hasPermission: checkPermission,
             getRequiredRole,
             hasRole: checkRole,
-            signIn,
             signOut,
             login,
         }),
-        [
-            isLoading,
-            isAuthenticated,
-            effectiveUser,
-            checkPermission,
-            getRequiredRole,
-            checkRole,
-            signIn,
-            signOut,
-            login,
-        ],
+        [isLoading, isAuthenticated, effectiveUser, checkPermission, getRequiredRole, checkRole, signOut, login],
     );
 
     return (

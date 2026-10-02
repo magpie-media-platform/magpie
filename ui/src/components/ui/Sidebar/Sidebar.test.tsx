@@ -12,7 +12,6 @@ import {
     SidebarItem,
     SidebarSubMenu,
     SidebarSeparator,
-    useSidebarContext,
 } from './Sidebar';
 
 function renderWithRouter(ui: React.ReactElement) {
@@ -59,24 +58,6 @@ describe('Sidebar', () => {
         const sidebar = screen.getByRole('complementary');
         expect(sidebar).not.toHaveAttribute('data-collapsed', 'true');
         expect(sidebar).toHaveAttribute('data-collapsed', 'false');
-    });
-
-    it('renders in collapsed state when defaultCollapsed is true', () => {
-        renderWithRouter(
-            <Sidebar defaultCollapsed>
-                <SidebarContent>
-                    <SidebarItem to="/" icon={<HouseIcon />}>
-                        Home
-                    </SidebarItem>
-                </SidebarContent>
-            </Sidebar>,
-        );
-
-        const sidebar = screen.getByRole('complementary');
-        expect(sidebar).toHaveAttribute('data-collapsed', 'true');
-        expect(sidebar).toHaveAttribute('data-collapsed', 'true');
-
-        expect(screen.queryByText('Home', { selector: '.sidebar-item-label' })).not.toBeInTheDocument();
     });
 
     it('supports controlled collapsed state', () => {
@@ -621,28 +602,6 @@ describe('Sidebar Integration', () => {
         expect(ref).toHaveBeenCalled();
         expect(ref.mock.calls[0][0]).toBeInstanceOf(HTMLAnchorElement);
     });
-});
-
-it('does not change internal sidebar state while controlled', async () => {
-    const user = userEvent.setup();
-    const onChange = vi.fn();
-    function Toggle() {
-        const { setCollapsed } = useSidebarContext();
-        return <button onClick={() => setCollapsed(true)}>Collapse</button>;
-    }
-    const { rerender } = render(
-        <Sidebar collapsed={false} onCollapsedChange={onChange}>
-            <Toggle />
-        </Sidebar>,
-    );
-    await user.click(screen.getByRole('button', { name: 'Collapse' }));
-    expect(onChange).toHaveBeenCalledWith(true);
-    rerender(
-        <Sidebar>
-            <Toggle />
-        </Sidebar>,
-    );
-    expect(screen.getByRole('complementary')).toHaveAttribute('data-collapsed', 'false');
 });
 
 it('does not change internal group state while controlled', async () => {

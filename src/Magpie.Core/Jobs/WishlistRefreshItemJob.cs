@@ -63,9 +63,7 @@ internal sealed class WishlistRefreshItemJob(
 
     public Task ExecuteAsync(JobContext context, CancellationToken cancellationToken = default)
     {
-        if (!context.Parameters.TryGetValue(
-            MagpieJobs.Parameters.WishlistId,
-            out var rawWishlistId) ||
+        if (!context.Parameters.TryGetValue(MagpieJobs.Parameters.WishlistId, out var rawWishlistId) ||
             string.IsNullOrWhiteSpace(rawWishlistId))
         {
             throw new ArgumentException("A wishlist ID is required.");
@@ -96,9 +94,7 @@ internal sealed class WishlistRefreshItemJob(
         var wishlist = await wishlistRepository.GetByIdAsync(wishlistId, cancellationToken).ConfigureAwait(false);
         if (wishlist is null)
         {
-            logger.LogInformation(
-                "Wishlist {WishlistId} no longer exists, so the job skipped the refresh",
-                wishlistId);
+            logger.LogInformation("Wishlist {WishlistId} no longer exists, so the job skipped the refresh", wishlistId);
             progressReporter.Report(1, "The refresh stopped because the wishlist does not exist.");
             return;
         }
@@ -166,10 +162,7 @@ internal sealed class WishlistRefreshItemJob(
 
             foreach (var warning in searchResult.Warnings)
             {
-                logger.LogWarning(
-                    "Wishlist {WishlistId} candidate search warning: {Warning}",
-                    wishlist.Id,
-                    warning);
+                logger.LogWarning("Wishlist {WishlistId} candidate search warning: {Warning}", wishlist.Id, warning);
             }
 
             var matches = searchResult.Matches;
@@ -215,7 +208,7 @@ internal sealed class WishlistRefreshItemJob(
                     logger.LogWarning(
                         ex,
                         "The job failed to hydrate {Source}={Value} from provider {Provider} " +
-                        "for wishlist {Wishlist}",
+                        "for wishlist {WishlistId}",
                         candidate.ExternalIdSource,
                         candidate.ExternalId,
                         candidate.ProviderType,

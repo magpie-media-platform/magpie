@@ -116,11 +116,11 @@ internal sealed class AuditWriter(string pluginSlug)
     private string AuditRoot()
     {
         var overrideRoot = Environment.GetEnvironmentVariable(RootEnvironmentVariable);
-        var root = string.IsNullOrWhiteSpace(overrideRoot) ? DefaultRoot : overrideRoot!;
+        var root = string.IsNullOrWhiteSpace(overrideRoot) ? DefaultRoot : overrideRoot;
         return Path.Combine(root, _pluginSlug, "audit");
     }
 
-    public sealed class AuditRecord<TRequest, TResponse>
+    internal sealed class AuditRecord<TRequest, TResponse>
     {
         public string Plugin { get; set; } = string.Empty;
 

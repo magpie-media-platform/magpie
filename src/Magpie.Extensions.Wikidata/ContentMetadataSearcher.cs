@@ -47,7 +47,7 @@ internal sealed class ContentMetadataSearcher(
             new QueryRequest
             {
                 EntityKind = kind,
-                Criteria = new MetadataCriteria(),
+                Criteria = new(),
                 Context = context,
                 Page = page,
                 OrdinaryTerm = searchTerm.Trim()
@@ -82,8 +82,13 @@ internal sealed class ContentMetadataSearcher(
 
         var progress = (continuation as SearchCheckpoint)?.Progress.Copy() ?? new QueryProgress();
         progress.ValidateOnly = maxResults == 0;
-        var page = await SearchPageAsync(contentType, query, maxResults, defaultLanguagePreference,
-            progress, cancellationToken).ConfigureAwait(false);
+        var page = await SearchPageAsync(
+            contentType,
+            query,
+            maxResults,
+            defaultLanguagePreference,
+            progress,
+            cancellationToken).ConfigureAwait(false);
         cancellationToken.ThrowIfCancellationRequested();
         return new MetadataSearchBatch { Page = page, Continuation = new SearchCheckpoint(fingerprint, progress) };
     }
@@ -111,16 +116,7 @@ internal sealed class ContentMetadataSearcher(
 
         var contentTypeCriteria = query.ContentType.And.ToArray();
         var levelCriteria = query.Level.And.ToArray();
-        var contentTypeScope = EvaluateScope(contentTypeCriteria, contentType);
-        var levelScope = EvaluateScope(levelCriteria, level);
-        if (contentTypeScope == CriteriaMatchResult.Unverifiable ||
-            levelScope == CriteriaMatchResult.Unverifiable)
-        {
-            return EmptySupported();
-        }
-
-        if (contentTypeScope == CriteriaMatchResult.Rejected ||
-            levelScope == CriteriaMatchResult.Rejected)
+        if (!InScope(contentTypeCriteria, contentType) || !InScope(levelCriteria, level))
         {
             return EmptySupported();
         }
@@ -132,7 +128,7 @@ internal sealed class ContentMetadataSearcher(
             var configuration = JsonSerializer.Serialize(context);
             if (progress.Configuration is not null && progress.Configuration != configuration)
             {
-                throw new MetadataSearchContinuationException("Wikidata configuration changed. Start a new search.");
+                throw new MetadataSearchContinuationException("Wikidata configuration changed.");
             }
 
             progress.Configuration = configuration;
@@ -183,7 +179,7 @@ internal sealed class ContentMetadataSearcher(
 
         var context = await settingsResolver.ResolveAsync(defaultLanguagePreference, cancellationToken)
             .ConfigureAwait(false);
-        var entity = await cache.GetEntityAsync(qid!, context, cancellationToken).ConfigureAwait(false);
+        var entity = await cache.GetEntityAsync(qid, context, cancellationToken).ConfigureAwait(false);
         if (entity is null || !entity.MatchesKind(kind))
         {
             return null;
@@ -220,7 +216,7 @@ internal sealed class ContentMetadataSearcher(
         {
             Supported = true,
             Matches = [],
-            PageInfo = new ProviderSearchPageInfo
+            PageInfo = new()
             {
                 RequestedPage = 1,
                 HasMore = false
@@ -243,31 +239,12 @@ internal sealed class ContentMetadataSearcher(
         return [.. values.Distinct(StringComparer.OrdinalIgnoreCase)];
     }
 
-    private static CriteriaMatchResult EvaluateScope(
-        IReadOnlyList<PropertyCriterion<string>> criteria,
-        string value)
-    {
-        var result = CriteriaMatchResult.Matched;
-        foreach (var criterion in criteria)
-        {
-            var criterionResult = CriteriaMatcher.Match(
-                value,
-                criterion.Operator,
-                TextValues(criterion),
-                criterion.Negate);
-            if (criterionResult == CriteriaMatchResult.Rejected)
-            {
-                result = CriteriaMatchResult.Rejected;
-            }
-
-            if (criterionResult == CriteriaMatchResult.Unverifiable)
-            {
-                return CriteriaMatchResult.Unverifiable;
-            }
-        }
-
-        return result;
-    }
+    private static bool InScope(IReadOnlyList<PropertyCriterion<string>> criteria, string value) =>
+        criteria.All(criterion => CriteriaMatcher.Match(
+            value,
+            criterion.Operator,
+            TextValues(criterion),
+            criterion.Negate) == CriteriaMatchResult.Matched);
 
     private sealed record SearchCheckpoint(string Fingerprint, QueryProgress Progress);
 }

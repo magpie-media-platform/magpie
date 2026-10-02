@@ -294,10 +294,7 @@ internal sealed class ContentService(
                 contentHierarchyItemId,
                 filePath,
                 actingUserId,
-                ct => MaterializeFulfillmentStatusAsync(
-                    contentHierarchyItemId,
-                    actingUserId,
-                    cancellationToken: ct),
+                ct => MaterializeFulfillmentStatusAsync(contentHierarchyItemId, actingUserId, cancellationToken: ct),
                 cancellationToken)
             .ConfigureAwait(false);
         return operation.Result;
@@ -337,20 +334,30 @@ internal sealed class ContentService(
         Guid? actingUserId,
         CancellationToken cancellationToken = default)
     {
-        return transactionManager.ExecuteWithTransactionAsync(async ct =>
-        {
-            var reassigned = await contentFileService.ReassignAsync(
-                contentHierarchyItemId, mediaFileId, request, actingUserId, ct).ConfigureAwait(false);
-            if (reassigned)
+        return transactionManager.ExecuteWithTransactionAsync(
+            async ct =>
             {
-                await MaterializeFulfillmentStatusAsync(
-                    contentHierarchyItemId, actingUserId, cancellationToken: ct).ConfigureAwait(false);
-                await MaterializeFulfillmentStatusAsync(
-                    request.TargetContentHierarchyItemId, actingUserId, cancellationToken: ct).ConfigureAwait(false);
-            }
+                var reassigned = await contentFileService.ReassignAsync(
+                    contentHierarchyItemId,
+                    mediaFileId,
+                    request,
+                    actingUserId,
+                    ct).ConfigureAwait(false);
+                if (reassigned)
+                {
+                    await MaterializeFulfillmentStatusAsync(
+                        contentHierarchyItemId,
+                        actingUserId,
+                        cancellationToken: ct).ConfigureAwait(false);
+                    await MaterializeFulfillmentStatusAsync(
+                        request.TargetContentHierarchyItemId,
+                        actingUserId,
+                        cancellationToken: ct).ConfigureAwait(false);
+                }
 
-            return reassigned;
-        }, cancellationToken);
+                return reassigned;
+            },
+            cancellationToken);
     }
 
     public async Task<BulkResult> BulkPatchAsync(
@@ -503,9 +510,7 @@ internal sealed class ContentService(
             .ConfigureAwait(false);
         return result is null
             ? null
-            : await contentHierarchyItemRepository.GetByIdAsync(
-                result.Value,
-                cancellationToken).ConfigureAwait(false);
+            : await contentHierarchyItemRepository.GetByIdAsync(result.Value, cancellationToken).ConfigureAwait(false);
     }
 
     public async Task<(ContentHierarchyItem Root, IReadOnlyCollection<Guid> CreatedHierarchyItemIds)?>
@@ -576,7 +581,9 @@ internal sealed class ContentService(
         CancellationToken cancellationToken = default)
     {
         await contentRepository.ReconcileMediaStateAsync(
-            changedContentHierarchyItemId, actingUserId, cancellationToken).ConfigureAwait(false);
+            changedContentHierarchyItemId,
+            actingUserId,
+            cancellationToken).ConfigureAwait(false);
         return await GetAsync(changedContentHierarchyItemId, cancellationToken).ConfigureAwait(false);
     }
 
@@ -589,7 +596,7 @@ internal sealed class ContentService(
 
     private ContentHierarchyItemCriteria BuildCriteria(ContentQuery query)
     {
-        var baseCriteria = TranslateFilter(query.Criteria) ?? new ContentHierarchyItemCriteria();
+        var baseCriteria = TranslateFilter(query.Criteria) ?? new();
 
         if (query.RootFolderId is { } rootFolderId &&
             baseCriteria.EffectiveRootFolderId is { } filteredRootFolderId &&
@@ -607,20 +614,20 @@ internal sealed class ContentService(
             EffectiveRootFolderId = query.RootFolderId ?? baseCriteria.EffectiveRootFolderId,
             ContentType = Combine(
                 baseCriteria.ContentType,
-                string.IsNullOrWhiteSpace(query.ContentType) ? null : EqualsCriterion(query.ContentType!)),
+                string.IsNullOrWhiteSpace(query.ContentType) ? null : EqualsCriterion(query.ContentType)),
             Level = Combine(
                 baseCriteria.Level,
-                string.IsNullOrWhiteSpace(query.Level) ? null : EqualsCriterion(query.Level!)),
+                string.IsNullOrWhiteSpace(query.Level) ? null : EqualsCriterion(query.Level)),
             Name = Combine(
                 baseCriteria.Name,
-                string.IsNullOrWhiteSpace(query.Search) ? null : ContainsCriterion(query.Search!)),
+                string.IsNullOrWhiteSpace(query.Search) ? null : ContainsCriterion(query.Search)),
             EffectiveMonitoring = query.Monitoring ?? baseCriteria.EffectiveMonitoring,
             Fulfillment = Combine(
                 baseCriteria.Fulfillment,
                 query.Fulfillment is { } fulfillment ? EqualsCriterion(fulfillment) : null),
             Tags = Combine(
                 baseCriteria.Tags,
-                string.IsNullOrWhiteSpace(query.Tag) ? null : EqualsCriterion(query.Tag!)),
+                string.IsNullOrWhiteSpace(query.Tag) ? null : EqualsCriterion(query.Tag)),
             RootLevelOnly = query.TopLevelOnly == true ? true : baseCriteria.RootLevelOnly,
         };
     }
@@ -690,9 +697,7 @@ internal sealed class ContentService(
         }
     }
 
-    private async Task ValidateReferencesAsync(
-        ContentHierarchyItemPatch patch,
-        CancellationToken cancellationToken)
+    private async Task ValidateReferencesAsync(ContentHierarchyItemPatch patch, CancellationToken cancellationToken)
     {
         if (patch.RootFolderId?.Value is { } rootFolderId &&
             await rootFolderRepository.GetByIdAsync(rootFolderId, cancellationToken).ConfigureAwait(false) is null)
@@ -768,8 +773,8 @@ internal sealed class ContentService(
     {
         var contentItemIds = items
             .Select(item => item.ContentItem)
-            .Where(contentItem => contentItem is not null)
-            .Select(contentItem => contentItem!.Id)
+            .OfType<ContentItem>()
+            .Select(contentItem => contentItem.Id)
             .ToArray();
         if (contentItemIds.Length == 0)
         {
@@ -834,7 +839,10 @@ internal sealed class ContentService(
                 {
                     await integration
                         .RemoveDownloadAsync(
-                            download.ExternalId, deleteFiles: true, downloadClient.Settings, cancellationToken)
+                            download.ExternalId,
+                            deleteFiles: true,
+                            downloadClient.Settings,
+                            cancellationToken)
                         .ConfigureAwait(false);
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -1444,8 +1452,13 @@ internal sealed class ContentService(
             }
         }
 
-        var fetched = await GetInitialMetadataAsync(request.ProviderType, request.ExternalIdKey, request.ExternalId,
-            request.ContentType, level, cancellationToken).ConfigureAwait(false);
+        var fetched = await GetInitialMetadataAsync(
+            request.ProviderType,
+            request.ExternalIdKey,
+            request.ExternalId,
+            request.ContentType,
+            level,
+            cancellationToken).ConfigureAwait(false);
         if (fetched?.Contribution is not { } contribution)
         {
             throw new InvalidOperationException("The metadata provider returned no hierarchy for the rename preview.");

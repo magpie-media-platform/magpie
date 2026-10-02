@@ -15,12 +15,9 @@ internal static class DataTelemetry
         "magpie.data.transaction.duration",
         unit: "ms");
 
-    internal static readonly Counter<long> CacheHit = Meter.CreateCounter<long>(
-        "magpie.cache.hit");
+    internal static readonly Counter<long> CacheHit = Meter.CreateCounter<long>("magpie.cache.hit");
 
-    internal static readonly Counter<long> CacheMiss = Meter.CreateCounter<long>(
-        "magpie.cache.miss");
+    internal static readonly Counter<long> CacheMiss = Meter.CreateCounter<long>("magpie.cache.miss");
 
-    internal static readonly Counter<long> CacheRefresh = Meter.CreateCounter<long>(
-        "magpie.cache.refresh");
+    internal static readonly Counter<long> CacheRefresh = Meter.CreateCounter<long>("magpie.cache.refresh");
 }

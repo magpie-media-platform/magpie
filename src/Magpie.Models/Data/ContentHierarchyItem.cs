@@ -111,7 +111,7 @@ public record ContentHierarchyItem
     public bool PendingMetadataRefresh { get; set; }
 
     /// <summary>
-    /// Whether a discovered file waits to import into the item, derived from the import candidates when read.
+    /// Whether a discovered file waits to import into the item.
     /// </summary>
     public bool ImportPending { get; set; }
 

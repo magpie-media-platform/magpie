@@ -534,8 +534,8 @@ describe('NotificationsPage row actions', () => {
         );
         await user.click(await screen.findByRole('button', { name: /^test failures webhook$/i }));
 
-        expect(await screen.findByText('Test Sent')).toBeInTheDocument();
-        expect(screen.getByText(/Check the destination to confirm it arrived\./)).toBeInTheDocument();
+        const toast = (await screen.findByText('Test Sent')).closest<HTMLElement>('[data-component="toast"]');
+        expect(within(toast!).getByText(/Check the destination to confirm it arrived\./)).toBeInTheDocument();
     });
 
     it('surfaces the failure reason when a Send Test fails', async () => {

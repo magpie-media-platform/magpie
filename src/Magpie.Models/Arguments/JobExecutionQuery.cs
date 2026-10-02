@@ -81,7 +81,7 @@ public sealed record JobExecutionQuery
     public Range<DateTime>? CompletedAt { get; init; }
 
     /// <summary>
-    /// The range of completion times, start times when incomplete, or creation times when not started.
+    /// The range of execution timestamps to match.
     /// </summary>
     public Range<DateTime>? ExecutionTimestamp { get; init; }
 

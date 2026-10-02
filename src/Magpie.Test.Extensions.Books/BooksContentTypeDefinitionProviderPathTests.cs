@@ -21,7 +21,7 @@ public sealed class BooksContentTypeDefinitionProviderPathTests
     }
 
     [Test]
-    public void BuildPath_Result_WhenEbookHasTitleAndYear()
+    public void BuildPath_ReturnsFileNameWithTitleAndYear_WhenEbookHasTitleAndYear()
     {
         // Arrange
         ContentHierarchyItem[] ancestors =
@@ -47,7 +47,7 @@ public sealed class BooksContentTypeDefinitionProviderPathTests
     }
 
     [Test]
-    public void BuildPath_Result_WhenAudiobookHasTitleAndYear()
+    public void BuildPath_ReturnsFolderAndFileName_WhenAudiobookHasTitleAndYear()
     {
         // Arrange
         ContentHierarchyItem[] ancestors =
@@ -73,7 +73,7 @@ public sealed class BooksContentTypeDefinitionProviderPathTests
     }
 
     [Test]
-    public void BuildPathPlan_Result_WhenEbookHasTitleAndYear()
+    public void BuildPathPlan_ReturnsNoDirectories_WhenEbookHasTitleAndYear()
     {
         // Arrange
         ContentHierarchyItem[] ancestors =
@@ -103,7 +103,7 @@ public sealed class BooksContentTypeDefinitionProviderPathTests
     }
 
     [Test]
-    public void BuildPathPlan_Result_WhenAudiobookHasTitleAndYear()
+    public void BuildPathPlan_ReturnsAudiobookDirectory_WhenAudiobookHasTitleAndYear()
     {
         // Arrange
         ContentHierarchyItem[] ancestors =

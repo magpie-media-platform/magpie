@@ -10,6 +10,7 @@ using Magpie.Extensions.OpenLibrary.QueryEngine;
 using Magpie.Models;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
+using Magpie.Models.Filtering;
 using Magpie.Sdk.Content;
 
 using Microsoft.Extensions.Logging.Abstractions;
@@ -188,6 +189,61 @@ public sealed class ContentMetadataProviderTests
                     "https://covers.openlibrary.org/b/olid/OL9M-L.jpg?default=false",
                     "https://covers.openlibrary.org/b/id/7-L.jpg?default=false"
                 ]));
+        }
+    }
+
+    [TestCase(null, 1, 1, TemporalPrecision.Year)]
+    [TestCase("March 1975", 3, 1, TemporalPrecision.Month)]
+    [TestCase("March 21, 1975", 3, 21, TemporalPrecision.Day)]
+    public async Task TryGetMetadataAsync_CarriesThePublishDatePrecision_WhenTheWorkHasAPublishDate(
+        string? editionPublishDate,
+        int month,
+        int day,
+        TemporalPrecision precision)
+    {
+        // Arrange
+        var hit = new WorkHit
+        {
+            WorkOlid = "OL1W",
+            Title = "Book",
+            Authors = [new AuthorPair("OL1A", "Author")],
+            FirstPublishYear = 1975
+        };
+        _searchEngine
+            .Setup(value => value.ResolveWorkAsync(It.IsAny<QueryRequest>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new WorkResolution { Kind = WorkResolutionKind.Resolved, Hit = hit });
+        _searchEngine
+            .Setup(value => value.GetRepresentativeEditionAsync(hit, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new EditionDto { PublishDate = editionPublishDate });
+        var contribution = new MetadataContribution { ProviderType = Constants.ProviderType };
+        contribution.ExternalIds.Add(new ExternalId
+        {
+            Source = Constants.ProviderType,
+            Value = "OL1W"
+        });
+
+        // Act
+        var result = await _subject.TryGetMetadataAsync(new MetadataFetchRequest
+        {
+            Item = new ContentHierarchyItem
+            {
+                Id = Guid.NewGuid(),
+                ContentType = "books",
+                Level = "book",
+                Slug = "book",
+                Name = "Book"
+            },
+            ExistingMetadata = [contribution],
+            DefaultLanguagePreference = string.Empty
+        }).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(
+                result?.Contribution?.PublishDate,
+                Is.EqualTo(new DateTime(1975, month, day, 0, 0, 0, DateTimeKind.Utc)));
+            Assert.That(result?.Contribution?.PublishDatePrecision, Is.EqualTo(precision));
         }
     }
 

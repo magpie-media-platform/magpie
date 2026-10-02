@@ -22,7 +22,7 @@ namespace Microsoft.AspNetCore.Builder;
 public static class WebApplicationExtensions
 {
     /// <summary>
-    /// Registers the middleware that blocks requests until the database work at start is complete.
+    /// Registers the database migration gate middleware.
     /// </summary>
     /// <param name="app">The web application to configure</param>
     public static WebApplication UseMagpieDatabaseMigrationGate(this WebApplication app)
@@ -59,8 +59,10 @@ public static class WebApplicationExtensions
         }
 
         var dataSources = ((IEndpointRouteBuilder)app).DataSources;
-        apiGroup.MapFallback("{**rest}", (HttpContext context, [FromServices] ParameterPolicyFactory policyFactory) =>
-            AnswerUnroutedApiRequest(context, dataSources, policyFactory))
+        apiGroup.MapFallback(
+            "{**rest}",
+            (HttpContext context, [FromServices] ParameterPolicyFactory policyFactory) =>
+                AnswerUnroutedApiRequest(context, dataSources, policyFactory))
             .AllowAnonymous();
 
         return app;
@@ -82,7 +84,8 @@ public static class WebApplicationExtensions
             }
 
             var matcher = new TemplateMatcher(
-                TemplateParser.Parse(template), new RouteValueDictionary(endpoint.RoutePattern.Defaults));
+                TemplateParser.Parse(template),
+                new RouteValueDictionary(endpoint.RoutePattern.Defaults));
             var values = new RouteValueDictionary();
             if (matcher.TryMatch(context.Request.Path, values) &&
                 endpoint.RoutePattern.ParameterPolicies.All(parameter => parameter.Value.All(policy =>

@@ -7,15 +7,10 @@ import {
     DropdownMenuTrigger,
     DropdownMenuContent,
     DropdownMenuItem,
-    DropdownMenuCheckboxItem,
     DropdownMenuRadioItem,
     DropdownMenuRadioGroup,
     DropdownMenuLabel,
     DropdownMenuSeparator,
-    DropdownMenuSub,
-    DropdownMenuSubTrigger,
-    DropdownMenuSubContent,
-    DropdownMenuShortcut,
 } from './DropdownMenu';
 
 describe('DropdownMenu', () => {
@@ -231,74 +226,6 @@ describe('DropdownMenu', () => {
         });
     });
 
-    it('renders shortcut text', async () => {
-        const user = userEvent.setup();
-
-        render(
-            <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                    <button>Open Menu</button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent>
-                    <DropdownMenuItem>
-                        Edit
-                        <DropdownMenuShortcut>Ctrl+E</DropdownMenuShortcut>
-                    </DropdownMenuItem>
-                </DropdownMenuContent>
-            </DropdownMenu>,
-        );
-
-        await user.click(screen.getByRole('button', { name: 'Open Menu' }));
-
-        await waitFor(() => {
-            expect(screen.getByText('Ctrl+E')).toBeInTheDocument();
-            expect(screen.getByText('Ctrl+E')).toHaveClass('dropdown-menu-shortcut');
-        });
-    });
-
-    it('applies inset class to item', async () => {
-        const user = userEvent.setup();
-
-        render(
-            <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                    <button>Open Menu</button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent>
-                    <DropdownMenuItem inset>Inset Item</DropdownMenuItem>
-                </DropdownMenuContent>
-            </DropdownMenu>,
-        );
-
-        await user.click(screen.getByRole('button', { name: 'Open Menu' }));
-
-        await waitFor(() => {
-            const item = screen.getByRole('menuitem', { name: 'Inset Item' });
-            expect(item).toHaveAttribute('data-inset', 'true');
-        });
-    });
-
-    it('applies inset class to label', async () => {
-        const user = userEvent.setup();
-
-        render(
-            <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                    <button>Open Menu</button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent>
-                    <DropdownMenuLabel inset>Inset Label</DropdownMenuLabel>
-                </DropdownMenuContent>
-            </DropdownMenu>,
-        );
-
-        await user.click(screen.getByRole('button', { name: 'Open Menu' }));
-
-        await waitFor(() => {
-            expect(screen.getByText('Inset Label')).toHaveAttribute('data-inset', 'true');
-        });
-    });
-
     it('applies custom className to content', async () => {
         const user = userEvent.setup();
 
@@ -369,59 +296,6 @@ describe('DropdownMenu', () => {
         await user.click(screen.getByRole('button', { name: 'Open Menu' }));
 
         expect(handleOpenChange).toHaveBeenCalledWith(true);
-    });
-});
-
-describe('DropdownMenuCheckboxItem', () => {
-    it('renders checkbox item', async () => {
-        const user = userEvent.setup();
-
-        render(
-            <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                    <button>Open Menu</button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent>
-                    <DropdownMenuCheckboxItem checked={true}>Show Status Bar</DropdownMenuCheckboxItem>
-                </DropdownMenuContent>
-            </DropdownMenu>,
-        );
-
-        await user.click(screen.getByRole('button', { name: 'Open Menu' }));
-
-        await waitFor(() => {
-            const item = screen.getByRole('menuitemcheckbox', { name: 'Show Status Bar' });
-            expect(item).toBeInTheDocument();
-            expect(item).toHaveAttribute('aria-checked', 'true');
-        });
-    });
-
-    it('toggles checkbox state on click', async () => {
-        const user = userEvent.setup();
-        const handleCheckedChange = vi.fn();
-
-        render(
-            <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                    <button>Open Menu</button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent>
-                    <DropdownMenuCheckboxItem checked={false} onCheckedChange={handleCheckedChange}>
-                        Show Status Bar
-                    </DropdownMenuCheckboxItem>
-                </DropdownMenuContent>
-            </DropdownMenu>,
-        );
-
-        await user.click(screen.getByRole('button', { name: 'Open Menu' }));
-
-        await waitFor(() => {
-            expect(screen.getByRole('menuitemcheckbox')).toBeInTheDocument();
-        });
-
-        await user.click(screen.getByRole('menuitemcheckbox'));
-
-        expect(handleCheckedChange).toHaveBeenCalledWith(true);
     });
 });
 
@@ -505,125 +379,5 @@ describe('DropdownMenuRadioGroup', () => {
         await user.click(screen.getByRole('menuitemradio', { name: 'Large' }));
 
         expect(handleValueChange).toHaveBeenCalledWith('large');
-    });
-});
-
-describe('DropdownMenuSub', () => {
-    it('renders submenu trigger', async () => {
-        const user = userEvent.setup();
-
-        render(
-            <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                    <button>Open Menu</button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent>
-                    <DropdownMenuSub>
-                        <DropdownMenuSubTrigger>More Options</DropdownMenuSubTrigger>
-                        <DropdownMenuSubContent>
-                            <DropdownMenuItem>Sub Item</DropdownMenuItem>
-                        </DropdownMenuSubContent>
-                    </DropdownMenuSub>
-                </DropdownMenuContent>
-            </DropdownMenu>,
-        );
-
-        await user.click(screen.getByRole('button', { name: 'Open Menu' }));
-
-        await waitFor(() => {
-            expect(screen.getByText('More Options')).toBeInTheDocument();
-        });
-    });
-
-    it('opens submenu on hover', async () => {
-        const user = userEvent.setup();
-
-        render(
-            <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                    <button>Open Menu</button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent>
-                    <DropdownMenuSub>
-                        <DropdownMenuSubTrigger>More Options</DropdownMenuSubTrigger>
-                        <DropdownMenuSubContent>
-                            <DropdownMenuItem>Sub Item</DropdownMenuItem>
-                        </DropdownMenuSubContent>
-                    </DropdownMenuSub>
-                </DropdownMenuContent>
-            </DropdownMenu>,
-        );
-
-        await user.click(screen.getByRole('button', { name: 'Open Menu' }));
-
-        await waitFor(() => {
-            expect(screen.getByText('More Options')).toBeInTheDocument();
-        });
-
-        await user.hover(screen.getByText('More Options'));
-
-        await waitFor(() => {
-            expect(screen.getByText('Sub Item')).toBeInTheDocument();
-        });
-    });
-
-    it('opens submenu with arrow key', async () => {
-        const user = userEvent.setup();
-
-        render(
-            <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                    <button>Open Menu</button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent>
-                    <DropdownMenuSub>
-                        <DropdownMenuSubTrigger>More Options</DropdownMenuSubTrigger>
-                        <DropdownMenuSubContent>
-                            <DropdownMenuItem>Sub Item</DropdownMenuItem>
-                        </DropdownMenuSubContent>
-                    </DropdownMenuSub>
-                </DropdownMenuContent>
-            </DropdownMenu>,
-        );
-
-        await user.click(screen.getByRole('button', { name: 'Open Menu' }));
-
-        await waitFor(() => {
-            expect(screen.getByText('More Options')).toBeInTheDocument();
-        });
-
-        await user.keyboard('{ArrowDown}');
-
-        await user.keyboard('{ArrowRight}');
-
-        await waitFor(() => {
-            expect(screen.getByText('Sub Item')).toBeInTheDocument();
-        });
-    });
-
-    it('applies inset class to sub-trigger', async () => {
-        const user = userEvent.setup();
-
-        render(
-            <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                    <button>Open Menu</button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent>
-                    <DropdownMenuSub>
-                        <DropdownMenuSubTrigger inset>More Options</DropdownMenuSubTrigger>
-                        <DropdownMenuSubContent>
-                            <DropdownMenuItem>Sub Item</DropdownMenuItem>
-                        </DropdownMenuSubContent>
-                    </DropdownMenuSub>
-                </DropdownMenuContent>
-            </DropdownMenu>,
-        );
-
-        await user.click(screen.getByRole('button', { name: 'Open Menu' }));
-
-        await waitFor(() => {
-            expect(screen.getByText('More Options')).toHaveAttribute('data-inset', 'true');
-        });
     });
 });

@@ -85,6 +85,7 @@ public sealed class ReleaseSearchScanJobTests
             _jobManager.Object,
             _jobExecutionRepository.Object,
             _hierarchyRepository.Object,
+            TimeProvider.System,
             NullLogger<ReleaseSearchScanJob>.Instance,
             _progressReporter);
     }
@@ -173,6 +174,48 @@ public sealed class ReleaseSearchScanJobTests
                     It.IsAny<CancellationToken>()),
                 Times.Never);
         }
+    }
+
+    [Test]
+    public async Task ExecuteAsync_EnqueuesReleaseSearch_WhenTheLibraryChangesAfterTheFirstPage()
+    {
+        // Arrange
+        var firstPage = Enumerable.Range(0, 500).Select(_ => Guid.NewGuid()).ToList();
+        var lastOfFirstPage = firstPage[^1];
+        var afterTheChangeId = Guid.NewGuid();
+        _ancestry = new Dictionary<Guid, ContentHierarchyItemAncestry>
+        {
+            [afterTheChangeId] = new() { Id = afterTheChangeId, EffectiveMonitoring = MonitoringMode.Monitored }
+        };
+        _hierarchyRepository
+            .Setup(r => r.QueryIdsAsync(
+                It.Is<ContentHierarchyItemCriteria>(c => c.AfterId == null),
+                It.Is<PagingParameter>(p => p.PageNumber == 1),
+                It.Is<SortParameter?>(s =>
+                    s != null && s.PropertyName == "Id" && s.Direction == SortDirection.Ascending),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(firstPage);
+        _hierarchyRepository
+            .Setup(r => r.QueryIdsAsync(
+                It.Is<ContentHierarchyItemCriteria>(c => c.AfterId == lastOfFirstPage),
+                It.IsAny<PagingParameter>(),
+                It.Is<SortParameter?>(s =>
+                    s != null && s.PropertyName == "Id" && s.Direction == SortDirection.Ascending),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync([afterTheChangeId]);
+
+        // Act
+        await _subject.ExecuteAsync(_jobContext).ConfigureAwait(false);
+
+        // Assert
+        _jobManager.Verify(
+            m => m.ExecuteAsync(
+                It.Is<JobEnqueueRequest>(r =>
+                    r.JobType == "ReleaseSearchItem" &&
+                    r.Parameters != null &&
+                    r.Parameters["contentHierarchyItemId"] == afterTheChangeId.ToString("D")),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
     }
 
     [Test]
@@ -295,30 +338,6 @@ public sealed class ReleaseSearchScanJobTests
         _jobManager.Verify(
             m => m.ExecuteAsync(It.IsAny<JobEnqueueRequest>(), It.IsAny<CancellationToken>()),
             Times.Never);
-    }
-
-    [Test]
-    public async Task ExecuteAsync_EnqueuesReleaseSearch_WhenRootIsFulfilledBelowCutoffAndUpgradeEligible()
-    {
-        // Arrange
-        var rootId = Guid.NewGuid();
-        _unfulfilledLeafIds = [rootId];
-        _ancestry = new Dictionary<Guid, ContentHierarchyItemAncestry>
-        {
-            [rootId] = new() { Id = rootId, EffectiveMonitoring = MonitoringMode.Monitored }
-        };
-
-        // Act
-        await _subject.ExecuteAsync(_jobContext).ConfigureAwait(false);
-
-        // Assert
-        _jobManager.Verify(
-            m => m.ExecuteAsync(
-                It.Is<JobEnqueueRequest>(r =>
-                    r.Parameters != null &&
-                    r.Parameters["contentHierarchyItemId"] == rootId.ToString("D")),
-                It.IsAny<CancellationToken>()),
-            Times.Once);
     }
 
     [Test]

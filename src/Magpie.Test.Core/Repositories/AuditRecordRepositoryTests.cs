@@ -81,7 +81,6 @@ public sealed class AuditRecordRepositoryTests
 
         _userId = user.Id;
 
-        var loggerFactory = NullLoggerFactory.Instance;
         _publishedEvents = [];
         var eventBus = new Mock<IEventBus>();
         eventBus
@@ -94,7 +93,7 @@ public sealed class AuditRecordRepositoryTests
         _subject = new AuditRecordRepository(
             _context,
             eventBus.Object,
-            loggerFactory.CreateLogger<AuditRecordRepository>(),
+            NullLogger<AuditRecordRepository>.Instance,
             transactionManager: _transactionManager,
             Mock.Of<IJobExecutionScopeFactory>(),
             timeProvider: _time);
@@ -103,7 +102,6 @@ public sealed class AuditRecordRepositoryTests
     [TearDown]
     public void TearDown()
     {
-        _context.Database.CloseConnection();
         _context.Dispose();
     }
 

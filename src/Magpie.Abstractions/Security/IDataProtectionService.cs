@@ -8,11 +8,6 @@ namespace Magpie.Abstractions.Security;
 public interface IDataProtectionService
 {
     /// <summary>
-    /// The id of the key that protects new secrets.
-    /// </summary>
-    string ActiveKeyId { get; }
-
-    /// <summary>
     /// Protects a set of secret settings.
     /// </summary>
     /// <param name="settings">The plaintext settings to protect</param>

@@ -13,8 +13,13 @@ public sealed record MediaFileCleanupPlan
     public List<MediaFileCleanupRow> Reassign { get; set; } = [];
 
     /// <summary>
-    /// The copies that a better copy of the same item supersedes. An approved row can unlink the copy, or delete it
-    /// from disk.
+    /// The files on an item whose names cover sibling items that the files do not cover yet.
+    /// </summary>
+    public List<MediaFileCleanupRow> Cover { get; set; } = [];
+
+    /// <summary>
+    /// The copies that a better copy of the same item supersedes, and the extras that are stored as primary files.
+    /// An approved row can unlink the file. Only a superseded copy can also be deleted from disk.
     /// </summary>
     public List<MediaFileCleanupRow> Unlink { get; set; } = [];
 

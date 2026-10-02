@@ -160,7 +160,7 @@ internal sealed class AuditHistoryService(
             .Take(query.Paging.PageSize)
             .ToList();
 
-        return new PagedList<AuditHistoryEntry>
+        return new()
         {
             Items = pageItems,
             PageNumber = query.Paging.PageNumber,
@@ -199,7 +199,7 @@ internal sealed class AuditHistoryService(
             }
         }
 
-        return new ContentActivityScope(resolvedContentId.ToString("D"), downloadIds);
+        return new(resolvedContentId.ToString("D"), downloadIds);
     }
 
     private sealed record ContentActivityScope(string ContentId, IReadOnlySet<string> DownloadIds)

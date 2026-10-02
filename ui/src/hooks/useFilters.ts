@@ -134,7 +134,7 @@ export function useContentFilters() {
     useInvalidateQueriesOnEvents(
         ['contentFilter.created', 'contentFilter.updated', 'contentFilter.deleted'],
         [contentFilterQueryKeys.shared, contentFilterQueryKeys.my],
-        { exact: true, owner: 'content-filter-shell' },
+        { exact: true },
     );
     const sharedQuery = useQuery({
         queryKey: contentFilterQueryKeys.shared,

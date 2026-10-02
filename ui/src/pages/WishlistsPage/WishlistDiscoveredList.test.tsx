@@ -490,6 +490,32 @@ describe('WishlistDiscoveredList', () => {
         expect(screen.queryByRole('button', { name: 'Edit filter' })).not.toBeInTheDocument();
     });
 
+    it.each([
+        [true, 'Edit filter'],
+        [false, 'View filter'],
+    ])(
+        'keeps the filter affordance name when its label is hidden and canEditFilter is %s',
+        async (canEditFilter, name) => {
+            // Arrange
+            render(
+                <TestWrapper>
+                    <WishlistDiscoveredList
+                        wishlistId={WISHLIST_ID}
+                        onOpenFilter={vi.fn()}
+                        canEditFilter={canEditFilter}
+                    />
+                </TestWrapper>,
+            );
+            await findTable();
+
+            // Act
+            screen.getByText(name).style.display = 'none';
+
+            // Assert
+            expect(screen.getByRole('button', { name })).toHaveAttribute('data-action', 'edit-filter');
+        },
+    );
+
     it('displays a found row as "Fulfilled" in the library vocabulary', async () => {
         render(
             <TestWrapper>

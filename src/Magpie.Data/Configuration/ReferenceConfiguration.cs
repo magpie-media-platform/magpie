@@ -10,13 +10,10 @@ internal sealed class ReferenceConfiguration : IEntityTypeConfiguration<Referenc
     public void Configure(EntityTypeBuilder<Reference> builder)
     {
         builder.ToTable("metadata_reference");
-        builder.HasKey(e => e.Id);
-        builder.Property(e => e.Id).ValueGeneratedOnAdd();
         builder.HasOne<MetadataContribution>()
             .WithMany(e => e.References)
             .HasForeignKey(e => e.MetadataContributionId)
             .IsRequired()
             .OnDelete(DeleteBehavior.Restrict);
-        builder.HasIndex(e => e.MetadataContributionId);
     }
 }

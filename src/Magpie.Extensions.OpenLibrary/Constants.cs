@@ -8,6 +8,8 @@ internal static class Constants
 
     public const string ProviderType = "openlibrary";
 
+    public const string MisPairedSubjectRepairId = "openlibrary.content.delete-mis-paired-subject";
+
     public const int PublisherCap = 12;
 
     public const int SubjectFacetCap = 12;

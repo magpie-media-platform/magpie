@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { renderHook, waitFor } from '@testing-library/react';
+import { act, renderHook, waitFor } from '@testing-library/react';
 import { createElement, type ReactNode } from 'react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ExtensionContext, type ExtensionContextValue } from '@/extensions/ExtensionProvider';
 import type { LoaderState } from '@/extensions/types';
@@ -62,6 +62,10 @@ describe('useOptionsSource', () => {
     beforeEach(() => {
         mockApiGet.mockReset();
         delete (window as unknown as Record<string, unknown>).testPlugin;
+    });
+
+    afterEach(() => {
+        vi.useRealTimers();
     });
 
     it('projects and sorts root folders from the root-folders endpoint', async () => {
@@ -136,6 +140,7 @@ describe('useOptionsSource', () => {
     });
 
     it('debounces full form-state changes before calling the JSFunction again', async () => {
+        vi.useFakeTimers({ shouldAdvanceTime: true });
         const listOptions = vi.fn(() => [{ value: 'lib-1', label: 'Movies' }]);
         setWindowFunction({ listOptions });
 
@@ -152,7 +157,7 @@ describe('useOptionsSource', () => {
         };
         rerender({ context: changedContext });
 
-        await new Promise((resolve) => window.setTimeout(resolve, 100));
+        await act(() => vi.advanceTimersByTimeAsync(100));
         expect(listOptions).toHaveBeenCalledTimes(1);
 
         await waitFor(() => expect(listOptions).toHaveBeenCalledTimes(2), { timeout: 1000 });
@@ -160,6 +165,7 @@ describe('useOptionsSource', () => {
     });
 
     it('does not call the JSFunction again when state key order changes', async () => {
+        vi.useFakeTimers({ shouldAdvanceTime: true });
         const listOptions = vi.fn(() => []);
         setWindowFunction({ listOptions });
 
@@ -172,7 +178,7 @@ describe('useOptionsSource', () => {
         await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
         rerender({ context: second });
-        await new Promise((resolve) => window.setTimeout(resolve, 300));
+        await act(() => vi.advanceTimersByTimeAsync(300));
 
         expect(listOptions).toHaveBeenCalledTimes(1);
     });
@@ -184,7 +190,6 @@ describe('useOptionsSource', () => {
         const { result } = renderHook(() => useOptionsSource(jsFunctionSource, defaultContext), {
             wrapper: createWrapper('loading'),
         });
-        await new Promise((resolve) => window.setTimeout(resolve, 20));
 
         expect(listOptions).not.toHaveBeenCalled();
         expect(result.current.fetchStatus).toBe('idle');

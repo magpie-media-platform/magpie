@@ -32,13 +32,6 @@ public interface ITokenService
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Validates a refresh token and gets its user id, or <see langword="null"/> when the token is invalid.
-    /// </summary>
-    /// <param name="refreshToken">The refresh token to validate</param>
-    /// <param name="cancellationToken">The token that cancels the operation</param>
-    Task<Guid?> TryValidateRefreshTokenAsync(string refreshToken, CancellationToken cancellationToken = default);
-
-    /// <summary>
     /// Redeems a single-use refresh token and gets its user id, or <see langword="null"/> when the token is invalid.
     /// </summary>
     /// <param name="refreshToken">The refresh token to redeem</param>

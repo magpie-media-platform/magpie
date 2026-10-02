@@ -42,21 +42,6 @@
         margin-left: var(--space-xs);
     }
 
-    .my-jobs-page__tab-note {
-        margin: 0 0 var(--space-md);
-        font-size: var(--text-xs);
-        color: var(--text-muted);
-
-        & a {
-            color: var(--accent-primary);
-            text-decoration: none;
-
-            &:hover {
-                text-decoration: underline;
-            }
-        }
-    }
-
     .my-jobs-page__section-header {
         display: flex;
         flex-wrap: wrap;
@@ -139,10 +124,6 @@
         margin-top: var(--space-md);
     }
 
-    .my-jobs-page__spinner {
-        animation: spin var(--duration-spinner) linear infinite;
-    }
-
     @media (max-width: 480px) {
         .my-jobs-page__pull-to-refresh .pull-to-refresh__content {
             padding: var(--space-md);
@@ -151,10 +132,6 @@
         .my-jobs-page__header {
             flex-wrap: wrap;
             margin-bottom: var(--space-md);
-        }
-
-        .my-jobs-page__run-label {
-            display: none;
         }
     }
 

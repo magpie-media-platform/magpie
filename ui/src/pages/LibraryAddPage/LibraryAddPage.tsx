@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useLocation, useNavigate } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useOpenLocalContentPreview } from '@/components/content/LocalContentPreview';
 import { type SortingState } from '@tanstack/react-table';
 
@@ -36,12 +36,7 @@ import {
 } from '@/hooks/useProviderMetadataCandidateSearch';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { getRootLevels, useLibraryTypes } from '@/hooks/useLibraryTypes';
-import {
-    useContentFilters,
-    useCreateContentFilter,
-    type ContentFilterCriteria,
-    type ContentFilterItem,
-} from '@/hooks/useFilters';
+import { useContentFilters, useCreateContentFilter, type ContentFilterCriteria } from '@/hooks/useFilters';
 import { useRootFolders, type ApiRootFolder } from '@/hooks/useRootFolders';
 import { useToggle } from '@/hooks/useToggle';
 import { useCardLayout } from '@/hooks/ui/useCardLayout';
@@ -147,19 +142,17 @@ const ADD_CONTENT_SORT_OPTIONS: MobileListSortOption[] = [
 ];
 
 function noResultsDescription(canGoNext: boolean, page: number, hasWarnings: boolean): string {
+    if (hasWarnings) {
+        return 'Results from some providers are missing; the warnings below say why.';
+    }
     if (canGoNext) {
         return 'Continue to the next page to see more results.';
     }
     if (page > 1) {
         return 'Return to a previous page to see earlier results.';
     }
-    if (hasWarnings) {
-        return 'No usable matches were returned. Review the provider warnings and adjust the filter.';
-    }
     return 'No providers returned content matching this filter. Try broader criteria, or save it as a wishlist to keep checking for new matches.';
 }
-
-export type { LibraryAddPreloadState } from '@/types/navigation';
 
 export function LibraryAddPage() {
     useDocumentTitle('Add content');
@@ -312,40 +305,12 @@ export function LibraryAddPage() {
     }, [previewCandidate, previewAddOptions]);
 
     const handleDrawerAdd = useCallback(
-        (target: PreviewDrawerTarget, rootFolderId?: string) => {
-            if (!previewCandidate || !previewCandidate.contentType || !rootFolderId) {
-                return;
+        (_target: PreviewDrawerTarget, rootFolderId?: string) => {
+            if (previewCandidate && rootFolderId) {
+                handleAdd(previewCandidate, rootFolderId);
             }
-            const candidateKey = previewCandidate.key;
-
-            setAddingKey(candidateKey);
-
-            addContent(
-                {
-                    providerType: target.providerType,
-                    externalIdKey: target.externalIdKey,
-                    externalId: target.externalId,
-                    contentType: target.contentType,
-                    ...(target.levelSlug ? { levelSlug: target.levelSlug } : {}),
-                    rootFolderId,
-                },
-                {
-                    onSuccess: (contentHierarchyItemId) =>
-                        handleAddSuccess(candidateKey, target.fallbackTitle, contentHierarchyItemId),
-                    onError: (error) => {
-                        toast({
-                            title: 'Failed to add content',
-                            description: getErrorMessage(error, 'Failed to add content.'),
-                            variant: 'error',
-                        });
-                    },
-                    onSettled: () => {
-                        setAddingKey((current) => (current === candidateKey ? null : current));
-                    },
-                },
-            );
         },
-        [addContent, handleAddSuccess, previewCandidate, toast],
+        [handleAdd, previewCandidate],
     );
 
     const runCandidateSearch = useCallback(
@@ -401,13 +366,6 @@ export function LibraryAddPage() {
         [savedCandidateSearch],
     );
 
-    const runCandidateSearchForSavedFilter = useCallback(
-        (filter: ContentFilterItem, candidateSearchPage: number) => {
-            return runSavedCandidateSearch(filter.query, candidateSearchPage);
-        },
-        [runSavedCandidateSearch],
-    );
-
     const handleSelectSavedFilter = useCallback((savedFilterId: string) => {
         setSelectedSavedFilterId(savedFilterId);
         setPage(1);
@@ -419,8 +377,8 @@ export function LibraryAddPage() {
             return;
         }
         setPage(1);
-        return runCandidateSearchForSavedFilter(filter, 1);
-    }, [savedContentFilters, selectedSavedFilterId, runCandidateSearchForSavedFilter]);
+        return runSavedCandidateSearch(filter.query, 1);
+    }, [savedContentFilters, selectedSavedFilterId, runSavedCandidateSearch]);
 
     const handleSavedFilterSelectChange = useCallback(
         (value: string) => {
@@ -462,13 +420,6 @@ export function LibraryAddPage() {
         [savedFilterOptions, selectedSavedFilterId],
     );
 
-    const handleOpenSavedFilterEditor = useCallback(() => {
-        if (!selectedSavedFilterId) {
-            return;
-        }
-        void navigate(`/filters?edit=${encodeURIComponent(selectedSavedFilterId)}`);
-    }, [navigate, selectedSavedFilterId]);
-
     const preload = location.state as LibraryAddPreloadState | null;
     // Holds the history entry whose preload was applied, so a new preload also applies while this page is open.
     const preloadAppliedRef = useRef<string | null>(null);
@@ -494,7 +445,7 @@ export function LibraryAddPage() {
             }
 
             preloadAppliedRef.current = location.key;
-            void runCandidateSearchForSavedFilter(preloadFilter, 1);
+            void runSavedCandidateSearch(preloadFilter.query, 1);
         } else {
             preloadAppliedRef.current = location.key;
             setPage(1);
@@ -502,14 +453,7 @@ export function LibraryAddPage() {
             setFilterQuery(preload.filterQuery);
             void runCandidateSearch(preload.filterQuery, 1);
         }
-    }, [
-        location.key,
-        preload,
-        savedContentFilters,
-        savedFiltersLoading,
-        runCandidateSearch,
-        runCandidateSearchForSavedFilter,
-    ]);
+    }, [location.key, preload, savedContentFilters, savedFiltersLoading, runCandidateSearch, runSavedCandidateSearch]);
 
     useEffect(() => {
         if (preloadAppliedRef.current === location.key) {
@@ -810,14 +754,14 @@ export function LibraryAddPage() {
                             >
                                 {selectedSavedFilter.query}
                             </code>
-                            <Button
-                                variant="secondary"
-                                size="sm"
-                                onClick={handleOpenSavedFilterEditor}
-                                data-action="open-filter-editor"
-                            >
-                                <PencilSimpleIcon weight="bold" aria-hidden="true" />
-                                Edit on Filters page
+                            <Button asChild variant="secondary" size="sm">
+                                <Link
+                                    to={`/filters?edit=${encodeURIComponent(selectedSavedFilter.id)}`}
+                                    data-action="open-filter-editor"
+                                >
+                                    <PencilSimpleIcon weight="bold" aria-hidden="true" />
+                                    Edit on Filters page
+                                </Link>
                             </Button>
                         </div>
                     )}
@@ -918,7 +862,7 @@ export function LibraryAddPage() {
                     <ProviderSearchWarnings
                         className="library-add-page__warnings"
                         warnings={warnings}
-                        hasResults={candidates.length > 0}
+                        hasResults={candidates.length > 0 || canGoNext}
                         data-testid="library-add-page__warnings"
                     />
                 )}

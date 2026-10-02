@@ -1,7 +1,4 @@
 using System;
-using System.Collections.Generic;
-using System.Diagnostics;
-using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Threading;
@@ -11,6 +8,7 @@ using Magpie.Extensions.Tvmaze;
 using Magpie.Models;
 using Magpie.Sdk.Services;
 
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 
 using Moq;
@@ -66,15 +64,6 @@ public class TvmazeClientTests
             ]
           }
         }
-        """;
-
-    private const string ImagesJson = """
-        [
-          { "id": 1, "type": "poster", "main": true, "resolutions": {
-            "original": { "url": "https://static.tvmaze.com/uploads/poster.jpg", "width": 680, "height": 1000 } } },
-          { "id": 2, "type": "background", "main": false, "resolutions": {
-            "original": { "url": "https://static.tvmaze.com/uploads/background.jpg" } } }
-        ]
         """;
 
     private const string EpisodeJson = """
@@ -160,6 +149,9 @@ public class TvmazeClientTests
         """;
 
     private Mock<ISettingsService> _settingsService = null!;
+    private MockHttpMessageHandler _http = null!;
+    private HttpClient _httpClient = null!;
+    private TvmazeClient _client = null!;
 
     [SetUp]
     public void SetUp()
@@ -170,25 +162,31 @@ public class TvmazeClientTests
                 ProviderSettings.GroupName,
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync((SettingsGroupDetail?)null);
+        _http = new MockHttpMessageHandler();
+        _httpClient = _http.ToHttpClient();
+        _client = new TvmazeClient(
+            _settingsService.Object,
+            Mock.Of<IHttpClientFactory>(factory => factory.CreateClient(TvmazeClient.HttpClientName) == _httpClient),
+            NullLogger<TvmazeClient>.Instance);
+    }
+
+    [TearDown]
+    public void TearDown()
+    {
+        _httpClient.Dispose();
+        _http.Dispose();
     }
 
     [Test]
     public async Task SearchShowsAsync_ReturnsHits_WhenResponseIsValid()
     {
         // Arrange
-        using var http = new MockHttpMessageHandler();
-        http.Expect(HttpMethod.Get, "https://api.tvmaze.com/search/shows*")
+        _http.Expect(HttpMethod.Get, "https://api.tvmaze.com/search/shows*")
             .WithQueryString("q", "game of thrones")
             .Respond("application/json", SearchJson);
-        var httpClient = http.ToHttpClient();
-        using var disposableClient = new TvmazeClient(
-            _settingsService.Object,
-            Mock.Of<IHttpClientFactory>(factory => factory.CreateClient(TvmazeClient.HttpClientName) == httpClient),
-            NullLogger<TvmazeClient>.Instance);
-        var client = disposableClient;
 
         // Act
-        var hits = await client.SearchShowsAsync("game of thrones", default).ConfigureAwait(false);
+        var hits = await _client.SearchShowsAsync("game of thrones", default).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -198,26 +196,19 @@ public class TvmazeClientTests
             Assert.That(hits[0].Show!.Externals!.Imdb, Is.EqualTo("tt0944947"));
         }
 
-        http.VerifyNoOutstandingExpectation();
+        _http.VerifyNoOutstandingExpectation();
     }
 
     [Test]
     public async Task SearchPeopleAsync_ReturnsPeople_WhenResponseIsValid()
     {
         // Arrange
-        using var http = new MockHttpMessageHandler();
-        http.Expect(HttpMethod.Get, "https://api.tvmaze.com/search/people*")
+        _http.Expect(HttpMethod.Get, "https://api.tvmaze.com/search/people*")
             .WithQueryString("q", "mackenzie lintz")
             .Respond("application/json", PersonSearchJson);
-        var httpClient = http.ToHttpClient();
-        using var disposableClient = new TvmazeClient(
-            _settingsService.Object,
-            Mock.Of<IHttpClientFactory>(factory => factory.CreateClient(TvmazeClient.HttpClientName) == httpClient),
-            NullLogger<TvmazeClient>.Instance);
-        var client = disposableClient;
 
         // Act
-        var hits = await client.SearchPeopleAsync("mackenzie lintz", default).ConfigureAwait(false);
+        var hits = await _client.SearchPeopleAsync("mackenzie lintz", default).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -229,15 +220,14 @@ public class TvmazeClientTests
             Assert.That(hits[0].Person!.Birthday, Is.EqualTo("1996-11-22"));
         }
 
-        http.VerifyNoOutstandingExpectation();
+        _http.VerifyNoOutstandingExpectation();
     }
 
     [Test]
     public async Task GetPersonByIdAsync_ReturnsPerson_WhenResponseIsValid()
     {
         // Arrange
-        using var http = new MockHttpMessageHandler();
-        http.Expect(HttpMethod.Get, "https://api.tvmaze.com/people/14072")
+        _http.Expect(HttpMethod.Get, "https://api.tvmaze.com/people/14072")
             .Respond(
                 "application/json",
                 """
@@ -247,15 +237,9 @@ public class TvmazeClientTests
                   "birthday": "1969-06-11"
                 }
                 """);
-        var httpClient = http.ToHttpClient();
-        using var disposableClient = new TvmazeClient(
-            _settingsService.Object,
-            Mock.Of<IHttpClientFactory>(factory => factory.CreateClient(TvmazeClient.HttpClientName) == httpClient),
-            NullLogger<TvmazeClient>.Instance);
-        var client = disposableClient;
 
         // Act
-        var person = await client.GetPersonByIdAsync(14072, default).ConfigureAwait(false);
+        var person = await _client.GetPersonByIdAsync(14072, default).ConfigureAwait(false);
 
         // Assert
         Assert.That(person, Is.Not.Null);
@@ -266,25 +250,18 @@ public class TvmazeClientTests
             Assert.That(person.Birthday, Is.EqualTo("1969-06-11"));
         }
 
-        http.VerifyNoOutstandingExpectation();
+        _http.VerifyNoOutstandingExpectation();
     }
 
     [Test]
     public async Task GetShowWithEmbedsAsync_ReturnsLeanShow_WhenResponseIsValid()
     {
         // Arrange
-        using var http = new MockHttpMessageHandler();
-        http.Expect(HttpMethod.Get, "https://api.tvmaze.com/shows/82")
+        _http.Expect(HttpMethod.Get, "https://api.tvmaze.com/shows/82")
             .Respond("application/json", LookupJson);
-        var httpClient = http.ToHttpClient();
-        using var disposableClient = new TvmazeClient(
-            _settingsService.Object,
-            Mock.Of<IHttpClientFactory>(factory => factory.CreateClient(TvmazeClient.HttpClientName) == httpClient),
-            NullLogger<TvmazeClient>.Instance);
-        var client = disposableClient;
 
         // Act
-        var show = await client.GetShowWithEmbedsAsync(82, [], default).ConfigureAwait(false);
+        var show = await _client.GetShowWithEmbedsAsync(82, [], default).ConfigureAwait(false);
 
         // Assert
         Assert.That(show, Is.Not.Null);
@@ -295,26 +272,19 @@ public class TvmazeClientTests
             Assert.That(show.Embedded, Is.Null);
         }
 
-        http.VerifyNoOutstandingExpectation();
+        _http.VerifyNoOutstandingExpectation();
     }
 
     [Test]
     public async Task GetShowWithEmbedsAsync_EmbeddedResources_WhenResponseIsValid()
     {
         // Arrange
-        using var http = new MockHttpMessageHandler();
-        http.Expect(HttpMethod.Get, "https://api.tvmaze.com/shows/82*")
+        _http.Expect(HttpMethod.Get, "https://api.tvmaze.com/shows/82*")
             .WithExactQueryString("embed[]=episodes&embed[]=images&embed[]=akas&embed[]=seasons")
             .Respond("application/json", ShowJson);
-        var httpClient = http.ToHttpClient();
-        using var disposableClient = new TvmazeClient(
-            _settingsService.Object,
-            Mock.Of<IHttpClientFactory>(factory => factory.CreateClient(TvmazeClient.HttpClientName) == httpClient),
-            NullLogger<TvmazeClient>.Instance);
-        var client = disposableClient;
 
         // Act
-        var show = await client.GetShowWithEmbedsAsync(
+        var show = await _client.GetShowWithEmbedsAsync(
             82, ["episodes", "images", "akas", "seasons"], default).ConfigureAwait(false);
 
         // Assert
@@ -336,62 +306,47 @@ public class TvmazeClientTests
             Assert.That(show.Embedded.Seasons![0].EndDate, Is.EqualTo("2012-03-31"));
         }
 
-        http.VerifyNoOutstandingExpectation();
+        _http.VerifyNoOutstandingExpectation();
     }
 
     [Test]
     public void GetShowWithEmbedsAsync_Throws_WhenPayloadIsBlank()
     {
         // Arrange
-        using var http = new MockHttpMessageHandler();
-        http.Expect(HttpMethod.Get, "https://api.tvmaze.com/shows/82")
+        _http.Expect(HttpMethod.Get, "https://api.tvmaze.com/shows/82")
             .Respond("application/json", string.Empty);
-        var httpClient = http.ToHttpClient();
-        using var disposableClient = new TvmazeClient(
-            _settingsService.Object,
-            Mock.Of<IHttpClientFactory>(factory => factory.CreateClient(TvmazeClient.HttpClientName) == httpClient),
-            NullLogger<TvmazeClient>.Instance);
-        var client = disposableClient;
 
         // Act
         var exception = Assert.ThrowsAsync<HttpRequestException>(async () =>
-            await client.GetShowWithEmbedsAsync(82, [], default).ConfigureAwait(false));
+            await _client.GetShowWithEmbedsAsync(82, [], default).ConfigureAwait(false));
 
         // Assert
         Assert.That(exception!.Message, Does.Contain("unusable JSON payload"));
-        http.VerifyNoOutstandingExpectation();
+        _http.VerifyNoOutstandingExpectation();
     }
 
     [Test]
     public void SearchPeopleAsync_Throws_WhenPayloadIsMalformed()
     {
         // Arrange
-        using var http = new MockHttpMessageHandler();
-        http.Expect(HttpMethod.Get, "https://api.tvmaze.com/search/people*")
+        _http.Expect(HttpMethod.Get, "https://api.tvmaze.com/search/people*")
             .WithQueryString("q", "person")
             .Respond("application/json", "{");
-        var httpClient = http.ToHttpClient();
-        using var disposableClient = new TvmazeClient(
-            _settingsService.Object,
-            Mock.Of<IHttpClientFactory>(factory => factory.CreateClient(TvmazeClient.HttpClientName) == httpClient),
-            NullLogger<TvmazeClient>.Instance);
-        var client = disposableClient;
 
         // Act
         var exception = Assert.ThrowsAsync<HttpRequestException>(async () =>
-            await client.SearchPeopleAsync("person", default).ConfigureAwait(false));
+            await _client.SearchPeopleAsync("person", default).ConfigureAwait(false));
 
         // Assert
         Assert.That(exception!.Message, Does.Contain("unusable JSON payload"));
-        http.VerifyNoOutstandingExpectation();
+        _http.VerifyNoOutstandingExpectation();
     }
 
     [Test]
     public async Task GetShowsPageAsync_ReturnsParsedShows_WhenPageIsRequested()
     {
         // Arrange
-        using var http = new MockHttpMessageHandler();
-        http.Expect(HttpMethod.Get, "https://api.tvmaze.com/shows")
+        _http.Expect(HttpMethod.Get, "https://api.tvmaze.com/shows")
             .WithQueryString("page", "2")
             .Respond(
                 "application/json",
@@ -401,15 +356,9 @@ public class TvmazeClientTests
                   { "id": 83, "name": "Game On" }
                 ]
                 """);
-        var httpClient = http.ToHttpClient();
-        using var disposableClient = new TvmazeClient(
-            _settingsService.Object,
-            Mock.Of<IHttpClientFactory>(factory => factory.CreateClient(TvmazeClient.HttpClientName) == httpClient),
-            NullLogger<TvmazeClient>.Instance);
-        var client = disposableClient;
 
         // Act
-        var shows = await client.GetShowsPageAsync(2, default).ConfigureAwait(false);
+        var shows = await _client.GetShowsPageAsync(2, default).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -419,25 +368,18 @@ public class TvmazeClientTests
             Assert.That(shows[1].Name, Is.EqualTo("Game On"));
         }
 
-        http.VerifyNoOutstandingExpectation();
+        _http.VerifyNoOutstandingExpectation();
     }
 
     [Test]
     public async Task GetEpisodeAsync_ReturnsEpisode_WhenResponseIsValid()
     {
         // Arrange
-        using var http = new MockHttpMessageHandler();
-        http.Expect(HttpMethod.Get, "https://api.tvmaze.com/episodes/4952")
+        _http.Expect(HttpMethod.Get, "https://api.tvmaze.com/episodes/4952")
             .Respond("application/json", EpisodeJson);
-        var httpClient = http.ToHttpClient();
-        using var disposableClient = new TvmazeClient(
-            _settingsService.Object,
-            Mock.Of<IHttpClientFactory>(factory => factory.CreateClient(TvmazeClient.HttpClientName) == httpClient),
-            NullLogger<TvmazeClient>.Instance);
-        var client = disposableClient;
 
         // Act
-        var episode = await client.GetEpisodeAsync(4952, default).ConfigureAwait(false);
+        var episode = await _client.GetEpisodeAsync(4952, default).ConfigureAwait(false);
 
         // Assert
         Assert.That(episode, Is.Not.Null);
@@ -455,15 +397,14 @@ public class TvmazeClientTests
                 Is.EqualTo("https://static.tvmaze.com/uploads/episode-original.jpg"));
         }
 
-        http.VerifyNoOutstandingExpectation();
+        _http.VerifyNoOutstandingExpectation();
     }
 
     [Test]
     public async Task GetShowWithEmbedsAsync_RequestsCastAndCrew_WhenShowIsFetched()
     {
         // Arrange
-        using var http = new MockHttpMessageHandler();
-        http.Expect(HttpMethod.Get, "https://api.tvmaze.com/shows/82*")
+        _http.Expect(HttpMethod.Get, "https://api.tvmaze.com/shows/82*")
             .WithExactQueryString("embed[]=cast&embed[]=crew")
             .Respond(
                 "application/json",
@@ -483,15 +424,9 @@ public class TvmazeClientTests
                   }
                 }
                 """);
-        var httpClient = http.ToHttpClient();
-        using var disposableClient = new TvmazeClient(
-            _settingsService.Object,
-            Mock.Of<IHttpClientFactory>(factory => factory.CreateClient(TvmazeClient.HttpClientName) == httpClient),
-            NullLogger<TvmazeClient>.Instance);
-        var client = disposableClient;
 
         // Act
-        var show = await client.GetShowWithEmbedsAsync(82, ["cast", "crew"], default).ConfigureAwait(false);
+        var show = await _client.GetShowWithEmbedsAsync(82, ["cast", "crew"], default).ConfigureAwait(false);
 
         // Assert
         Assert.That(show, Is.Not.Null);
@@ -505,15 +440,14 @@ public class TvmazeClientTests
             Assert.That(show.Embedded.Crew![0].Type, Is.EqualTo("Creator"));
         }
 
-        http.VerifyNoOutstandingExpectation();
+        _http.VerifyNoOutstandingExpectation();
     }
 
     [Test]
     public async Task GetShowWithEmbedsAsync_RequestsCombinedEmbeds_WhenShowIsFetched()
     {
         // Arrange
-        using var http = new MockHttpMessageHandler();
-        http.Expect(HttpMethod.Get, "https://api.tvmaze.com/shows/82*")
+        _http.Expect(HttpMethod.Get, "https://api.tvmaze.com/shows/82*")
             .WithExactQueryString("embed[]=akas&embed[]=cast&embed[]=crew&embed[]=images")
             .Respond(
                 "application/json",
@@ -529,15 +463,9 @@ public class TvmazeClientTests
                   }
                 }
                 """);
-        var httpClient = http.ToHttpClient();
-        using var disposableClient = new TvmazeClient(
-            _settingsService.Object,
-            Mock.Of<IHttpClientFactory>(factory => factory.CreateClient(TvmazeClient.HttpClientName) == httpClient),
-            NullLogger<TvmazeClient>.Instance);
-        var client = disposableClient;
 
         // Act
-        var show = await client.GetShowWithEmbedsAsync(
+        var show = await _client.GetShowWithEmbedsAsync(
             82,
             ["akas", "cast", "crew", "images"],
             default).ConfigureAwait(false);
@@ -552,26 +480,19 @@ public class TvmazeClientTests
             Assert.That(show.Embedded.Images, Is.Empty);
         }
 
-        http.VerifyNoOutstandingExpectation();
+        _http.VerifyNoOutstandingExpectation();
     }
 
     [Test]
     public async Task GetPersonCastCreditsAsync_ReturnsCredits_WhenShowIsEmbedded()
     {
         // Arrange
-        using var http = new MockHttpMessageHandler();
-        http.Expect(HttpMethod.Get, "https://api.tvmaze.com/people/1/castcredits*")
+        _http.Expect(HttpMethod.Get, "https://api.tvmaze.com/people/1/castcredits*")
             .WithQueryString("embed", "show")
             .Respond("application/json", CastCreditsJson);
-        var httpClient = http.ToHttpClient();
-        using var disposableClient = new TvmazeClient(
-            _settingsService.Object,
-            Mock.Of<IHttpClientFactory>(factory => factory.CreateClient(TvmazeClient.HttpClientName) == httpClient),
-            NullLogger<TvmazeClient>.Instance);
-        var client = disposableClient;
 
         // Act
-        var credits = await client.GetPersonCastCreditsAsync(1, default).ConfigureAwait(false);
+        var credits = await _client.GetPersonCastCreditsAsync(1, default).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -583,26 +504,19 @@ public class TvmazeClientTests
             Assert.That(credits[0].Embedded!.Show!.Externals!.Imdb, Is.EqualTo("tt1553656"));
         }
 
-        http.VerifyNoOutstandingExpectation();
+        _http.VerifyNoOutstandingExpectation();
     }
 
     [Test]
     public async Task GetPersonCrewCreditsAsync_ReturnsCredits_WhenShowIsEmbedded()
     {
         // Arrange
-        using var http = new MockHttpMessageHandler();
-        http.Expect(HttpMethod.Get, "https://api.tvmaze.com/people/100/crewcredits*")
+        _http.Expect(HttpMethod.Get, "https://api.tvmaze.com/people/100/crewcredits*")
             .WithQueryString("embed", "show")
             .Respond("application/json", CrewCreditsJson);
-        var httpClient = http.ToHttpClient();
-        using var disposableClient = new TvmazeClient(
-            _settingsService.Object,
-            Mock.Of<IHttpClientFactory>(factory => factory.CreateClient(TvmazeClient.HttpClientName) == httpClient),
-            NullLogger<TvmazeClient>.Instance);
-        var client = disposableClient;
 
         // Act
-        var credits = await client.GetPersonCrewCreditsAsync(100, default).ConfigureAwait(false);
+        var credits = await _client.GetPersonCrewCreditsAsync(100, default).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -613,25 +527,18 @@ public class TvmazeClientTests
             Assert.That(credits[0].Embedded!.Show!.Externals!.TheTvdb, Is.EqualTo(248742));
         }
 
-        http.VerifyNoOutstandingExpectation();
+        _http.VerifyNoOutstandingExpectation();
     }
 
     [Test]
     public async Task GetEpisodeGuestCastAsync_ReturnsGuestCast_WhenResponseIsValid()
     {
         // Arrange
-        using var http = new MockHttpMessageHandler();
-        http.Expect(HttpMethod.Get, "https://api.tvmaze.com/episodes/1/guestcast")
+        _http.Expect(HttpMethod.Get, "https://api.tvmaze.com/episodes/1/guestcast")
             .Respond("application/json", GuestCastJson);
-        var httpClient = http.ToHttpClient();
-        using var disposableClient = new TvmazeClient(
-            _settingsService.Object,
-            Mock.Of<IHttpClientFactory>(factory => factory.CreateClient(TvmazeClient.HttpClientName) == httpClient),
-            NullLogger<TvmazeClient>.Instance);
-        var client = disposableClient;
 
         // Act
-        var cast = await client.GetEpisodeGuestCastAsync(1, default).ConfigureAwait(false);
+        var cast = await _client.GetEpisodeGuestCastAsync(1, default).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -643,25 +550,18 @@ public class TvmazeClientTests
             Assert.That(cast[0].Voice, Is.True);
         }
 
-        http.VerifyNoOutstandingExpectation();
+        _http.VerifyNoOutstandingExpectation();
     }
 
     [Test]
     public async Task GetEpisodeGuestCrewAsync_ReturnsGuestCrew_WhenResponseIsValid()
     {
         // Arrange
-        using var http = new MockHttpMessageHandler();
-        http.Expect(HttpMethod.Get, "https://api.tvmaze.com/episodes/1/guestcrew")
+        _http.Expect(HttpMethod.Get, "https://api.tvmaze.com/episodes/1/guestcrew")
             .Respond("application/json", GuestCrewJson);
-        var httpClient = http.ToHttpClient();
-        using var disposableClient = new TvmazeClient(
-            _settingsService.Object,
-            Mock.Of<IHttpClientFactory>(factory => factory.CreateClient(TvmazeClient.HttpClientName) == httpClient),
-            NullLogger<TvmazeClient>.Instance);
-        var client = disposableClient;
 
         // Act
-        var crew = await client.GetEpisodeGuestCrewAsync(1, default).ConfigureAwait(false);
+        var crew = await _client.GetEpisodeGuestCrewAsync(1, default).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -671,39 +571,31 @@ public class TvmazeClientTests
             Assert.That(crew[0].Type, Is.EqualTo("Story"));
         }
 
-        http.VerifyNoOutstandingExpectation();
+        _http.VerifyNoOutstandingExpectation();
     }
 
     [Test]
     public async Task LookupShowAsync_ReturnsShow_WhenExternalIdIsKnown()
     {
         // Arrange
-        using var http = new MockHttpMessageHandler();
-        http.Expect(HttpMethod.Get, "https://api.tvmaze.com/lookup/shows*")
+        _http.Expect(HttpMethod.Get, "https://api.tvmaze.com/lookup/shows*")
             .WithQueryString("imdb", "tt0944947")
             .Respond("application/json", LookupJson);
-        var httpClient = http.ToHttpClient();
-        using var disposableClient = new TvmazeClient(
-            _settingsService.Object,
-            Mock.Of<IHttpClientFactory>(factory => factory.CreateClient(TvmazeClient.HttpClientName) == httpClient),
-            NullLogger<TvmazeClient>.Instance);
-        var client = disposableClient;
 
         // Act
-        var show = await client.LookupShowAsync("imdb", "tt0944947", default).ConfigureAwait(false);
+        var show = await _client.LookupShowAsync("imdb", "tt0944947", default).ConfigureAwait(false);
 
         // Assert
         Assert.That(show, Is.Not.Null);
         Assert.That(show!.Id, Is.EqualTo(82));
-        http.VerifyNoOutstandingExpectation();
+        _http.VerifyNoOutstandingExpectation();
     }
 
     [Test]
-    public async Task LookupShowAsync_EmitsRequestSpanPerWireAttempt_WhenLookupIsMovedPermanently()
+    public async Task LookupShowAsync_ReturnsShow_WhenLookupIsMovedPermanently()
     {
         // Arrange
-        using var http = new MockHttpMessageHandler();
-        http.Expect(HttpMethod.Get, "https://api.tvmaze.com/lookup/shows*")
+        _http.Expect(HttpMethod.Get, "https://api.tvmaze.com/lookup/shows*")
             .WithQueryString("imdb", "tt0944947")
             .Respond(_ =>
             {
@@ -711,96 +603,56 @@ public class TvmazeClientTests
                 response.Headers.Location = new Uri("https://api.tvmaze.com/shows/82");
                 return response;
             });
-        http.Expect(HttpMethod.Get, "https://api.tvmaze.com/shows/82")
+        _http.Expect(HttpMethod.Get, "https://api.tvmaze.com/shows/82")
             .Respond("application/json", LookupJson);
-        var spans = new List<Activity>();
-        using var trace = new Activity("test").Start();
-        using var listener = new ActivityListener
-        {
-            ShouldListenTo = source => source.Name == "magpie.extensions.tvmaze",
-            Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
-            ActivityStopped = activity =>
-            {
-                if (activity.TraceId == trace.TraceId)
-                {
-                    spans.Add(activity);
-                }
-            }
-        };
-        ActivitySource.AddActivityListener(listener);
-        var httpClient = http.ToHttpClient();
-        using var disposableClient = new TvmazeClient(
+        var services = new ServiceCollection();
+        services.AddHttpClient(TvmazeClient.HttpClientName)
+            .AddUpstreamCooldown(followRedirects: true)
+            .ConfigurePrimaryHttpMessageHandler(() => _http);
+        using var provider = services.BuildServiceProvider();
+        var client = new TvmazeClient(
             _settingsService.Object,
-            Mock.Of<IHttpClientFactory>(factory => factory.CreateClient(TvmazeClient.HttpClientName) == httpClient),
+            provider.GetRequiredService<IHttpClientFactory>(),
             NullLogger<TvmazeClient>.Instance);
-        var client = disposableClient;
 
         // Act
         var show = await client.LookupShowAsync("imdb", "tt0944947", default).ConfigureAwait(false);
 
         // Assert
         Assert.That(show, Is.Not.Null);
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(show!.Id, Is.EqualTo(82));
-            Assert.That(
-                spans.Select(span => span.OperationName),
-                Is.EqualTo(["tvmaze.query.request", "tvmaze.query.request"]));
-            Assert.That(
-                spans.Select(span => span.GetTagItem("magpie.request.target")),
-                Is.EqualTo(
-                [
-                    "https://api.tvmaze.com/lookup/shows?imdb=tt0944947",
-                    "https://api.tvmaze.com/shows/82"
-                ]));
-        }
-
-        http.VerifyNoOutstandingExpectation();
+        Assert.That(show!.Id, Is.EqualTo(82));
+        _http.VerifyNoOutstandingExpectation();
     }
 
     [Test]
     public async Task GetShowWithEmbedsAsync_ReturnsNull_WhenNotFound()
     {
         // Arrange
-        using var http = new MockHttpMessageHandler();
-        http.Expect(HttpMethod.Get, "https://api.tvmaze.com/shows/999*")
+        _http.Expect(HttpMethod.Get, "https://api.tvmaze.com/shows/999*")
             .Respond(HttpStatusCode.NotFound);
-        var httpClient = http.ToHttpClient();
-        using var disposableClient = new TvmazeClient(
-            _settingsService.Object,
-            Mock.Of<IHttpClientFactory>(factory => factory.CreateClient(TvmazeClient.HttpClientName) == httpClient),
-            NullLogger<TvmazeClient>.Instance);
-        var client = disposableClient;
 
         // Act
-        var show = await client.GetShowWithEmbedsAsync(
+        var show = await _client.GetShowWithEmbedsAsync(
             999, ["episodes", "images", "akas", "seasons"], default).ConfigureAwait(false);
 
         // Assert
         Assert.That(show, Is.Null);
-        http.VerifyNoOutstandingExpectation();
+        _http.VerifyNoOutstandingExpectation();
     }
 
     [Test]
     public async Task GetEpisodeAsync_ReturnsNull_WhenNotFound()
     {
         // Arrange
-        using var http = new MockHttpMessageHandler();
-        http.Expect(HttpMethod.Get, "https://api.tvmaze.com/episodes/999")
+        _http.Expect(HttpMethod.Get, "https://api.tvmaze.com/episodes/999")
             .Respond(HttpStatusCode.NotFound);
-        var httpClient = http.ToHttpClient();
-        using var disposableClient = new TvmazeClient(
-            _settingsService.Object,
-            Mock.Of<IHttpClientFactory>(factory => factory.CreateClient(TvmazeClient.HttpClientName) == httpClient),
-            NullLogger<TvmazeClient>.Instance);
-        var client = disposableClient;
 
         // Act
-        var episode = await client.GetEpisodeAsync(999, default).ConfigureAwait(false);
+        var episode = await _client.GetEpisodeAsync(999, default).ConfigureAwait(false);
 
         // Assert
         Assert.That(episode, Is.Null);
-        http.VerifyNoOutstandingExpectation();
+        _http.VerifyNoOutstandingExpectation();
     }
 
     [TestCase("", "", "https://api.tvmaze.com/shows/82")]
@@ -810,24 +662,18 @@ public class TvmazeClientTests
         string first, string second, string expectedUri)
     {
         // Arrange
-        using var http = new MockHttpMessageHandler();
-        var request = http.When(HttpMethod.Get, "https://api.tvmaze.com/shows/82*")
+        var request = _http.When(HttpMethod.Get, "https://api.tvmaze.com/shows/82*")
             .With(message => message.RequestUri!.AbsoluteUri == expectedUri)
             .Respond("application/json", ShowJson);
-        using var httpClient = http.ToHttpClient();
-        using var client = new TvmazeClient(
-            _settingsService.Object,
-            Mock.Of<IHttpClientFactory>(factory => factory.CreateClient(TvmazeClient.HttpClientName) == httpClient),
-            NullLogger<TvmazeClient>.Instance);
 
         // Act
-        var show = await client.GetShowWithEmbedsAsync(82, [first, second], default).ConfigureAwait(false);
+        var show = await _client.GetShowWithEmbedsAsync(82, [first, second], default).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
         {
             Assert.That(show!.Id, Is.EqualTo(82));
-            Assert.That(http.GetMatchCount(request), Is.EqualTo(1));
+            Assert.That(_http.GetMatchCount(request), Is.EqualTo(1));
         }
     }
 
@@ -835,16 +681,10 @@ public class TvmazeClientTests
     public async Task SearchShowsAsync_ReadsSettingsOncePerClient_WhenRequestsRunConcurrently()
     {
         // Arrange
-        using var http = new MockHttpMessageHandler();
-        http.When(HttpMethod.Get, "https://api.tvmaze.com/search/shows*").Respond("application/json", SearchJson);
-        using var httpClient = http.ToHttpClient();
-        using var client = new TvmazeClient(
-            _settingsService.Object,
-            Mock.Of<IHttpClientFactory>(factory => factory.CreateClient(TvmazeClient.HttpClientName) == httpClient),
-            NullLogger<TvmazeClient>.Instance);
+        _http.When(HttpMethod.Get, "https://api.tvmaze.com/search/shows*").Respond("application/json", SearchJson);
 
         // Act
-        await Task.WhenAll(client.SearchShowsAsync("first", default), client.SearchShowsAsync("second", default))
+        await Task.WhenAll(_client.SearchShowsAsync("first", default), _client.SearchShowsAsync("second", default))
             .ConfigureAwait(false);
 
         // Assert
@@ -858,17 +698,11 @@ public class TvmazeClientTests
     public void GetShowsPageAsync_Throws_WhenPayloadIsUnusable(string payload)
     {
         // Arrange
-        using var http = new MockHttpMessageHandler();
-        http.When(HttpMethod.Get, "https://api.tvmaze.com/shows*").Respond("application/json", payload);
-        using var httpClient = http.ToHttpClient();
-        using var client = new TvmazeClient(
-            _settingsService.Object,
-            Mock.Of<IHttpClientFactory>(factory => factory.CreateClient(TvmazeClient.HttpClientName) == httpClient),
-            NullLogger<TvmazeClient>.Instance);
+        _http.When(HttpMethod.Get, "https://api.tvmaze.com/shows*").Respond("application/json", payload);
 
         // Act
         var exception = Assert.ThrowsAsync<HttpRequestException>(async () =>
-            await client.GetShowsPageAsync(0, default).ConfigureAwait(false));
+            await _client.GetShowsPageAsync(0, default).ConfigureAwait(false));
 
         // Assert
         Assert.That(exception!.Message, Is.EqualTo("TVMaze returned an unusable JSON payload."));

@@ -334,8 +334,10 @@ internal sealed class RootFolderRepository(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "The root folder repository failed to create root folder " +
-                "{RootFolderName}.", model.Name);
+            logger.LogError(
+                ex,
+                "The root folder repository failed to create root folder {RootFolderName}.",
+                model.Name);
             throw;
         }
 

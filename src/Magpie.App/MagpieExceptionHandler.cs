@@ -65,7 +65,7 @@ internal sealed class MagpieExceptionHandler(
             _ => exception.Message
         };
 
-        logger.LogWarning(exception, "The request failed with status {StatusCode}", statusCode.Value);
+        logger.LogWarning(exception, "Request failed with status {StatusCode}", statusCode.Value);
 
         httpContext.Response.StatusCode = statusCode.Value;
 

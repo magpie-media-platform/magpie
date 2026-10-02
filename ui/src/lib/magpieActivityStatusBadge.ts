@@ -5,17 +5,6 @@ interface MagpieActivityStatusBadge {
     label: string;
 }
 
-const MAGPIE_ACTIVITY_STATUS_LABEL: Record<string, string> = {
-    Queued: 'Queued',
-    Pending: 'Pending',
-    Running: 'Running',
-    Completed: 'Completed',
-    Failed: 'Failed',
-    Cancelled: 'Cancelled',
-    CancellationRequested: 'Cancelling',
-    Stale: 'Stale',
-};
-
 const MAGPIE_ACTIVITY_STATUS_VARIANT: Record<string, BadgeVariant> = {
     Queued: 'unknown',
     Pending: 'unknown',
@@ -31,6 +20,6 @@ export function getMagpieActivityStatusBadge(status: string | null | undefined):
     const key = status ?? '';
     return {
         variant: MAGPIE_ACTIVITY_STATUS_VARIANT[key] ?? 'unknown',
-        label: MAGPIE_ACTIVITY_STATUS_LABEL[key] ?? key,
+        label: key === 'CancellationRequested' ? 'Cancelling' : key,
     };
 }

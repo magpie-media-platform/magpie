@@ -10,8 +10,6 @@ internal sealed class RefreshTokenConfiguration : IEntityTypeConfiguration<Refre
     public void Configure(EntityTypeBuilder<RefreshToken> builder)
     {
         builder.ToTable("auth_refreshToken");
-        builder.HasKey(e => e.Id);
-        builder.Property(e => e.Id).ValueGeneratedOnAdd();
         builder.Property(e => e.AccessTokenJti).HasMaxLength(36);
         builder.Property(e => e.PreviousTokenHash).HasMaxLength(44);
         builder.Property(e => e.RenewalKeyHash).HasMaxLength(44);
@@ -20,7 +18,6 @@ internal sealed class RefreshTokenConfiguration : IEntityTypeConfiguration<Refre
             .HasForeignKey(e => e.UserId)
             .IsRequired()
             .OnDelete(DeleteBehavior.Restrict);
-        builder.HasIndex(e => e.UserId);
         builder.HasIndex(e => e.ExpiresAt);
         builder.HasIndex(e => e.AccessTokenJti).IsUnique();
         builder.HasIndex(e => e.RenewalKeyHash);

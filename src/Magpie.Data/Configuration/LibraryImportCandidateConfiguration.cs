@@ -13,8 +13,6 @@ internal sealed class LibraryImportCandidateConfiguration : IEntityTypeConfigura
     public void Configure(EntityTypeBuilder<LibraryImportCandidate> builder)
     {
         builder.ToTable("content_libraryImportCandidate");
-        builder.HasKey(e => e.Id);
-        builder.Property(e => e.Id).ValueGeneratedOnAdd();
         builder.Property(e => e.Matches).HasConversion(
             v => JsonSerializer.Serialize(v, JsonSerializerOptions.Default),
             v => JsonSerializer.Deserialize<List<LibraryImportMatch>>(v, JsonSerializerOptions.Default)

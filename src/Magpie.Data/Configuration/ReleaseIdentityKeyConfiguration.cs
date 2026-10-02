@@ -10,8 +10,6 @@ internal sealed class ReleaseIdentityKeyConfiguration : IEntityTypeConfiguration
     public void Configure(EntityTypeBuilder<ReleaseIdentityKey> builder)
     {
         builder.ToTable("indexer_releaseIdentityKey");
-        builder.HasKey(e => e.Id);
-        builder.Property(e => e.Id).ValueGeneratedOnAdd();
         builder.Property(e => e.Authority).HasMaxLength(255).IsRequired();
         builder.Property(e => e.Value).HasMaxLength(1024).IsRequired();
         builder.HasOne(e => e.Release)

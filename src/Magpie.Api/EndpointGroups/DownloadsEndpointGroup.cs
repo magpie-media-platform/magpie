@@ -132,11 +132,7 @@ internal sealed class DownloadsEndpointGroup : IApiEndpointGroup
             Statuses = statuses is { Length: > 0 } ? statuses : null,
         };
 
-        var paging = new PagingParameter
-        {
-            PageNumber = pageNumber ?? 1,
-            PageSize = pageSize ?? 25,
-        };
+        var paging = new PagingParameter { PageNumber = pageNumber ?? 1, PageSize = pageSize ?? 25 };
 
         var sort = string.IsNullOrEmpty(sortBy)
             ? null
@@ -192,7 +188,8 @@ internal sealed class DownloadsEndpointGroup : IApiEndpointGroup
                 Results.NoContent(),
             DownloadCancellationOutcome.NotFound => Results.NotFound(),
             DownloadCancellationOutcome.NotCancellable => Results.Problem(
-                "The download status does not permit cancellation.", statusCode: StatusCodes.Status409Conflict),
+                "The download status does not permit cancellation.",
+                statusCode: StatusCodes.Status409Conflict),
             DownloadCancellationOutcome.ClientUnavailable => Results.Problem(
                 "The download client or transfer identifier is unavailable. Cancellation can be retried.",
                 statusCode: StatusCodes.Status503ServiceUnavailable),

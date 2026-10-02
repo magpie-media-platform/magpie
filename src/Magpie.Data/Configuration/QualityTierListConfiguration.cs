@@ -13,8 +13,6 @@ internal sealed class QualityTierListConfiguration : IEntityTypeConfiguration<Qu
     public void Configure(EntityTypeBuilder<QualityTierList> builder)
     {
         builder.ToTable("quality_tierList");
-        builder.HasKey(e => e.Id);
-        builder.Property(e => e.Id).ValueGeneratedOnAdd();
         builder.Property(e => e.Rules).HasConversion(
             v => JsonSerializer.Serialize(v, JsonSerializerOptions.Default),
             v => JsonSerializer.Deserialize<List<QualityTierRule>>(v, JsonSerializerOptions.Default) ?? new())

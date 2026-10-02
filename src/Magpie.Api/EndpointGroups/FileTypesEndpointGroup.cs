@@ -114,9 +114,7 @@ internal sealed class FileTypesEndpointGroup : IApiEndpointGroup
     {
         if (string.IsNullOrWhiteSpace(request.MimeType))
         {
-            return Results.Problem(
-                detail: "The MIME type is required.",
-                statusCode: StatusCodes.Status400BadRequest);
+            return Results.Problem(detail: "The MIME type is required.", statusCode: StatusCodes.Status400BadRequest);
         }
 
         var mapping = await fileSystem

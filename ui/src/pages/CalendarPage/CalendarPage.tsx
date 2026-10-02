@@ -15,15 +15,14 @@ import { Button } from '@/components/ui/Button';
 import { Alert } from '@/components/ui/Alert';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Skeleton } from '@/components/ui/Skeleton';
-import { CalendarMainSlot } from '@/components/ui/Slot/CalendarSlots';
+import { Slot } from '@/components/ui/Slot';
 import { PullToRefresh } from '@/components/ui/PullToRefresh';
 import { useCalendar } from '@/hooks/useCalendar';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { useUrlFilterState } from '@/hooks/useUrlFilterState';
 import type { CalendarEvent, CalendarView } from '@/types/calendar';
 
-import { DayView } from './DayView';
-import { ListView } from './ListView';
+import { CalendarEventList } from './CalendarEventList';
 import { MonthView } from './MonthView';
 import { WeekView } from './WeekView';
 import {
@@ -120,45 +119,28 @@ export function CalendarPage() {
             .sort((a, b) => parseCalendarDate(a.date).getTime() - parseCalendarDate(b.date).getTime());
     }, [view, currentDate, events, getEventsForDate]);
 
-    const handlePrev = useCallback(() => {
-        let newDate: Date;
-        switch (view) {
-            case 'month':
-                newDate = new Date(currentDate.getFullYear(), currentDate.getMonth() - 1, 1);
-                break;
-            case 'week':
-                newDate = new Date(currentDate);
-                newDate.setDate(newDate.getDate() - 7);
-                break;
-            case 'day':
-                newDate = new Date(currentDate);
-                newDate.setDate(newDate.getDate() - 1);
-                break;
-            case 'list':
-                return;
-        }
-        updateParams({ date: formatDateKey(newDate) });
-    }, [currentDate, view, updateParams]);
-
-    const handleNext = useCallback(() => {
-        let newDate: Date;
-        switch (view) {
-            case 'month':
-                newDate = new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 1);
-                break;
-            case 'week':
-                newDate = new Date(currentDate);
-                newDate.setDate(newDate.getDate() + 7);
-                break;
-            case 'day':
-                newDate = new Date(currentDate);
-                newDate.setDate(newDate.getDate() + 1);
-                break;
-            case 'list':
-                return;
-        }
-        updateParams({ date: formatDateKey(newDate) });
-    }, [currentDate, view, updateParams]);
+    const shiftDate = useCallback(
+        (step: 1 | -1) => {
+            let newDate: Date;
+            switch (view) {
+                case 'month':
+                    newDate = new Date(currentDate.getFullYear(), currentDate.getMonth() + step, 1);
+                    break;
+                case 'week':
+                    newDate = new Date(currentDate);
+                    newDate.setDate(newDate.getDate() + step * 7);
+                    break;
+                case 'day':
+                    newDate = new Date(currentDate);
+                    newDate.setDate(newDate.getDate() + step);
+                    break;
+                case 'list':
+                    return;
+            }
+            updateParams({ date: formatDateKey(newDate) });
+        },
+        [currentDate, view, updateParams],
+    );
 
     const handleToday = useCallback(() => {
         updateParams({ date: formatDateKey(new Date()) });
@@ -211,7 +193,7 @@ export function CalendarPage() {
                     icon={<CalendarBlankIcon weight="duotone" data-testid="calendar-page__icon" aria-hidden="true" />}
                 />
 
-                <CalendarMainSlot>
+                <Slot slot="calendar.main">
                     {isTruncated && (
                         <Alert variant="warning" title="Not every calendar event is listed">
                             Only part of this date range was loaded. Select a shorter date range.
@@ -222,7 +204,7 @@ export function CalendarPage() {
                             <Button
                                 variant="ghost"
                                 size="sm"
-                                onClick={handlePrev}
+                                onClick={() => shiftDate(-1)}
                                 disabled={view === 'list'}
                                 aria-label="Previous"
                                 data-action="prev"
@@ -233,7 +215,7 @@ export function CalendarPage() {
                             <Button
                                 variant="ghost"
                                 size="sm"
-                                onClick={handleNext}
+                                onClick={() => shiftDate(1)}
                                 disabled={view === 'list'}
                                 aria-label="Next"
                                 data-action="next"
@@ -335,13 +317,31 @@ export function CalendarPage() {
                     )}
 
                     {!isLoading && view === 'day' && (
-                        <DayView viewEvents={viewEvents} onEventClick={handleEventClick} />
+                        <CalendarEventList
+                            viewEvents={viewEvents}
+                            onEventClick={handleEventClick}
+                            containerClassName="calendar-page__day-view"
+                            dataComponent="day-view"
+                            listClassName="calendar-page__day-events-list"
+                            emptyTitle="No events on this day"
+                            emptyDescription="Try a different date or check other views"
+                        />
                     )}
 
                     {!isLoading && view === 'list' && (
-                        <ListView viewEvents={viewEvents} onEventClick={handleEventClick} />
+                        <CalendarEventList
+                            viewEvents={viewEvents}
+                            onEventClick={handleEventClick}
+                            containerClassName="calendar-page__list-view"
+                            dataComponent="list-view"
+                            listClassName="calendar-page__list-items"
+                            listTestId="calendar-page__list-items"
+                            emptyTitle="No upcoming events"
+                            emptyDescription="Content will appear here as premiere dates approach"
+                            showDate
+                        />
                     )}
-                </CalendarMainSlot>
+                </Slot>
             </PullToRefresh>
         </div>
     );

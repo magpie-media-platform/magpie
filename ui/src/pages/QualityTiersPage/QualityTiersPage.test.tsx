@@ -184,12 +184,12 @@ describe('QualityTiersPage', () => {
 
         const row = document.querySelector('[data-row-id="video-list"]') as HTMLElement;
         expect(within(row).getByText('Allowed')).toBeInTheDocument();
-        for (const label of ['Name', 'File Types', 'Upgrades']) {
-            expect(row.querySelector(`[data-label="${label}"]`)).toBeInTheDocument();
-        }
-        for (const label of ['Tier Count', 'Cutoff', 'Last Updated']) {
-            expect(row.querySelector(`[data-label="${label}"]`)).not.toBeInTheDocument();
-        }
+        expect(row.querySelector('[data-label="Name"]')).toBeInTheDocument();
+        expect(row.querySelector('[data-label="File Types"]')).toBeInTheDocument();
+        expect(row.querySelector('[data-label="Upgrades"]')).toBeInTheDocument();
+        expect(row.querySelector('[data-label="Tier Count"]')).not.toBeInTheDocument();
+        expect(row.querySelector('[data-label="Cutoff"]')).not.toBeInTheDocument();
+        expect(row.querySelector('[data-label="Last Updated"]')).not.toBeInTheDocument();
     });
 
     it('sorts by standard table columns', async () => {
@@ -261,6 +261,18 @@ describe('QualityTiersPage', () => {
 
         expect(screen.getByText('Delete Tier List')).toBeInTheDocument();
         expect(apiDelete).not.toHaveBeenCalled();
+    });
+
+    it('tells the user that the created list shares its tiers with the original', async () => {
+        vi.mocked(apiPost).mockResolvedValueOnce({ ...tierLists[0], id: 'cloned-list', name: 'HD Standard (Copy) 2' });
+        const user = userEvent.setup();
+        await renderPage(Role.Manager);
+
+        await user.click(screen.getByRole('button', { name: 'Clone HD Standard' }));
+
+        expect(
+            await screen.findByText('Created "HD Standard (Copy) 2". It shares its tiers with "HD Standard".'),
+        ).toBeInTheDocument();
     });
 
     it('shows the clone pending state', async () => {

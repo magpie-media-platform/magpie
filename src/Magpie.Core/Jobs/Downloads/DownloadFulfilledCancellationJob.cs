@@ -31,8 +31,12 @@ internal sealed class DownloadFulfilledCancellationJob(
         LockPartitionFields = [MagpieJobs.Parameters.DownloadId],
         Parameters =
         [
-            new(MagpieJobs.Parameters.DownloadId, "The successfully imported download to preserve.",
-                DataType.String, true, null)
+            new(
+                MagpieJobs.Parameters.DownloadId,
+                "The successfully imported download to preserve.",
+                DataType.String,
+                true,
+                null)
         ],
     };
 
@@ -45,7 +49,8 @@ internal sealed class DownloadFulfilledCancellationJob(
         }
 
         var candidates = await downloadRepository.ListFulfilledIdsAsync(
-            importedDownloadId, cancellationToken: cancellationToken).ConfigureAwait(false);
+            importedDownloadId,
+            cancellationToken: cancellationToken).ConfigureAwait(false);
         var failed = 0;
         foreach (var candidate in candidates)
         {

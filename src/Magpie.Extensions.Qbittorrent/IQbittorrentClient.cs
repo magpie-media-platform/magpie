@@ -10,11 +10,6 @@ internal interface IQbittorrentClient
 
     Task<IReadOnlyList<TorrentInfo>> GetTorrentInfoAsync(
         QbittorrentSettings settings,
-        string hash,
-        CancellationToken cancellationToken);
-
-    Task<IReadOnlyList<TorrentInfo>> GetTorrentInfoAsync(
-        QbittorrentSettings settings,
         IReadOnlyCollection<string> hashes,
         CancellationToken cancellationToken);
 

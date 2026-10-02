@@ -41,12 +41,6 @@ describe('ServiceHealthBar', () => {
         expect(screen.getByRole('heading', { level: 2, name: 'Service Health' })).toBeInTheDocument();
     });
 
-    it('uses custom heading level', () => {
-        renderWithRouter(<ServiceHealthBar services={defaultServices} headingLevel={3} />);
-
-        expect(screen.getByRole('heading', { level: 3, name: 'Service Health' })).toBeInTheDocument();
-    });
-
     it('links unhealthy service to filtered page', () => {
         renderWithRouter(<ServiceHealthBar services={defaultServices} />);
 

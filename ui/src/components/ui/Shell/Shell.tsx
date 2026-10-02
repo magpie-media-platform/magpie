@@ -19,7 +19,6 @@ interface ShellContextValue {
     sidebarOpen: boolean;
     setSidebarOpen: (open: boolean) => void;
     sidebarCollapsed: boolean;
-    setSidebarCollapsed: (collapsed: boolean) => void;
     toggleSidebarOpen: () => void;
     toggleSidebarCollapsed: () => void;
 }
@@ -37,8 +36,6 @@ function useShellContext() {
 export interface ShellProps extends ComponentPropsWithoutRef<'div'> {
     classPrefix?: string;
 
-    defaultSidebarCollapsed?: boolean;
-
     sidebarCollapsed?: boolean;
 
     onSidebarCollapsedChange?: (collapsed: boolean) => void;
@@ -49,7 +46,6 @@ const Shell = forwardRef<HTMLDivElement, ShellProps>(
         {
             className,
             classPrefix = 'shell',
-            defaultSidebarCollapsed = false,
             sidebarCollapsed: controlledCollapsed,
             onSidebarCollapsedChange,
             children,
@@ -58,24 +54,16 @@ const Shell = forwardRef<HTMLDivElement, ShellProps>(
         ref,
     ) => {
         const [sidebarOpen, setSidebarOpen] = useState(false);
-        const [internalCollapsed, setInternalCollapsed] = useState(defaultSidebarCollapsed);
 
-        const sidebarCollapsed = controlledCollapsed ?? internalCollapsed;
-        const setSidebarCollapsed = useCallback(
-            (collapsed: boolean) => {
-                if (controlledCollapsed === undefined) setInternalCollapsed(collapsed);
-                onSidebarCollapsedChange?.(collapsed);
-            },
-            [controlledCollapsed, onSidebarCollapsedChange],
-        );
+        const sidebarCollapsed = controlledCollapsed ?? false;
 
         const toggleSidebarOpen = useCallback(() => {
             setSidebarOpen((prev) => !prev);
         }, []);
 
         const toggleSidebarCollapsed = useCallback(() => {
-            setSidebarCollapsed(!sidebarCollapsed);
-        }, [sidebarCollapsed, setSidebarCollapsed]);
+            onSidebarCollapsedChange?.(!sidebarCollapsed);
+        }, [sidebarCollapsed, onSidebarCollapsedChange]);
 
         const classes = [classPrefix, className].filter(Boolean).join(' ');
         const contextValue = useMemo<ShellContextValue>(
@@ -83,11 +71,10 @@ const Shell = forwardRef<HTMLDivElement, ShellProps>(
                 sidebarOpen,
                 setSidebarOpen,
                 sidebarCollapsed,
-                setSidebarCollapsed,
                 toggleSidebarOpen,
                 toggleSidebarCollapsed,
             }),
-            [sidebarOpen, sidebarCollapsed, setSidebarCollapsed, toggleSidebarOpen, toggleSidebarCollapsed],
+            [sidebarOpen, sidebarCollapsed, toggleSidebarOpen, toggleSidebarCollapsed],
         );
 
         return (
@@ -342,8 +329,6 @@ function useShell() {
         toggleSidebar,
         toggleSidebarCollapsed: context.toggleSidebarCollapsed,
         closeSidebar,
-        setSidebarOpen: context.setSidebarOpen,
-        setSidebarCollapsed: context.setSidebarCollapsed,
     };
 }
 

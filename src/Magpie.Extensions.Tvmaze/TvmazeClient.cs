@@ -20,7 +20,7 @@ namespace Magpie.Extensions.Tvmaze;
 internal sealed class TvmazeClient(
     ISettingsService settingsService,
     IHttpClientFactory httpClientFactory,
-    ILogger<TvmazeClient> logger) : IClient, IDisposable
+    ILogger<TvmazeClient> logger) : IClient
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };
 
@@ -31,8 +31,6 @@ internal sealed class TvmazeClient(
     private readonly HttpClient _http = httpClientFactory.CreateClient(HttpClientName);
 
     private ProviderSettings? _settings;
-
-    private bool _disposed;
 
     private Uri BuildUri(string path, IReadOnlyList<(string Key, string Value)>? queryParameters)
     {
@@ -178,32 +176,9 @@ internal sealed class TvmazeClient(
             return null;
         }
 
-        return await GetJsonFollowingMovedPermanentlyAsync<ShowDto>(
+        return await GetJsonAsync<ShowDto>(
             BuildUri("lookup/shows", [(externalSource, externalValue.Trim())]),
             cancellationToken).ConfigureAwait(false);
-    }
-
-    private async Task<T?> GetJsonFollowingMovedPermanentlyAsync<T>(Uri uri, CancellationToken cancellationToken)
-        where T : class
-    {
-        var response = await SendAsync(uri, cancellationToken).ConfigureAwait(false);
-        try
-        {
-            if (response.StatusCode == HttpStatusCode.MovedPermanently)
-            {
-                var location = response.Headers.Location
-                    ?? throw new HttpRequestException("TVMaze returned a redirect without a location.");
-                var redirectUri = location.IsAbsoluteUri ? location : new Uri(uri, location);
-                response.Dispose();
-                response = await SendAsync(redirectUri, cancellationToken).ConfigureAwait(false);
-            }
-
-            return await ReadJsonAsync<T>(response, uri, cancellationToken).ConfigureAwait(false);
-        }
-        finally
-        {
-            response.Dispose();
-        }
     }
 
     private async Task<T?> GetJsonAsync<T>(Uri uri, CancellationToken cancellationToken)
@@ -231,7 +206,7 @@ internal sealed class TvmazeClient(
         }
         catch (JsonException ex)
         {
-            logger.LogWarning(ex, "The TVmaze client cannot parse the JSON response for {Uri}.", uri);
+            logger.LogWarning(ex, "TVmaze returned unparsable JSON for {Uri}", uri);
             throw new HttpRequestException("TVMaze returned an unusable JSON payload.", ex);
         }
     }
@@ -258,16 +233,5 @@ internal sealed class TvmazeClient(
             activity?.SetTag("error.type", exception.GetType().FullName);
             throw;
         }
-    }
-
-    public void Dispose()
-    {
-        if (_disposed)
-        {
-            return;
-        }
-
-        _disposed = true;
-        _http.Dispose();
     }
 }

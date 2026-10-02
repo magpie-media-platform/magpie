@@ -36,7 +36,6 @@ const authedAuthValue: AuthContextValue = {
     hasPermission: () => true,
     getRequiredRole: () => undefined,
     hasRole: () => true,
-    signIn: () => {},
     signOut: async () => {},
     login: async () => {},
 };

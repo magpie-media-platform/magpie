@@ -2,4 +2,22 @@
   <ItemGroup>
     <AdditionalFiles Include="$(MSBuildThisFileDirectory)stylecop.json" Link="stylecop.json" />
   </ItemGroup>
+
+  <PropertyGroup Condition="$(MSBuildProjectName.StartsWith('Magpie.Extensions.'))">
+    <TargetsForTfmSpecificBuildOutput>$(TargetsForTfmSpecificBuildOutput);PackExtensionDependencies</TargetsForTfmSpecificBuildOutput>
+  </PropertyGroup>
+
+  <Target Name="PackExtensionDependencies" DependsOnTargets="ResolvePackageAssets">
+    <ItemGroup>
+      <BuildOutputInPackage Include="@(RuntimeCopyLocalItems)" />
+    </ItemGroup>
+  </Target>
+
+  <Target Name="BoundProjectReferenceDependencies" AfterTargets="_GetProjectReferenceVersions">
+    <ItemGroup>
+      <_ProjectReferencesWithVersions>
+        <ProjectVersion>[%(ProjectVersion), $([MSBuild]::Add($([System.Text.RegularExpressions.Regex]::Match('%(ProjectVersion)', '^\d+').Value), 1)).0.0)</ProjectVersion>
+      </_ProjectReferencesWithVersions>
+    </ItemGroup>
+  </Target>
 </Project>

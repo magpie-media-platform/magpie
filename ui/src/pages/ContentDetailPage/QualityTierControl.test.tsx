@@ -96,7 +96,7 @@ describe('QualityTierControl', () => {
         expect(await screen.findByRole('option', { name: 'Inherit' })).toBeInTheDocument();
     });
 
-    it('requests lists for the target level and displays their MIME applicability', async () => {
+    it('displays the MIME applicability of every tier list', async () => {
         const user = userEvent.setup();
         mockUseEffectiveQualityTierList.mockReturnValue({ data: makeEffective(), isLoading: false });
         mockUseQualityTierLists.mockReturnValue({
@@ -107,40 +107,28 @@ describe('QualityTierControl', () => {
             isLoading: false,
         });
 
-        render(<QualityTierControl contentHierarchyItemId="c-1" contentType="movies" level="movie" />, {
-            wrapper: Wrap,
-        });
+        render(<QualityTierControl contentHierarchyItemId="c-1" />, { wrapper: Wrap });
         await user.click(screen.getByTestId('quality-tier-control__trigger'));
 
-        expect(mockUseQualityTierLists).toHaveBeenCalledWith({ contentType: 'movies', level: 'movie' });
         expect(await screen.findByRole('option', { name: 'HD Tiers - video/*' })).toBeInTheDocument();
         expect(screen.getByRole('option', { name: 'Universal - Any MIME type' })).toBeInTheDocument();
     });
 
-    it('resolves an excluded current assignment from the unfiltered tier lists', async () => {
+    it('resolves the current assignment from the tier lists', async () => {
         const user = userEvent.setup();
         mockUseEffectiveQualityTierList.mockReturnValue({
             data: makeEffective({ ownQualityTierListId: 'audio-list' }),
             isLoading: false,
         });
-        mockUseQualityTierLists.mockImplementation((options: unknown) => {
-            const scoped = typeof options === 'object' && options !== null && 'contentType' in options;
-            return {
-                tierLists: scoped
-                    ? [makeList({ id: 'universal-list', name: 'Universal' })]
-                    : [makeList({ id: 'audio-list', name: 'Audio Tiers', mimeTypes: ['audio/*'] })],
-                isLoading: false,
-            };
+        mockUseQualityTierLists.mockReturnValue({
+            tierLists: [makeList({ id: 'audio-list', name: 'Audio Tiers', mimeTypes: ['audio/*'] })],
+            isLoading: false,
         });
 
-        render(<QualityTierControl contentHierarchyItemId="c-1" contentType="movies" level="movie" />, {
-            wrapper: Wrap,
-        });
+        render(<QualityTierControl contentHierarchyItemId="c-1" />, { wrapper: Wrap });
         await user.click(screen.getByTestId('quality-tier-control__trigger'));
 
         expect(screen.getByTestId('quality-tier-control__select')).toHaveTextContent('Audio Tiers - audio/*');
-        expect(await screen.findByRole('option', { name: 'Universal - Any MIME type' })).toBeInTheDocument();
-        expect(screen.queryByRole('option', { name: 'Audio Tiers - audio/*' })).not.toBeInTheDocument();
     });
 
     it('renders no cutoff badge next to the tier value', () => {

@@ -129,11 +129,7 @@ internal sealed class JobsEndpointGroup : IApiEndpointGroup
             RootsOnly = rootsOnly ?? (mine == true),
         };
 
-        var paging = new PagingParameter
-        {
-            PageNumber = pageNumber ?? 1,
-            PageSize = pageSize ?? 25,
-        };
+        var paging = new PagingParameter { PageNumber = pageNumber ?? 1, PageSize = pageSize ?? 25 };
 
         var sort = !string.IsNullOrEmpty(sortBy)
             ? new SortParameter { PropertyName = sortBy, Direction = sortDirection ?? SortDirection.Descending }

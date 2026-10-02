@@ -96,17 +96,13 @@ function candidate(overrides: Partial<InteractiveSearchCandidate> = {}): Interac
     };
 }
 
-function createTestQueryClient() {
-    return new QueryClient({
+function TestWrapper({ children }: { children: ReactNode }) {
+    const queryClient = new QueryClient({
         defaultOptions: {
             queries: { retry: false, gcTime: 0 },
             mutations: { retry: false },
         },
     });
-}
-
-function TestWrapper({ children }: { children: ReactNode }) {
-    const queryClient = createTestQueryClient();
     return (
         <QueryClientProvider client={queryClient}>
             <MemoryRouter initialEntries={[`/interactive-search/${ITEM_ID}`]}>
@@ -127,31 +123,43 @@ function TestWrapper({ children }: { children: ReactNode }) {
 }
 
 describe('InteractiveSearchPage', () => {
-    it.each([true, false])(
-        'Search_RetainsAvailableCandidates_WhenResultIsIncomplete (healthy: %s)',
-        async (healthy) => {
-            // Arrange
-            vi.mocked(apiPost).mockResolvedValue({
-                candidates: healthy ? [candidate()] : [],
-                partial: true,
-                warning: 'One or more upstream providers are throttled. The search is incomplete.',
-                retryAt: '2027-01-01T00:00:00Z',
-            });
+    it('Search_RetainsAvailableCandidates_WhenResultIsIncomplete (healthy: true)', async () => {
+        // Arrange
+        vi.mocked(apiPost).mockResolvedValue({
+            candidates: [candidate()],
+            partial: true,
+            warning: 'One or more upstream providers are throttled. The search is incomplete.',
+            retryAt: '2027-01-01T00:00:00Z',
+        });
 
-            // Act
-            render(<InteractiveSearchPage />, { wrapper: TestWrapper });
+        // Act
+        render(<InteractiveSearchPage />, { wrapper: TestWrapper });
 
-            // Assert
-            expect(await screen.findByRole('alert')).toHaveTextContent('providers are throttled');
-            expect(screen.getByRole('alert')).toHaveTextContent('Retry after');
-            expect(screen.queryByText('No releases found')).not.toBeInTheDocument();
-            if (healthy) {
-                expect(screen.getByText('The.Movie.2024.1080p.BluRay')).toBeInTheDocument();
-            } else {
-                expect(screen.getByText('Search incomplete')).toBeInTheDocument();
-            }
-        },
-    );
+        // Assert
+        expect(await screen.findByRole('alert')).toHaveTextContent('providers are throttled');
+        expect(screen.getByRole('alert')).toHaveTextContent('Retry after');
+        expect(screen.queryByText('No releases found')).not.toBeInTheDocument();
+        expect(screen.getByText('The.Movie.2024.1080p.BluRay')).toBeInTheDocument();
+    });
+
+    it('Search_RetainsAvailableCandidates_WhenResultIsIncomplete (healthy: false)', async () => {
+        // Arrange
+        vi.mocked(apiPost).mockResolvedValue({
+            candidates: [],
+            partial: true,
+            warning: 'One or more upstream providers are throttled. The search is incomplete.',
+            retryAt: '2027-01-01T00:00:00Z',
+        });
+
+        // Act
+        render(<InteractiveSearchPage />, { wrapper: TestWrapper });
+
+        // Assert
+        expect(await screen.findByRole('alert')).toHaveTextContent('providers are throttled');
+        expect(screen.getByRole('alert')).toHaveTextContent('Retry after');
+        expect(screen.queryByText('No releases found')).not.toBeInTheDocument();
+        expect(screen.getByText('Search incomplete')).toBeInTheDocument();
+    });
 
     beforeEach(() => {
         installMatchMedia(1024);

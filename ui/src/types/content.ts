@@ -6,6 +6,7 @@ import {
     extractImages,
     extractImageUrl,
     extractPublishDate,
+    extractPublishDatePrecision,
     extractSequenceNumber,
     extractStandardFactValues,
     extractTitle,
@@ -17,6 +18,7 @@ import {
     type MetadataContainer,
     type StandardFactValue,
 } from '@/lib/metadata';
+import type { TemporalPrecision } from '@/types/contentMetadata';
 import type { GalleryImage } from '@/types/images';
 import type { BadgeVariant } from './badge';
 import type { PagedList } from './paging';
@@ -81,18 +83,6 @@ export function getFulfillmentBadge(status: FulfillmentStatus, importPending = f
     return FULFILLMENT_BADGE_MAP[status] ?? FULFILLMENT_BADGE_MAP.missing;
 }
 
-const FULFILLMENT_DOT_COLOR: Record<FulfillmentStatus, string> = {
-    missing: 'var(--fulfillment-missing)',
-    upgradable: 'var(--fulfillment-upgradable)',
-    fulfilled: 'var(--fulfillment-fulfilled)',
-    fulfilledExternally: 'var(--fulfillment-external)',
-    partial: 'var(--fulfillment-partial)',
-};
-
-export function getFulfillmentDotColor(status: FulfillmentStatus): string {
-    return FULFILLMENT_DOT_COLOR[status] ?? 'var(--status-unknown)';
-}
-
 interface ApiMediaInfoTrack {
     type: string;
     name: string;
@@ -132,6 +122,7 @@ interface ApiMediaFile {
     createdByUserId?: string | null;
     modifiedAt?: string | null;
     modifiedByUserId?: string | null;
+    coverage?: { mediaFileId: string; contentItemId: string }[];
 }
 
 export type DownloadStatusValue =
@@ -166,6 +157,7 @@ export interface ApiContentItem {
     modifiedAt?: string | null;
     modifiedByUserId?: string | null;
     mediaFiles?: ApiMediaFile[];
+    coveringMediaFiles?: ApiMediaFile[];
     activeAcquisitionStatus?: DownloadStatusValue | null;
 }
 
@@ -248,6 +240,7 @@ export interface ContentListItem {
     tags?: string[];
     year?: number;
     publishDate?: string;
+    publishDatePrecision?: TemporalPrecision;
     sequenceNumber?: number;
     overview?: string;
     dateAdded?: string;
@@ -271,6 +264,7 @@ export interface ContentDetailItem {
     importPending?: boolean;
     year?: number;
     publishDate?: string;
+    publishDatePrecision?: TemporalPrecision;
     overview?: string;
     parentId?: string;
     parentTitle?: string;
@@ -279,6 +273,7 @@ export interface ContentDetailItem {
     lastSearched?: string;
     lastRefreshed?: string;
     mediaFiles?: ApiMediaFile[];
+    coveringMediaFiles?: ApiMediaFile[];
     externalIds?: ContentExternalId[];
     references?: ContentReference[];
     genres?: string[];
@@ -341,6 +336,7 @@ export function mapToContentListItem(item: ApiContentHierarchyItem): ContentList
         tags: item.tags ?? undefined,
         year: extractYear(metadata) ?? undefined,
         publishDate: extractPublishDate(metadata) ?? undefined,
+        publishDatePrecision: extractPublishDatePrecision(metadata),
         sequenceNumber: extractSequenceNumber(metadata) ?? undefined,
         overview: extractOverview(metadata) ?? undefined,
         dateAdded: item.createdAt,
@@ -369,6 +365,7 @@ export function mapToContentDetailItem(item: ApiContentHierarchyItem): ContentDe
         importPending: item.importPending ?? false,
         year: extractYear(metadata) ?? undefined,
         publishDate: extractPublishDate(metadata) ?? undefined,
+        publishDatePrecision: extractPublishDatePrecision(metadata),
         overview: extractOverview(metadata) ?? undefined,
         parentId: item.parentId ?? undefined,
         path: item.path ?? null,
@@ -376,6 +373,7 @@ export function mapToContentDetailItem(item: ApiContentHierarchyItem): ContentDe
         lastSearched: contentItem?.dateLastSearched ?? undefined,
         lastRefreshed: item.dateLastRefreshed ?? undefined,
         mediaFiles: contentItem?.mediaFiles ?? undefined,
+        coveringMediaFiles: contentItem?.coveringMediaFiles ?? undefined,
         externalIds: extractExternalIds(metadata),
         references: extractReferences(metadata),
         genres: extractGenres(metadata),

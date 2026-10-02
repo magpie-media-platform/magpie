@@ -1,4 +1,3 @@
-import { forwardRef, type ComponentPropsWithoutRef } from 'react';
 import { Link } from 'react-router-dom';
 
 import {
@@ -18,7 +17,7 @@ import {
     UsersIcon,
 } from '@phosphor-icons/react';
 
-import { Shell, ShellHeader, ShellSidebar, ShellMain, ShellBottomNav, useShell, type ShellProps } from '../Shell';
+import { useShell } from '../Shell';
 import { Sidebar, SidebarContent, SidebarGroup, SidebarItem, SidebarSeparator } from '../Sidebar';
 import { Header } from '../Header';
 import { LiveUpdateStatus } from '../LiveUpdateStatus/LiveUpdateStatus';
@@ -28,56 +27,6 @@ import { AdminLink } from '@/auth';
 import { LibraryQuickSearch } from '@/components/content/LibraryQuickSearch';
 import { useMediaQuery } from '@/hooks/ui/useMediaQuery';
 import { useIsActive } from '@/lib/routes';
-
-export interface AdminShellProps extends Omit<ComponentPropsWithoutRef<'div'>, keyof ShellProps>, ShellProps {}
-
-const AdminShell = forwardRef<HTMLDivElement, AdminShellProps>((props, ref) => (
-    <Shell ref={ref} classPrefix="admin-shell" {...props} />
-));
-
-AdminShell.displayName = 'AdminShell';
-
-export type AdminShellHeaderProps = ComponentPropsWithoutRef<'div'>;
-
-const AdminShellHeader = forwardRef<HTMLDivElement, AdminShellHeaderProps>((props, ref) => (
-    <ShellHeader ref={ref} classPrefix="admin-shell" {...props} />
-));
-
-AdminShellHeader.displayName = 'AdminShellHeader';
-
-export interface AdminShellSidebarProps extends ComponentPropsWithoutRef<'nav'> {
-    ariaLabel?: string;
-}
-
-const AdminShellSidebar = forwardRef<HTMLElement, AdminShellSidebarProps>(
-    ({ ariaLabel = 'Admin navigation', ...props }, ref) => (
-        <ShellSidebar
-            ref={ref}
-            classPrefix="admin-shell"
-            ariaLabel={ariaLabel}
-            navId="admin-navigation-menu"
-            {...props}
-        />
-    ),
-);
-
-AdminShellSidebar.displayName = 'AdminShellSidebar';
-
-export type AdminShellMainProps = ComponentPropsWithoutRef<'main'>;
-
-const AdminShellMain = forwardRef<HTMLElement, AdminShellMainProps>((props, ref) => (
-    <ShellMain ref={ref} classPrefix="admin-shell" mainId="admin-main-content" {...props} />
-));
-
-AdminShellMain.displayName = 'AdminShellMain';
-
-export type AdminShellBottomNavProps = ComponentPropsWithoutRef<'div'>;
-
-const AdminShellBottomNav = forwardRef<HTMLDivElement, AdminShellBottomNavProps>((props, ref) => (
-    <ShellBottomNav ref={ref} classPrefix="admin-shell" {...props} />
-));
-
-AdminShellBottomNav.displayName = 'AdminShellBottomNav';
 
 function AdminHeader() {
     const { toggleSidebar, sidebarOpen, sidebarCollapsed } = useShell();
@@ -95,7 +44,6 @@ function AdminHeader() {
             status={<LiveUpdateStatus />}
             onSidebarToggle={toggleSidebar}
             sidebarOpen={sidebarExpanded}
-            sidebarNavId="admin-navigation-menu"
             actions={
                 <>
                     <LibraryQuickSearch />
@@ -108,12 +56,12 @@ function AdminHeader() {
 }
 
 function AdminSidebar() {
-    const { sidebarOpen, sidebarCollapsed, toggleSidebarCollapsed, closeSidebar } = useShell();
+    const { sidebarOpen, sidebarCollapsed, closeSidebar } = useShell();
 
     const isActive = useIsActive();
 
     return (
-        <Sidebar open={sidebarOpen} collapsed={sidebarCollapsed} onCollapsedChange={toggleSidebarCollapsed}>
+        <Sidebar open={sidebarOpen} collapsed={sidebarCollapsed}>
             <SidebarContent>
                 <SidebarGroup label="System">
                     <SidebarItem
@@ -253,14 +201,4 @@ function AdminSidebar() {
     );
 }
 
-export {
-    AdminShell,
-    AdminShellHeader,
-    AdminShellSidebar,
-    AdminShellMain,
-    AdminShellBottomNav,
-    AdminHeader,
-    AdminSidebar,
-};
-
-export default AdminShell;
+export { AdminHeader, AdminSidebar };

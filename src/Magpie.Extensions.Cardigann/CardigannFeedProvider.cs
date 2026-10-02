@@ -16,7 +16,7 @@ using Microsoft.Extensions.Logging;
 namespace Magpie.Extensions.Cardigann;
 
 internal sealed class CardigannFeedProvider(
-    IGitDefinitionSource definitionSource,
+    GitCoreDefinitionSource definitionSource,
     ICardigannLoader loader,
     ILogger<CardigannFeedProvider> logger) : IIndexerFeedProvider
 {
@@ -98,7 +98,7 @@ internal sealed class CardigannFeedProvider(
             SchemaData = rawYaml,
             Availability = availability,
             Categories = categories,
-            Languages = string.IsNullOrWhiteSpace(definition.Language) ? [] : [definition.Language!],
+            Languages = string.IsNullOrWhiteSpace(definition.Language) ? [] : [definition.Language],
             SupportedContentTypes = [],
         };
     }

@@ -250,6 +250,7 @@
 
     .tier-list-detail-page__tier-title-row {
         display: flex;
+        flex-wrap: wrap;
         align-items: center;
         gap: var(--space-sm);
         margin-bottom: var(--space-xs);
@@ -283,6 +284,15 @@
     .tier-list-detail-page__tier-meta {
         font-size: var(--text-xs);
         color: var(--text-muted);
+        overflow-wrap: anywhere;
+    }
+
+    .tier-list-detail-page__lists-error {
+        margin-bottom: var(--space-md);
+    }
+
+    .tier-list-detail-page__notice-text {
+        margin: 0 0 var(--space-sm);
     }
 
     .tier-list-detail-page__criteria-count {
@@ -407,7 +417,7 @@
         }
 
         .tier-list-detail-page__tier-info {
-            flex: 1 1 auto;
+            flex: 1 1 0;
         }
 
         .tier-list-detail-page__tier-actions {

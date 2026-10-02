@@ -33,13 +33,7 @@ public sealed class CardigannExtension : IExtensionLifecycle
     public Guid Id => Constants.ExtensionId;
 
     /// <inheritdoc />
-    public Version Version => new(1, 0, 0);
-
-    /// <inheritdoc />
     public string Name => Constants.DisplayName;
-
-    /// <inheritdoc />
-    public string? TargetABI => "[1.0.0,)";
 
     private static IndexerFeed BuildDefaultFeed()
     {
@@ -69,7 +63,8 @@ public sealed class CardigannExtension : IExtensionLifecycle
         services
             .AddHttpClient(CardigannSessionManager.HttpClientName)
             .AddUpstreamCooldown(request => request.Options.TryGetValue(
-                CardigannSessionManager.AuthenticationScopeKey, out var scope) ? scope : null)
+                CardigannSessionManager.AuthenticationScopeKey,
+                out var scope) ? scope : null)
             .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
             {
                 UseCookies = false,
@@ -90,7 +85,7 @@ public sealed class CardigannExtension : IExtensionLifecycle
         services.AddSingleton<CardigannSessionState>();
         services.AddScoped<ICardigannSessionManager, CardigannSessionManager>();
         services.AddSingleton<IExtensionSettingsSchemaProvider, CardigannSettingsSchemaProvider>();
-        services.AddSingleton<Git.IGitDefinitionSource, Git.GitCoreDefinitionSource>();
+        services.AddSingleton<Git.GitCoreDefinitionSource>();
         services.AddSingleton<IIndexerFeedProvider, CardigannFeedProvider>();
         services.AddScoped<IRuntimeIndexerIntegrationFactory, CardigannRuntimeIntegrationFactory>();
 

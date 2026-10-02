@@ -133,7 +133,7 @@ describe('useDownloads', () => {
         await waitFor(() => expect(result.current.isLoading).toBe(false));
         const listOptions = vi
             .mocked(useInvalidateQueriesOnEvents)
-            .mock.calls.find(([, , options]) => options.owner === 'downloads-query')?.[2];
+            .mock.calls.find(([, , options]) => options.failOpenEventNames !== undefined)?.[2];
 
         expect(listOptions?.failOpenEventNames).toEqual(['download.created']);
         expect(listOptions?.unprovableMembership).toBe(true);
@@ -146,9 +146,7 @@ describe('useDownloads', () => {
             wrapper: createWrapper(),
         });
         await waitFor(() => expect(result.current.isLoading).toBe(false));
-        const countOptions = vi
-            .mocked(useInvalidateQueriesOnEvents)
-            .mock.calls.find(([, , options]) => options.owner === 'downloads:status-counts')?.[2];
+        const countOptions = vi.mocked(useInvalidateQueriesOnEvents).mock.calls[0]?.[2];
 
         expect(countOptions?.failOpenEventNames).toEqual(['download.created']);
         expect(countOptions?.unprovableMembership).toBe(true);
@@ -640,9 +638,7 @@ describe('useDownloadStatusTotal', () => {
 
         renderHook(() => useDownloadStatusTotal(activeStatuses), { wrapper: createWrapper() });
 
-        const call = vi
-            .mocked(useInvalidateQueriesOnEvents)
-            .mock.calls.find(([, , options]) => options.owner === 'downloads-query');
+        const call = vi.mocked(useInvalidateQueriesOnEvents).mock.calls[0];
         expect(call).toBeDefined();
         expect(call![1]).toHaveLength(1);
     });

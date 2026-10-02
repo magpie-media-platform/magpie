@@ -1,30 +1,21 @@
 using System;
+using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 
 using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.TestHost;
 
 namespace Magpie.CommandLine.Dispatch;
 
-internal sealed class CommandTransportFactory(Func<CancellationToken, Task<WebApplication>>? localAppFactory = null)
+internal static class CommandTransportFactory
 {
-    public async Task<ICommandTransport> CreateAsync(
-        CommandTransportOptions options,
-        bool allowsAnonymousRemote,
-        CancellationToken cancellationToken)
-    {
-        var target = Resolve(options, allowsAnonymousRemote);
-        return target.Kind switch
-        {
-            CommandTransportKind.Local => await LocalCommandTransport
-                .CreateAsync(localAppFactory, cancellationToken)
-                .ConfigureAwait(false),
-            CommandTransportKind.Remote => new RemoteCommandTransport(target.Url!, target.ApiKey),
-            _ => throw new InvalidOperationException($"Unsupported command transport kind {target.Kind}.")
-        };
-    }
+    private const string ApiKeyHeader = "X-Api-Key";
 
-    private static CommandTarget Resolve(CommandTransportOptions options, bool allowAnonymousRemote = false)
+    public static async Task<HttpClient> CreateAsync(
+        CommandTransportOptions options,
+        Func<CancellationToken, Task<WebApplication>> localAppFactory,
+        CancellationToken cancellationToken)
     {
         if (options.IsUrlExplicit && string.IsNullOrWhiteSpace(options.Url))
         {
@@ -36,15 +27,15 @@ internal sealed class CommandTransportFactory(Func<CancellationToken, Task<WebAp
         {
             if (apiKeyWasExplicit)
             {
-                throw new CommandTargetResolutionException(
-                    "Remote commands require --url when --api-key is supplied.");
+                throw new CommandTargetResolutionException("Remote commands require --url when --api-key is supplied.");
             }
 
-            return new CommandTarget(CommandTransportKind.Local, null, null);
+            var app = await localAppFactory(cancellationToken).ConfigureAwait(false);
+
+            return app.GetTestClient();
         }
 
-        if (!Uri.TryCreate(options.Url, UriKind.Absolute, out var url) ||
-            url.Scheme is not ("http" or "https"))
+        if (!Uri.TryCreate(options.Url, UriKind.Absolute, out var url) || url.Scheme is not ("http" or "https"))
         {
             throw new CommandTargetResolutionException(
                 $"Remote URL {options.Url} is not an absolute http or https URL.");
@@ -52,15 +43,23 @@ internal sealed class CommandTransportFactory(Func<CancellationToken, Task<WebAp
 
         if (string.IsNullOrWhiteSpace(options.ApiKey))
         {
-            if (allowAnonymousRemote)
-            {
-                return new CommandTarget(CommandTransportKind.Remote, url, null);
-            }
-
-            throw new CommandTargetResolutionException(
-                "Remote commands using --url require --api-key.");
+            throw new CommandTargetResolutionException("Remote commands using --url require --api-key.");
         }
 
-        return new CommandTarget(CommandTransportKind.Remote, url, options.ApiKey);
+        var client = new HttpClient { BaseAddress = NormalizeBaseUrl(url) };
+        client.DefaultRequestHeaders.TryAddWithoutValidation(ApiKeyHeader, options.ApiKey);
+
+        return client;
+    }
+
+    private static Uri NormalizeBaseUrl(Uri baseUrl)
+    {
+        var text = baseUrl.ToString();
+        if (!text.EndsWith("/", StringComparison.Ordinal))
+        {
+            text += "/";
+        }
+
+        return new Uri(text, UriKind.Absolute);
     }
 }

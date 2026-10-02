@@ -73,19 +73,12 @@ internal sealed class IndexerService(
                 ? await pending.WaitAsync(limit, cancellationToken).ConfigureAwait(false)
                 : await pending.ConfigureAwait(false);
         }
-        catch (TimeoutException) when (timeout is not null)
+        catch (Exception ex) when ((ex is TimeoutException && timeout is not null) ||
+            (ex is OperationCanceledException &&
+                !cancellationToken.IsCancellationRequested &&
+                timeoutSource is { IsCancellationRequested: true }))
         {
-            return new ConfigurationTestResult
-            {
-                Success = false,
-                Message = "Connection test timed out.",
-                FailureKind = ConfigurationFailureKind.Transient
-            };
-        }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested &&
-            timeoutSource is { IsCancellationRequested: true })
-        {
-            return new ConfigurationTestResult
+            return new()
             {
                 Success = false,
                 Message = "Connection test timed out.",
@@ -98,7 +91,7 @@ internal sealed class IndexerService(
         }
         catch (Exception ex)
         {
-            return new ConfigurationTestResult
+            return new()
             {
                 Success = false,
                 Message = ex.Message,
@@ -373,7 +366,7 @@ internal sealed class IndexerService(
             Id = Guid.NewGuid(),
             IndexerId = indexer.Id,
             Name = string.Empty,
-            Settings = new Dictionary<string, string>(merged),
+            Settings = new(merged),
         };
 
         return await TestIndexerConnectionCoreAsync(indexer, transientConnection, null, cancellationToken)
@@ -466,7 +459,7 @@ internal sealed class IndexerService(
             .ToArray();
         if (connections.Length == 0)
         {
-            return new IndexerSearchResponse();
+            return new();
         }
 
         var indexerIds = connections
@@ -499,7 +492,7 @@ internal sealed class IndexerService(
             });
         }
 
-        return new IndexerSearchResponse
+        return new()
         {
             Candidates =
             [
@@ -568,7 +561,7 @@ internal sealed class IndexerService(
         {
             Id = Guid.NewGuid(),
             IndexerId = indexerId,
-            Name = string.IsNullOrWhiteSpace(create.Name) ? indexer?.Name ?? DefaultConnectionName : create.Name!,
+            Name = string.IsNullOrWhiteSpace(create.Name) ? indexer?.Name ?? DefaultConnectionName : create.Name,
             Enabled = create.Enabled,
             Status = IntegrationHealthStatus.Unknown,
             Settings = create.Settings is null
@@ -752,13 +745,13 @@ internal sealed class IndexerService(
         }
 
         var transientFeed = feed is not null
-            ? feed with { Settings = new Dictionary<string, string>(merged) }
+            ? feed with { Settings = new(merged) }
             : new IndexerFeed
             {
                 Id = Guid.NewGuid(),
                 ProviderType = providerType ?? provider.ProviderType,
                 Name = string.Empty,
-                Settings = new Dictionary<string, string>(merged),
+                Settings = new(merged),
             };
 
         var succeeded = await provider.TestConnectionAsync(transientFeed, cancellationToken).ConfigureAwait(false);
@@ -1003,10 +996,10 @@ internal sealed class IndexerService(
         var integration = ResolveIntegration(indexer);
         if (integration is null)
         {
-            return new IndexerSearchCapabilities { IndexerId = indexer.Id };
+            return new() { IndexerId = indexer.Id };
         }
 
-        return new IndexerSearchCapabilities
+        return new()
         {
             IndexerId = indexer.Id,
             SearchFacets = [.. integration.SearchFacets.Select(set => (IReadOnlyList<string>)[.. set])],
@@ -1023,7 +1016,7 @@ internal sealed class IndexerService(
         var integration = ResolveIntegration(indexer);
         if (integration is null)
         {
-            return new ConfigurationTestResult
+            return new()
             {
                 Success = false,
                 Message = $"No indexer integration is available for provider type {indexer.ProviderType}.",

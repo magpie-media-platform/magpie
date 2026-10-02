@@ -54,15 +54,6 @@ describe('Shell', () => {
         expect(root).toHaveAttribute('data-sidebar-collapsed', 'false');
     });
 
-    it('supports defaultSidebarCollapsed prop', () => {
-        const { container } = render(
-            <Shell defaultSidebarCollapsed>
-                <ShellMain>Content</ShellMain>
-            </Shell>,
-        );
-        expect(container.firstElementChild).toHaveAttribute('data-sidebar-collapsed', 'true');
-    });
-
     it('supports controlled sidebarCollapsed prop', () => {
         const { container, rerender } = render(
             <Shell sidebarCollapsed={false}>
@@ -251,22 +242,4 @@ it('works when matchMedia is unavailable', async () => {
     } finally {
         Object.defineProperty(window, 'matchMedia', { configurable: true, writable: true, value: original });
     }
-});
-
-it('does not change internal collapse state while controlled', async () => {
-    const user = userEvent.setup();
-    const onChange = vi.fn();
-    const { rerender, container } = render(
-        <Shell sidebarCollapsed={false} onSidebarCollapsedChange={onChange}>
-            <ShellConsumer />
-        </Shell>,
-    );
-    await user.click(screen.getByRole('button', { name: 'Toggle' }));
-    expect(onChange).toHaveBeenCalledWith(true);
-    rerender(
-        <Shell>
-            <ShellConsumer />
-        </Shell>,
-    );
-    expect(container.firstElementChild).toHaveAttribute('data-sidebar-collapsed', 'false');
 });

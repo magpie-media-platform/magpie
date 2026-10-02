@@ -45,54 +45,10 @@ internal sealed class AtomicFileKeyStore(
         return Task.FromResult(TryLoad(keyName, out _));
     }
 
-    public Task<bool> DeleteKeyAsync(string keyName, CancellationToken cancellationToken = default)
-    {
-        var path = PathFor(keyName);
-        var existed = File.Exists(path);
-        if (existed)
-        {
-            File.Delete(path);
-        }
-
-        _cache.TryRemove(keyName, out _);
-        return Task.FromResult(existed);
-    }
-
-    public Task CreateSigningKeyAsync(string keyName, CancellationToken cancellationToken = default)
-    {
-        CreateKey(keyName, KeyStoreKeyType.Signing, 32);
-        return Task.CompletedTask;
-    }
-
     public Task CreateHmacKeyAsync(string keyName, CancellationToken cancellationToken = default)
     {
         CreateKey(keyName, KeyStoreKeyType.Hmac, 32);
         return Task.CompletedTask;
-    }
-
-    public Task<byte[]> SignAsync(string keyName, byte[] data, CancellationToken cancellationToken = default)
-    {
-        var entry = GetKeyOrThrow(keyName, KeyStoreKeyType.Signing);
-        using var hmac = new HMACSHA256(entry.KeyMaterial);
-        return Task.FromResult(hmac.ComputeHash(data));
-    }
-
-    public Task<bool> VerifySignatureAsync(
-        string keyName,
-        byte[] data,
-        byte[] signature,
-        CancellationToken cancellationToken = default)
-    {
-        var entry = GetKeyOrThrow(keyName, KeyStoreKeyType.Signing);
-        using var hmac = new HMACSHA256(entry.KeyMaterial);
-        var computed = hmac.ComputeHash(data);
-        return Task.FromResult(CryptographicOperations.FixedTimeEquals(computed, signature));
-    }
-
-    public Task<byte[]> GetPublicKeyAsync(string keyName, CancellationToken cancellationToken = default)
-    {
-        var entry = GetKeyOrThrow(keyName, KeyStoreKeyType.Signing);
-        return Task.FromResult(entry.KeyMaterial);
     }
 
     public Task<byte[]> ComputeHmacAsync(string keyName, byte[] data, CancellationToken cancellationToken = default)
@@ -141,7 +97,7 @@ internal sealed class AtomicFileKeyStore(
             options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
         }
 
-        return new FileStream(path, options);
+        return new(path, options);
     }
 
     [UnsupportedOSPlatform("windows")]
@@ -231,7 +187,7 @@ internal sealed class AtomicFileKeyStore(
         var keyBytes = RandomNumberGenerator.GetBytes(sizeBytes);
         var envelope = new KeyEnvelope(type, Convert.ToBase64String(keyBytes));
         WriteKeyFileAtomically(path, JsonSerializer.Serialize(envelope, JsonOptions), logger);
-        _cache[keyName] = new KeyStoreEntry(keyBytes, type);
+        _cache[keyName] = new(keyBytes, type);
     }
 
     private KeyStoreEntry GetKeyOrThrow(string keyName, KeyStoreKeyType expectedType)

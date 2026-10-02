@@ -20,16 +20,16 @@ RUN cd ui && pnpm install --frozen-lockfile
 COPY . .
 RUN dotnet publish src/Magpie.App/Magpie.App.csproj -c Release -o /app/publish -nodeReuse:false
 RUN dotnet pack src/Magpie.Extensions.IntegrationTestShims/Magpie.Extensions.IntegrationTestShims.csproj -c Release -o /app/packages -p:PackageVersion=1.0.0 -nodeReuse:false
-RUN dotnet pack src/Magpie.Extensions.IntegrationTestShims/Magpie.Extensions.IntegrationTestShims.csproj -c Release -o /app/packages -p:PackageVersion=1.1.0 -nodeReuse:false
+RUN dotnet pack src/Magpie.Extensions.IntegrationTestShims/Magpie.Extensions.IntegrationTestShims.csproj -c Release -o /app/packages -p:Version=1.1.0 -p:BuildProjectReferences=false -nodeReuse:false
 RUN dotnet pack src/Magpie.Extensions.Movies/Magpie.Extensions.Movies.csproj -c Release -o /app/packages -nodeReuse:false
 RUN dotnet pack src/Magpie.Extensions.Tv/Magpie.Extensions.Tv.csproj -c Release -o /app/packages -nodeReuse:false
 RUN dotnet pack src/Magpie.Extensions.Music/Magpie.Extensions.Music.csproj -c Release -o /app/packages -nodeReuse:false
 RUN dotnet pack src/Magpie.Extensions.Books/Magpie.Extensions.Books.csproj -c Release -o /app/packages -nodeReuse:false
 RUN dotnet pack tests/integration/fixtures/LifecycleExtension/Magpie.Extensions.IntegrationTestLifecycle.csproj -c Release -o /app/packages -p:PackageVersion=1.0.0 -nodeReuse:false
-RUN dotnet pack tests/integration/fixtures/LifecycleExtension/Magpie.Extensions.IntegrationTestLifecycle.csproj -c Release -o /app/packages -p:PackageVersion=1.1.0 -nodeReuse:false
+RUN dotnet pack tests/integration/fixtures/LifecycleExtension/Magpie.Extensions.IntegrationTestLifecycle.csproj -c Release -o /app/packages -p:Version=1.1.0 -p:BuildProjectReferences=false -nodeReuse:false
 RUN dotnet pack tests/integration/fixtures/BrokenExtension/Magpie.Extensions.IntegrationTestBrokenAssembly.csproj -c Release -o /app/packages -p:PackageVersion=1.0.0 -nodeReuse:false
 RUN dotnet pack src/Magpie.Extensions.OpenLibrary/Magpie.Extensions.OpenLibrary.csproj -c Release -o /app/packages -p:PackageVersion=1.0.0 -nodeReuse:false
-RUN dotnet pack src/Magpie.Extensions.OpenLibrary/Magpie.Extensions.OpenLibrary.csproj -c Release -o /app/packages -p:PackageVersion=1.1.0 -nodeReuse:false
+RUN dotnet pack src/Magpie.Extensions.OpenLibrary/Magpie.Extensions.OpenLibrary.csproj -c Release -o /app/packages -p:Version=1.1.0 -p:BuildProjectReferences=false -nodeReuse:false
 RUN cp tests/integration/fixtures/BrokenExtension/broken-package.txt \
     /app/packages/Magpie.Extensions.IntegrationTestBroken.nupkg
 RUN mkdir -p \

@@ -408,11 +408,7 @@ internal sealed class ExtensionsEndpointGroup : IApiEndpointGroup
             return trimmed;
         }
 
-        var builder = new UriBuilder(uri)
-        {
-            UserName = string.Empty,
-            Password = string.Empty
-        };
+        var builder = new UriBuilder(uri) { UserName = string.Empty, Password = string.Empty };
 
         return builder.Uri.AbsoluteUri;
     }

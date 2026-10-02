@@ -23,12 +23,7 @@ internal sealed class EventBus(
 
     public IObservable<MagpieEvent> Events => _events.AsObservable();
 
-    public IEventListener CreateListener(string? eventName = null, bool localOnly = false)
-    {
-        return new EventListener(Events, eventName, localOnly ? hostEnvironment.NodeId : null);
-    }
-
-    internal IEventListener CreateListener(string? eventName, bool localOnly, string callSite)
+    public IEventListener CreateListener(string? eventName, bool localOnly, string callSite)
     {
         return new EventListener(Events, eventName, localOnly ? hostEnvironment.NodeId : null, callSite);
     }

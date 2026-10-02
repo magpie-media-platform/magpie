@@ -90,7 +90,7 @@ internal static class MappingExtensions
         }
 
         return DateTime.TryParseExact(
-            value!.Trim(),
+            value.Trim(),
             "yyyy-MM-dd",
             CultureInfo.InvariantCulture,
             DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal,
@@ -139,7 +139,7 @@ internal static class MappingExtensions
     {
         var name = string.IsNullOrWhiteSpace(season?.Name)
             ? string.Format(CultureInfo.InvariantCulture, "Season {0}", seasonNumber)
-            : season!.Name!;
+            : season.Name;
         var slug = string.Format(CultureInfo.InvariantCulture, "season-{0}", seasonNumber);
 
         var episodeDefinitions = new List<ChildHierarchyDefinition>(seasonEpisodes.Count);
@@ -180,7 +180,7 @@ internal static class MappingExtensions
 
         var name = string.IsNullOrWhiteSpace(episode.Name)
             ? string.Format(CultureInfo.InvariantCulture, "Episode {0}", episodeNumber)
-            : episode.Name!;
+            : episode.Name;
         var slug = string.Format(CultureInfo.InvariantCulture, "s{0:D2}e{1:D2}", seasonNumber, episodeNumber);
 
         return new ChildHierarchyDefinition
@@ -319,7 +319,7 @@ internal static class MappingExtensions
         {
             if (image is null ||
                 string.IsNullOrWhiteSpace(image.Type) ||
-                !TypeMap.TryGetValue(image.Type!, out var mappedType))
+                !TypeMap.TryGetValue(image.Type, out var mappedType))
             {
                 continue;
             }
@@ -458,8 +458,7 @@ internal static class MappingExtensions
                 break;
             }
 
-            var person = entry?.Person;
-            if (person is null || person.Id <= 0 || string.IsNullOrWhiteSpace(person.Name))
+            if (entry?.Person is not { } person || person.Id <= 0 || string.IsNullOrWhiteSpace(person.Name))
             {
                 continue;
             }
@@ -467,10 +466,10 @@ internal static class MappingExtensions
             result.Add(new SubjectRelationshipDefinition
             {
                 RelationshipKind = relationshipKind,
-                RelationshipQualifier = (entry!.Character?.Name).ToCastQualifier(entry.Self, entry.Voice),
+                RelationshipQualifier = (entry.Character?.Name).ToCastQualifier(entry.Self, entry.Voice),
                 RelationshipOrdinal = result.Count,
                 SubjectKind = RelationshipKinds.PersonSubject,
-                SubjectName = person.Name!.Trim(),
+                SubjectName = person.Name.Trim(),
                 SubjectExternalIds = person.Id.ToPersonExternalIds(),
                 InitialSubjectContribution = person.ToContribution(utcNow)
             });
@@ -503,7 +502,7 @@ internal static class MappingExtensions
                 RelationshipQualifier = entry.Type.NullIfBlank(),
                 RelationshipOrdinal = result.Count,
                 SubjectKind = RelationshipKinds.PersonSubject,
-                SubjectName = person.Name!.Trim(),
+                SubjectName = person.Name.Trim(),
                 SubjectExternalIds = person.Id.ToPersonExternalIds(),
                 InitialSubjectContribution = person.ToContribution(utcNow)
             });
@@ -527,7 +526,7 @@ internal static class MappingExtensions
         {
             ProviderType = Constants.ProviderType,
             Source = sourcePrefix + idString,
-            Title = network.Name!.Trim(),
+            Title = network.Name.Trim(),
             DateLastRefreshed = utcNow
         };
         contribution.ExternalIds.Add(new ExternalId
@@ -555,7 +554,7 @@ internal static class MappingExtensions
             RelationshipKind = RelationshipKinds.Network,
             RelationshipOrdinal = result.Count,
             SubjectKind = RelationshipKinds.StudioSubject,
-            SubjectName = network.Name!.Trim(),
+            SubjectName = network.Name.Trim(),
             SubjectExternalIds = new Dictionary<string, string> { [Constants.ProviderType] = idString },
             InitialSubjectContribution = contribution
         });
@@ -568,7 +567,7 @@ internal static class MappingExtensions
             return RelationshipKinds.Crew;
         }
 
-        var trimmed = type!.Trim();
+        var trimmed = type.Trim();
         if (string.Equals(trimmed, "Director", StringComparison.OrdinalIgnoreCase))
         {
             return RelationshipKinds.Director;
@@ -672,26 +671,24 @@ internal static class MappingExtensions
         var references = new List<ProviderMetadataSearchSubjectReference>(show.ToNetworkReferences());
         foreach (var entry in show.Embedded?.Cast ?? [])
         {
-            var person = entry?.Person;
-            if (person is null || person.Id <= 0 || string.IsNullOrWhiteSpace(person.Name))
+            if (entry?.Person is not { } person || person.Id <= 0 || string.IsNullOrWhiteSpace(person.Name))
             {
                 continue;
             }
 
             references.Add(person.ToSearchSubjectReference(
                 RelationshipKinds.Cast,
-                (entry!.Character?.Name).ToCastQualifier(entry.Self, entry.Voice)));
+                (entry.Character?.Name).ToCastQualifier(entry.Self, entry.Voice)));
         }
 
         foreach (var entry in show.Embedded?.Crew ?? [])
         {
-            var person = entry?.Person;
-            if (person is null || person.Id <= 0 || string.IsNullOrWhiteSpace(person.Name))
+            if (entry?.Person is not { } person || person.Id <= 0 || string.IsNullOrWhiteSpace(person.Name))
             {
                 continue;
             }
 
-            references.Add(person.ToSearchSubjectReference(entry!.Type.ToRelationshipKind(), entry.Type));
+            references.Add(person.ToSearchSubjectReference(entry.Type.ToRelationshipKind(), entry.Type));
         }
 
         return references;
@@ -778,7 +775,7 @@ internal static class MappingExtensions
             contribution.ExternalIds.Add(new ExternalId
             {
                 Source = Constants.ImdbSource,
-                Value = imdbId!.Trim(),
+                Value = imdbId.Trim(),
                 Ordinal = 1
             });
         }
@@ -921,7 +918,7 @@ internal static class MappingExtensions
             return null;
         }
 
-        return Uri.TryCreate(value!.Trim(), UriKind.Absolute, out var uri) &&
+        return Uri.TryCreate(value.Trim(), UriKind.Absolute, out var uri) &&
             (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps) ? uri : null;
     }
 }

@@ -190,7 +190,6 @@ function compareExtensionOrder(left: ExtensionItem, right: ExtensionItem): numbe
 export function useExtensionManagement() {
     useInvalidateQueriesOnEvents(EXTENSION_CATALOG_EVENTS, [extensionQueryKeys.list()], {
         exact: true,
-        owner: 'extensions:list',
     });
     const queryClient = useQueryClient();
     const { setRestartRequired } = useRestartRequired();
@@ -305,7 +304,6 @@ export function useExtension(id: string | undefined) {
     useInvalidateQueriesOnEvents(EXTENSION_CATALOG_EVENTS, [extensionQueryKeys.list()], {
         entityIds: id ? [id] : [],
         exact: true,
-        owner: 'extensions:detail',
     });
     const listQuery = useQuery({
         queryKey: extensionQueryKeys.list(),
@@ -336,7 +334,6 @@ interface ExtensionVersion {
 export function useExtensionVersions(extensionPackageId: string | undefined) {
     useInvalidateQueriesOnEvents(EXTENSION_CATALOG_EVENTS, [extensionQueryKeys.list()], {
         exact: true,
-        owner: 'extensions:versions',
     });
     const extensionsQuery = useQuery({
         queryKey: extensionQueryKeys.list(),

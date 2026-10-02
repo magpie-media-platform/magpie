@@ -67,6 +67,7 @@ public class AuthServiceTests
     private Mock<ITokenService> _tokenService = null!;
     private Mock<IUserService> _userService = null!;
     private Mock<IEventBus> _eventBus = null!;
+    private AuthService _subject = null!;
 
     [SetUp]
     public void SetUp()
@@ -74,22 +75,33 @@ public class AuthServiceTests
         _tokenService = new Mock<ITokenService>();
         _userService = new Mock<IUserService>();
         _eventBus = new Mock<IEventBus>();
+        _subject = new AuthService(
+            [],
+            _tokenService.Object,
+            _userService.Object,
+            _eventBus.Object,
+            new AccountLockoutOptions(),
+            TimeProvider.System,
+            NullLogger<AuthService>.Instance,
+            Mock.Of<ITransactionManager>(),
+            Mock.Of<IRefreshTokenRepository>(),
+            Mock.Of<IDataProtectionService>());
     }
 
     [TestCaseSource(nameof(PermissionRoles))]
     public void GetEffectivePermissions_ReturnsExpectedGrants_WhenTheCallerHasEachRole(
-        string permission, Role requiredRole, bool viewerGranted, bool requesterGranted, bool managerGranted)
+        string permission,
+        Role requiredRole,
+        bool viewerGranted,
+        bool requesterGranted,
+        bool managerGranted)
     {
         // Arrange
-        var subject = new AuthService([], _tokenService.Object, _userService.Object, _eventBus.Object,
-            new AccountLockoutOptions(), TimeProvider.System, NullLogger<AuthService>.Instance,
-            Mock.Of<ITransactionManager>(), Mock.Of<IRefreshTokenRepository>(), Mock.Of<IDataProtectionService>());
-
         // Act
-        var viewer = subject.GetEffectivePermissions(Role.Viewer).Permissions[permission];
-        var requester = subject.GetEffectivePermissions(Role.Requester).Permissions[permission];
-        var manager = subject.GetEffectivePermissions(Role.Manager).Permissions[permission];
-        var admin = subject.GetEffectivePermissions(Role.Admin).Permissions[permission];
+        var viewer = _subject.GetEffectivePermissions(Role.Viewer).Permissions[permission];
+        var requester = _subject.GetEffectivePermissions(Role.Requester).Permissions[permission];
+        var manager = _subject.GetEffectivePermissions(Role.Manager).Permissions[permission];
+        var admin = _subject.GetEffectivePermissions(Role.Admin).Permissions[permission];
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -109,12 +121,8 @@ public class AuthServiceTests
     public void GetEffectivePermissions_PublishesExpectedPermissions_WhenTheCatalogIsServed()
     {
         // Arrange
-        var subject = new AuthService([], _tokenService.Object, _userService.Object, _eventBus.Object,
-            new AccountLockoutOptions(), TimeProvider.System, NullLogger<AuthService>.Instance,
-            Mock.Of<ITransactionManager>(), Mock.Of<IRefreshTokenRepository>(), Mock.Of<IDataProtectionService>());
-
         // Act
-        var permissions = subject.GetEffectivePermissions(Role.Admin).Permissions.Keys;
+        var permissions = _subject.GetEffectivePermissions(Role.Admin).Permissions.Keys;
 
         // Assert
         Assert.That(
@@ -196,8 +204,10 @@ public class AuthServiceTests
             _eventBus.Object,
             new AccountLockoutOptions(),
             TimeProvider.System,
-            NullLogger<AuthService>.Instance, Mock.Of<ITransactionManager>(),
-            Mock.Of<IRefreshTokenRepository>(), Mock.Of<IDataProtectionService>());
+            NullLogger<AuthService>.Instance,
+            Mock.Of<ITransactionManager>(),
+            Mock.Of<IRefreshTokenRepository>(),
+            Mock.Of<IDataProtectionService>());
 
         // Act
         var result = await subject.VerifyCredentialsAsync("jdoe", "secret").ConfigureAwait(false);
@@ -209,12 +219,8 @@ public class AuthServiceTests
             Assert.That(result!.ProviderType, Is.EqualTo("ldap"));
         }
 
-        local.Verify(
-            p => p.VerifyCredentialsAsync("jdoe", "secret", It.IsAny<CancellationToken>()),
-            Times.Once);
-        ldap.Verify(
-            p => p.VerifyCredentialsAsync("jdoe", "secret", It.IsAny<CancellationToken>()),
-            Times.Once);
+        local.Verify(p => p.VerifyCredentialsAsync("jdoe", "secret", It.IsAny<CancellationToken>()), Times.Once);
+        ldap.Verify(p => p.VerifyCredentialsAsync("jdoe", "secret", It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Test]
@@ -246,8 +252,10 @@ public class AuthServiceTests
             _eventBus.Object,
             new AccountLockoutOptions(),
             TimeProvider.System,
-            NullLogger<AuthService>.Instance, Mock.Of<ITransactionManager>(),
-            Mock.Of<IRefreshTokenRepository>(), Mock.Of<IDataProtectionService>());
+            NullLogger<AuthService>.Instance,
+            Mock.Of<ITransactionManager>(),
+            Mock.Of<IRefreshTokenRepository>(),
+            Mock.Of<IDataProtectionService>());
 
         // Act
         var result = await subject.VerifyCredentialsAsync("admin", "secret").ConfigureAwait(false);
@@ -284,8 +292,10 @@ public class AuthServiceTests
             _eventBus.Object,
             new AccountLockoutOptions(),
             TimeProvider.System,
-            NullLogger<AuthService>.Instance, Mock.Of<ITransactionManager>(),
-            Mock.Of<IRefreshTokenRepository>(), Mock.Of<IDataProtectionService>());
+            NullLogger<AuthService>.Instance,
+            Mock.Of<ITransactionManager>(),
+            Mock.Of<IRefreshTokenRepository>(),
+            Mock.Of<IDataProtectionService>());
 
         // Act
         var result = await subject.VerifyCredentialsAsync("nobody", "secret").ConfigureAwait(false);

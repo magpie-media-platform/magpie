@@ -10,8 +10,6 @@ internal sealed class ReleaseScopeConfiguration : IEntityTypeConfiguration<Relea
     public void Configure(EntityTypeBuilder<ReleaseScope> builder)
     {
         builder.ToTable("indexer_releaseScope");
-        builder.HasKey(e => e.Id);
-        builder.Property(e => e.Id).ValueGeneratedOnAdd();
         builder.HasOne(e => e.Release)
             .WithMany(e => e.Scope)
             .HasForeignKey(e => e.ReleaseId)

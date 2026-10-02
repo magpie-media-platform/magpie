@@ -353,6 +353,16 @@ export function WishlistsPage() {
         [canWriteWishlists, isAdmin, user?.id],
     );
 
+    const deletingFilter = deletingWishlist?.contentFilter;
+    const canDeleteFilter =
+        !!deletingFilter &&
+        canEditOwned(
+            { ownerId: deletingFilter.ownerUserId ?? null, ownerLock: deletingFilter.ownerLock ?? false },
+            user?.id,
+            isAdmin,
+            canWriteWishlists,
+        );
+
     const wishlistsDescription = 'Saved filters Magpie uses to automatically monitor for matching content.';
 
     if (isLoading) {
@@ -463,11 +473,14 @@ export function WishlistsPage() {
                 itemType="Wishlist"
                 isDeleting={isDeleting}
                 extraToggle={
-                    deletingWishlist?.contentFilter
+                    deletingFilter
                         ? {
-                              label: `Also delete its filter "${deletingWishlist.contentFilter.name}"`,
+                              label: `Also delete its filter "${deletingFilter.name}"`,
                               checked: deleteFilterToo,
                               onChange: setDeleteFilterToo,
+                              disabledReason: canDeleteFilter
+                                  ? undefined
+                                  : 'You do not have permission to delete this filter.',
                           }
                         : undefined
                 }

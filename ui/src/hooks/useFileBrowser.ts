@@ -27,7 +27,7 @@ export function useFileBrowser(endpoint = '/system/files') {
     useInvalidateQueriesOnEvents(
         path ? ['download.imported', 'library.scan.completed'] : [],
         [fileBrowserQueryKey(endpoint, path)],
-        { debounceMs: 300, exact: true, maxWaitMs: 1200, owner: 'file-browser' },
+        { debounceMs: 300, exact: true, maxWaitMs: 1200 },
     );
 
     const query = useQuery({

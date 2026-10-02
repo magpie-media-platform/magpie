@@ -16,7 +16,6 @@ export function useSetupStatus() {
         queryKey: setupStatusQueryKey,
         queryFn: fetchSetupStatus,
         staleTime: 60_000,
-        gcTime: 5 * 60_000,
         retry: false,
         refetchOnWindowFocus: false,
         refetchOnMount: false,

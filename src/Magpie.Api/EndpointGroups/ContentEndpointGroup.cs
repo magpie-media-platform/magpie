@@ -208,7 +208,8 @@ internal sealed class ContentEndpointGroup : IApiEndpointGroup
         "file-cleanup",
         "GET",
         "file-cleanup",
-        "List the files on containers to reassign and the superseded copies to unlink, without a change")]
+        "List the files on containers to reassign, the files whose names cover more items, and the superseded " +
+        "copies and extras to unlink, without a change")]
     internal async Task<IResult> PlanFileCleanupAsync(
         [FromServices] ILibraryImportService libraryImportService,
         Guid? rootId,
@@ -269,18 +270,10 @@ internal sealed class ContentEndpointGroup : IApiEndpointGroup
             Tag = tag
         };
 
-        var paging = new PagingParameter
-        {
-            PageNumber = pageNumber ?? 1,
-            PageSize = pageSize ?? 25
-        };
+        var paging = new PagingParameter { PageNumber = pageNumber ?? 1, PageSize = pageSize ?? 25 };
 
         var sort = sortBy is not null
-            ? new SortParameter
-            {
-                PropertyName = sortBy,
-                Direction = sortDirection ?? SortDirection.Ascending
-            }
+            ? new SortParameter { PropertyName = sortBy, Direction = sortDirection ?? SortDirection.Ascending }
             : null;
 
         var result = await contentService.QueryAsync(query, paging, sort, cancellationToken)
@@ -318,11 +311,7 @@ internal sealed class ContentEndpointGroup : IApiEndpointGroup
         int? pageSize,
         CancellationToken cancellationToken)
     {
-        var paging = new PagingParameter
-        {
-            PageNumber = pageNumber ?? 1,
-            PageSize = pageSize ?? 25
-        };
+        var paging = new PagingParameter { PageNumber = pageNumber ?? 1, PageSize = pageSize ?? 25 };
 
         var result = await contentService.GetChildrenAsync(id, paging, cancellationToken)
             .ConfigureAwait(false);
@@ -399,17 +388,9 @@ internal sealed class ContentEndpointGroup : IApiEndpointGroup
             return FilterParseProblem(error);
         }
 
-        var action = new BulkAction<ContentFilterCriteria>
-        {
-            Ids = request.Ids,
-            Filter = filterCriteria
-        };
+        var action = new BulkAction<ContentFilterCriteria> { Ids = request.Ids, Filter = filterCriteria };
 
-        var result = await contentService.BulkDeleteAsync(
-            action,
-            request.DeleteFromLibrary,
-            user.Id,
-            cancellationToken)
+        var result = await contentService.BulkDeleteAsync(action, request.DeleteFromLibrary, user.Id, cancellationToken)
             .ConfigureAwait(false);
 
         return Results.Ok(result);

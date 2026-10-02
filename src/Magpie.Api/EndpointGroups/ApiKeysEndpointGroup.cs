@@ -61,6 +61,9 @@ internal sealed class ApiKeysEndpointGroup : IApiEndpointGroup
             .RequireViewer();
     }
 
+    internal static IReadOnlyList<ApiKeyResponse> CreateResponse(IReadOnlyList<ApiKey> apiKeys) =>
+        [.. apiKeys.Select(CreateResponse)];
+
     [MagpieCommand("list", "GET", "", "List all API keys")]
     internal async Task<IResult> GetApiKeysAsync(
         [FromServices] IApiKeyService apiKeyService,
@@ -144,15 +147,8 @@ internal sealed class ApiKeysEndpointGroup : IApiEndpointGroup
         return deleted ? Results.NoContent() : Results.NotFound();
     }
 
-    private static IReadOnlyList<ApiKeyResponse> CreateResponse(IReadOnlyList<ApiKey> apiKeys) =>
-        [.. apiKeys.Select(CreateResponse)];
-
     private static ApiKeyCreatedResponse CreateResponse(ApiKeyWithPlaintextKey created) =>
-        new()
-        {
-            Key = CreateResponse(created.ApiKey),
-            PlaintextKey = created.PlaintextKey,
-        };
+        new() { Key = CreateResponse(created.ApiKey), PlaintextKey = created.PlaintextKey };
 
     private static ApiKeyResponse CreateResponse(ApiKey apiKey) =>
         new()

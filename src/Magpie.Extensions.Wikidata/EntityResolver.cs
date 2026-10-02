@@ -27,41 +27,20 @@ internal sealed class EntityResolver(IWikidataClient client, IQueryCoordinator c
         RequestContext context,
         CancellationToken cancellationToken)
     {
-        var direct = FindExternalId(existingMetadata, Constants.ProviderType);
-        if (direct.TryNormalizeQid(out var qid))
+        var resolution = await ResolveSubjectAsync(kind, existingMetadata, context, cancellationToken)
+            .ConfigureAwait(false);
+        if (resolution.Kind != EntityResolutionKind.NotFound || kind is not (EntityKind.Season or EntityKind.Episode))
         {
-            return Resolved(qid!);
+            return resolution;
         }
 
-        foreach (var source in ExternalSources(kind))
-        {
-            var value = FindExternalId(existingMetadata, source.Source);
-            if (string.IsNullOrWhiteSpace(value))
-            {
-                continue;
-            }
-
-            var resolution = await ResolveExternalAsync(
-                kind,
-                source.PropertyId,
-                value!,
-                context,
-                cancellationToken).ConfigureAwait(false);
-            if (resolution.Kind != EntityResolutionKind.NotFound)
-            {
-                return resolution;
-            }
-        }
-
-        return kind is EntityKind.Season or EntityKind.Episode
-            ? await ResolveCoordinateAsync(
-                kind,
-                item,
-                existingMetadata,
-                ancestorMetadata,
-                context,
-                cancellationToken).ConfigureAwait(false)
-            : NotFound();
+        return await ResolveCoordinateAsync(
+            kind,
+            item,
+            existingMetadata,
+            ancestorMetadata,
+            context,
+            cancellationToken).ConfigureAwait(false);
     }
 
     public async Task<EntityResolution> ResolveSubjectAsync(
@@ -74,7 +53,7 @@ internal sealed class EntityResolver(IWikidataClient client, IQueryCoordinator c
         var direct = FindExternalId(contributions, Constants.ProviderType);
         if (direct.TryNormalizeQid(out var qid))
         {
-            return Resolved(qid!);
+            return Resolved(qid);
         }
 
         foreach (var source in ExternalSources(kind))
@@ -88,7 +67,7 @@ internal sealed class EntityResolver(IWikidataClient client, IQueryCoordinator c
             var resolution = await ResolveExternalAsync(
                 kind,
                 source.PropertyId,
-                value!,
+                value,
                 context,
                 cancellationToken).ConfigureAwait(false);
             if (resolution.Kind != EntityResolutionKind.NotFound)
@@ -106,7 +85,7 @@ internal sealed class EntityResolver(IWikidataClient client, IQueryCoordinator c
         int? episode = null;
         if (!string.IsNullOrWhiteSpace(item.AlignmentKey))
         {
-            var parts = item.AlignmentKey!.Split(':');
+            var parts = item.AlignmentKey.Split(':');
             if (parts.Length == 2 && parts[0] == "season" && TryPositive(parts[1], out var seasonValue))
             {
                 season = seasonValue;
@@ -172,7 +151,7 @@ internal sealed class EntityResolver(IWikidataClient client, IQueryCoordinator c
             from row in rows
             let value = row.TryGetValue("item", out var binding) ? binding?.Value.ToQid() : null
             where value is not null
-            select value!)
+            select value)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .Take(2)
             .ToArray();
@@ -294,7 +273,7 @@ internal sealed class EntityResolver(IWikidataClient client, IQueryCoordinator c
             where string.Equals(external.Source, Constants.ProviderType, StringComparison.OrdinalIgnoreCase)
             let value = external.Value.ToQid()
             where value is not null
-            select value!)
+            select value)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
         if (ancestorQids.Count == 0)
@@ -312,7 +291,7 @@ internal sealed class EntityResolver(IWikidataClient client, IQueryCoordinator c
             from contribution in existingMetadata
             let value = contribution.SequenceNumber
             where value > 0
-            select value!.Value).ToList();
+            select value.Value).ToList();
         if (item.Ordinal > 0)
         {
             storedOrdinals.Add(item.Ordinal.Value);
@@ -344,7 +323,7 @@ internal sealed class EntityResolver(IWikidataClient client, IQueryCoordinator c
                 from contribution in ancestorMetadata
                 let value = contribution.SequenceNumber
                 where value > 0
-                select value!.Value).ToList();
+                select value.Value).ToList();
             if (itemCoordinates.SeasonNumber is > 0)
             {
                 seasonCoordinates.Add(itemCoordinates.SeasonNumber.Value);

@@ -99,11 +99,15 @@ public sealed class ContentTypeRegistryTests
             [provider],
             _loggerFactory.CreateLogger<ContentTypeRegistry>());
 
+        // Act
+        var exactMatch = registry.FindProviderFor("type-a");
+        var differentCase = registry.FindProviderFor("TYPE-A");
+
         // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(registry.FindProviderFor("type-a"), Is.SameAs(provider));
-            Assert.That(registry.FindProviderFor("TYPE-A"), Is.Null);
+            Assert.That(exactMatch, Is.SameAs(provider));
+            Assert.That(differentCase, Is.Null);
         }
     }
 

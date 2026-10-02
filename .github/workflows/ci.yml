@@ -1,0 +1,229 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+    tags: ['v*']
+  pull_request:
+    branches: [main, develop]
+
+permissions:
+  contents: read
+
+env:
+  DOTNET_NOLOGO: true
+  CONTRACT_PROJECTS: Magpie.Models Magpie.Sdk
+  EXTENSION_PROJECTS: >-
+    Magpie.Extensions.Books
+    Magpie.Extensions.Cardigann
+    Magpie.Extensions.Jellyfin
+    Magpie.Extensions.MediaInfo.FFProbe
+    Magpie.Extensions.Movies
+    Magpie.Extensions.Music
+    Magpie.Extensions.MusicBrainz
+    Magpie.Extensions.OpenLibrary
+    Magpie.Extensions.Qbittorrent
+    Magpie.Extensions.Tmdb
+    Magpie.Extensions.Tv
+    Magpie.Extensions.Tvmaze
+    Magpie.Extensions.Wikidata
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+
+      - run: corepack enable
+
+      - name: Set version
+        id: version
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            version="${GITHUB_REF_NAME#v}"
+            if [[ ! "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$ ]]; then
+              echo "Tag $GITHUB_REF_NAME is not v<major>.<minor>.<patch>[-<prerelease>]." >&2
+              exit 1
+            fi
+          else
+            version="$(dotnet msbuild src/Magpie.Sdk/Magpie.Sdk.csproj -getProperty:Version)"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Build
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: dotnet build src/Magpie.sln -c Release -p:Version="$VERSION"
+
+      - name: Test
+        run: dotnet test src/Magpie.sln -c Release --no-build
+
+      - name: Verify UI
+        working-directory: ui
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm run verify-full
+
+  pack:
+    needs: build
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.build.outputs.version }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+
+      - run: bash scripts/pack-packages.sh "$VERSION" artifacts/packages $CONTRACT_PROJECTS $EXTENSION_PROJECTS
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: packages
+          path: artifacts/packages/*.nupkg
+
+  app:
+    needs: build
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        rid: [win-x64, linux-x64]
+    env:
+      VERSION: ${{ needs.build.outputs.version }}
+      RID: ${{ matrix.rid }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+
+      - run: corepack enable
+
+      - run: bash scripts/package-app.sh "$VERSION" "$RID" artifacts/app $EXTENSION_PROJECTS
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: app-${{ matrix.rid }}
+          path: artifacts/app/*.tar.gz
+
+  image:
+    needs: [build, app]
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.build.outputs.version }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: app-linux-x64
+          path: artifacts/app
+
+      - name: Build image
+        run: |
+          mkdir artifacts/image
+          tar -xzf "artifacts/app/magpie-$VERSION-linux-x64.tar.gz" -C artifacts/image
+          docker build --platform linux/amd64 --file Dockerfile --tag "magpie:$VERSION" \
+            --label "org.opencontainers.image.version=$VERSION" \
+            --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+            artifacts/image
+          docker run --rm "magpie:$VERSION" version | grep -F "Magpie $VERSION"
+          docker save "magpie:$VERSION" | gzip > "artifacts/magpie-$VERSION-image.tar.gz"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: image
+          path: artifacts/magpie-*-image.tar.gz
+
+  verify:
+    needs: [build, pack, app]
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.build.outputs.version }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: packages
+          path: artifacts/packages
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: app-linux-x64
+          path: artifacts/app
+
+      - run: >
+          bash scripts/verify-artifacts.sh "$VERSION"
+          "artifacts/app/magpie-$VERSION-linux-x64.tar.gz" artifacts/packages
+
+  publish:
+    needs: [build, pack, app, image, verify]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.build.outputs.version }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Require the tagged commit on main
+        run: git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+
+      - uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+
+      - name: Publish NuGet packages
+        env:
+          NUGET_SOURCE: ${{ vars.NUGET_SOURCE }}
+          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+        run: >
+          dotnet nuget push "artifacts/packages/*.nupkg"
+          --source "$NUGET_SOURCE" --api-key "$NUGET_API_KEY" --skip-duplicate
+
+      - name: Publish image
+        env:
+          MAGPIE_IMAGE: ${{ vars.MAGPIE_IMAGE }}
+          REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
+          REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
+        run: |
+          docker load --input "artifacts/image/magpie-$VERSION-image.tar.gz"
+          echo "$REGISTRY_PASSWORD" | docker login "${MAGPIE_IMAGE%%/*}" --username "$REGISTRY_USERNAME" --password-stdin
+          docker tag "magpie:$VERSION" "$MAGPIE_IMAGE:$VERSION"
+          docker push "$MAGPIE_IMAGE:$VERSION"
+
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          prerelease=()
+          if [[ "$VERSION" == *-* ]]; then
+            prerelease=(--prerelease)
+          fi
+          gh release create "$GITHUB_REF_NAME" artifacts/app-*/*.tar.gz \
+            --verify-tag --title "$VERSION" --notes "" "${prerelease[@]}"

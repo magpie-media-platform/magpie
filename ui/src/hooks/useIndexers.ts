@@ -4,18 +4,14 @@ import { useQuery, useQueries, useMutation, useQueryClient } from '@tanstack/rea
 import { apiGet, apiPost, apiPatch, apiDelete } from '@/lib/api';
 import { executeImmediateJobRequest, type JobActionDisposition } from '@/lib/jobActions';
 import type { ConnectionTestResult } from '@/hooks/useTestConnection';
-import { useJobAction, type JobActionLifecycleOptions } from '@/hooks/useJobAction';
+import { useJobAction } from '@/hooks/useJobAction';
 import { useInvalidateQueriesOnEvents } from '@/hooks/useInvalidateQueriesOnEvents';
 import type { DictionaryPatch, ScalarPatch } from '@/types/patch';
 import { POLLING_INTERVALS } from '@/lib/queryClient';
 import { queryErrorOrNull } from '@/lib/utils';
-import { healthStatusLabels, healthStatusVariants } from '@/types/healthStatus';
 import type { HealthStatusValue } from '@/types/healthStatus';
 
 export type IndexerStatusValue = HealthStatusValue;
-
-export const indexerStatusLabels = healthStatusLabels;
-export const indexerStatusVariants = healthStatusVariants;
 
 export type IndexerAvailabilityValue = 'Unknown' | 'Public' | 'Private' | 'SemiPrivate';
 
@@ -139,20 +135,6 @@ interface IndexerCreateRequest {
     settings?: Record<string, string>;
 }
 
-interface IndexerUpdateRequest {
-    providerType?: ScalarPatch<string>;
-
-    name?: ScalarPatch<string>;
-
-    description?: ScalarPatch<string | null>;
-
-    availability?: ScalarPatch<IndexerAvailabilityValue>;
-
-    categories?: ScalarPatch<string[]>;
-
-    languages?: ScalarPatch<string[]>;
-}
-
 interface IndexerConnectionUpdateRequest {
     name?: ScalarPatch<string>;
 
@@ -233,14 +215,6 @@ async function createIndexer(request: IndexerCreateRequest): Promise<ApiIndexer>
     return apiPost<ApiIndexer>('/indexers', request);
 }
 
-async function updateIndexer(id: string, request: IndexerUpdateRequest): Promise<void> {
-    return apiPatch(`/indexers/${id}`, request);
-}
-
-async function deleteIndexer(id: string): Promise<void> {
-    return apiDelete(`/indexers/${id}`);
-}
-
 interface IndexerConnectionCreateRequest {
     name: string;
     enabled: boolean;
@@ -313,7 +287,7 @@ export function useConfiguredIndexerCount(): number | undefined {
     }).data;
 }
 
-export function useIndexers(options?: { syncFeed?: JobActionLifecycleOptions<string> }) {
+export function useIndexers() {
     useInvalidateQueriesOnEvents(
         [
             'indexer.created',
@@ -324,14 +298,13 @@ export function useIndexers(options?: { syncFeed?: JobActionLifecycleOptions<str
             'indexerFeed.deleted',
         ],
         [indexerQueryKeys.list(), indexerQueryKeys.feeds()],
-        { exact: true, owner: 'indexer-settings' },
+        { exact: true },
     );
     useInvalidateQueriesOnEvents(['integration.health.changed'], [indexerQueryKeys.list()], {
         context: { 'integration.type': 'indexer' },
         debounceMs: 150,
         exact: true,
         maxWaitMs: 600,
-        owner: 'indexer-settings',
     });
     const queryClient = useQueryClient();
 
@@ -345,13 +318,6 @@ export function useIndexers(options?: { syncFeed?: JobActionLifecycleOptions<str
         queryKey: indexerQueryKeys.feeds(),
         queryFn: fetchIndexerFeeds,
         staleTime: POLLING_INTERVALS.normal / 2,
-    });
-
-    const deleteIndexerMutation = useMutation({
-        mutationFn: deleteIndexer,
-        onSuccess: () => {
-            void queryClient.invalidateQueries({ queryKey: indexerQueryKeys.list() });
-        },
     });
 
     const enableFeedMutation = useMutation({
@@ -377,23 +343,13 @@ export function useIndexers(options?: { syncFeed?: JobActionLifecycleOptions<str
 
     const syncFeedMutation = useJobAction<string>({
         mutationFn: syncIndexerFeed,
-        onJobStarted: (disposition, id) => {
+        onJobStarted: () => {
             void queryClient.invalidateQueries({ queryKey: indexerQueryKeys.feeds() });
-            options?.syncFeed?.onJobStarted?.(disposition, id);
         },
-        onJobExecutionSettled: options?.syncFeed?.onJobExecutionSettled,
-        trackExecution: options?.syncFeed?.trackExecution,
     });
 
     const createIndexerMutation = useMutation({
         mutationFn: createIndexer,
-        onSuccess: () => {
-            void queryClient.invalidateQueries({ queryKey: indexerQueryKeys.list() });
-        },
-    });
-
-    const updateIndexerMutation = useMutation({
-        mutationFn: ({ id, request }: { id: string; request: IndexerUpdateRequest }) => updateIndexer(id, request),
         onSuccess: () => {
             void queryClient.invalidateQueries({ queryKey: indexerQueryKeys.list() });
         },
@@ -432,15 +388,9 @@ export function useIndexers(options?: { syncFeed?: JobActionLifecycleOptions<str
         isLoadingIndexers: indexersQuery.isLoading,
         isLoadingFeeds: feedsQuery.isLoading,
         error: queryErrorOrNull(indexersQuery),
-        feedsError: queryErrorOrNull(feedsQuery),
 
         createIndexer: createIndexerMutation.mutateAsync,
-        updateIndexer: (id: string, request: IndexerUpdateRequest) =>
-            updateIndexerMutation.mutateAsync({ id, request }),
-        deleteIndexer: deleteIndexerMutation.mutateAsync,
         isCreatingIndexer: createIndexerMutation.isPending,
-        isUpdatingIndexer: updateIndexerMutation.isPending,
-        isDeletingIndexer: deleteIndexerMutation.isPending,
 
         createFeed: createFeedMutation.mutateAsync,
         updateFeed: (id: string, request: IndexerFeedUpdateRequest) => updateFeedMutation.mutateAsync({ id, request }),
@@ -449,16 +399,11 @@ export function useIndexers(options?: { syncFeed?: JobActionLifecycleOptions<str
         syncFeed: syncFeedMutation.mutateAsync,
         isCreatingFeed: createFeedMutation.isPending,
         isUpdatingFeed: updateFeedMutation.isPending,
-        isTogglingFeed: enableFeedMutation.isPending || disableFeedMutation.isPending,
-        isDeletingFeed: deleteFeedMutation.isPending,
-        isSyncingFeed: syncFeedMutation.isPending,
         syncingFeedId: syncFeedMutation.isPending ? syncFeedMutation.variables : undefined,
 
         refetch: async () => {
             await Promise.all([indexersQuery.refetch(), feedsQuery.refetch()]);
         },
-        refetchIndexers: indexersQuery.refetch,
-        refetchFeeds: feedsQuery.refetch,
     };
 }
 
@@ -470,14 +415,12 @@ export interface ConfiguredConnectionRow {
 export function useAllIndexerConnections(indexers: ApiIndexer[]) {
     useInvalidateQueriesOnEvents(['indexer.updated', 'indexer.deleted'], [indexerQueryKeys.connections()], {
         exact: false,
-        owner: 'indexer-connections',
     });
     useInvalidateQueriesOnEvents(['integration.health.changed'], [indexerQueryKeys.connections()], {
         context: { 'integration.type': 'indexer' },
         debounceMs: 150,
         exact: false,
         maxWaitMs: 600,
-        owner: 'indexer-connections',
     });
     const configured = indexers.filter((i) => (i.connectionCount ?? 0) > 0);
 

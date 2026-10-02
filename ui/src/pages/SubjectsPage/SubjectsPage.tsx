@@ -14,7 +14,7 @@ import { Pager } from '@/components/ui/Pager';
 
 import { SubjectList, type SubjectItem } from '@/components/ui/SubjectList';
 import { FilterBar } from '@/components/filters/FilterBar';
-import { SubjectListSlot } from '@/components/ui/Slot/SubjectSlots';
+import { Slot } from '@/components/ui/Slot';
 import { PullToRefresh } from '@/components/ui/PullToRefresh';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { useUrlFilterState } from '@/hooks/useUrlFilterState';
@@ -310,7 +310,7 @@ export function SubjectsPage() {
     return (
         <div className="subjects-page" data-page="subjects" data-layout={usesCardLayout ? 'card' : 'table'}>
             <PullToRefresh onRefresh={handleRefresh} className="subjects-page__pull-to-refresh">
-                <SubjectListSlot>
+                <Slot slot="subject.list">
                     <PageHeader
                         className="subjects-page__header"
                         title={pageTitle}
@@ -434,7 +434,7 @@ export function SubjectsPage() {
                             </div>
                         </>
                     )}
-                </SubjectListSlot>
+                </Slot>
             </PullToRefresh>
         </div>
     );

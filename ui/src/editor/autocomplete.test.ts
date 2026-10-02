@@ -14,7 +14,6 @@ import {
     getScalarField,
     getCollectionField,
     isCollectionField,
-    getAllFieldNames,
 } from './field-registry';
 
 const parserWithHighlight = parser.configure({
@@ -150,23 +149,6 @@ describe('Filter Query Autocomplete', () => {
             it('returns false for scalar fields', () => {
                 expect(isCollectionField(contentFieldRegistry, 'name')).toBe(false);
                 expect(isCollectionField(contentFieldRegistry, 'monitoring')).toBe(false);
-            });
-        });
-
-        describe('getAllFieldNames', () => {
-            it('returns all scalar field names', () => {
-                const names = getAllFieldNames(contentFieldRegistry);
-                expect(names).toContain('name');
-                expect(names).toContain('monitoring');
-                expect(names).not.toContain('fileSize');
-            });
-
-            it('returns all collection field names and aliases', () => {
-                const names = getAllFieldNames(contentFieldRegistry);
-                expect(names).toContain('genre');
-                expect(names).toContain('genres');
-                expect(names).toContain('tag');
-                expect(names).toContain('tags');
             });
         });
     });

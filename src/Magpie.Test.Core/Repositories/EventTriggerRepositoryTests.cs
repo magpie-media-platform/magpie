@@ -107,11 +107,10 @@ public sealed class EventTriggerRepositoryTests
         _extensionId = extension.Id;
         _otherExtensionId = otherExtension.Id;
 
-        var loggerFactory = NullLoggerFactory.Instance;
         var auditRepo = new AuditRecordRepository(
             _context,
             Mock.Of<IEventBus>(),
-            loggerFactory.CreateLogger<AuditRecordRepository>(),
+            NullLogger<AuditRecordRepository>.Instance,
             new TransactionManager(_context, NullLogger<TransactionManager>.Instance),
             Mock.Of<IJobExecutionScopeFactory>(),
             timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
@@ -126,14 +125,13 @@ public sealed class EventTriggerRepositoryTests
             auditRepo,
             transactionManager,
             _eventBus.Object,
-            loggerFactory.CreateLogger<EventTriggerRepository>(),
+            NullLogger<EventTriggerRepository>.Instance,
             timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
     }
 
     [TearDown]
     public void TearDown()
     {
-        _context.Database.CloseConnection();
         _context.Dispose();
     }
 
@@ -956,10 +954,11 @@ public sealed class EventTriggerRepositoryTests
             DelaySeconds = -1
         };
 
+        // Act
+        var act = (AsyncTestDelegate)(async () => await _subject.CreateAsync(model, _userId).ConfigureAwait(false));
+
         // Assert
-        Assert.That(
-            async () => await _subject.CreateAsync(model, _userId).ConfigureAwait(false),
-            Throws.TypeOf<MagpieException>());
+        Assert.ThrowsAsync<MagpieException>(act);
     }
 
     [Test]
@@ -1037,10 +1036,11 @@ public sealed class EventTriggerRepositoryTests
             DelaySeconds = new() { Value = -5 }
         };
 
+        // Act
+        var act = (AsyncTestDelegate)(async () => await _subject.PatchAsync(patch, _userId).ConfigureAwait(false));
+
         // Assert
-        Assert.That(
-            async () => await _subject.PatchAsync(patch, _userId).ConfigureAwait(false),
-            Throws.TypeOf<MagpieException>());
+        Assert.ThrowsAsync<MagpieException>(act);
     }
 
     [Test]

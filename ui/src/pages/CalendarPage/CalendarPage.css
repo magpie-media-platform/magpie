@@ -248,36 +248,6 @@
         display: none;
     }
 
-    .calendar-page__day-event--missing {
-        background-color: color-mix(in srgb, var(--fulfillment-missing) 20%, transparent);
-        color: var(--fulfillment-missing);
-        border-left: 2px solid var(--fulfillment-missing);
-    }
-
-    .calendar-page__day-event--upgradable {
-        background-color: color-mix(in srgb, var(--fulfillment-upgradable) 20%, transparent);
-        color: var(--fulfillment-upgradable);
-        border-left: 2px solid var(--fulfillment-upgradable);
-    }
-
-    .calendar-page__day-event--fulfilled {
-        background-color: color-mix(in srgb, var(--fulfillment-fulfilled) 20%, transparent);
-        color: var(--fulfillment-fulfilled);
-        border-left: 2px solid var(--fulfillment-fulfilled);
-    }
-
-    .calendar-page__day-event--fulfilledExternally {
-        background-color: color-mix(in srgb, var(--fulfillment-external) 20%, transparent);
-        color: var(--fulfillment-external);
-        border-left: 2px solid var(--fulfillment-external);
-    }
-
-    .calendar-page__day-event--partial {
-        background-color: color-mix(in srgb, var(--fulfillment-partial) 20%, transparent);
-        color: var(--fulfillment-partial);
-        border-left: 2px solid var(--fulfillment-partial);
-    }
-
     .calendar-page__day-more {
         font-size: var(--text-xs);
         color: var(--text-muted);
@@ -455,26 +425,6 @@
             gap: var(--space-2xs);
             padding: 0 var(--space-2xs);
         }
-    }
-
-    .calendar-page__event-card--missing {
-        border-left: 3px solid var(--fulfillment-missing);
-    }
-
-    .calendar-page__event-card--upgradable {
-        border-left: 3px solid var(--fulfillment-upgradable);
-    }
-
-    .calendar-page__event-card--fulfilled {
-        border-left: 3px solid var(--fulfillment-fulfilled);
-    }
-
-    .calendar-page__event-card--fulfilledExternally {
-        border-left: 3px solid var(--fulfillment-external);
-    }
-
-    .calendar-page__event-card--partial {
-        border-left: 3px solid var(--fulfillment-partial);
     }
 
     .calendar-page__event-poster {

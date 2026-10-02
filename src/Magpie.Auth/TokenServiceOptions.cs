@@ -30,5 +30,5 @@ public sealed class TokenServiceOptions
     /// <summary>
     /// The lockout options for user accounts.
     /// </summary>
-    public AccountLockoutOptions LockoutOptions { get; set; } = new AccountLockoutOptions();
+    public AccountLockoutOptions LockoutOptions { get; set; } = new();
 }

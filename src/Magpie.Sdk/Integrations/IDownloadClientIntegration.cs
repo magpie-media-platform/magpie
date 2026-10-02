@@ -43,7 +43,7 @@ public interface IDownloadClientIntegration
     /// <param name="cancellationToken">The token that cancels the operation</param>
     /// <returns>The added download.</returns>
     /// <exception cref="ReleasePayloadRejectedException">
-    /// The release payload was rejected before anything was sent to the client
+    /// The release payload was rejected, so the client added no download for it
     /// </exception>
     Task<DownloadInfo> DownloadReleaseAsync(
         Release release,
@@ -85,7 +85,7 @@ public interface IDownloadClientIntegration
     /// <param name="cancellationToken">The token that cancels the operation</param>
     /// <returns>The added download.</returns>
     /// <exception cref="ReleasePayloadRejectedException">
-    /// The release payload was rejected before anything was sent to the client
+    /// The release payload was rejected, so the client added no download for it
     /// </exception>
     Task<DownloadInfo> DownloadReleaseAsync(
         Release release,

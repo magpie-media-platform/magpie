@@ -157,6 +157,11 @@ public sealed record ContentHierarchyItemCriteria
     public IReadOnlyCollection<Guid>? ExcludeIds { get; set; }
 
     /// <summary>
+    /// The id that every item in the result must follow in the id order, or <see langword="null"/> for no limit.
+    /// </summary>
+    public Guid? AfterId { get; set; }
+
+    /// <summary>
     /// The id of an ancestor that matches its descendants at any depth.
     /// </summary>
     public Guid? AncestorId { get; set; }

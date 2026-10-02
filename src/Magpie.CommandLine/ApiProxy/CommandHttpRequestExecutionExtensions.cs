@@ -17,86 +17,20 @@ internal static class CommandHttpRequestExecutionExtensions
     private static JsonSerializerOptions JsonOptions { get; } = CreateJsonOptions();
 
     public static async Task<int> ExecuteAsync(
-        this CommandHttpRequest request,
+        this HttpRequestMessage request,
         CommandTransportOptions transportOptions,
-        Func<CancellationToken, Task<WebApplication>>? localAppFactory,
-        TextWriter output,
-        TextWriter error,
-        CancellationToken cancellationToken)
-    {
-        var transportFactory = new CommandTransportFactory(localAppFactory);
-
-        ICommandTransport transport;
-        try
-        {
-            transport = await transportFactory
-                .CreateAsync(transportOptions, request.AllowsAnonymousRemote, cancellationToken)
-                .ConfigureAwait(false);
-        }
-        catch (CommandTargetResolutionException ex)
-        {
-            await error.WriteLineAsync(ex.Message).ConfigureAwait(false);
-            return 1;
-        }
-
-        try
-        {
-            await using (transport.ConfigureAwait(false))
-            {
-                using var message = request.Build(JsonOptions);
-                using var response = await transport
-                    .SendAsync(message, HttpCompletionOption.ResponseContentRead, cancellationToken)
-                    .ConfigureAwait(false);
-                var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
-                if (!response.IsSuccessStatusCode)
-                {
-                    var errorMessage = $"Request failed with HTTP {(int)response.StatusCode} ({response.StatusCode}).";
-                    await error.WriteLineAsync(errorMessage)
-                        .ConfigureAwait(false);
-                    if (!string.IsNullOrWhiteSpace(body))
-                    {
-                        await error.WriteLineAsync(body).ConfigureAwait(false);
-                    }
-
-                    return 1;
-                }
-
-                if (!string.IsNullOrWhiteSpace(body))
-                {
-                    await output.WriteLineAsync(FormatJson(body)).ConfigureAwait(false);
-                }
-
-                return 0;
-            }
-        }
-        catch (HttpRequestException ex)
-        {
-            await WriteTransportFailureAsync(ex, error).ConfigureAwait(false);
-            return 1;
-        }
-        catch (OperationCanceledException ex) when (!cancellationToken.IsCancellationRequested)
-        {
-            await WriteTransportFailureAsync(ex, error).ConfigureAwait(false);
-            return 1;
-        }
-    }
-
-    public static async Task<int> ExecuteBlobAsync(
-        this CommandHttpRequest request,
-        CommandTransportOptions transportOptions,
-        Func<CancellationToken, Task<WebApplication>>? localAppFactory,
+        Func<CancellationToken, Task<WebApplication>> localAppFactory,
+        bool blob,
         string? outputPath,
         TextWriter output,
         TextWriter error,
         CancellationToken cancellationToken)
     {
-        var transportFactory = new CommandTransportFactory(localAppFactory);
-
-        ICommandTransport transport;
+        HttpClient client;
         try
         {
-            transport = await transportFactory
-                .CreateAsync(transportOptions, request.AllowsAnonymousRemote, cancellationToken)
+            client = await CommandTransportFactory
+                .CreateAsync(transportOptions, localAppFactory, cancellationToken)
                 .ConfigureAwait(false);
         }
         catch (CommandTargetResolutionException ex)
@@ -107,24 +41,38 @@ internal static class CommandHttpRequestExecutionExtensions
 
         try
         {
-            await using (transport.ConfigureAwait(false))
+            using (client)
             {
-                using var message = request.Build(JsonOptions);
-                using var response = await transport
-                    .SendAsync(message, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
+                var completionOption = blob
+                    ? HttpCompletionOption.ResponseHeadersRead
+                    : HttpCompletionOption.ResponseContentRead;
+                using var response = await client
+                    .SendAsync(request, completionOption, cancellationToken)
                     .ConfigureAwait(false);
                 if (!response.IsSuccessStatusCode)
                 {
-                    var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+                    var failureBody = await response.Content.ReadAsStringAsync(cancellationToken)
+                        .ConfigureAwait(false);
                     await error.WriteLineAsync(
                         $"Request failed with HTTP {(int)response.StatusCode} ({response.StatusCode}).")
                         .ConfigureAwait(false);
-                    if (!string.IsNullOrWhiteSpace(body))
+                    if (!string.IsNullOrWhiteSpace(failureBody))
                     {
-                        await error.WriteLineAsync(body).ConfigureAwait(false);
+                        await error.WriteLineAsync(failureBody).ConfigureAwait(false);
                     }
 
                     return 1;
+                }
+
+                if (!blob)
+                {
+                    var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+                    if (!string.IsNullOrWhiteSpace(body))
+                    {
+                        await output.WriteLineAsync(FormatJson(body)).ConfigureAwait(false);
+                    }
+
+                    return 0;
                 }
 
                 var targetPath = string.IsNullOrWhiteSpace(outputPath)
@@ -191,10 +139,7 @@ internal static class CommandHttpRequestExecutionExtensions
 
     private static JsonSerializerOptions CreateJsonOptions()
     {
-        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web)
-        {
-            WriteIndented = true
-        };
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true };
         options.Converters.Add(new JsonStringEnumConverter());
 
         return options;

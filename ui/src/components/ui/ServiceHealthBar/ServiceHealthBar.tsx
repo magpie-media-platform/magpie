@@ -28,8 +28,6 @@ export interface ServiceHealthBarProps {
     error?: Error | null;
 
     onRetry?: () => void;
-
-    headingLevel?: 2 | 3;
 }
 
 function overallStatus(counts: HealthStatusCounts): HealthStatus {
@@ -95,18 +93,10 @@ const SkeletonSegment = () => (
     </div>
 );
 
-export function ServiceHealthBar({
-    services,
-    loading = false,
-    error = null,
-    onRetry,
-    headingLevel = 2,
-}: ServiceHealthBarProps) {
-    const HeadingTag = `h${headingLevel}` as const;
-
+export function ServiceHealthBar({ services, loading = false, error = null, onRetry }: ServiceHealthBarProps) {
     return (
         <div className="service-health-bar" data-component="service-health-bar">
-            <HeadingTag className="sr-only">Service Health</HeadingTag>
+            <h2 className="sr-only">Service Health</h2>
 
             <div className="service-health-bar__services">
                 {loading ? (

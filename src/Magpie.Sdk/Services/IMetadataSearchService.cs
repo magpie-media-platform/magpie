@@ -13,7 +13,7 @@ namespace Magpie.Sdk.Services;
 public interface IMetadataSearchService
 {
     /// <summary>
-    /// Starts a fresh search or reads a page from a reusable checkpoint.
+    /// Searches the metadata providers for one page of candidates.
     /// </summary>
     /// <param name="criteria">The filter criteria</param>
     /// <param name="contentType">The content type, or null to use the criteria</param>
@@ -28,7 +28,7 @@ public interface IMetadataSearchService
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Starts a fresh provider search with parsed filter criteria.
+    /// Searches the metadata providers for candidates.
     /// </summary>
     /// <param name="criteria">The filter criteria</param>
     /// <param name="contentType">The content type, or <see langword="null"/> to use the criteria</param>

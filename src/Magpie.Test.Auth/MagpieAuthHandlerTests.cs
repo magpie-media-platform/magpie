@@ -158,15 +158,11 @@ public class MagpieAuthHandlerTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(result, Has.Property(nameof(result.Succeeded)).True);
-            Assert.That(
-                result.Principal!.FindFirst(ClaimTypes.NameIdentifier)?.Value,
-                Is.EqualTo(userId.ToString()));
+            Assert.That(result.Principal!.FindFirst(ClaimTypes.NameIdentifier)?.Value, Is.EqualTo(userId.ToString()));
         }
 
         refreshTokenRepository.Verify(
-            repository => repository.GetByAccessTokenJtiAsync(
-                It.IsAny<string>(),
-                It.IsAny<CancellationToken>()),
+            repository => repository.GetByAccessTokenJtiAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()),
             Times.Never);
     }
 

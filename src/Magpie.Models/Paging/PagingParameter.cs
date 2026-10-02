@@ -3,12 +3,12 @@ using System;
 namespace Magpie.Models.Paging;
 
 /// <summary>
-/// Pagination parameters for a query, with a positive page number and page size.
+/// The paging parameters for a query.
 /// </summary>
 public sealed record PagingParameter
 {
     /// <summary>
-    /// One-based page number, clamped to at least one.
+    /// The one-based page number.
     /// </summary>
     public required int PageNumber
     {
@@ -17,7 +17,7 @@ public sealed record PagingParameter
     }
 
     /// <summary>
-    /// Number of items per page, clamped to the range 1 through 1000.
+    /// The number of items per page.
     /// </summary>
     public required int PageSize
     {

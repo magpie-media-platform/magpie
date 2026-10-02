@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -24,27 +23,9 @@ internal sealed class MockMediaServerIntegration :
 
     private const string DeepLinkBase = "https://mock-media-server.local/item";
 
-    private readonly AuditWriter _auditWriter;
-    private readonly LatencyInjector _latencyInjector;
-    private readonly ScenarioReader _scenarioReader;
-
-    public MockMediaServerIntegration()
-        : this(
-            new AuditWriter(ProviderTypeName),
-            new LatencyInjector(ProviderTypeName),
-            new ScenarioReader(ProviderTypeName))
-    {
-    }
-
-    internal MockMediaServerIntegration(
-        AuditWriter auditWriter,
-        LatencyInjector latencyInjector,
-        ScenarioReader scenarioReader)
-    {
-        _auditWriter = auditWriter;
-        _latencyInjector = latencyInjector;
-        _scenarioReader = scenarioReader;
-    }
+    private readonly AuditWriter _auditWriter = new(ProviderTypeName);
+    private readonly LatencyInjector _latencyInjector = new(ProviderTypeName);
+    private readonly ScenarioReader _scenarioReader = new(ProviderTypeName);
 
     public string ProviderType => ProviderTypeName;
 
@@ -82,38 +63,12 @@ internal sealed class MockMediaServerIntegration :
 
     private static string EncodeExternalIds(IReadOnlyDictionary<string, string> externalIds)
     {
-        var pairs = new List<KeyValuePair<string, string>>();
-        foreach (var pair in externalIds)
-        {
-            if (string.IsNullOrWhiteSpace(pair.Key) || string.IsNullOrWhiteSpace(pair.Value))
-            {
-                continue;
-            }
-
-            pairs.Add(pair);
-        }
-
-        if (pairs.Count == 0)
-        {
-            return string.Empty;
-        }
-
-        pairs.Sort((a, b) => StringComparer.OrdinalIgnoreCase.Compare(a.Key, b.Key));
-
-        var builder = new StringBuilder();
-        for (var i = 0; i < pairs.Count; i++)
-        {
-            if (i > 0)
-            {
-                builder.Append(',');
-            }
-
-            builder.Append(Uri.EscapeDataString(pairs[i].Key));
-            builder.Append(':');
-            builder.Append(Uri.EscapeDataString(pairs[i].Value));
-        }
-
-        return builder.ToString();
+        return string.Join(
+            ",",
+            externalIds
+                .Where(pair => !string.IsNullOrWhiteSpace(pair.Key) && !string.IsNullOrWhiteSpace(pair.Value))
+                .OrderBy(pair => pair.Key, StringComparer.OrdinalIgnoreCase)
+                .Select(pair => Uri.EscapeDataString(pair.Key) + ":" + Uri.EscapeDataString(pair.Value)));
     }
 
     public async Task<ConfigurationTestResult> TestConnectionAsync(

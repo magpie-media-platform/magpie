@@ -53,7 +53,6 @@ const PLAYABLE_TYPE: LibraryTypeDefinition = {
             ],
             standardFactFields: [],
             acceptedFileTypes: [],
-            effectiveAcceptedMimeTypes: [],
             acceptedSidecarTypes: [],
             subfolder: null,
         },

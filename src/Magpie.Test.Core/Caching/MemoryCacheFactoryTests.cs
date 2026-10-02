@@ -324,18 +324,18 @@ public sealed class MemoryCacheFactoryTests
         var complete = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
         CancellationToken factoryCancellation = default;
         var factoryCalls = 0;
-        async ValueTask<string> Factory(CancellationToken cancellationToken)
+        Func<CancellationToken, ValueTask<string>> factory = async cancellationToken =>
         {
             Interlocked.Increment(ref factoryCalls);
             factoryCancellation = cancellationToken;
             started.SetResult();
             return await complete.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
-        }
+        };
 
         // Act
-        var first = cache.GetOrAddAsync("value", Factory, firstCancellation.Token).AsTask();
+        var first = cache.GetOrAddAsync("value", factory, firstCancellation.Token).AsTask();
         await started.Task.ConfigureAwait(false);
-        var second = cache.GetOrAddAsync("value", Factory).AsTask();
+        var second = cache.GetOrAddAsync("value", factory).AsTask();
         await firstCancellation.CancelAsync().ConfigureAwait(false);
         Assert.CatchAsync<OperationCanceledException>(async () => await first.ConfigureAwait(false));
         complete.SetResult("shared");
@@ -363,7 +363,7 @@ public sealed class MemoryCacheFactoryTests
         using var secondCancellation = new CancellationTokenSource();
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var factoryCanceled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        async ValueTask<string> Factory(CancellationToken cancellationToken)
+        Func<CancellationToken, ValueTask<string>> factory = async cancellationToken =>
         {
             started.SetResult();
             try
@@ -376,12 +376,12 @@ public sealed class MemoryCacheFactoryTests
                 factoryCanceled.SetResult();
                 throw;
             }
-        }
+        };
 
         // Act
-        var first = cache.GetOrAddAsync("value", Factory, firstCancellation.Token).AsTask();
+        var first = cache.GetOrAddAsync("value", factory, firstCancellation.Token).AsTask();
         await started.Task.ConfigureAwait(false);
-        var second = cache.GetOrAddAsync("value", Factory, secondCancellation.Token).AsTask();
+        var second = cache.GetOrAddAsync("value", factory, secondCancellation.Token).AsTask();
         await firstCancellation.CancelAsync().ConfigureAwait(false);
         Assert.CatchAsync<OperationCanceledException>(async () => await first.ConfigureAwait(false));
         await secondCancellation.CancelAsync().ConfigureAwait(false);
@@ -408,7 +408,7 @@ public sealed class MemoryCacheFactoryTests
         var abandonedStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var abandonedFinished = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var releaseAbandoned = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
-        async ValueTask<string> AbandonedFactory(CancellationToken _)
+        Func<CancellationToken, ValueTask<string>> abandonedFactory = async _ =>
         {
             abandonedStarted.SetResult();
             try
@@ -419,10 +419,10 @@ public sealed class MemoryCacheFactoryTests
             {
                 abandonedFinished.SetResult();
             }
-        }
+        };
 
         // Act
-        var abandoned = cache.GetOrAddAsync("value", AbandonedFactory, cancellation.Token).AsTask();
+        var abandoned = cache.GetOrAddAsync("value", abandonedFactory, cancellation.Token).AsTask();
         await abandonedStarted.Task.ConfigureAwait(false);
         await cancellation.CancelAsync().ConfigureAwait(false);
         Assert.CatchAsync<OperationCanceledException>(async () => await abandoned.ConfigureAwait(false));

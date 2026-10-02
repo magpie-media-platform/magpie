@@ -5,6 +5,7 @@ import { DataTable, type DataTableProps } from '../DataTable';
 import { AcquisitionBadge } from '../AcquisitionBadge';
 import { selectColumn } from '../DataTable/selectColumn';
 import type { BulkSelectionState } from '@/types/bulkSelection';
+import type { TemporalPrecision } from '@/types/contentMetadata';
 import { ColumnHeaderFilter, type FacetOption } from '../ColumnHeaderFilter';
 import {
     ContentFulfillmentBadge,
@@ -14,7 +15,7 @@ import {
 } from '@/components/content/ContentCardPrimitives';
 import { ContentLineageTitle } from '@/components/content/ContentLineageTitle';
 import { EmptyState } from '@/components/ui/EmptyState';
-import { ContentListActionsSlot, ContentListColumnsSlot } from '@/components/ui/Slot';
+import { Slot } from '@/components/ui/Slot';
 import { formatRelativeTime } from '@/lib/formatTime';
 import { formatShortDate } from '@/lib/dateFormatting';
 import { formatFileSize } from '@/lib/formatSize';
@@ -50,6 +51,8 @@ export interface ContentItem {
     year?: number;
 
     publishDate?: string;
+
+    publishDatePrecision?: TemporalPrecision;
 
     dateAdded?: string;
 
@@ -186,8 +189,8 @@ function DateAddedCell({ dateAdded }: { dateAdded?: string }) {
     return <span className="content-list__date-added">{formatRelativeTime(dateAdded, 'N/A')}</span>;
 }
 
-function PublishedCell({ publishDate }: { publishDate?: string }) {
-    return <span className="content-list__published">{formatShortDate(publishDate, '--')}</span>;
+function PublishedCell({ publishDate, precision }: { publishDate?: string; precision?: TemporalPrecision }) {
+    return <span className="content-list__published">{formatShortDate(publishDate, '--', precision)}</span>;
 }
 
 export const ContentList = forwardRef<HTMLDivElement, ContentListProps>(
@@ -377,7 +380,12 @@ export const ContentList = forwardRef<HTMLDivElement, ContentListProps>(
                             : 'Published',
                     size: 156,
                     sortUndefined: 'last',
-                    cell: ({ row }) => <PublishedCell publishDate={row.original.publishDate} />,
+                    cell: ({ row }) => (
+                        <PublishedCell
+                            publishDate={row.original.publishDate}
+                            precision={row.original.publishDatePrecision}
+                        />
+                    ),
                 },
                 {
                     id: 'dateAdded',
@@ -465,8 +473,8 @@ export const ContentList = forwardRef<HTMLDivElement, ContentListProps>(
                 data-selection-enabled={selection ? 'true' : undefined}
                 {...props}
             >
-                <ContentListActionsSlot className="content-list__extension-actions" />
-                <ContentListColumnsSlot className="content-list__extension-columns" />
+                <Slot slot="content.list.actions" className="content-list__extension-actions" />
+                <Slot slot="content.list.columns" className="content-list__extension-columns" />
 
                 <DataTable<ContentItem>
                     columns={tableColumns}

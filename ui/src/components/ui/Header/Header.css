@@ -52,13 +52,6 @@
         align-items: center;
     }
 
-    .header__slot {
-        display: flex;
-        align-items: center;
-        flex: 1;
-        min-width: 0;
-    }
-
     .header__left-slot {
         display: flex;
         align-items: center;

@@ -3,37 +3,37 @@ using System;
 namespace Magpie.Models.Storage;
 
 /// <summary>
-/// Disk space for a root folder.
+/// The disk space of a root folder.
 /// </summary>
 public sealed record DiskSpaceInfo
 {
     /// <summary>
-    /// Root folder id.
+    /// The id of the root folder.
     /// </summary>
     public required Guid Id { get; init; }
 
     /// <summary>
-    /// Root folder display name.
+    /// The display name of the root folder.
     /// </summary>
     public required string Name { get; init; }
 
     /// <summary>
-    /// Filesystem path.
+    /// The file system path of the root folder.
     /// </summary>
     public required string Path { get; init; }
 
     /// <summary>
-    /// Total bytes on the containing drive.
+    /// The total bytes on the drive that holds the root folder.
     /// </summary>
     public long TotalBytes { get; init; }
 
     /// <summary>
-    /// Free bytes on the containing drive.
+    /// The free bytes on the drive that holds the root folder.
     /// </summary>
     public long FreeBytes { get; init; }
 
     /// <summary>
-    /// Used bytes on the containing drive.
+    /// The used bytes on the drive that holds the root folder.
     /// </summary>
     public long UsedBytes { get; init; }
 }

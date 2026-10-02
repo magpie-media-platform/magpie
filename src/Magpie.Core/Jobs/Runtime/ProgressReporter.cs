@@ -69,9 +69,10 @@ internal sealed class ProgressReporter(
         {
             await writes.WaitAsync(_flushTimeout).ConfigureAwait(false);
         }
-        catch (TimeoutException)
+        catch (TimeoutException ex)
         {
             logger.LogWarning(
+                ex,
                 "The reporter stopped waiting for the progress writes after {FlushTimeout}",
                 _flushTimeout);
         }
@@ -106,10 +107,7 @@ internal sealed class ProgressReporter(
             await using var scopeHandle = scope.ConfigureAwait(false);
 
             var applied = await scope.ServiceProvider.GetRequiredService<IJobExecutionRepository>()
-                .UpdateProgressAsync(
-                    executionId,
-                    percentage.HasValue ? percentage.Value * 100 : null,
-                    message)
+                .UpdateProgressAsync(executionId, percentage.HasValue ? percentage.Value * 100 : null, message)
                 .ConfigureAwait(false);
             if (!applied)
             {

@@ -210,11 +210,13 @@ public sealed class QualityServiceTests
             Is.EqualTo(["video/*", "application/epub+zip", "application/vnd.unknown"]));
     }
 
-    [TestCase("video")]
-    [TestCase("*/mp4")]
-    [TestCase("video/m*")]
-    [TestCase("video/mp4; charset=utf-8")]
-    public async Task CreateTierListAsync_ReturnsValidationError_WhenMimePatternIsInvalid(string pattern)
+    [TestCase("video", "video is not a valid MIME pattern.")]
+    [TestCase("*/mp4", "*/mp4 is not a valid MIME pattern.")]
+    [TestCase("video/m*", "video/m* is not a valid MIME pattern.")]
+    [TestCase("video/mp4; charset=utf-8", "video/mp4; charset=utf-8 is not a valid MIME pattern.")]
+    public async Task CreateTierListAsync_ReturnsValidationError_WhenMimePatternIsInvalid(
+        string pattern,
+        string expectedError)
     {
         // Arrange
         var tierList = new QualityTierList
@@ -228,14 +230,16 @@ public sealed class QualityServiceTests
         var result = await _subject.CreateTierListAsync(tierList, null).ConfigureAwait(false);
 
         // Assert
-        Assert.That(result.ValidationError, Is.EqualTo($"{pattern} is not a valid MIME pattern."));
+        Assert.That(result.ValidationError, Is.EqualTo(expectedError));
     }
 
-    [TestCase("video")]
-    [TestCase("*/mp4")]
-    [TestCase("video/m*")]
-    [TestCase("video/mp4; charset=utf-8")]
-    public async Task PatchTierListAsync_ReturnsValidationError_WhenMimePatternIsInvalid(string pattern)
+    [TestCase("video", "video is not a valid MIME pattern.")]
+    [TestCase("*/mp4", "*/mp4 is not a valid MIME pattern.")]
+    [TestCase("video/m*", "video/m* is not a valid MIME pattern.")]
+    [TestCase("video/mp4; charset=utf-8", "video/mp4; charset=utf-8 is not a valid MIME pattern.")]
+    public async Task PatchTierListAsync_ReturnsValidationError_WhenMimePatternIsInvalid(
+        string pattern,
+        string expectedError)
     {
         // Arrange
         var patch = new QualityTierListPatch
@@ -247,6 +251,6 @@ public sealed class QualityServiceTests
         var result = await _subject.PatchTierListAsync(Guid.NewGuid(), patch, null).ConfigureAwait(false);
 
         // Assert
-        Assert.That(result.ValidationError, Is.EqualTo($"{pattern} is not a valid MIME pattern."));
+        Assert.That(result.ValidationError, Is.EqualTo(expectedError));
     }
 }

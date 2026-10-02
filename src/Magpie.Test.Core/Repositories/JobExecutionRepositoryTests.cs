@@ -10,6 +10,7 @@ using Magpie.Abstractions.Jobs;
 using Magpie.Abstractions.Repositories;
 using Magpie.Core;
 using Magpie.Core.Jobs;
+using Magpie.Core.Jobs.Fulfillment;
 using Magpie.Core.Jobs.Metadata;
 using Magpie.Core.Jobs.Runtime;
 using Magpie.Core.Repositories;
@@ -98,6 +99,55 @@ public sealed class JobExecutionRepositoryTests
             Assert.That(dueClaim!.Status, Is.EqualTo(JobExecutionStatus.Running));
             Assert.That(await _context.JobExecutions.CountAsync().ConfigureAwait(false), Is.EqualTo(1));
             Assert.That(auditsAfterDefer, Is.EqualTo(auditsBefore));
+        }
+    }
+
+    [TestCase("true", null)]
+    [TestCase("false", "The work is incomplete while its upstream is throttled.")]
+    public async Task CreateAsync_ClearsTheThrottleMarkerOnlyForAForcedSearch_WhenTheSearchJoinsADeferredExecution(
+        string force,
+        string? expectedStatusMessage)
+    {
+        // Arrange
+        var execution = await _subject.CreateAsync(new JobExecution
+        {
+            JobType = "ReleaseSearchItem",
+            Status = JobExecutionStatus.Queued,
+            ExecutionMode = JobExecutionMode.Queue,
+            LockPartition = "content=deferred",
+            Parameters = new Dictionary<string, string>
+            {
+                ["contentHierarchyItemId"] = "deferred",
+                ["force"] = "false",
+            },
+        }, null).ConfigureAwait(false);
+        await _subject.TryStartAsync(execution.Id, "owner").ConfigureAwait(false);
+        await _subject.TryDeferRunningAsync(execution.Id, "owner",
+            new DateTime(2026, 7, 17, 12, 2, 0, DateTimeKind.Utc)).ConfigureAwait(false);
+        _timeProvider.Advance(TimeSpan.FromMinutes(3));
+
+        // Act
+        var joined = await _subject.CreateAsync(new JobExecution
+        {
+            JobType = "ReleaseSearchItem",
+            Status = JobExecutionStatus.Queued,
+            ExecutionMode = JobExecutionMode.Immediate,
+            LockPartition = "content=deferred",
+            Parameters = new Dictionary<string, string>
+            {
+                ["contentHierarchyItemId"] = "deferred",
+                ["force"] = force,
+            },
+        }, null).ConfigureAwait(false);
+        _context.ChangeTracker.Clear();
+        var persisted = await _subject.GetByIdAsync(execution.Id).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(joined.Id, Is.EqualTo(execution.Id));
+            Assert.That(persisted!.Parameters["force"], Is.EqualTo(force));
+            Assert.That(persisted.StatusMessage, Is.EqualTo(expectedStatusMessage));
         }
     }
 
@@ -312,7 +362,7 @@ public sealed class JobExecutionRepositoryTests
                     .Select(record => record.Detail)
                     .ToListAsync()
                     .ConfigureAwait(false),
-                Has.Exactly(expectedForceUpgrades).EndsWith("; upgraded the search to forced"));
+                Has.Exactly(expectedForceUpgrades).EndsWith("; set force to true"));
         }
     }
 
@@ -356,7 +406,90 @@ public sealed class JobExecutionRepositoryTests
                     .Select(record => record.Detail)
                     .ToListAsync()
                     .ConfigureAwait(false),
-                Has.Exactly(expectedWidenings).EndsWith("; widened the run to the whole root folder"));
+                Has.Exactly(expectedWidenings).EndsWith("; removed contentHierarchyItemId"));
+        }
+    }
+
+    [TestCase("true", "item-b", "true", null, "; set flag to true, removed scope")]
+    [TestCase("false", "item-a", "false", "item-a", "; updated queue eligibility or the waiting reason")]
+    [TestCase("true", null, "true", null, "; set flag to true, removed scope")]
+    [TestCase("false", "ITEM-A", "false", "item-a", "; updated queue eligibility or the waiting reason")]
+    public async Task CreateAsync_MergesTheSpecsCoalesceFields_WhenAnyJobTypeCoalescesOntoAQueuedRun(
+        string incomingFlag,
+        string? incomingScope,
+        string expectedFlag,
+        string? expectedScope,
+        string expectedAuditEnding)
+    {
+        // Arrange
+        IJobExecutionRepository subject = new JobExecutionRepository(
+            _context,
+            new AuditRecordRepository(
+                _context,
+                Mock.Of<IEventBus>(),
+                NullLogger<AuditRecordRepository>.Instance,
+                _transactionManager,
+                Mock.Of<IJobExecutionScopeFactory>(),
+                _timeProvider),
+            _transactionManager,
+            Mock.Of<IEventBus>(),
+            NullLogger<JobExecutionRepository>.Instance,
+            _timeProvider,
+            new JobRegistry(
+                [
+                    new(
+                        new JobSpec
+                        {
+                            JobType = "MergeJob",
+                            DisplayName = "Merge job",
+                            Category = "Test",
+                            Scope = JobScope.System,
+                            CoalesceTrueWinsFields = ["flag"],
+                            CoalesceWideningFields = ["scope"]
+                        },
+                        typeof(IJob))
+                ],
+                NullLogger<JobRegistry>.Instance));
+        var original = await subject.CreateAsync(new JobExecution
+        {
+            JobType = "MergeJob",
+            Status = JobExecutionStatus.Queued,
+            ExecutionMode = JobExecutionMode.Queue,
+            LockPartition = "shared",
+            Parameters = new Dictionary<string, string> { ["flag"] = "false", ["scope"] = "item-a" }
+        }, null).ConfigureAwait(false);
+        var incomingParameters = new Dictionary<string, string> { ["flag"] = incomingFlag };
+        if (incomingScope is not null)
+        {
+            incomingParameters["scope"] = incomingScope;
+        }
+
+        // Act
+        var coalesced = await subject.CreateAsync(new JobExecution
+        {
+            JobType = "MergeJob",
+            Status = JobExecutionStatus.Queued,
+            ExecutionMode = JobExecutionMode.Immediate,
+            LockPartition = "shared",
+            Parameters = incomingParameters,
+            StatusMessage = "Waiting for capacity."
+        }, null).ConfigureAwait(false);
+        _context.ChangeTracker.Clear();
+        var persisted = await subject.GetByIdAsync(original.Id).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(coalesced.Id, Is.EqualTo(original.Id));
+            Assert.That(persisted!.Parameters["flag"], Is.EqualTo(expectedFlag));
+            Assert.That(persisted.Parameters.GetValueOrDefault("scope"), Is.EqualTo(expectedScope));
+            Assert.That(
+                await _context.AuditRecords
+                    .Where(record => record.Operation == "Coalesce")
+                    .Select(record => record.Detail)
+                    .ToListAsync()
+                    .ConfigureAwait(false),
+                Has.Exactly(1).EndsWith(expectedAuditEnding));
         }
     }
 
@@ -407,7 +540,9 @@ public sealed class JobExecutionRepositoryTests
             Mock.Of<IEventBus>(),
             NullLogger<JobExecutionRepository>.Instance,
             _timeProvider,
-            new JobRegistry([], NullLogger<JobRegistry>.Instance));
+            new JobRegistry(
+                [new(ReleaseSearchItemJob.Spec, typeof(ReleaseSearchItemJob))],
+                NullLogger<JobRegistry>.Instance));
         var original = await subject.CreateAsync(new JobExecution
         {
             JobType = "ReleaseSearchItem",
@@ -723,6 +858,7 @@ public sealed class JobExecutionRepositoryTests
                     new(DownloadImportItemJob.Spec, typeof(DownloadImportItemJob)),
                     new(MediaInfoExtractScanJob.Spec, typeof(MediaInfoExtractScanJob)),
                     new(MediaServerRefreshJob.Spec, typeof(MediaServerRefreshJob)),
+                    new(ReleaseSearchItemJob.Spec, typeof(ReleaseSearchItemJob)),
                     new(RootFolderContentDiscoveryJob.Spec, typeof(RootFolderContentDiscoveryJob))
                 ],
                 NullLogger<JobRegistry>.Instance));
@@ -731,7 +867,6 @@ public sealed class JobExecutionRepositoryTests
     [TearDown]
     public void TearDown()
     {
-        _context.Database.CloseConnection();
         _context.Dispose();
     }
 
@@ -2533,7 +2668,7 @@ public sealed class JobExecutionRepositoryTests
     [TestCase(MagpieJobs.Types.MediaInfoExtractScan, true)]
     [TestCase(MagpieJobs.Types.MediaServerRefresh, true)]
     [TestCase(MagpieJobs.Types.RootFolderContentDiscovery, false)]
-    public async Task QueryAsync_MatchesTriggerContext_OnlyWhenTheJobTypeTargetsThatEventKey(
+    public async Task QueryAsync_MatchesTriggerContext_WhenTheJobTypeTargetsThatEventKey(
         string jobType,
         bool expected)
     {

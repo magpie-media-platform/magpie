@@ -54,6 +54,7 @@ export function SaveFilterDialog({
 
     const canUpdate = !!onUpdate && !!updateTargetName;
     const busy = isSaving || isUpdating;
+    const shownError = localError ?? nameError ?? null;
 
     useEffect(() => {
         if (open) {
@@ -61,10 +62,6 @@ export function SaveFilterDialog({
             setLocalError(null);
         }
     }, [open]);
-
-    useEffect(() => {
-        setLocalError(nameError ?? null);
-    }, [nameError]);
 
     const handleSubmit = useCallback(
         async (e: SubmitEvent) => {
@@ -125,8 +122,8 @@ export function SaveFilterDialog({
                             onChange={(e) => setName(e.target.value)}
                             placeholder="Favorites from 2020"
                             disabled={busy}
-                            error={!!localError}
-                            errorMessage={localError ?? undefined}
+                            error={!!shownError}
+                            errorMessage={shownError ?? undefined}
                             autoFocus
                         />
                     </div>

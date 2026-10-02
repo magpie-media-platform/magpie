@@ -41,6 +41,8 @@ public class JellyfinMediaServerIntegrationTests
     private const string TvPath = "/data/tv";
 
     private ICacheFactory _cacheFactory = null!;
+    private MockHttpMessageHandler _handler = null!;
+    private JellyfinMediaServerIntegration _integration = null!;
 
     [SetUp]
     public void SetUp()
@@ -78,24 +80,29 @@ public class JellyfinMediaServerIntegrationTests
                 return caches[name] = cache.Object;
             });
         _cacheFactory = cacheFactory.Object;
+        _handler = new MockHttpMessageHandler();
+        _integration = new JellyfinMediaServerIntegration(
+            _cacheFactory,
+            NullLogger<JellyfinMediaServerIntegration>.Instance,
+            new JellyfinClient(new HttpClient(_handler, false), NullLogger<JellyfinClient>.Instance));
+    }
+
+    [TearDown]
+    public void TearDown()
+    {
+        _handler.Dispose();
     }
 
     [Test]
     public async Task TestConnectionAsync_ReturnsServerIdentity_WhenSettingsAreValid()
     {
         // Arrange
-        var handler = new MockHttpMessageHandler();
-        var systemInfoRequest = handler.Expect(HttpMethod.Get, "http://jellyfin.local:8096/System/Info")
+        var systemInfoRequest = _handler.Expect(HttpMethod.Get, "http://jellyfin.local:8096/System/Info")
             .WithHeaders("X-Emby-Token", "test-api-key")
             .Respond("application/json", SystemInfoJson);
 
-        var integration = new JellyfinMediaServerIntegration(
-            _cacheFactory,
-            NullLogger<JellyfinMediaServerIntegration>.Instance,
-            new JellyfinClient(new HttpClient(handler, false), NullLogger<JellyfinClient>.Instance));
-
         // Act
-        var result = await integration.TestConnectionAsync(ValidSettings, default).ConfigureAwait(false);
+        var result = await _integration.TestConnectionAsync(ValidSettings, default).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -103,27 +110,21 @@ public class JellyfinMediaServerIntegrationTests
             Assert.That(result.Success, Is.True);
             Assert.That(result.Message, Is.EqualTo("Connected to Jellyfin test-server 10.10.7"));
             Assert.That(result.FailureKind, Is.EqualTo(ConfigurationFailureKind.None));
-            Assert.That(handler.GetMatchCount(systemInfoRequest), Is.EqualTo(1));
+            Assert.That(_handler.GetMatchCount(systemInfoRequest), Is.EqualTo(1));
         }
 
-        handler.VerifyNoOutstandingExpectation();
+        _handler.VerifyNoOutstandingExpectation();
     }
 
     [Test]
     public async Task TestConnectionAsync_ReturnsAuthenticationFailure_WhenUnauthorized()
     {
         // Arrange
-        var handler = new MockHttpMessageHandler();
-        handler.Expect(HttpMethod.Get, "http://jellyfin.local:8096/System/Info")
+        _handler.Expect(HttpMethod.Get, "http://jellyfin.local:8096/System/Info")
             .Respond(HttpStatusCode.Unauthorized);
 
-        var integration = new JellyfinMediaServerIntegration(
-            _cacheFactory,
-            NullLogger<JellyfinMediaServerIntegration>.Instance,
-            new JellyfinClient(new HttpClient(handler, false), NullLogger<JellyfinClient>.Instance));
-
         // Act
-        var result = await integration.TestConnectionAsync(ValidSettings, default).ConfigureAwait(false);
+        var result = await _integration.TestConnectionAsync(ValidSettings, default).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -138,17 +139,11 @@ public class JellyfinMediaServerIntegrationTests
     public async Task TestConnectionAsync_ReturnsAuthenticationFailure_WhenForbidden()
     {
         // Arrange
-        var handler = new MockHttpMessageHandler();
-        handler.Expect(HttpMethod.Get, "http://jellyfin.local:8096/System/Info")
+        _handler.Expect(HttpMethod.Get, "http://jellyfin.local:8096/System/Info")
             .Respond(HttpStatusCode.Forbidden);
 
-        var integration = new JellyfinMediaServerIntegration(
-            _cacheFactory,
-            NullLogger<JellyfinMediaServerIntegration>.Instance,
-            new JellyfinClient(new HttpClient(handler, false), NullLogger<JellyfinClient>.Instance));
-
         // Act
-        var result = await integration.TestConnectionAsync(ValidSettings, default).ConfigureAwait(false);
+        var result = await _integration.TestConnectionAsync(ValidSettings, default).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -163,16 +158,11 @@ public class JellyfinMediaServerIntegrationTests
     public async Task TestConnectionAsync_ReturnsNetworkFailure_WhenRequestThrows()
     {
         // Arrange
-        var handler = new MockHttpMessageHandler();
-        handler.When(HttpMethod.Get, "http://jellyfin.local:8096/System/Info")
+        _handler.When(HttpMethod.Get, "http://jellyfin.local:8096/System/Info")
             .Throw(new HttpRequestException("connection refused"));
-        var integration = new JellyfinMediaServerIntegration(
-            _cacheFactory,
-            NullLogger<JellyfinMediaServerIntegration>.Instance,
-            new JellyfinClient(new HttpClient(handler, false), NullLogger<JellyfinClient>.Instance));
 
         // Act
-        var result = await integration.TestConnectionAsync(ValidSettings, default).ConfigureAwait(false);
+        var result = await _integration.TestConnectionAsync(ValidSettings, default).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -261,15 +251,10 @@ public class JellyfinMediaServerIntegrationTests
     public async Task RefreshForContentAsync_RefreshesAllLibraries_WhenNoMappingMatches()
     {
         // Arrange
-        var handler = new MockHttpMessageHandler();
-        var refreshRequest = handler.Expect(HttpMethod.Post, "http://jellyfin.local:8096/Library/Refresh")
+        var refreshRequest = _handler.Expect(HttpMethod.Post, "http://jellyfin.local:8096/Library/Refresh")
             .WithHeaders("X-Emby-Token", ValidSettings["apiKey"])
             .Respond(HttpStatusCode.NoContent);
 
-        var integration = new JellyfinMediaServerIntegration(
-            _cacheFactory,
-            NullLogger<JellyfinMediaServerIntegration>.Instance,
-            new JellyfinClient(new HttpClient(handler, false), NullLogger<JellyfinClient>.Instance));
         var server = new MediaServer
         {
             Id = Guid.NewGuid(),
@@ -279,7 +264,7 @@ public class JellyfinMediaServerIntegrationTests
         };
 
         // Act
-        var ok = await integration.RefreshForContentAsync(
+        var ok = await _integration.RefreshForContentAsync(
             server,
             new Dictionary<string, string>(),
             contentType: "movies",
@@ -290,24 +275,19 @@ public class JellyfinMediaServerIntegrationTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(ok, Is.True);
-            Assert.That(handler.GetMatchCount(refreshRequest), Is.EqualTo(1));
+            Assert.That(_handler.GetMatchCount(refreshRequest), Is.EqualTo(1));
         }
 
-        handler.VerifyNoOutstandingExpectation();
+        _handler.VerifyNoOutstandingExpectation();
     }
 
     [Test]
     public async Task RefreshForContentAsync_ReturnsFalse_WhenServerReturnsNotFound()
     {
         // Arrange
-        var handler = new MockHttpMessageHandler();
-        handler.Expect(HttpMethod.Post, "http://jellyfin.local:8096/Library/Refresh")
+        _handler.Expect(HttpMethod.Post, "http://jellyfin.local:8096/Library/Refresh")
             .Respond(HttpStatusCode.NotFound);
 
-        var integration = new JellyfinMediaServerIntegration(
-            _cacheFactory,
-            NullLogger<JellyfinMediaServerIntegration>.Instance,
-            new JellyfinClient(new HttpClient(handler, false), NullLogger<JellyfinClient>.Instance));
         var server = new MediaServer
         {
             Id = Guid.NewGuid(),
@@ -317,7 +297,7 @@ public class JellyfinMediaServerIntegrationTests
         };
 
         // Act
-        var ok = await integration.RefreshForContentAsync(
+        var ok = await _integration.RefreshForContentAsync(
             server,
             new Dictionary<string, string>(),
             contentType: "movies",
@@ -332,17 +312,11 @@ public class JellyfinMediaServerIntegrationTests
     public async Task RefreshForContentAsync_RefreshesMappedLibrary_WhenMappingMatchesContent()
     {
         // Arrange
-        var handler = new MockHttpMessageHandler();
-        var refreshRequest = handler.Expect(
+        var refreshRequest = _handler.Expect(
             HttpMethod.Post,
             "http://jellyfin.local:8096/Items/lib-7/Refresh" +
             "?Recursive=true&ImageRefreshMode=Default&MetadataRefreshMode=Default")
                 .Respond(HttpStatusCode.NoContent);
-
-        var integration = new JellyfinMediaServerIntegration(
-            _cacheFactory,
-            NullLogger<JellyfinMediaServerIntegration>.Instance,
-            new JellyfinClient(new HttpClient(handler, false), NullLogger<JellyfinClient>.Instance));
 
         var settings = new Dictionary<string, string>(ValidSettings)
         {
@@ -360,7 +334,7 @@ public class JellyfinMediaServerIntegrationTests
         };
 
         // Act
-        var ok = await integration.RefreshForContentAsync(
+        var ok = await _integration.RefreshForContentAsync(
             server,
             new Dictionary<string, string>(),
             contentType: "movies",
@@ -371,10 +345,10 @@ public class JellyfinMediaServerIntegrationTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(ok, Is.True);
-            Assert.That(handler.GetMatchCount(refreshRequest), Is.EqualTo(1));
+            Assert.That(_handler.GetMatchCount(refreshRequest), Is.EqualTo(1));
         }
 
-        handler.VerifyNoOutstandingExpectation();
+        _handler.VerifyNoOutstandingExpectation();
     }
 
     [Test]
@@ -703,6 +677,75 @@ public class JellyfinMediaServerIntegrationTests
         handler.VerifyNoOutstandingExpectation();
     }
 
+    [TestCase("MusicArtist", "MusicBrainzArtist")]
+    [TestCase("MusicAlbum", "MusicBrainzReleaseGroup")]
+    [TestCase("Audio", "MusicBrainzRecording")]
+    [TestCase("Audio", "MusicBrainzTrack")]
+    public async Task TryFindItemIdByExternalIdsAsync_ReturnsMatchingItemId_WhenMusicBrainzIdIdentifiesItem(
+        string itemType,
+        string jellyfinProvider)
+    {
+        // Arrange
+        var handler = new MockHttpMessageHandler();
+        handler.Expect(HttpMethod.Get, "http://jellyfin.local:8096/Items*")
+            .Respond(
+                "application/json",
+                "{\"Items\":[{\"Id\":\"jf-1\",\"Type\":\"" +
+                itemType +
+                "\",\"ProviderIds\":{\"" +
+                jellyfinProvider +
+                "\":\"4cd13a09-ea6e-4eb5-9bc4-4b9141bdd3cd\"}}]}");
+
+        var client = new JellyfinClient(
+            new HttpClient(handler, disposeHandler: false),
+            NullLogger<JellyfinClient>.Instance);
+
+        // Act
+        var result = await client.TryFindItemIdByExternalIdsAsync(
+            ValidSettings.ToJellyfinSettings(),
+            new Dictionary<string, string> { ["musicbrainz"] = "4cd13a09-ea6e-4eb5-9bc4-4b9141bdd3cd" },
+            title: "Sample",
+            parentLibraryId: null,
+            default).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(result.ItemId, Is.EqualTo("jf-1"));
+        handler.VerifyNoOutstandingExpectation();
+    }
+
+    [TestCase(
+        "{\"Items\":[{\"Id\":\"jf-artist\",\"Type\":\"MusicArtist\"," +
+        "\"ProviderIds\":{\"MusicBrainzArtist\":\"4cb775ac-f1f6-4a5d-b7be-21a61116a550\"}}]}")]
+    [TestCase(
+        "{\"Items\":[{\"Id\":\"jf-track\",\"Type\":\"Audio\"," +
+        "\"ProviderIds\":{\"MusicBrainzArtist\":\"4cd13a09-ea6e-4eb5-9bc4-4b9141bdd3cd\"}}]}")]
+    [TestCase(
+        "{\"Items\":[{\"Id\":\"jf-album\",\"Type\":\"MusicAlbum\"," +
+        "\"ProviderIds\":{\"MusicBrainzAlbumArtist\":\"4cd13a09-ea6e-4eb5-9bc4-4b9141bdd3cd\"}}]}")]
+    public async Task TryFindItemIdByExternalIdsAsync_ReturnsNull_WhenMusicBrainzIdDoesNotIdentifyItem(string body)
+    {
+        // Arrange
+        var handler = new MockHttpMessageHandler();
+        handler.Expect(HttpMethod.Get, "http://jellyfin.local:8096/Items*")
+            .Respond("application/json", body);
+
+        var client = new JellyfinClient(
+            new HttpClient(handler, disposeHandler: false),
+            NullLogger<JellyfinClient>.Instance);
+
+        // Act
+        var result = await client.TryFindItemIdByExternalIdsAsync(
+            ValidSettings.ToJellyfinSettings(),
+            new Dictionary<string, string> { ["musicbrainz"] = "4cd13a09-ea6e-4eb5-9bc4-4b9141bdd3cd" },
+            title: "Sample",
+            parentLibraryId: null,
+            default).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(result.ItemId, Is.Null);
+        handler.VerifyNoOutstandingExpectation();
+    }
+
     [Test]
     public async Task TryFindItemIdByExternalIdsAsync_ReturnsNull_WhenNetworkException()
     {
@@ -787,15 +830,10 @@ public class JellyfinMediaServerIntegrationTests
     public async Task BuildItemDeepLink_ReturnsDetailsUrl_WhenMappedAndPresent()
     {
         // Arrange
-        var handler = new MockHttpMessageHandler();
-        handler.When(HttpMethod.Get, "http://jellyfin.local:8096/Items*")
+        _handler.When(HttpMethod.Get, "http://jellyfin.local:8096/Items*")
             .Respond(
                 "application/json",
                 "{\"Items\":[{\"Id\":\"abc-123\",\"ProviderIds\":{\"Imdb\":\"tt1234567\"}}]}");
-        var integration = new JellyfinMediaServerIntegration(
-            _cacheFactory,
-            NullLogger<JellyfinMediaServerIntegration>.Instance,
-            new JellyfinClient(new HttpClient(handler, false), NullLogger<JellyfinClient>.Instance));
 
         var server = new MediaServer
         {
@@ -820,7 +858,7 @@ public class JellyfinMediaServerIntegrationTests
         };
 
         // Act
-        var uri = await integration.BuildItemDeepLinkAsync(
+        var uri = await _integration.BuildItemDeepLinkAsync(
             server, ids, contentType: "movies", rootFolderPath: MoviesPath, title: "Sample", default)
                 .ConfigureAwait(false);
 
@@ -834,8 +872,7 @@ public class JellyfinMediaServerIntegrationTests
     {
         // Arrange
         var requests = new List<Uri>();
-        var handler = new MockHttpMessageHandler();
-        handler.When(HttpMethod.Get, "http://jellyfin.local:8096/Items*")
+        _handler.When(HttpMethod.Get, "http://jellyfin.local:8096/Items*")
             .With(request =>
             {
                 requests.Add(request.RequestUri!);
@@ -844,10 +881,6 @@ public class JellyfinMediaServerIntegrationTests
             .Respond(
                 "application/json",
                 "{\"Items\":[{\"Id\":\"abc-123\",\"ProviderIds\":{\"Imdb\":\"tt1234567\"}}]}");
-        var integration = new JellyfinMediaServerIntegration(
-            _cacheFactory,
-            NullLogger<JellyfinMediaServerIntegration>.Instance,
-            new JellyfinClient(new HttpClient(handler, false), NullLogger<JellyfinClient>.Instance));
 
         var server = new MediaServer
         {
@@ -872,7 +905,7 @@ public class JellyfinMediaServerIntegrationTests
         };
 
         // Act
-        await integration.BuildItemDeepLinkAsync(
+        await _integration.BuildItemDeepLinkAsync(
             server,
             ids,
             contentType: "movies",
@@ -881,10 +914,13 @@ public class JellyfinMediaServerIntegrationTests
             default)
                 .ConfigureAwait(false);
 
-        // Assert
-        var query = Uri.UnescapeDataString(requests.Last().PathAndQuery);
-        Assert.That(query, Does.Contain("searchTerm="));
-        Assert.That(query, Does.Contain("parentId=lib-7"));
+        using (Assert.EnterMultipleScope())
+        {
+            // Assert
+            var query = Uri.UnescapeDataString(requests.Last().PathAndQuery);
+            Assert.That(query, Does.Contain("searchTerm="));
+            Assert.That(query, Does.Contain("parentId=lib-7"));
+        }
     }
 
     [Test]
@@ -892,8 +928,7 @@ public class JellyfinMediaServerIntegrationTests
     {
         // Arrange
         var requests = new List<Uri>();
-        var handler = new MockHttpMessageHandler();
-        handler.When(HttpMethod.Get, "http://jellyfin.local:8096/Items*")
+        _handler.When(HttpMethod.Get, "http://jellyfin.local:8096/Items*")
             .With(request =>
             {
                 requests.Add(request.RequestUri!);
@@ -902,10 +937,6 @@ public class JellyfinMediaServerIntegrationTests
             .Respond(
                 "application/json",
                 "{\"Items\":[{\"Id\":\"abc-123\",\"ProviderIds\":{\"Imdb\":\"tt1234567\"}}]}");
-        var integration = new JellyfinMediaServerIntegration(
-            _cacheFactory,
-            NullLogger<JellyfinMediaServerIntegration>.Instance,
-            new JellyfinClient(new HttpClient(handler, false), NullLogger<JellyfinClient>.Instance));
 
         var server = new MediaServer
         {
@@ -930,17 +961,20 @@ public class JellyfinMediaServerIntegrationTests
         };
 
         // Act
-        var uri = await integration.BuildItemDeepLinkAsync(
+        var uri = await _integration.BuildItemDeepLinkAsync(
             server, ids, contentType: "movies", rootFolderPath: "/elsewhere", title: "Sample", default)
                 .ConfigureAwait(false);
 
         // Assert
         Assert.That(uri, Is.Not.Null);
-        Assert.That(uri!.AbsoluteUri, Is.EqualTo("http://jellyfin.local:8096/web/index.html#!/details?id=abc-123"));
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(uri!.AbsoluteUri, Is.EqualTo("http://jellyfin.local:8096/web/index.html#!/details?id=abc-123"));
 
-        var query = Uri.UnescapeDataString(requests.Last().PathAndQuery);
-        Assert.That(query, Does.Contain("searchTerm="));
-        Assert.That(query, Does.Not.Contain("parentId="));
+            var query = Uri.UnescapeDataString(requests.Last().PathAndQuery);
+            Assert.That(query, Does.Contain("searchTerm="));
+            Assert.That(query, Does.Not.Contain("parentId="));
+        }
     }
 
     [Test]
@@ -948,18 +982,13 @@ public class JellyfinMediaServerIntegrationTests
     {
         // Arrange
         var requests = new List<Uri>();
-        var handler = new MockHttpMessageHandler();
-        handler.When(HttpMethod.Get, "http://jellyfin.local:8096/Items*")
+        _handler.When(HttpMethod.Get, "http://jellyfin.local:8096/Items*")
             .With(request =>
             {
                 requests.Add(request.RequestUri!);
                 return true;
             })
             .Respond("application/json", "{\"Items\":[]}");
-        var integration = new JellyfinMediaServerIntegration(
-            _cacheFactory,
-            NullLogger<JellyfinMediaServerIntegration>.Instance,
-            new JellyfinClient(new HttpClient(handler, false), NullLogger<JellyfinClient>.Instance));
 
         var server = new MediaServer
         {
@@ -984,7 +1013,7 @@ public class JellyfinMediaServerIntegrationTests
         };
 
         // Act
-        var uri = await integration.BuildItemDeepLinkAsync(
+        var uri = await _integration.BuildItemDeepLinkAsync(
             server, ids, contentType: "movies", rootFolderPath: "/elsewhere", title: "Sample", default)
                 .ConfigureAwait(false);
 
@@ -1004,8 +1033,7 @@ public class JellyfinMediaServerIntegrationTests
     {
         // Arrange
         var requests = new List<Uri>();
-        var handler = new MockHttpMessageHandler();
-        handler.When(HttpMethod.Get, "http://jellyfin.local:8096/Items*")
+        _handler.When(HttpMethod.Get, "http://jellyfin.local:8096/Items*")
             .With(request =>
             {
                 requests.Add(request.RequestUri!);
@@ -1014,10 +1042,6 @@ public class JellyfinMediaServerIntegrationTests
             .Respond(
                 "application/json",
                 "{\"Items\":[{\"Id\":\"abc-123\",\"ProviderIds\":{\"Imdb\":\"tt1234567\"}}]}");
-        var integration = new JellyfinMediaServerIntegration(
-            _cacheFactory,
-            NullLogger<JellyfinMediaServerIntegration>.Instance,
-            new JellyfinClient(new HttpClient(handler, false), NullLogger<JellyfinClient>.Instance));
 
         var server = new MediaServer
         {
@@ -1036,17 +1060,20 @@ public class JellyfinMediaServerIntegrationTests
         };
 
         // Act
-        var uri = await integration.BuildItemDeepLinkAsync(
+        var uri = await _integration.BuildItemDeepLinkAsync(
             server, ids, contentType: "movies", rootFolderPath: MoviesPath, title: "Sample", default)
                 .ConfigureAwait(false);
 
         // Assert
         Assert.That(uri, Is.Not.Null);
-        Assert.That(uri!.AbsoluteUri, Is.EqualTo("http://jellyfin.local:8096/web/index.html#!/details?id=abc-123"));
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(uri!.AbsoluteUri, Is.EqualTo("http://jellyfin.local:8096/web/index.html#!/details?id=abc-123"));
 
-        var query = Uri.UnescapeDataString(requests.Last().PathAndQuery);
-        Assert.That(query, Does.Contain("searchTerm="));
-        Assert.That(query, Does.Not.Contain("parentId="));
+            var query = Uri.UnescapeDataString(requests.Last().PathAndQuery);
+            Assert.That(query, Does.Contain("searchTerm="));
+            Assert.That(query, Does.Not.Contain("parentId="));
+        }
     }
 
     [Test]
@@ -1054,18 +1081,13 @@ public class JellyfinMediaServerIntegrationTests
     {
         // Arrange
         var requests = new List<Uri>();
-        var handler = new MockHttpMessageHandler();
-        handler.When(HttpMethod.Get, "http://jellyfin.local:8096/Items*")
+        _handler.When(HttpMethod.Get, "http://jellyfin.local:8096/Items*")
             .With(request =>
             {
                 requests.Add(request.RequestUri!);
                 return true;
             })
             .Respond("application/json", "{\"Items\":[]}");
-        var integration = new JellyfinMediaServerIntegration(
-            _cacheFactory,
-            NullLogger<JellyfinMediaServerIntegration>.Instance,
-            new JellyfinClient(new HttpClient(handler, false), NullLogger<JellyfinClient>.Instance));
 
         var server = new MediaServer
         {
@@ -1084,7 +1106,7 @@ public class JellyfinMediaServerIntegrationTests
         };
 
         // Act
-        var uri = await integration.BuildItemDeepLinkAsync(
+        var uri = await _integration.BuildItemDeepLinkAsync(
             server, ids, contentType: "movies", rootFolderPath: MoviesPath, title: "Sample", default)
                 .ConfigureAwait(false);
 
@@ -1101,8 +1123,7 @@ public class JellyfinMediaServerIntegrationTests
     {
         // Arrange
         var requests = new List<Uri>();
-        var handler = new MockHttpMessageHandler();
-        handler.When(HttpMethod.Get, "http://jellyfin.local:8096/Items*")
+        _handler.When(HttpMethod.Get, "http://jellyfin.local:8096/Items*")
             .With(request =>
             {
                 requests.Add(request.RequestUri!);
@@ -1111,10 +1132,6 @@ public class JellyfinMediaServerIntegrationTests
             .Respond(
                 "application/json",
                 "{\"Items\":[{\"Id\":\"abc-123\",\"ProviderIds\":{\"Imdb\":\"tt1234567\"}}]}");
-        var integration = new JellyfinMediaServerIntegration(
-            _cacheFactory,
-            NullLogger<JellyfinMediaServerIntegration>.Instance,
-            new JellyfinClient(new HttpClient(handler, false), NullLogger<JellyfinClient>.Instance));
 
         var server = new MediaServer
         {
@@ -1134,7 +1151,7 @@ public class JellyfinMediaServerIntegrationTests
         };
 
         // Act
-        var uri = await integration.BuildItemDeepLinkAsync(
+        var uri = await _integration.BuildItemDeepLinkAsync(
             server, ids, contentType: "movies", rootFolderPath: MoviesPath, title: "Sample", default)
                 .ConfigureAwait(false);
 
@@ -1148,15 +1165,10 @@ public class JellyfinMediaServerIntegrationTests
     public async Task BuildItemDeepLinkAsync_UsesServerWideLookup_WhenMappingsExistButNoneMatch()
     {
         // Arrange
-        var handler = new MockHttpMessageHandler();
-        handler.When(HttpMethod.Get, "http://jellyfin.local:8096/Items*")
+        _handler.When(HttpMethod.Get, "http://jellyfin.local:8096/Items*")
             .Respond(
                 "application/json",
                 "{\"Items\":[{\"Id\":\"abc-123\",\"ProviderIds\":{\"Imdb\":\"tt1234567\"}}]}");
-        var integration = new JellyfinMediaServerIntegration(
-            _cacheFactory,
-            NullLogger<JellyfinMediaServerIntegration>.Instance,
-            new JellyfinClient(new HttpClient(handler, false), NullLogger<JellyfinClient>.Instance));
 
         var server = new MediaServer
         {
@@ -1181,7 +1193,7 @@ public class JellyfinMediaServerIntegrationTests
         };
 
         // Act
-        var uri = await integration.BuildItemDeepLinkAsync(
+        var uri = await _integration.BuildItemDeepLinkAsync(
             server, ids, contentType: "movies", rootFolderPath: "/elsewhere", title: "Sample", default)
                 .ConfigureAwait(false);
 
@@ -1193,13 +1205,8 @@ public class JellyfinMediaServerIntegrationTests
     public async Task BuildItemDeepLink_ReturnsNull_WhenNotFoundOnServer()
     {
         // Arrange
-        var handler = new MockHttpMessageHandler();
-        handler.When(HttpMethod.Get, "http://jellyfin.local:8096/Items*")
+        _handler.When(HttpMethod.Get, "http://jellyfin.local:8096/Items*")
             .Respond("application/json", "{\"Items\":[]}");
-        var integration = new JellyfinMediaServerIntegration(
-            _cacheFactory,
-            NullLogger<JellyfinMediaServerIntegration>.Instance,
-            new JellyfinClient(new HttpClient(handler, false), NullLogger<JellyfinClient>.Instance));
 
         var server = new MediaServer
         {
@@ -1224,7 +1231,7 @@ public class JellyfinMediaServerIntegrationTests
         };
 
         // Act
-        var uri = await integration.BuildItemDeepLinkAsync(
+        var uri = await _integration.BuildItemDeepLinkAsync(
             server, ids, contentType: "movies", rootFolderPath: MoviesPath, title: "Sample", default)
                 .ConfigureAwait(false);
 
@@ -1236,13 +1243,8 @@ public class JellyfinMediaServerIntegrationTests
     public async Task BuildItemDeepLink_ReturnsNull_WhenLookupError()
     {
         // Arrange
-        var handler = new MockHttpMessageHandler();
-        handler.When(HttpMethod.Get, "http://jellyfin.local:8096/Items*")
+        _handler.When(HttpMethod.Get, "http://jellyfin.local:8096/Items*")
             .Respond(HttpStatusCode.InternalServerError);
-        var integration = new JellyfinMediaServerIntegration(
-            _cacheFactory,
-            NullLogger<JellyfinMediaServerIntegration>.Instance,
-            new JellyfinClient(new HttpClient(handler, false), NullLogger<JellyfinClient>.Instance));
 
         var server = new MediaServer
         {
@@ -1267,7 +1269,7 @@ public class JellyfinMediaServerIntegrationTests
         };
 
         // Act
-        var uri = await integration.BuildItemDeepLinkAsync(
+        var uri = await _integration.BuildItemDeepLinkAsync(
             server, ids, contentType: "movies", rootFolderPath: MoviesPath, title: "Sample", default)
                 .ConfigureAwait(false);
 
@@ -1280,8 +1282,7 @@ public class JellyfinMediaServerIntegrationTests
     {
         // Arrange
         var requests = new List<Uri>();
-        var handler = new MockHttpMessageHandler();
-        handler.When(HttpMethod.Get, "http://jellyfin.local:8096/Items*")
+        _handler.When(HttpMethod.Get, "http://jellyfin.local:8096/Items*")
             .With(request =>
             {
                 requests.Add(request.RequestUri!);
@@ -1290,10 +1291,6 @@ public class JellyfinMediaServerIntegrationTests
             .Respond(
                 "application/json",
                 "{\"Items\":[{\"Id\":\"abc-123\",\"ProviderIds\":{\"Imdb\":\"tt1234567\"}}]}");
-        var integration = new JellyfinMediaServerIntegration(
-            _cacheFactory,
-            NullLogger<JellyfinMediaServerIntegration>.Instance,
-            new JellyfinClient(new HttpClient(handler, false), NullLogger<JellyfinClient>.Instance));
 
         var ids = new Dictionary<string, string>
         {
@@ -1312,7 +1309,7 @@ public class JellyfinMediaServerIntegrationTests
                 ["apiKey"] = "test-key"
             },
         };
-        await integration.BuildItemDeepLinkAsync(
+        await _integration.BuildItemDeepLinkAsync(
             serverWide,
             ids,
             contentType: "movies",
@@ -1338,7 +1335,7 @@ public class JellyfinMediaServerIntegrationTests
             },
         };
 
-        await integration.BuildItemDeepLinkAsync(
+        await _integration.BuildItemDeepLinkAsync(
             scoped,
             ids,
             contentType: "movies",
@@ -1362,8 +1359,7 @@ public class JellyfinMediaServerIntegrationTests
     {
         // Arrange
         var requests = new List<Uri>();
-        var handler = new MockHttpMessageHandler();
-        handler.When(HttpMethod.Get, "http://jellyfin.local:8096/Items*")
+        _handler.When(HttpMethod.Get, "http://jellyfin.local:8096/Items*")
             .With(request =>
             {
                 requests.Add(request.RequestUri!);
@@ -1372,10 +1368,6 @@ public class JellyfinMediaServerIntegrationTests
             .Respond(
                 "application/json",
                 "{\"Items\":[{\"Id\":\"abc-123\",\"ProviderIds\":{\"Imdb\":\"tt1234567\"}}]}");
-        var integration = new JellyfinMediaServerIntegration(
-            _cacheFactory,
-            NullLogger<JellyfinMediaServerIntegration>.Instance,
-            new JellyfinClient(new HttpClient(handler, false), NullLogger<JellyfinClient>.Instance));
 
         var ids = new Dictionary<string, string>
         {
@@ -1400,7 +1392,7 @@ public class JellyfinMediaServerIntegrationTests
                     "\"serverLibraryId\":\"lib-7\"}]"
             },
         };
-        await integration.BuildItemDeepLinkAsync(
+        await _integration.BuildItemDeepLinkAsync(
             withMapping,
             ids,
             contentType: "movies",
@@ -1419,7 +1411,7 @@ public class JellyfinMediaServerIntegrationTests
                 ["apiKey"] = "test-key"
             },
         };
-        await integration.BuildItemDeepLinkAsync(
+        await _integration.BuildItemDeepLinkAsync(
             zeroMappings,
             ids,
             contentType: "movies",
@@ -1427,10 +1419,13 @@ public class JellyfinMediaServerIntegrationTests
             title: "Sample",
             default).ConfigureAwait(false);
 
-        // Assert
-        Assert.That(requests, Has.Count.EqualTo(1));
-        var query = Uri.UnescapeDataString(requests[0].PathAndQuery);
-        Assert.That(query, Does.Not.Contain("parentId="));
+        using (Assert.EnterMultipleScope())
+        {
+            // Assert
+            Assert.That(requests, Has.Count.EqualTo(1));
+            var query = Uri.UnescapeDataString(requests[0].PathAndQuery);
+            Assert.That(query, Does.Not.Contain("parentId="));
+        }
     }
 
     [Test]
@@ -1438,8 +1433,7 @@ public class JellyfinMediaServerIntegrationTests
     {
         // Arrange
         var requests = new List<Uri>();
-        var handler = new MockHttpMessageHandler();
-        handler.When(HttpMethod.Get, "http://jellyfin.local:8096/Items*")
+        _handler.When(HttpMethod.Get, "http://jellyfin.local:8096/Items*")
             .With(request =>
             {
                 requests.Add(request.RequestUri!);
@@ -1448,10 +1442,6 @@ public class JellyfinMediaServerIntegrationTests
             .Respond(
                 "application/json",
                 "{\"Items\":[{\"Id\":\"abc-123\",\"ProviderIds\":{\"Imdb\":\"tt1234567\"}}]}");
-        var integration = new JellyfinMediaServerIntegration(
-            _cacheFactory,
-            NullLogger<JellyfinMediaServerIntegration>.Instance,
-            new JellyfinClient(new HttpClient(handler, false), NullLogger<JellyfinClient>.Instance));
 
         var server = new MediaServer
         {
@@ -1483,14 +1473,17 @@ public class JellyfinMediaServerIntegrationTests
         };
 
         // Act
-        await integration.BuildItemDeepLinkAsync(
+        await _integration.BuildItemDeepLinkAsync(
             server, ids, contentType: "movies", rootFolderPath: MoviesPath, title: "Sample", default)
                 .ConfigureAwait(false);
 
-        // Assert
-        var query = Uri.UnescapeDataString(requests.Last().PathAndQuery);
-        Assert.That(query, Does.Contain("parentId=lib-movies"));
-        Assert.That(query, Does.Not.Contain("lib-tv"));
+        using (Assert.EnterMultipleScope())
+        {
+            // Assert
+            var query = Uri.UnescapeDataString(requests.Last().PathAndQuery);
+            Assert.That(query, Does.Contain("parentId=lib-movies"));
+            Assert.That(query, Does.Not.Contain("lib-tv"));
+        }
     }
 
     [Test]
@@ -1498,8 +1491,7 @@ public class JellyfinMediaServerIntegrationTests
     {
         // Arrange
         var requests = new List<Uri>();
-        var handler = new MockHttpMessageHandler();
-        handler.When(HttpMethod.Get, "http://jellyfin.local:8096/Items*")
+        _handler.When(HttpMethod.Get, "http://jellyfin.local:8096/Items*")
             .With(request =>
             {
                 requests.Add(request.RequestUri!);
@@ -1508,10 +1500,6 @@ public class JellyfinMediaServerIntegrationTests
             .Respond(
                 "application/json",
                 "{\"Items\":[{\"Id\":\"abc-123\",\"ProviderIds\":{\"Imdb\":\"tt1234567\"}}]}");
-        var integration = new JellyfinMediaServerIntegration(
-            _cacheFactory,
-            NullLogger<JellyfinMediaServerIntegration>.Instance,
-            new JellyfinClient(new HttpClient(handler, false), NullLogger<JellyfinClient>.Instance));
 
         var server = new MediaServer
         {
@@ -1536,10 +1524,10 @@ public class JellyfinMediaServerIntegrationTests
         };
 
         // Act
-        var first = await integration.BuildItemDeepLinkAsync(
+        var first = await _integration.BuildItemDeepLinkAsync(
             server, ids, contentType: "movies", rootFolderPath: MoviesPath, title: "Sample", default)
                 .ConfigureAwait(false);
-        var second = await integration.BuildItemDeepLinkAsync(
+        var second = await _integration.BuildItemDeepLinkAsync(
             server, ids, contentType: "movies", rootFolderPath: MoviesPath, title: "Sample", default)
                 .ConfigureAwait(false);
 
@@ -1556,15 +1544,14 @@ public class JellyfinMediaServerIntegrationTests
     {
         // Arrange
         var requests = new List<Uri>();
-        var handler = new MockHttpMessageHandler();
-        handler.Expect(HttpMethod.Get, "http://jellyfin.local:8096/Items*")
+        _handler.Expect(HttpMethod.Get, "http://jellyfin.local:8096/Items*")
             .With(request =>
             {
                 requests.Add(request.RequestUri!);
                 return true;
             })
             .Respond(HttpStatusCode.InternalServerError);
-        handler.Expect(HttpMethod.Get, "http://jellyfin.local:8096/Items*")
+        _handler.Expect(HttpMethod.Get, "http://jellyfin.local:8096/Items*")
             .With(request =>
             {
                 requests.Add(request.RequestUri!);
@@ -1573,10 +1560,6 @@ public class JellyfinMediaServerIntegrationTests
             .Respond(
                 "application/json",
                 "{\"Items\":[{\"Id\":\"abc-123\",\"ProviderIds\":{\"Imdb\":\"tt1234567\"}}]}");
-        var integration = new JellyfinMediaServerIntegration(
-            _cacheFactory,
-            NullLogger<JellyfinMediaServerIntegration>.Instance,
-            new JellyfinClient(new HttpClient(handler, false), NullLogger<JellyfinClient>.Instance));
 
         var server = new MediaServer
         {
@@ -1601,10 +1584,10 @@ public class JellyfinMediaServerIntegrationTests
         };
 
         // Act
-        var first = await integration.BuildItemDeepLinkAsync(
+        var first = await _integration.BuildItemDeepLinkAsync(
             server, ids, contentType: "movies", rootFolderPath: MoviesPath, title: "Sample", default)
                 .ConfigureAwait(false);
-        var second = await integration.BuildItemDeepLinkAsync(
+        var second = await _integration.BuildItemDeepLinkAsync(
             server, ids, contentType: "movies", rootFolderPath: MoviesPath, title: "Sample", default)
                 .ConfigureAwait(false);
 
@@ -1619,7 +1602,7 @@ public class JellyfinMediaServerIntegrationTests
             Assert.That(requests, Has.Count.EqualTo(2));
         }
 
-        handler.VerifyNoOutstandingExpectation();
+        _handler.VerifyNoOutstandingExpectation();
     }
 
     [Test]
@@ -1627,18 +1610,13 @@ public class JellyfinMediaServerIntegrationTests
     {
         // Arrange
         var requests = new List<Uri>();
-        var handler = new MockHttpMessageHandler();
-        handler.When(HttpMethod.Get, "http://jellyfin.local:8096/Items*")
+        _handler.When(HttpMethod.Get, "http://jellyfin.local:8096/Items*")
             .With(request =>
             {
                 requests.Add(request.RequestUri!);
                 return true;
             })
             .Respond("application/json", "{\"Items\":[]}");
-        var integration = new JellyfinMediaServerIntegration(
-            _cacheFactory,
-            NullLogger<JellyfinMediaServerIntegration>.Instance,
-            new JellyfinClient(new HttpClient(handler, false), NullLogger<JellyfinClient>.Instance));
 
         var server = new MediaServer
         {
@@ -1663,10 +1641,10 @@ public class JellyfinMediaServerIntegrationTests
         };
 
         // Act
-        var first = await integration.BuildItemDeepLinkAsync(
+        var first = await _integration.BuildItemDeepLinkAsync(
             server, ids, contentType: "movies", rootFolderPath: MoviesPath, title: "Sample", default)
                 .ConfigureAwait(false);
-        var second = await integration.BuildItemDeepLinkAsync(
+        var second = await _integration.BuildItemDeepLinkAsync(
             server, ids, contentType: "movies", rootFolderPath: MoviesPath, title: "Sample", default)
                 .ConfigureAwait(false);
 
@@ -1683,12 +1661,7 @@ public class JellyfinMediaServerIntegrationTests
     public async Task BuildItemDeepLinkAsync_ReturnsNull_WhenExternalIdsAreEmpty()
     {
         // Arrange
-        var handler = new MockHttpMessageHandler();
-        var fallback = handler.Fallback.Respond(HttpStatusCode.OK);
-        var integration = new JellyfinMediaServerIntegration(
-            _cacheFactory,
-            NullLogger<JellyfinMediaServerIntegration>.Instance,
-            new JellyfinClient(new HttpClient(handler, false), NullLogger<JellyfinClient>.Instance));
+        var fallback = _handler.Fallback.Respond(HttpStatusCode.OK);
 
         var server = new MediaServer
         {
@@ -1710,7 +1683,7 @@ public class JellyfinMediaServerIntegrationTests
         var ids = new Dictionary<string, string>();
 
         // Act
-        var uri = await integration.BuildItemDeepLinkAsync(
+        var uri = await _integration.BuildItemDeepLinkAsync(
             server, ids, contentType: "movies", rootFolderPath: MoviesPath, title: "Sample", default)
                 .ConfigureAwait(false);
 
@@ -1718,7 +1691,7 @@ public class JellyfinMediaServerIntegrationTests
         {
             // Assert
             Assert.That(uri, Is.Null);
-            Assert.That(handler.GetMatchCount(fallback), Is.Zero);
+            Assert.That(_handler.GetMatchCount(fallback), Is.Zero);
         }
     }
 
@@ -1726,11 +1699,6 @@ public class JellyfinMediaServerIntegrationTests
     public async Task BuildItemDeepLinkAsync_ReturnsNull_WhenSettingsAreInvalid()
     {
         // Arrange
-        var handler = new MockHttpMessageHandler();
-        var integration = new JellyfinMediaServerIntegration(
-            _cacheFactory,
-            NullLogger<JellyfinMediaServerIntegration>.Instance,
-            new JellyfinClient(new HttpClient(handler, false), NullLogger<JellyfinClient>.Instance));
 
         var server = new MediaServer
         {
@@ -1748,7 +1716,7 @@ public class JellyfinMediaServerIntegrationTests
         };
 
         // Act
-        var uri = await integration.BuildItemDeepLinkAsync(
+        var uri = await _integration.BuildItemDeepLinkAsync(
             server, ids, contentType: "movies", rootFolderPath: MoviesPath, title: "Sample", default)
             .ConfigureAwait(false);
 

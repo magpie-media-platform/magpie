@@ -142,17 +142,12 @@ public sealed class ContentEventImpactTests
         }
     }
 
-    [TestCase("content.impact.subtreeIds", "content.impact.subtreeTruncated")]
-    [TestCase("content.impact.batchIds", "content.impact.batchTruncated")]
-    public void ToContext_WritesEveryScopeIdWithoutTruncation_WhenScopeExceedsThePreviousLimit(
-        string idsKey,
-        string truncatedKey)
+    [Test]
+    public void ToContext_WritesEverySubtreeIdWithoutTruncation_WhenScopeExceedsThePreviousLimit()
     {
         // Arrange
         var ids = Enumerable.Range(0, 250).Select(_ => Guid.NewGuid()).ToArray();
-        var impact = idsKey == "content.impact.subtreeIds"
-            ? new ContentEventImpact { HierarchyItemId = HierarchyItemId, SubtreeIds = ids }
-            : new ContentEventImpact { HierarchyItemId = HierarchyItemId, BatchIds = ids };
+        var impact = new ContentEventImpact { HierarchyItemId = HierarchyItemId, SubtreeIds = ids };
 
         // Act
         var context = impact.ToContext();
@@ -160,8 +155,26 @@ public sealed class ContentEventImpactTests
         // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(context[idsKey].Split(','), Has.Length.EqualTo(250));
-            Assert.That(context.ContainsKey(truncatedKey), Is.False);
+            Assert.That(context["content.impact.subtreeIds"].Split(','), Has.Length.EqualTo(250));
+            Assert.That(context.ContainsKey("content.impact.subtreeTruncated"), Is.False);
+        }
+    }
+
+    [Test]
+    public void ToContext_WritesEveryBatchIdWithoutTruncation_WhenScopeExceedsThePreviousLimit()
+    {
+        // Arrange
+        var ids = Enumerable.Range(0, 250).Select(_ => Guid.NewGuid()).ToArray();
+        var impact = new ContentEventImpact { HierarchyItemId = HierarchyItemId, BatchIds = ids };
+
+        // Act
+        var context = impact.ToContext();
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(context["content.impact.batchIds"].Split(','), Has.Length.EqualTo(250));
+            Assert.That(context.ContainsKey("content.impact.batchTruncated"), Is.False);
         }
     }
 

@@ -165,7 +165,7 @@
         }
 
         /* The bottom navigation already sits outside the main area, so only the button and its offset need room. */
-        :is(.app-shell__main-wrapper, .admin-shell__main-wrapper):has(.quick-actions-button__fab) {
+        .app-shell__main-wrapper:has(.quick-actions-button__fab) {
             padding-bottom: max(var(--fab-clearance), var(--mobile-selection-bar-clearance, 0px));
         }
 

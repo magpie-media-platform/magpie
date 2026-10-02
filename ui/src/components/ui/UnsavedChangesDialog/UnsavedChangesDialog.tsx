@@ -6,12 +6,25 @@ import { Button } from '../Button';
 export interface UnsavedChangesDialogProps {
     open: boolean;
 
+    title?: string;
+
+    description?: string;
+
+    discardLabel?: string;
+
     onDiscard: () => void;
 
     onCancel: () => void;
 }
 
-export function UnsavedChangesDialog({ open, onDiscard, onCancel }: UnsavedChangesDialogProps) {
+export function UnsavedChangesDialog({
+    open,
+    title = 'Unsaved Changes',
+    description = 'Close without saving your changes?',
+    discardLabel = 'Discard Changes',
+    onDiscard,
+    onCancel,
+}: UnsavedChangesDialogProps) {
     return (
         <Dialog
             open={open}
@@ -23,16 +36,16 @@ export function UnsavedChangesDialog({ open, onDiscard, onCancel }: UnsavedChang
                 <DialogHeader>
                     <DialogTitle>
                         <WarningIcon weight="duotone" aria-hidden="true" />
-                        Unsaved Changes
+                        {title}
                     </DialogTitle>
-                    <DialogDescription>Close without saving your changes?</DialogDescription>
+                    <DialogDescription>{description}</DialogDescription>
                 </DialogHeader>
                 <DialogFooter>
                     <Button variant="ghost" onClick={onCancel} data-action="cancel">
                         Keep Editing
                     </Button>
                     <Button variant="destructive" onClick={onDiscard} data-action="discard">
-                        Discard Changes
+                        {discardLabel}
                     </Button>
                 </DialogFooter>
             </DialogContent>

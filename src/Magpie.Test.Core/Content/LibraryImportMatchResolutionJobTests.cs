@@ -1358,7 +1358,7 @@ public sealed class LibraryImportMatchResolutionJobTests
     [TestCase(true, true, 1)]
     [TestCase(false, true, 0)]
     [TestCase(true, false, 0)]
-    public async Task ExecuteAsync_OffersAConfidentMatchForAutomaticAssociation_OnlyWhenAutoImportIsOnAndItHasATarget(
+    public async Task ExecuteAsync_OffersAConfidentMatchForAutomaticAssociation_WhenAutoImportIsOnAndItHasATarget(
         bool autoImport, bool libraryHasItem, int expectedAssociations)
     {
         // Arrange

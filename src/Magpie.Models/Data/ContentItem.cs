@@ -96,6 +96,11 @@ public record ContentItem
     public ICollection<MediaFile> MediaFiles { get; } = [];
 
     /// <summary>
+    /// The media files of other items that also cover this item.
+    /// </summary>
+    public ICollection<MediaFile> CoveringMediaFiles { get; } = [];
+
+    /// <summary>
     /// The status of the active acquisition.
     /// </summary>
     public DownloadStatus? ActiveAcquisitionStatus { get; set; }

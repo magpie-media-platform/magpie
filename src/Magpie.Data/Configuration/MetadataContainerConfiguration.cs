@@ -10,8 +10,6 @@ internal sealed class MetadataContainerConfiguration : IEntityTypeConfiguration<
     public void Configure(EntityTypeBuilder<MetadataContainer> builder)
     {
         builder.ToTable("metadata_container");
-        builder.HasKey(e => e.Id);
-        builder.Property(e => e.Id).ValueGeneratedOnAdd();
         builder.HasMany<Tag>()
             .WithMany(e => e.MetadataContainers)
             .UsingEntity(j => j.ToTable("metadata_containerTag"));

@@ -172,7 +172,13 @@ public sealed class MagpieCommandManifestGenerator : IIncrementalGenerator
             foreach (var method in groupSymbol.GetMembers().OfType<IMethodSymbol>()
                 .OrderBy(symbol => symbol.Name, StringComparer.Ordinal))
             {
-                if (TryCreateEntry(context, method, group, routePrefix, groupDescription, out var entry))
+                if (TryCreateEntry(
+                    context,
+                    method,
+                    group,
+                    routePrefix,
+                    groupDescription,
+                    out var entry) && entry is not null)
                 {
                     entries.Add(entry);
                 }
@@ -180,9 +186,7 @@ public sealed class MagpieCommandManifestGenerator : IIncrementalGenerator
         }
 
         ReportDuplicateCommands(context, entries);
-        context.AddSource(
-            "MagpieGeneratedCommandManifest.g.cs",
-            SourceText.From(BuildSource(entries), Encoding.UTF8));
+        context.AddSource("MagpieGeneratedCommandManifest.g.cs", SourceText.From(BuildSource(entries), Encoding.UTF8));
     }
 
     private static IEnumerable<INamedTypeSymbol> GetAllTypes(INamespaceSymbol namespaceSymbol)
@@ -233,9 +237,9 @@ public sealed class MagpieCommandManifestGenerator : IIncrementalGenerator
         string group,
         string routePrefix,
         string groupDescription,
-        out CommandEntry entry)
+        out CommandEntry? entry)
     {
-        entry = null!;
+        entry = null;
         var attribute = FindAttribute(method, CommandAttributeName);
         if (attribute is null || !TryGetStringConstructorArgument(attribute, 0, out var command))
         {
@@ -245,12 +249,7 @@ public sealed class MagpieCommandManifestGenerator : IIncrementalGenerator
         var verb = TryGetStringConstructorArgument(attribute, 1, out var declaredVerb) ? declaredVerb : "GET";
         if (!TryGetMethodExpression(verb, out var methodExpression))
         {
-            context.ReportDiagnostic(Diagnostic.Create(
-                UnsupportedMethod,
-                GetLocation(method),
-                group,
-                command,
-                verb));
+            context.ReportDiagnostic(Diagnostic.Create(UnsupportedMethod, GetLocation(method), group, command, verb));
             return false;
         }
 
@@ -316,7 +315,7 @@ public sealed class MagpieCommandManifestGenerator : IIncrementalGenerator
                 continue;
             }
 
-            if (TryCreateQueryParameter(parameter, out var queryParameter))
+            if (TryCreateQueryParameter(parameter, out var queryParameter) && queryParameter is not null)
             {
                 if (IsReservedOption(queryParameter.CliName))
                 {
@@ -347,7 +346,7 @@ public sealed class MagpieCommandManifestGenerator : IIncrementalGenerator
             return false;
         }
 
-        entry = new CommandEntry(
+        entry = new(
             method,
             group,
             command,
@@ -389,18 +388,20 @@ public sealed class MagpieCommandManifestGenerator : IIncrementalGenerator
 
             parameters.Add(new ParameterDescriptor(
                 routeParameterName,
-                ToArgumentName(routeParameterName),
+                ToKebabCase(routeParameterName),
                 isCollection: false));
         }
 
         return valid ? parameters : null;
     }
 
-    private static bool TryCreateQueryParameter(IParameterSymbol parameter, out ParameterDescriptor descriptor)
+    private static bool TryCreateQueryParameter(
+        IParameterSymbol parameter,
+        out ParameterDescriptor? descriptor)
     {
-        descriptor = null!;
+        descriptor = null;
         var fromQuery = FindAttribute(parameter, FromQueryAttributeName);
-        var isCollection = TryGetScalarCollectionItemType(parameter.Type, out _);
+        var isCollection = IsScalarCollection(parameter.Type);
         if (!IsScalar(parameter.Type) && !isCollection)
         {
             return false;
@@ -409,7 +410,7 @@ public sealed class MagpieCommandManifestGenerator : IIncrementalGenerator
         var wireName = fromQuery is not null && TryGetNamedStringArgument(fromQuery, "Name", out var queryName)
             ? queryName
             : parameter.Name;
-        descriptor = new ParameterDescriptor(wireName, ToOptionName(parameter.Name), isCollection);
+        descriptor = new(wireName, ToOptionName(parameter.Name), isCollection);
         return true;
     }
 
@@ -434,9 +435,8 @@ public sealed class MagpieCommandManifestGenerator : IIncrementalGenerator
         return !parameter.Type.IsValueType && parameter.NullableAnnotation == NullableAnnotation.Annotated;
     }
 
-    private static bool TryGetScalarCollectionItemType(ITypeSymbol type, out ITypeSymbol itemType)
+    private static bool IsScalarCollection(ITypeSymbol type)
     {
-        itemType = null!;
         if (IsType(type, "System.String"))
         {
             return false;
@@ -444,23 +444,20 @@ public sealed class MagpieCommandManifestGenerator : IIncrementalGenerator
 
         if (type is IArrayTypeSymbol arrayType)
         {
-            itemType = arrayType.ElementType;
-            return IsScalar(itemType);
+            return IsScalar(arrayType.ElementType);
         }
 
         if (type is INamedTypeSymbol namedType &&
             GetFullMetadataName(namedType.OriginalDefinition) == "System.Collections.Generic.IEnumerable`1")
         {
-            itemType = namedType.TypeArguments[0];
-            return IsScalar(itemType);
+            return IsScalar(namedType.TypeArguments[0]);
         }
 
         foreach (var interfaceType in type.AllInterfaces)
         {
             if (GetFullMetadataName(interfaceType.OriginalDefinition) == "System.Collections.Generic.IEnumerable`1")
             {
-                itemType = interfaceType.TypeArguments[0];
-                return IsScalar(itemType);
+                return IsScalar(interfaceType.TypeArguments[0]);
             }
         }
 
@@ -656,11 +653,6 @@ public sealed class MagpieCommandManifestGenerator : IIncrementalGenerator
         return optionName is "--api-key" or "--data" or "--file" or "--json" or "--output" or "--url";
     }
 
-    private static string ToArgumentName(string name)
-    {
-        return ToKebabCase(name);
-    }
-
     private static string ToOptionName(string name)
     {
         return "--" + ToKebabCase(name);
@@ -797,13 +789,15 @@ public sealed class MagpieCommandManifestGenerator : IIncrementalGenerator
             CommandGroupAttributeName,
             static (node, _) => node is TypeDeclarationSyntax,
             static (syntax, _) => ValidateMappedRoutes(syntax));
-        context.RegisterSourceOutput(routeDiagnostics, static (output, diagnostics) =>
-        {
-            foreach (var diagnostic in diagnostics)
+        context.RegisterSourceOutput(
+            routeDiagnostics,
+            static (output, diagnostics) =>
             {
-                output.ReportDiagnostic(diagnostic);
-            }
-        });
+                foreach (var diagnostic in diagnostics)
+                {
+                    output.ReportDiagnostic(diagnostic);
+                }
+            });
     }
 
     private static IReadOnlyList<Diagnostic> ValidateMappedRoutes(GeneratorAttributeSyntaxContext syntax)

@@ -453,7 +453,7 @@ public sealed class AuditHistoryServiceTests
         {
             Assert.That(items, Has.Count.EqualTo(1));
             Assert.That(items[0].Kind, Is.EqualTo(AuditHistoryEntryKind.JobExecution));
-            Assert.That(items[0].Status, Is.EqualTo(JobExecutionStatus.Failed.ToString()));
+            Assert.That(items[0].Status, Is.EqualTo("Failed"));
         }
     }
 
@@ -567,7 +567,7 @@ public sealed class AuditHistoryServiceTests
     {
         // Arrange
         var contentId = Guid.NewGuid();
-        var downloadId = Guid.NewGuid();
+        var downloadId = new Guid("00000000-0000-0000-0000-0000000000d1");
         var firstUnrelatedDownloadId = Guid.NewGuid();
         var secondUnrelatedDownloadId = Guid.NewGuid();
         var baseline = DateTime.UtcNow;
@@ -688,10 +688,10 @@ public sealed class AuditHistoryServiceTests
             Assert.That(entries.Select(entry => entry.Id), Does.Contain(eventTriggeredImportJob.Id));
             Assert.That(
                 entries.Single(entry => entry.Id == parameterImportJob.Id).EntityId,
-                Is.EqualTo(downloadId.ToString("D")));
+                Is.EqualTo("00000000-0000-0000-0000-0000000000d1"));
             Assert.That(
                 entries.Single(entry => entry.Id == eventTriggeredImportJob.Id).EntityId,
-                Is.EqualTo(downloadId.ToString("D")));
+                Is.EqualTo("00000000-0000-0000-0000-0000000000d1"));
             Assert.That(
                 entries.Single(entry => entry.Id == eventTriggeredImportJob.Id).Detail,
                 Is.EqualTo("The output path does not exist."));

@@ -10,8 +10,6 @@ internal sealed class DownloadClientConfiguration : IEntityTypeConfiguration<Dow
     public void Configure(EntityTypeBuilder<DownloadClient> builder)
     {
         builder.ToTable("download_client");
-        builder.HasKey(e => e.Id);
-        builder.Property(e => e.Id).ValueGeneratedOnAdd();
         builder.Property(e => e.Settings).UseStringDictionaryConversion();
         builder.Property(e => e.Priority).HasDefaultValue(100);
         builder.Property(e => e.LastError).HasMaxLength(1024);

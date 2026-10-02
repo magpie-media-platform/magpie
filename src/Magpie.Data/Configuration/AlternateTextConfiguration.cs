@@ -10,13 +10,10 @@ internal sealed class AlternateTextConfiguration : IEntityTypeConfiguration<Alte
     public void Configure(EntityTypeBuilder<AlternateText> builder)
     {
         builder.ToTable("metadata_alternateText");
-        builder.HasKey(e => e.Id);
-        builder.Property(e => e.Id).ValueGeneratedOnAdd();
         builder.HasOne<MetadataContribution>()
             .WithMany(e => e.AlternateTexts)
             .HasForeignKey(e => e.MetadataContributionId)
             .IsRequired()
             .OnDelete(DeleteBehavior.Restrict);
-        builder.HasIndex(e => e.MetadataContributionId);
     }
 }

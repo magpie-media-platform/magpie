@@ -283,8 +283,10 @@ internal sealed class ExtensionPackageSourceRepository(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "The package source repository failed to create package source " +
-                "{PackageSourceName}.", model.Name);
+            logger.LogError(
+                ex,
+                "The package source repository failed to create package source {PackageSourceName}.",
+                model.Name);
             throw;
         }
     }
@@ -361,7 +363,9 @@ internal sealed class ExtensionPackageSourceRepository(
                         await transactionManager.OnCommittedAsync(
                             token => eventBus.PublishAsync(
                                 ExtensionEventBuilder.BuildExtensionPackageSourceUpdatedEvent(
-                                    model.Id, changedFields), token),
+                                    model.Id,
+                                    changedFields),
+                                token),
                             cancellationToken).ConfigureAwait(false);
                     }
 
@@ -371,8 +375,10 @@ internal sealed class ExtensionPackageSourceRepository(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "The package source repository failed to update package source " +
-                "{PackageSourceId}.", model.Id);
+            logger.LogError(
+                ex,
+                "The package source repository failed to update package source {PackageSourceId}.",
+                model.Id);
             throw;
         }
     }
@@ -549,8 +555,10 @@ internal sealed class ExtensionPackageSourceRepository(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "The package source repository failed to patch package source " +
-                "{PackageSourceId}.", patch.Id);
+            logger.LogError(
+                ex,
+                "The package source repository failed to patch package source {PackageSourceId}.",
+                patch.Id);
             throw;
         }
     }

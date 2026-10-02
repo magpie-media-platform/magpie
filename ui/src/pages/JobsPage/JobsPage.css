@@ -112,10 +112,6 @@
         margin-top: var(--space-md);
     }
 
-    .jobs-page__spinner {
-        animation: spin var(--duration-spinner) linear infinite;
-    }
-
     .jobs-page__section-header {
         display: flex;
         align-items: center;
@@ -130,11 +126,6 @@
         .jobs-page__executions-toolbar > :is([data-action='run-job'], :has([data-action='run-job'])) {
             display: none;
         }
-    }
-
-    .jobs-page__trigger-desktop-actions {
-        display: flex;
-        gap: var(--space-sm);
     }
 
     .jobs-page__trigger {
@@ -336,14 +327,6 @@
         .jobs-page__header {
             flex-wrap: wrap;
             margin-bottom: var(--space-md);
-        }
-
-        .jobs-page__run-label {
-            display: none;
-        }
-
-        .jobs-page__trigger-desktop-actions {
-            display: none;
         }
 
         .jobs-page__trigger-main {

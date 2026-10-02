@@ -50,6 +50,8 @@ export interface ApiWishlist {
         id: string;
         name: string;
         criteria?: ContentFilterCriteria;
+        ownerUserId?: string | null;
+        ownerLock?: boolean | null;
     } | null;
 
     qualityTierList?: {
@@ -139,7 +141,7 @@ export function useWishlists() {
     useInvalidateQueriesOnEvents(
         WISHLIST_CHANGE_EVENTS,
         [wishlistQueryKeys.list(), contentFilterQueryKeys.shared, contentFilterQueryKeys.my],
-        { exact: true, owner: 'wishlist-settings' },
+        { exact: true },
     );
     const queryClient = useQueryClient();
 
@@ -232,7 +234,6 @@ export function useWishlist(id: string | undefined) {
     useInvalidateQueriesOnEvents(WISHLIST_CHANGE_EVENTS, [wishlistQueryKeys.detail(id ?? '')], {
         entityIds: id ? [id] : [],
         exact: true,
-        owner: 'wishlist-detail',
     });
     return useQuery({
         queryKey: wishlistQueryKeys.detail(id ?? ''),

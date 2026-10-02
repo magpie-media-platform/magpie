@@ -61,8 +61,6 @@ export interface UpcomingContentWidgetProps extends HTMLAttributes<HTMLDivElemen
     getItemUrl?: (item: UpcomingContentItem) => string;
 
     viewCalendarUrl?: string;
-
-    headingLevel?: 2 | 3;
 }
 
 function formatRelativeDate(dateStr: string): string {
@@ -225,7 +223,6 @@ const UpcomingContentWidgetBase = forwardRef<HTMLDivElement, UpcomingContentWidg
             onRetry,
             getItemUrl,
             viewCalendarUrl,
-            headingLevel = 2,
             className,
             ...props
         },
@@ -234,7 +231,6 @@ const UpcomingContentWidgetBase = forwardRef<HTMLDivElement, UpcomingContentWidg
         const classes = ['upcoming-content-widget', className].filter(Boolean).join(' ');
         const displayedItems = items.slice(0, maxItems);
         const hasMore = items.length > maxItems;
-        const HeadingTag = `h${headingLevel}` as const;
 
         const todayCount = items.filter((item) => {
             const date = new Date(item.date);
@@ -250,7 +246,7 @@ const UpcomingContentWidgetBase = forwardRef<HTMLDivElement, UpcomingContentWidg
                             {icon}
                         </span>
                     )}
-                    <HeadingTag className="upcoming-content-widget__title">{heading}</HeadingTag>
+                    <h2 className="upcoming-content-widget__title">{heading}</h2>
                     {todayCount > 0 && !loading && (
                         <span className="upcoming-content-widget__today-badge">{todayCount} today</span>
                     )}

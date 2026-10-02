@@ -131,7 +131,10 @@ describe('mapToContentDetailItem', () => {
 });
 
 describe('mapToContentListItem', () => {
-    it.each([null, '2026-09-21T09:00:00Z'])('distinguishes unknown and zero totals with %s', (mediaReconciledAt) => {
+    it.each([
+        [null, undefined],
+        ['2026-09-21T09:00:00Z', 0],
+    ])('distinguishes unknown and zero totals with %s', (mediaReconciledAt, expectedTotal) => {
         const result = mapToContentListItem(
             makeItem({
                 contentItem: {
@@ -146,8 +149,8 @@ describe('mapToContentListItem', () => {
             }),
         );
 
-        expect(result.primaryMediaSize).toBe(mediaReconciledAt ? 0 : undefined);
-        expect(result.primaryMediaFileCount).toBe(mediaReconciledAt ? 0 : undefined);
+        expect(result.primaryMediaSize).toBe(expectedTotal);
+        expect(result.primaryMediaFileCount).toBe(expectedTotal);
     });
 
     it('carries the tag names the list response already contains', () => {

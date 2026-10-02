@@ -7,6 +7,7 @@ using Magpie.Core;
 using Magpie.Core.Repositories;
 using Magpie.Data;
 using Magpie.Data.SQLite;
+using Magpie.Models;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
 using Magpie.Sdk.Services;
@@ -70,19 +71,29 @@ public sealed class ContentRepositoryTests
         _context.ContentHierarchyItems.Add(_hierarchyItem);
         _context.SaveChanges();
         _time = new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero));
+        var registry = new Mock<IContentTypeRegistry>();
+        registry.Setup(r => r.GetDefinitionFor("tv")).Returns(new ContentTypeDefinition
+        {
+            Slug = "tv",
+            DisplayName = "TV",
+            LevelDefinitions =
+            [
+                new() { Slug = "season", DisplayName = "Season", CustomMetadataFields = [] },
+                new() { Slug = "episode", DisplayName = "Episode", CustomMetadataFields = [] }
+            ]
+        });
         _subject = new ContentRepository(
             _context,
             new TransactionManager(_context, NullLogger<TransactionManager>.Instance),
             Mock.Of<IEventBus>(),
             _time,
-            NullLogger<ContentRepository>.Instance, Mock.Of<IContentTypeRegistry>(),
+            NullLogger<ContentRepository>.Instance, registry.Object,
             Mock.Of<IFileSystem>(), Mock.Of<IAuditRecordRepository>());
     }
 
     [TearDown]
     public void TearDown()
     {
-        _context.Database.CloseConnection();
         _context.Dispose();
     }
 
@@ -216,5 +227,97 @@ public sealed class ContentRepositoryTests
         Assert.That(
             (await _subject.GetByIdAsync(item.Id).ConfigureAwait(false))!.FulfilledAt,
             Is.Null);
+    }
+
+    [Test]
+    public async Task ReconcileMediaStateAsync_FulfillsCoveredEpisodesAndCountsTheFileOnce_WhenAFileCoversTwoEpisodes()
+    {
+        // Arrange
+        var season = new ContentHierarchyItem
+        {
+            MetadataContainer = new() { CreatedAt = DateTime.UtcNow },
+            ContentType = "tv",
+            Level = "season",
+            Slug = "season-1",
+            Name = "Season 1",
+            CreatedAt = DateTime.UtcNow,
+            ContentItem = new() { CreatedAt = DateTime.UtcNow }
+        };
+        _context.ContentHierarchyItems.Add(season);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        var firstEpisode = new ContentHierarchyItem
+        {
+            MetadataContainer = new() { CreatedAt = DateTime.UtcNow },
+            ParentId = season.Id,
+            ContentType = "tv",
+            Level = "episode",
+            Slug = "episode-1",
+            Name = "Episode 1",
+            Ordinal = 1,
+            CreatedAt = DateTime.UtcNow,
+            ContentItem = new() { CreatedAt = DateTime.UtcNow }
+        };
+        var secondEpisode = new ContentHierarchyItem
+        {
+            MetadataContainer = new() { CreatedAt = DateTime.UtcNow },
+            ParentId = season.Id,
+            ContentType = "tv",
+            Level = "episode",
+            Slug = "episode-2",
+            Name = "Episode 2",
+            Ordinal = 2,
+            CreatedAt = DateTime.UtcNow,
+            ContentItem = new() { CreatedAt = DateTime.UtcNow }
+        };
+        var thirdEpisode = new ContentHierarchyItem
+        {
+            MetadataContainer = new() { CreatedAt = DateTime.UtcNow },
+            ParentId = season.Id,
+            ContentType = "tv",
+            Level = "episode",
+            Slug = "episode-3",
+            Name = "Episode 3",
+            Ordinal = 3,
+            CreatedAt = DateTime.UtcNow,
+            ContentItem = new() { CreatedAt = DateTime.UtcNow }
+        };
+        _context.ContentHierarchyItems.AddRange(firstEpisode, secondEpisode, thirdEpisode);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        var mediaFile = new MediaFile
+        {
+            ContentItemId = firstEpisode.ContentItem.Id,
+            FileKind = "Video",
+            FilePath = "/tv/S01E01-E02.mkv",
+            PathKey = "/TV/S01E01-E02.MKV",
+            FileSize = 1_400,
+            CreatedAt = DateTime.UtcNow
+        };
+        mediaFile.Coverage.Add(new() { ContentItemId = secondEpisode.ContentItem.Id });
+        _context.MediaFiles.Add(mediaFile);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        // Act
+        await _subject.ReconcileMediaStateAsync(season.Id, null).ConfigureAwait(false);
+
+        // Assert
+        var states = await _context.ContentItems.AsNoTracking()
+            .Join(
+                _context.ContentHierarchyItems,
+                item => item.ContentHierarchyItemId,
+                node => node.Id,
+                (item, node) => new { node.Slug, item.Fulfillment, item.PrimaryMediaFileCount, item.PrimaryMediaSize })
+            .OrderBy(state => state.Slug)
+            .ToListAsync()
+            .ConfigureAwait(false);
+        Assert.That(
+            states.Select(state =>
+                (state.Slug, state.Fulfillment, state.PrimaryMediaFileCount, state.PrimaryMediaSize)),
+            Is.EqualTo(new (string, FulfillmentStatus, int, long)[]
+            {
+                ("episode-1", FulfillmentStatus.Fulfilled, 1, 1_400),
+                ("episode-2", FulfillmentStatus.Fulfilled, 1, 1_400),
+                ("episode-3", FulfillmentStatus.Missing, 0, 0),
+                ("season-1", FulfillmentStatus.Partial, 1, 1_400)
+            }));
     }
 }

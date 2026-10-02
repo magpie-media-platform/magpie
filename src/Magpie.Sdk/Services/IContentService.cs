@@ -227,7 +227,7 @@ public interface IContentService
     Task<ContentStats> GetStatsAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Hydrates content from an external provider id, or returns the item that already exists.
+    /// Hydrates content from an external provider id.
     /// </summary>
     /// <param name="providerType">The metadata provider type</param>
     /// <param name="externalIdKey">The external id source</param>

@@ -28,28 +28,10 @@ internal sealed class MockDownloadClientIntegration :
     private static readonly string[] SupportedProtocolsArray = ["torrent", "usenet"];
     public const string ProviderTypeName = "mock-download-client";
 
-    private readonly ScenarioReader _scenarioReader;
-    private readonly AuditWriter _auditWriter;
-    private readonly LatencyInjector _latencyInjector;
+    private readonly ScenarioReader _scenarioReader = new(ProviderTypeName);
+    private readonly AuditWriter _auditWriter = new(ProviderTypeName);
+    private readonly LatencyInjector _latencyInjector = new(ProviderTypeName);
     private readonly ConcurrentDictionary<string, int> _statusCursors = [];
-
-    public MockDownloadClientIntegration()
-        : this(
-            new ScenarioReader(ProviderTypeName),
-            new AuditWriter(ProviderTypeName),
-            new LatencyInjector(ProviderTypeName))
-    {
-    }
-
-    internal MockDownloadClientIntegration(
-        ScenarioReader scenarioReader,
-        AuditWriter auditWriter,
-        LatencyInjector latencyInjector)
-    {
-        _scenarioReader = scenarioReader;
-        _auditWriter = auditWriter;
-        _latencyInjector = latencyInjector;
-    }
 
     public string ProviderType => ProviderTypeName;
 
@@ -89,12 +71,12 @@ internal sealed class MockDownloadClientIntegration :
     {
         if (!string.IsNullOrWhiteSpace(scenarioExternalId))
         {
-            return scenarioExternalId!;
+            return scenarioExternalId;
         }
 
         return string.IsNullOrWhiteSpace(releaseExternalId)
             ? Guid.NewGuid().ToString("N")
-            : releaseExternalId!;
+            : releaseExternalId;
     }
 
     private static string? LandedFolder(string externalId)
@@ -138,12 +120,10 @@ internal sealed class MockDownloadClientIntegration :
             var source = ResolveSourcePath(file.Source);
             if (!File.Exists(source))
             {
-                throw new FileNotFoundException(
-                    $"Media fixture {file.Source} does not exist at {source}.",
-                    source);
+                throw new FileNotFoundException($"Media fixture {file.Source} does not exist at {source}.", source);
             }
 
-            Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+            Directory.CreateDirectory(Path.GetDirectoryName(destination));
             File.Copy(source, destination, overwrite: true);
         }
 

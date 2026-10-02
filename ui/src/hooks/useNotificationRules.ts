@@ -99,7 +99,7 @@ export function useNotificationRules() {
     useInvalidateQueriesOnEvents(
         ['notificationRule.created', 'notificationRule.updated', 'notificationRule.deleted'],
         [notificationRuleQueryKeys.list()],
-        { exact: true, owner: 'notification-rules' },
+        { exact: true },
     );
     const queryClient = useQueryClient();
 

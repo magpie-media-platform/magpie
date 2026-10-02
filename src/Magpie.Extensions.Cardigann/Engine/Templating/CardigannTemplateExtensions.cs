@@ -58,24 +58,9 @@ internal static class CardigannTemplateExtensions
             return template;
         }
 
-        var vars = new Dictionary<string, object?>();
-        if (variables != null)
-        {
-            foreach (var kvp in variables)
-            {
-                vars[kvp.Key] = kvp.Value;
-            }
-        }
-
-        if (!vars.ContainsKey(TrueVar))
-        {
-            vars[TrueVar] = "True";
-        }
-
-        if (!vars.ContainsKey(FalseVar))
-        {
-            vars[FalseVar] = null;
-        }
+        var vars = new Dictionary<string, object?>(variables);
+        vars.TryAdd(TrueVar, "True");
+        vars.TryAdd(FalseVar, null);
 
         template = ApplyReReplace(template, vars, escapeValue);
         template = ApplyJoin(template, vars, escapeValue);
@@ -97,29 +82,14 @@ internal static class CardigannTemplateExtensions
         IDictionary<string, object?> vars,
         Func<string, string>? escapeValue)
     {
-        template = ReplaceAll(
-            template,
-            ReReplacePipeRegex,
-            m =>
-            {
-                var variable = m.Groups[1].Value;
-                var pattern = m.Groups[2].Value;
-                var replacement = m.Groups[3].Value;
-                return ReReplace(GetString(vars, variable), pattern, replacement, m.Value, escapeValue);
-            });
+        Func<Match, string> evaluate = m => ReReplace(
+            GetString(vars, m.Groups[1].Value),
+            m.Groups[2].Value,
+            m.Groups[3].Value,
+            m.Value,
+            escapeValue);
 
-        template = ReplaceAll(
-            template,
-            ReReplaceRegex,
-            m =>
-            {
-                var variable = m.Groups[1].Value;
-                var pattern = m.Groups[2].Value;
-                var replacement = m.Groups[3].Value;
-                return ReReplace(GetString(vars, variable), pattern, replacement, m.Value, escapeValue);
-            });
-
-        return template;
+        return ReplaceAll(ReplaceAll(template, ReReplacePipeRegex, evaluate), ReReplaceRegex, evaluate);
     }
 
     private static string ReReplace(
@@ -150,31 +120,11 @@ internal static class CardigannTemplateExtensions
         IDictionary<string, object?> vars,
         Func<string, string>? escapeValue)
     {
-        template = ReplaceAll(
-            template,
-            JoinPipeRegex,
-            m =>
-            {
-                var variable = m.Groups[1].Value;
-                var delimiter = m.Groups[2].Value;
-                return string.Join(
-                    delimiter,
-                    GetList(vars, variable).Select(value => Escape(value, escapeValue)));
-            });
+        Func<Match, string> evaluate = m => string.Join(
+            m.Groups[2].Value,
+            GetList(vars, m.Groups[1].Value).Select(value => Escape(value, escapeValue)));
 
-        template = ReplaceAll(
-            template,
-            JoinRegex,
-            m =>
-            {
-                var variable = m.Groups[1].Value;
-                var delimiter = m.Groups[2].Value;
-                return string.Join(
-                    delimiter,
-                    GetList(vars, variable).Select(value => Escape(value, escapeValue)));
-            });
-
-        return template;
+        return ReplaceAll(ReplaceAll(template, JoinPipeRegex, evaluate), JoinRegex, evaluate);
     }
 
     private static string ApplyLogicFunctions(string template, IDictionary<string, object?> vars)
@@ -353,38 +303,19 @@ internal static class CardigannTemplateExtensions
 
     private static string ReplaceAll(string input, Regex regex, Func<Match, string> replacer)
     {
-        var result = input;
-        var searchStart = 0;
-        var guard = 0;
-
-        while (guard++ < 100000)
-        {
-            var match = regex.Match(result, searchStart);
-            if (!match.Success)
+        return regex.Replace(
+            input,
+            m =>
             {
-                break;
-            }
-
-            string replacement;
-            try
-            {
-                replacement = replacer(match) ?? string.Empty;
-            }
-            catch (Exception)
-            {
-                replacement = match.Value;
-            }
-
-            result = result.Substring(0, match.Index) + replacement + result.Substring(match.Index + match.Length);
-
-            searchStart = match.Index + replacement.Length;
-            if (searchStart > result.Length)
-            {
-                searchStart = result.Length;
-            }
-        }
-
-        return result;
+                try
+                {
+                    return replacer(m) ?? string.Empty;
+                }
+                catch (Exception)
+                {
+                    return m.Value;
+                }
+            });
     }
 
     private static object? GetVariable(IDictionary<string, object?> vars, string path)

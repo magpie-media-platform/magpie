@@ -31,7 +31,7 @@ internal sealed class DownloadService(
     IJobManager jobManager,
     ITransactionManager transactionManager,
     TimeProvider timeProvider,
-    ILogger<DownloadService> logger) : IDeferrableDownloadService
+    ILogger<DownloadService> logger) : IDownloadService
 {
     private static readonly DownloadStatus[] PausableStatuses =
     [
@@ -94,7 +94,6 @@ internal sealed class DownloadService(
 
     private static RefreshedDownloadState BuildRefreshedState(
         RefreshedDownloadState current,
-        DownloadStatus currentStatus,
         DownloadInfo info,
         DateTime now)
     {
@@ -104,7 +103,7 @@ internal sealed class DownloadService(
 
         var newProgress = current.Progress;
         var newLastProgressAt = current.LastProgressAt;
-        var completionTransition = IsCompleteStatus(info.Status) && !IsCompleteStatus(currentStatus);
+        var completionTransition = IsCompleteStatus(info.Status) && !IsCompleteStatus(current.Status);
         if (HasProgressAnchorUpdate(current.Progress, current.LastProgressAt, info) || completionTransition)
         {
             if (RoundProgress(info.ProgressPercent) is { } reportedProgress)
@@ -116,9 +115,10 @@ internal sealed class DownloadService(
         }
 
         var failedTransition = info.Status is DownloadStatus.Failed &&
-            !DownloadStatuses.Failures.Contains(currentStatus);
+            !DownloadStatuses.Failures.Contains(current.Status);
 
-        return new RefreshedDownloadState(
+        return new(
+            info.Status is DownloadStatus.Failed ? DownloadStatus.Faulted : info.Status,
             newDateCompleted,
             newProgress,
             newLastProgressAt,
@@ -148,7 +148,7 @@ internal sealed class DownloadService(
         if (!interactive)
         {
             var taints = (await downloadRepository
-                .ListByReleaseAsync([.. release.IdentityKeys], cancellationToken)
+                .ListByReleaseAsync([release], cancellationToken)
                 .ConfigureAwait(false))
                 .Where(download => download.DownloadClientId == source.Id && download.Status == DownloadStatus.Failed)
                 .ToList();
@@ -192,10 +192,10 @@ internal sealed class DownloadService(
         {
             ReleaseTelemetry.Grabs.Add(1, modeTag, new("outcome", "rejected"));
             logger.LogWarning(
-                "The download client integration rejected release {ReleaseId} before dispatch: {Reason}",
+                "The download client integration rejected release {ReleaseId}: {Reason}",
                 release.Id,
                 ex.Message);
-            return new GrabResult { Success = false, ErrorMessage = ex.Message, Transient = ex.Transient };
+            return new() { Success = false, ErrorMessage = ex.Message, Transient = ex.Transient };
         }
 
         ReleaseTelemetry.Grabs.Add(1, modeTag, new("outcome", "accepted"));
@@ -258,7 +258,7 @@ internal sealed class DownloadService(
                 var lockedIds = importedDownloadId is null
                     ? [id]
                     : (await downloadRepository.ListTransferAttemptsAsync(id, ct).ConfigureAwait(false))
-                        .Select(attempt => attempt.Id).OrderBy(attemptId => attemptId).ToArray();
+                        .Select(attempt => attempt.Id).ToArray();
 
                 foreach (var attemptId in lockedIds)
                 {
@@ -325,8 +325,11 @@ internal sealed class DownloadService(
                 }
                 catch (Exception ex)
                 {
-                    logger.LogWarning(ex, "The client failed to cancel download {DownloadId} ({ExternalId}).",
-                        download.Id, download.ExternalId);
+                    logger.LogWarning(
+                        ex,
+                        "The client failed to cancel download {DownloadId} ({ExternalId})",
+                        download.Id,
+                        download.ExternalId);
                     return DownloadCancellationOutcome.ClientError;
                 }
 
@@ -455,7 +458,7 @@ internal sealed class DownloadService(
             }
         }
 
-        return new BulkResult
+        return new()
         {
             Count = cancelled,
             Error = failed == 0 ? null : $"Failed to cancel {failed} {(failed == 1 ? "download" : "downloads")}."
@@ -484,7 +487,7 @@ internal sealed class DownloadService(
         }
 
         var failed = targets.Count - removed;
-        return new BulkResult
+        return new()
         {
             Count = removed,
             Error = failed == 0 ? null : $"Failed to remove {failed} {(failed == 1 ? "download" : "downloads")}."
@@ -568,7 +571,7 @@ internal sealed class DownloadService(
             await EnqueueAutoGrabItemAsync(contentItemId, cancellationToken).ConfigureAwait(false);
         }
 
-        return new BulkResult { Count = retried };
+        return new() { Count = retried };
     }
 
     public Task<BulkResult> BulkStopAsync(
@@ -593,7 +596,7 @@ internal sealed class DownloadService(
     }
 
     /// <inheritdoc />
-    public async Task<bool> ApplyDeferredRefreshedClientStateAsync(
+    public async Task<bool> UpdateRefreshedClientStateAsync(
         Download download,
         DownloadInfo info,
         Guid? userId,
@@ -605,11 +608,10 @@ internal sealed class DownloadService(
             return false;
         }
 
-        if (download.Status == info.Status &&
-            downloadRepository is IDeferrableDownloadRepository deferrable &&
-            await deferrable.UpdateDeferredRefreshedStatusAsync(
+        if (download.Status == refreshed.Status &&
+            await downloadRepository.UpdateRefreshedClientStateAsync(
                 download.Id,
-                info.Status,
+                refreshed.Status,
                 info.StatusReason,
                 info.OutputPath,
                 refreshed.DateCompleted,
@@ -631,30 +633,28 @@ internal sealed class DownloadService(
     }
 
     /// <inheritdoc />
-    public Task CompleteDeferredRefreshAsync(
+    public Task PublishRefreshedStatusAsync(
         IReadOnlyCollection<Guid> downloadIds,
         Guid? userId,
         CancellationToken cancellationToken)
     {
-        return downloadRepository is IDeferrableDownloadRepository deferrable
-            ? deferrable.CompleteDeferredRefreshAsync(downloadIds, userId, cancellationToken)
-            : Task.CompletedTask;
+        return downloadRepository.PublishRefreshedStatusAsync(downloadIds, userId, cancellationToken);
     }
 
     private static RefreshedDownloadState? BuildRefreshedChange(Download download, DownloadInfo info, DateTime now)
     {
         var refreshed = BuildRefreshedState(
             new RefreshedDownloadState(
+                download.Status,
                 download.DateCompleted,
                 download.Progress,
                 download.LastProgressAt,
                 download.FailureReason,
                 download.FailedAt),
-            download.Status,
             info,
             now);
 
-        var hasChanges = download.Status != info.Status ||
+        var hasChanges = download.Status != refreshed.Status ||
             download.StatusReason != info.StatusReason ||
             download.OutputPath != info.OutputPath ||
             download.DateCompleted != refreshed.DateCompleted ||
@@ -678,7 +678,7 @@ internal sealed class DownloadService(
             {
                 var applied = await downloadRepository.UpdateRefreshedStatusAsync(
                     download.Id,
-                    info.Status,
+                    refreshed.Status,
                     info.StatusReason,
                     info.OutputPath,
                     refreshed.DateCompleted,
@@ -695,8 +695,7 @@ internal sealed class DownloadService(
                 if (!applied)
                 {
                     logger.LogDebug(
-                        "Download {DownloadId} reached a terminal status concurrently, so the refreshed " +
-                        "status did not apply",
+                        "Download {DownloadId} reached a terminal status; the refreshed status was not applied",
                         download.Id);
                 }
             },
@@ -735,17 +734,17 @@ internal sealed class DownloadService(
 
         var refreshed = BuildRefreshedState(
             new RefreshedDownloadState(
+                candidate.Status,
                 candidate.DateCompleted,
                 candidate.Progress,
                 candidate.LastProgressAt,
                 candidate.FailureReason,
                 candidate.FailedAt),
-            candidate.Status,
             info,
             now);
         var updated = await downloadRepository.UpdateActiveRefreshedStatusAsync(
             candidate.DownloadId,
-            info.Status,
+            refreshed.Status,
             info.StatusReason,
             info.OutputPath,
             refreshed.DateCompleted,
@@ -765,11 +764,10 @@ internal sealed class DownloadService(
         }
 
         logger.LogInformation(
-            "Download {DownloadId} on {DownloadClientName} refreshed to {DownloadStatus} without applying " +
-            "Faulted or DownloadStuck",
+            "Download {DownloadId} on {DownloadClientName} refreshed to {DownloadStatus} instead of DownloadStuck",
             candidate.DownloadId,
             candidate.ClientName,
-            info.Status);
+            refreshed.Status);
 
         return true;
     }
@@ -979,11 +977,7 @@ internal sealed class DownloadService(
 
         try
         {
-            return await integration.RemoveDownloadAsync(
-                download.ExternalId,
-                true,
-                client.Settings,
-                cancellationToken)
+            return await integration.RemoveDownloadAsync(download.ExternalId, true, client.Settings, cancellationToken)
                 .ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -1045,6 +1039,7 @@ internal sealed class DownloadService(
     }
 
     private readonly record struct RefreshedDownloadState(
+        DownloadStatus Status,
         DateTime? DateCompleted,
         decimal? Progress,
         DateTime? LastProgressAt,

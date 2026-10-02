@@ -35,6 +35,8 @@ internal sealed class QueryCoordinator : IQueryCoordinator, IDisposable
 
     private readonly ICache _browsePages;
 
+    private readonly ICache _trackReleases;
+
     private readonly ICache _artistBrowsePages;
 
     private readonly ICache _artistResolutions;
@@ -51,6 +53,8 @@ internal sealed class QueryCoordinator : IQueryCoordinator, IDisposable
 
     private readonly Dictionary<BrowseCacheKey, Task<FetchResult<ReleaseGroupSearchResponseDto>>>
         _browseLoads = [];
+
+    private readonly Dictionary<string, Task<FetchResult<ReleaseSearchResponseDto>>> _trackReleaseLoads = [];
 
     private readonly Dictionary<ArtistBrowseCacheKey, Task<FetchResult<ArtistBrowseResponseDto>>>
         _artistBrowseLoads = [];
@@ -72,6 +76,7 @@ internal sealed class QueryCoordinator : IQueryCoordinator, IDisposable
             "musicbrainz-entities-negative",
             () => Policy(MissingEntityTtl, 256));
         _browsePages = cacheFactory.GetOrCreate("musicbrainz-browse-pages", () => Policy(EntityTtl, 256));
+        _trackReleases = cacheFactory.GetOrCreate("musicbrainz-track-releases", () => Policy(EntityTtl, 256));
         _artistBrowsePages = cacheFactory.GetOrCreate("musicbrainz-artist-browse", () => Policy(EntityTtl, 256));
         _artistResolutions = cacheFactory.GetOrCreate(
             "musicbrainz-artist-resolution",
@@ -108,7 +113,7 @@ internal sealed class QueryCoordinator : IQueryCoordinator, IDisposable
             Task<FetchResult<VerifiedScan>> shared;
             lock (_loadGate)
             {
-                if (!_scanLoads.TryGetValue(fingerprint, out shared!))
+                if (!_scanLoads.TryGetValue(fingerprint, out shared))
                 {
                     shared = LoadScanAsync(fingerprint, existing, loader);
                     _scanLoads[fingerprint] = shared;
@@ -168,6 +173,20 @@ internal sealed class QueryCoordinator : IQueryCoordinator, IDisposable
         return GetCachedAsync(key, _browsePages, _browseLoads, loader, "browse", cancellationToken);
     }
 
+    public Task<FetchResult<ReleaseSearchResponseDto>> GetTrackReleasesAsync(
+        string trackMbid,
+        Func<CancellationToken, Task<FetchResult<ReleaseSearchResponseDto>>> loader,
+        CancellationToken cancellationToken)
+    {
+        return GetCachedAsync(
+            trackMbid,
+            _trackReleases,
+            _trackReleaseLoads,
+            loader,
+            "track_releases",
+            cancellationToken);
+    }
+
     public Task<FetchResult<ArtistBrowseResponseDto>> GetArtistBrowsePageAsync(
         ArtistBrowseCacheKey key,
         Func<CancellationToken, Task<FetchResult<ArtistBrowseResponseDto>>> loader,
@@ -218,7 +237,7 @@ internal sealed class QueryCoordinator : IQueryCoordinator, IDisposable
         Task<FetchResult<SearchPage>> shared;
         lock (_loadGate)
         {
-            if (!_isrcLoads.TryGetValue(isrc, out shared!))
+            if (!_isrcLoads.TryGetValue(isrc, out shared))
             {
                 shared = LoadIsrcAsync(isrc, identity, loader);
                 _isrcLoads[isrc] = shared;
@@ -249,7 +268,7 @@ internal sealed class QueryCoordinator : IQueryCoordinator, IDisposable
         Task<FetchResult<Uri>> shared;
         lock (_loadGate)
         {
-            if (!_coverLoads.TryGetValue(key, out shared!))
+            if (!_coverLoads.TryGetValue(key, out shared))
             {
                 shared = LoadCoverAsync(key, loader);
                 _coverLoads[key] = shared;
@@ -323,7 +342,7 @@ internal sealed class QueryCoordinator : IQueryCoordinator, IDisposable
         where TKey : notnull
         where TValue : class
     {
-        var cacheKey = key.ToString()!;
+        var cacheKey = key.ToString();
         if (cache.TryGet<TValue>(cacheKey, out var cached) && cached is not null)
         {
             RecordCache(region, hit: true);
@@ -334,7 +353,7 @@ internal sealed class QueryCoordinator : IQueryCoordinator, IDisposable
         Task<FetchResult<TValue>> shared;
         lock (_loadGate)
         {
-            if (!loads.TryGetValue(key, out shared!))
+            if (!loads.TryGetValue(key, out shared))
             {
                 shared = LoadCachedAsync(key, cacheKey, cache, loads, loader);
                 loads[key] = shared;

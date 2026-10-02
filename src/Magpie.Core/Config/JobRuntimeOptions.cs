@@ -28,12 +28,12 @@ public sealed class JobRuntimeOptions
     public TimeSpan StaleJobCleanupInterval { get; set; } = TimeSpan.FromHours(1);
 
     /// <summary>
-    /// The maximum interval between inactive-worker recovery passes on clustered nodes.
+    /// The maximum interval between stale-job cleanup passes on clustered nodes.
     /// </summary>
     public TimeSpan ClusteredStaleJobCleanupInterval { get; set; } = TimeSpan.FromSeconds(30);
 
     /// <summary>
-    /// The time the progress reporter waits for its outstanding writes when the job scope closes.
+    /// The time that the progress reporter waits to flush progress.
     /// </summary>
     public TimeSpan ProgressFlushTimeout { get; set; } = TimeSpan.FromSeconds(30);
 

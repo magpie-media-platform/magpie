@@ -15,7 +15,7 @@ namespace Magpie.Extensions.Jellyfin;
 internal sealed class JellyfinLibraryService(
     IMediaServerService mediaServerService,
     IJellyfinClient client,
-    ILogger<JellyfinLibraryService> logger) : IJellyfinLibraryService
+    ILogger<JellyfinLibraryService> logger)
 {
     public async Task<JellyfinLibrariesResult> ListLibrariesAsync(
         Guid? mediaServerId,
@@ -84,8 +84,8 @@ internal sealed class JellyfinLibraryService(
 
             options.Add(new SettingSchemaOption
             {
-                Value = folder.ItemId!,
-                Label = string.IsNullOrWhiteSpace(folder.Name) ? folder.ItemId! : folder.Name!,
+                Value = folder.ItemId,
+                Label = string.IsNullOrWhiteSpace(folder.Name) ? folder.ItemId : folder.Name,
                 Description = folder.CollectionType
             });
         }

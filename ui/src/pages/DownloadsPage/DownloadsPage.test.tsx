@@ -579,9 +579,11 @@ describe('DownloadsPage table columns', () => {
 
         const table = getTable();
         expect(table).toBeInTheDocument();
-        for (const header of ['Title', 'Client', 'Status', 'Added', 'Last status']) {
-            expect(within(table).getByText(header)).toBeInTheDocument();
-        }
+        expect(within(table).getByText('Title')).toBeInTheDocument();
+        expect(within(table).getByText('Client')).toBeInTheDocument();
+        expect(within(table).getByText('Status')).toBeInTheDocument();
+        expect(within(table).getByText('Added')).toBeInTheDocument();
+        expect(within(table).getByText('Last status')).toBeInTheDocument();
     });
 
     it('reserves enough Status column width for the Downloading badge', async () => {
@@ -2734,11 +2736,9 @@ describe('DownloadsPage select all across pages', () => {
     });
 
     it.each([
-        { action: 'Start', button: /^start$/i, confirm: false },
-        { action: 'Pause', button: /^pause$/i, confirm: false },
-        { action: 'Stop', button: /^stop$/i, confirm: false },
-        { action: 'Forget', button: /^forget$/i, confirm: true },
-        { action: 'Remove', button: /^remove$/i, confirm: true },
+        { action: 'Start', button: /^start$/i },
+        { action: 'Pause', button: /^pause$/i },
+        { action: 'Stop', button: /^stop$/i },
     ])('surfaces the backend error for all-pages $action', async (config) => {
         const user = userEvent.setup();
         vi.mocked(apiPost).mockResolvedValue({ count: 0, error: `${config.action} bulk failure` });
@@ -2751,9 +2751,26 @@ describe('DownloadsPage select all across pages', () => {
 
         const bar = document.querySelector('[data-component="downloads-bulk-bar-queue"]') as HTMLElement;
         await user.click(within(bar).getByRole('button', { name: config.button }));
-        if (config.confirm) {
-            await user.click(within(await screen.findByRole('dialog')).getByRole('button', { name: config.button }));
-        }
+
+        await waitFor(() => expect(screen.getByText(`${config.action} bulk failure`)).toBeInTheDocument());
+    });
+
+    it.each([
+        { action: 'Forget', button: /^forget$/i },
+        { action: 'Remove', button: /^remove$/i },
+    ])('surfaces the backend error for all-pages $action after confirmation', async (config) => {
+        const user = userEvent.setup();
+        vi.mocked(apiPost).mockResolvedValue({ count: 0, error: `${config.action} bulk failure` });
+        render(<DownloadsPage />, { wrapper: createTestWrapper(createTestQueryClient()) });
+
+        await selectWholePage(user);
+
+        const banner = document.querySelector('[data-component="select-all-banner"]') as HTMLElement;
+        await user.click(within(banner).getByRole('button', { name: /select all 40 across all pages/i }));
+
+        const bar = document.querySelector('[data-component="downloads-bulk-bar-queue"]') as HTMLElement;
+        await user.click(within(bar).getByRole('button', { name: config.button }));
+        await user.click(within(await screen.findByRole('dialog')).getByRole('button', { name: config.button }));
 
         await waitFor(() => expect(screen.getByText(`${config.action} bulk failure`)).toBeInTheDocument());
     });

@@ -2,6 +2,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
+import { TooltipProvider } from '../Tooltip';
 import { DeleteConfirmDialog } from './DeleteConfirmDialog';
 
 const defaultProps = {
@@ -205,6 +206,51 @@ describe('DeleteConfirmDialog', () => {
         await user.click(screen.getByRole('switch'));
 
         expect(onChange).toHaveBeenCalledWith(true);
+    });
+
+    it('disables the extra toggle and describes the reason when disabledReason is set', async () => {
+        render(
+            <DeleteConfirmDialog
+                {...defaultProps}
+                extraToggle={{
+                    label: 'Also delete its filter "Action"',
+                    checked: false,
+                    onChange: vi.fn(),
+                    disabledReason: 'You do not have permission to delete this filter.',
+                }}
+            />,
+            { wrapper: TooltipProvider },
+        );
+
+        await waitFor(() => {
+            expect(screen.getByRole('dialog')).toBeInTheDocument();
+        });
+
+        const toggle = screen.getByRole('switch');
+        expect(toggle).toBeDisabled();
+        expect(toggle.parentElement).toHaveAccessibleDescription('You do not have permission to delete this filter.');
+    });
+
+    it('focuses Cancel and opens no tooltip when the dialog opens with a disabled extra toggle', async () => {
+        render(
+            <DeleteConfirmDialog
+                {...defaultProps}
+                extraToggle={{
+                    label: 'Also delete its filter "Action"',
+                    checked: false,
+                    onChange: vi.fn(),
+                    disabledReason: 'You do not have permission to delete this filter.',
+                }}
+            />,
+            { wrapper: TooltipProvider },
+        );
+
+        await waitFor(() => {
+            expect(screen.getByRole('dialog')).toBeInTheDocument();
+        });
+
+        expect(screen.getByRole('button', { name: 'Cancel' })).toHaveFocus();
+        expect(screen.queryByRole('tooltip')).not.toBeInTheDocument();
     });
 
     it('calls onCancel when overlay is clicked', async () => {

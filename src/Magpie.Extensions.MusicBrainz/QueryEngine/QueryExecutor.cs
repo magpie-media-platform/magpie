@@ -104,7 +104,7 @@ internal sealed class QueryExecutor(
         var groupFetched = await GetEntityAsync(groupKey, settings, cancellationToken).ConfigureAwait(false);
         if (groupFetched is not { Outcome: FetchOutcome.Success, Value.ReleaseGroup: { } releaseGroup })
         {
-            return Failed<IReadOnlyList<LabelReference>>(groupFetched);
+            return Outcome<IReadOnlyList<LabelReference>>(groupFetched.Outcome, groupFetched.StatusCode);
         }
 
         if (!MatchesMbid(releaseGroup.Id, hit.PrimaryMbid))
@@ -143,7 +143,7 @@ internal sealed class QueryExecutor(
         var releaseFetched = await GetEntityAsync(releaseKey, settings, cancellationToken).ConfigureAwait(false);
         if (releaseFetched is not { Outcome: FetchOutcome.Success, Value.Release: { } release })
         {
-            return Failed<IReadOnlyList<LabelReference>>(releaseFetched);
+            return Outcome<IReadOnlyList<LabelReference>>(releaseFetched.Outcome, releaseFetched.StatusCode);
         }
 
         if (!MatchesMbid(release.Id, releaseMbid.ToString("D")))
@@ -254,28 +254,6 @@ internal sealed class QueryExecutor(
         };
     }
 
-    private QueryResult Empty(QueryPlan plan)
-    {
-        return new()
-        {
-            Supported = true,
-            Hits = [],
-            PageInfo = new ProviderSearchPageInfo { RequestedPage = plan.RequestedPage, HasMore = false },
-            Warnings = plan.Warnings
-        };
-    }
-
-    private QueryResult Oversized(QueryPlan plan)
-    {
-        return new()
-        {
-            Supported = true,
-            Hits = [],
-            PageInfo = new ProviderSearchPageInfo { RequestedPage = plan.RequestedPage, HasMore = false },
-            Warnings = [.. plan.Warnings, OversizedQueryWarning]
-        };
-    }
-
     private QueryResult Failure(QueryPlan plan, FetchOutcome outcome)
     {
         return new()
@@ -324,22 +302,13 @@ internal sealed class QueryExecutor(
         };
     }
 
-    private FetchResult<VerifiedScan> ScanResult(VerifiedScan scan)
-    {
-        return new()
-        {
-            Outcome = FetchOutcome.Success,
-            Value = scan
-        };
-    }
-
     private Request LinkedBrowseRequest(QueryTarget target, string artistMbid, int limit, int offset)
     {
         var endpoint = target switch
         {
             QueryTarget.Album => "release-group",
             QueryTarget.Track => "recording",
-            _ => throw new InvalidOperationException("target")
+            _ => throw new InvalidOperationException("Unsupported MusicBrainz query target.")
         };
         var includes = target == QueryTarget.Track ? "artist-credits%2Bisrcs" : "artist-credits";
         return new Request
@@ -366,7 +335,7 @@ internal sealed class QueryExecutor(
 
     private QueryResult EmptyWithWarnings(QueryPlan plan, IEnumerable<string> warnings)
     {
-        return Empty(plan) with
+        return RawCandidates(plan, []) with
         { Warnings = [.. plan.Warnings.Concat(warnings).Distinct()] };
     }
 
@@ -396,7 +365,7 @@ internal sealed class QueryExecutor(
     {
         return [.. artists
             .Where(artist => Guid.TryParse(artist.Id, out _))
-            .Select(artist => artist with { Id = Guid.Parse(artist.Id!).ToString("D", CultureInfo.InvariantCulture) })
+            .Select(artist => artist with { Id = Guid.Parse(artist.Id).ToString("D", CultureInfo.InvariantCulture) })
             .GroupBy(artist => artist.Id, StringComparer.OrdinalIgnoreCase)
             .Select(group => group.First())];
     }
@@ -807,7 +776,7 @@ internal sealed class QueryExecutor(
             .SearchFragments()
             .Select(fragment => FieldWildcard(field, "*" + fragment + "*"))
             .ToArray();
-        return Group([FieldPhrase(field, value), GroupAnd(wildcardClauses)]);
+        return Group([FieldPhrase(field, value), Group(wildcardClauses, CombineMode.And)]);
     }
 
     private string StartsWithClause(string field, string value)
@@ -950,17 +919,6 @@ internal sealed class QueryExecutor(
         };
     }
 
-    private string GroupAnd(IEnumerable<string> clauses)
-    {
-        var values = clauses.Where(clause => clause.Length > 0).ToArray();
-        return values.Length switch
-        {
-            0 => string.Empty,
-            1 => values[0],
-            _ => "(" + string.Join(" AND ", values) + ")"
-        };
-    }
-
     private string Join(IEnumerable<string> clauses, CombineMode combineMode)
     {
         var values = clauses.Where(clause => clause.Length > 0).ToArray();
@@ -993,7 +951,7 @@ internal sealed class QueryExecutor(
             QueryTarget.Artist => "artist",
             QueryTarget.Album => "release-group",
             QueryTarget.Track => "recording",
-            _ => throw new InvalidOperationException("target")
+            _ => throw new InvalidOperationException("Unsupported MusicBrainz query target.")
         };
     }
 
@@ -1161,7 +1119,7 @@ internal sealed class QueryExecutor(
     {
         var tracks = (release.Media ?? [])
             .Where(medium => medium is not null)
-            .SelectMany(medium => medium!.Tracks ?? [])
+            .SelectMany(medium => medium.Tracks ?? [])
             .Where(track => track is not null)
             .ToList();
         if (tracks.Count == 0)
@@ -1169,7 +1127,7 @@ internal sealed class QueryExecutor(
             return Success(new ResidualEntityData());
         }
 
-        var lengths = tracks.Select(track => track!.Length ?? track.Recording?.Length).ToList();
+        var lengths = tracks.Select(track => track.Length ?? track.Recording?.Length).ToList();
         if (lengths.Any(length => length is null or < 0))
         {
             return Outcome<ResidualEntityData>(FetchOutcome.Malformed);
@@ -1177,12 +1135,6 @@ internal sealed class QueryExecutor(
 
         return Success(new ResidualEntityData
         { Duration = TimeSpan.FromMilliseconds(lengths.Sum(length => length!.Value)) });
-    }
-
-    private FetchResult<TOut> Failed<TOut>(FetchResult<EntityResponseDto> fetched)
-        where TOut : class
-    {
-        return new() { Outcome = fetched.Outcome, StatusCode = fetched.StatusCode };
     }
 
     private FetchResult<T> Outcome<T>(FetchOutcome outcome, int? statusCode = null)
@@ -1208,7 +1160,7 @@ internal sealed class QueryExecutor(
         }
 
         return plan.Root is null
-            ? Task.FromResult(Empty(plan))
+            ? Task.FromResult(RawCandidates(plan, []))
             : ExecuteNodeAsync(plan, plan.Root, new Dictionary<int, QueryResult>(), bound: null, cancellationToken);
     }
 
@@ -1574,7 +1526,7 @@ internal sealed class QueryExecutor(
             .ToArray();
         if (resolvedMbids.Length == 0)
         {
-            return Empty(plan);
+            return RawCandidates(plan, []);
         }
 
         var artists = new List<ArtistDto>();
@@ -1730,7 +1682,7 @@ internal sealed class QueryExecutor(
     {
         if (results.Count == 0)
         {
-            return Empty(plan);
+            return RawCandidates(plan, []);
         }
 
         var hits = results[0].Hits.ToList();
@@ -1778,12 +1730,12 @@ internal sealed class QueryExecutor(
         var built = Build(fetch, plan.Fingerprint, plan.MaxResults, offset);
         if (built.TooLarge)
         {
-            return Oversized(plan);
+            return EmptyWithWarnings(plan, [OversizedQueryWarning]);
         }
 
         if (built.Request is null)
         {
-            return Empty(plan);
+            return RawCandidates(plan, []);
         }
 
         var fetched = await SearchPageAsync(built.Request, plan.Settings, "seed", cancellationToken)
@@ -1824,12 +1776,12 @@ internal sealed class QueryExecutor(
                 : Build(fetch, plan.Fingerprint, ScanBatchSize, offset: 0);
         if (preflight.TooLarge)
         {
-            return Oversized(plan);
+            return EmptyWithWarnings(plan, [OversizedQueryWarning]);
         }
 
         if (preflight.Request is null)
         {
-            return Empty(plan);
+            return RawCandidates(plan, []);
         }
 
         var diagnostics = new VerifiedScanDiagnostics();
@@ -1891,8 +1843,14 @@ internal sealed class QueryExecutor(
     {
         if (plan.Progress is not null)
         {
-            await foreach (var hit in ContinueVerifiedHitsAsync(plan, fetch, filter, diagnostics,
-                scanFingerprint, artistCompositionQuery, cancellationToken).ConfigureAwait(false))
+            await foreach (var hit in ContinueVerifiedHitsAsync(
+                plan,
+                fetch,
+                filter,
+                diagnostics,
+                scanFingerprint,
+                artistCompositionQuery,
+                cancellationToken).ConfigureAwait(false))
             {
                 yield return hit;
             }
@@ -1957,7 +1915,7 @@ internal sealed class QueryExecutor(
 
         if (source.Signature is not null && source.Signature != signature)
         {
-            throw new MetadataSearchContinuationException("MusicBrainz resolved sources changed. Start a new search.");
+            throw new MetadataSearchContinuationException("MusicBrainz resolved sources changed.");
         }
 
         source.Signature = signature;
@@ -1998,7 +1956,12 @@ internal sealed class QueryExecutor(
                     break;
                 }
 
-                var fetched = await ExtendScanAsync(plan, fetch, filter, scan, artistCompositionQuery,
+                var fetched = await ExtendScanAsync(
+                    plan,
+                    fetch,
+                    filter,
+                    scan,
+                    artistCompositionQuery,
                     cancellationToken).ConfigureAwait(false);
                 if (fetched is not { Outcome: FetchOutcome.Success, Value: { } updated })
                 {
@@ -2025,7 +1988,7 @@ internal sealed class QueryExecutor(
         var snapshot = scan.Read();
         if (snapshot.Exhausted)
         {
-            return ScanResult(scan);
+            return Success(scan);
         }
 
         if (scan.TryPeekPending(out var pending) && pending is not null)
@@ -2036,12 +1999,12 @@ internal sealed class QueryExecutor(
                 pending,
                 cancellationToken).ConfigureAwait(false);
             scan.CompletePending(evaluated.Accepted, evaluated.Candidate, evaluated.Warnings);
-            return ScanResult(scan);
+            return Success(scan);
         }
 
         if (snapshot.SourceExhausted)
         {
-            return ScanResult(scan);
+            return Success(scan);
         }
 
         return fetch.UsesReleaseIndexComposition
@@ -2098,7 +2061,7 @@ internal sealed class QueryExecutor(
         var sourceExhausted = rawHitCount == 0 || rawHitCount < ScanBatchSize || nextOffset >= page.Count;
         var filtered = FilterCandidates(filter?.Filters ?? [], providerHits, role);
         AppendCandidates(scan, filter?.Residuals ?? [], filtered, nextOffset, sourceExhausted, truncated: false);
-        return ScanResult(scan);
+        return Success(scan);
     }
 
     private async Task<FetchResult<VerifiedScan>> ExtendReleaseIndexScanAsync(
@@ -2188,7 +2151,7 @@ internal sealed class QueryExecutor(
                 nextOffset,
                 sourceExhausted,
                 truncated: false);
-            return ScanResult(scan);
+            return Success(scan);
         }
 
         var composed = BuildComposed(fetch, plan.Fingerprint, order);
@@ -2235,7 +2198,7 @@ internal sealed class QueryExecutor(
             nextOffset,
             sourceExhausted,
             truncated: false);
-        return ScanResult(scan);
+        return Success(scan);
     }
 
     private void AppendCandidates(
@@ -2280,7 +2243,8 @@ internal sealed class QueryExecutor(
         FilterPlanNode? filter,
         CancellationToken cancellationToken)
     {
-        var entityKind = fetch.EntityKind ?? throw new InvalidOperationException("entity kind");
+        var entityKind = fetch.EntityKind ??
+            throw new InvalidOperationException("MusicBrainz fetch has no entity kind.");
         var key = new EntityCacheKey
         {
             Kind = entityKind,
@@ -2696,7 +2660,7 @@ internal sealed class QueryExecutor(
             offset);
         if (built.TooLarge)
         {
-            return Oversized(plan);
+            return EmptyWithWarnings(plan, [OversizedQueryWarning]);
         }
 
         if (built.Request is null)
@@ -2979,7 +2943,7 @@ internal sealed class QueryExecutor(
         var fetched = await GetEntityAsync(key, settings, cancellationToken).ConfigureAwait(false);
         if (fetched is not { Outcome: FetchOutcome.Success, Value: { } entity })
         {
-            return Failed<ResidualEntityData>(fetched);
+            return Outcome<ResidualEntityData>(fetched.Outcome, fetched.StatusCode);
         }
 
         var entityId = hit.Target switch
@@ -3041,7 +3005,7 @@ internal sealed class QueryExecutor(
         var groupFetched = await GetEntityAsync(groupKey, settings, cancellationToken).ConfigureAwait(false);
         if (groupFetched is not { Outcome: FetchOutcome.Success, Value.ReleaseGroup: { } releaseGroup })
         {
-            return Failed<ResidualEntityData>(groupFetched);
+            return Outcome<ResidualEntityData>(groupFetched.Outcome, groupFetched.StatusCode);
         }
 
         if (!MatchesMbid(releaseGroup.Id, hit.PrimaryMbid) || releaseGroup.Releases is null)
@@ -3069,7 +3033,7 @@ internal sealed class QueryExecutor(
         var groupFetched = await GetEntityAsync(groupKey, settings, cancellationToken).ConfigureAwait(false);
         if (groupFetched is not { Outcome: FetchOutcome.Success, Value.ReleaseGroup: { } releaseGroup })
         {
-            return Failed<ResidualEntityData>(groupFetched);
+            return Outcome<ResidualEntityData>(groupFetched.Outcome, groupFetched.StatusCode);
         }
 
         if (!MatchesMbid(releaseGroup.Id, hit.PrimaryMbid) || releaseGroup.Releases is null)
@@ -3100,7 +3064,7 @@ internal sealed class QueryExecutor(
         var releaseFetched = await GetEntityAsync(releaseKey, settings, cancellationToken).ConfigureAwait(false);
         if (releaseFetched is not { Outcome: FetchOutcome.Success, Value.Release: { } release })
         {
-            return Failed<ResidualEntityData>(releaseFetched);
+            return Outcome<ResidualEntityData>(releaseFetched.Outcome, releaseFetched.StatusCode);
         }
 
         if (!MatchesMbid(release.Id, releaseMbid.ToString("D")) || release.Media is null)
@@ -3669,7 +3633,7 @@ internal sealed class QueryExecutor(
     {
         if (plan.Root is null)
         {
-            return Empty(plan);
+            return RawCandidates(plan, []);
         }
 
         var warnings = new List<string>(plan.Warnings);
@@ -3944,7 +3908,7 @@ internal sealed class QueryExecutor(
         });
         if (plan.Progress!.ResolvedSources.TryGetValue(fetch.Id, out var previous) && previous != signature)
         {
-            throw new MetadataSearchContinuationException("MusicBrainz resolved sources changed. Start a new search.");
+            throw new MetadataSearchContinuationException("MusicBrainz resolved sources changed.");
         }
 
         plan.Progress.ResolvedSources[fetch.Id] = signature;
@@ -3971,9 +3935,14 @@ internal sealed class QueryExecutor(
             var diagnostics = new VerifiedScanDiagnostics();
             try
             {
-                await foreach (var hit in ContinueVerifiedHitsAsync(plan, fetch, filter, diagnostics,
-                    signature + JsonSerializer.Serialize(composition), composition, cancellationToken)
-                    .ConfigureAwait(false))
+                await foreach (var hit in ContinueVerifiedHitsAsync(
+                    plan,
+                    fetch,
+                    filter,
+                    diagnostics,
+                    signature + JsonSerializer.Serialize(composition),
+                    composition,
+                    cancellationToken).ConfigureAwait(false))
                 {
                     yield return hit;
                 }
@@ -4011,9 +3980,15 @@ internal sealed class QueryExecutor(
 
                 while (!source.Exhausted)
                 {
-                    var response = await SearchPageAsync(LinkedBrowseRequest(fetch.Target, artist,
-                        BrowsePageSize, source.Offset), plan.Settings, "browse", cancellationToken)
-                        .ConfigureAwait(false);
+                    var response = await SearchPageAsync(
+                        LinkedBrowseRequest(
+                            fetch.Target,
+                            artist,
+                            BrowsePageSize,
+                            source.Offset),
+                        plan.Settings,
+                        "browse",
+                        cancellationToken).ConfigureAwait(false);
                     if (response is not { Outcome: FetchOutcome.Success, Value: { } page })
                     {
                         warnings.Add(FailureWarning(response.Outcome));
@@ -4125,8 +4100,7 @@ internal sealed class QueryExecutor(
         var identity = JsonSerializer.Serialize(result.Hits.Select(hit => new { hit.PrimaryMbid, hit.ArtistType }));
         if (progress.ResolverIdentities.TryGetValue(node.Id, out var previous) && previous != identity)
         {
-            throw new MetadataSearchContinuationException(
-                "MusicBrainz resolved identities changed. Start a new search.");
+            throw new MetadataSearchContinuationException("MusicBrainz resolved identities changed.");
         }
 
         progress.ResolverIdentities[node.Id] = identity;

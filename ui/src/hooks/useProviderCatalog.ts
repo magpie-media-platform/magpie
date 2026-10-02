@@ -30,7 +30,6 @@ export const providerCatalogQueryKey = ['providers'] as const;
 export function useProviderCatalog<T>(select: (providers: ProviderDescriptor[]) => T, enabled = true) {
     useInvalidateQueriesOnEvents(enabled ? EXTENSION_CATALOG_EVENTS : [], [providerCatalogQueryKey], {
         exact: true,
-        owner: 'provider-catalog',
     });
     return useQuery({
         queryKey: providerCatalogQueryKey,

@@ -233,7 +233,6 @@ interface ApiContentLevelDefinition {
     customMetadataFields?: unknown[] | null;
     standardFactFields?: unknown[] | null;
     acceptedFileTypes?: string[] | null;
-    effectiveAcceptedMimeTypes?: string[] | null;
     acceptedSidecarTypes?: string[] | null;
     subfolder?: string | null;
 }
@@ -379,7 +378,6 @@ function mapContentTypes(types: ApiContentTypeDefinition[]): LibraryTypeDefiniti
                 standardMetadataFields: standardMetadataFieldsFromMask(supportedMetadataFields),
                 standardFactFields: normalizeFieldDefinitions(l.standardFactFields),
                 acceptedFileTypes: [...(l.acceptedFileTypes ?? [])],
-                effectiveAcceptedMimeTypes: [...(l.effectiveAcceptedMimeTypes ?? [])],
                 acceptedSidecarTypes: [...(l.acceptedSidecarTypes ?? [])],
                 subfolder: l.subfolder == null ? null : l.subfolder.trim(),
             };
@@ -427,14 +425,13 @@ export function useLibraryTypes() {
     useInvalidateQueriesOnEvents(
         isAuthenticated ? EXTENSION_CATALOG_EVENTS : [],
         [libraryTypesQueryKeys.contentTypes(), libraryTypesQueryKeys.subjectTypes()],
-        { exact: true, owner: 'library-type-catalog' },
+        { exact: true },
     );
 
     const contentTypesQuery = useQuery({
         queryKey: libraryTypesQueryKeys.contentTypes(),
         queryFn: fetchContentTypes,
         staleTime: POLLING_INTERVALS.slow,
-        gcTime: 5 * 60 * 1000,
         enabled: isAuthenticated,
     });
 
@@ -442,7 +439,6 @@ export function useLibraryTypes() {
         queryKey: libraryTypesQueryKeys.subjectTypes(),
         queryFn: fetchSubjectTypes,
         staleTime: POLLING_INTERVALS.slow,
-        gcTime: 5 * 60 * 1000,
         enabled: isAuthenticated,
     });
 
@@ -543,7 +539,7 @@ export function useContentLevelCounts(contentType: string, levels: LibraryLevelD
     useInvalidateQueriesOnEvents(
         contentType && levels.length > 0 ? LIBRARY_COUNT_EVENTS : [],
         [contentLevelCountsQueryKeys.counts(contentType, levelSlugs)],
-        { debounceMs: 300, exact: true, maxWaitMs: 1200, owner: 'library-counts:levels' },
+        { debounceMs: 300, exact: true, maxWaitMs: 1200 },
     );
 
     const countsQuery = useQuery({
@@ -563,7 +559,6 @@ export function useContentLevelCounts(contentType: string, levels: LibraryLevelD
         },
         enabled: contentType.length > 0 && levels.length > 0,
         staleTime: POLLING_INTERVALS.slow,
-        gcTime: 5 * 60 * 1000,
     });
 
     return {
@@ -577,7 +572,7 @@ export function useLibraryCounts(contentTypes: LibraryTypeDefinition[], subjectT
     useInvalidateQueriesOnEvents(
         contentTypes.length > 0 || subjectTypes.length > 0 ? LIBRARY_COUNT_EVENTS : [],
         [libraryCountsQueryKeys.counts(contentSlugs, subjectSlugs)],
-        { debounceMs: 300, exact: true, maxWaitMs: 1200, owner: 'library-counts:types' },
+        { debounceMs: 300, exact: true, maxWaitMs: 1200 },
     );
 
     const countsQuery = useQuery({
@@ -602,7 +597,6 @@ export function useLibraryCounts(contentTypes: LibraryTypeDefinition[], subjectT
         },
         enabled: contentTypes.length > 0 || subjectTypes.length > 0,
         staleTime: POLLING_INTERVALS.slow,
-        gcTime: 5 * 60 * 1000,
     });
 
     return { counts: countsQuery.data ?? {} };

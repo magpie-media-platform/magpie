@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
-    getFulfillmentClass,
     formatDateKey,
     formatDate,
     formatTime,
@@ -15,16 +14,6 @@ import {
     WEEKDAY_NAMES,
     getFirstDayOfWeek,
 } from './calendarUtils';
-
-describe('getFulfillmentClass', () => {
-    it('returns class string for each status', () => {
-        expect(getFulfillmentClass('missing')).toBe('calendar-page__event--missing');
-        expect(getFulfillmentClass('upgradable')).toBe('calendar-page__event--upgradable');
-        expect(getFulfillmentClass('fulfilled')).toBe('calendar-page__event--fulfilled');
-        expect(getFulfillmentClass('fulfilledExternally')).toBe('calendar-page__event--fulfilledExternally');
-        expect(getFulfillmentClass('partial')).toBe('calendar-page__event--partial');
-    });
-});
 
 describe('formatDate', () => {
     it('formats a date with weekday, month, day, and year', () => {
@@ -175,19 +164,15 @@ describe('isSameDay', () => {
 });
 
 describe('parseCalendarDate', () => {
+    afterEach(() => {
+        vi.unstubAllEnvs();
+    });
+
     it('keeps date-only publication values on their calendar date in a negative time zone', () => {
-        const originalTimeZone = process.env.TZ;
-        process.env.TZ = 'America/Los_Angeles';
-        try {
-            expect(parseCalendarDate('2026-07-20')).toEqual(new Date(2026, 6, 20));
-            expect(parseCalendarDate('2026-07-20T00:00:00Z')).toEqual(new Date(2026, 6, 20));
-        } finally {
-            if (originalTimeZone === undefined) {
-                delete process.env.TZ;
-            } else {
-                process.env.TZ = originalTimeZone;
-            }
-        }
+        vi.stubEnv('TZ', 'America/Los_Angeles');
+
+        expect(parseCalendarDate('2026-07-20')).toEqual(new Date(2026, 6, 20));
+        expect(parseCalendarDate('2026-07-20T00:00:00Z')).toEqual(new Date(2026, 6, 20));
     });
 
     it('preserves the instant for publication values with a time', () => {

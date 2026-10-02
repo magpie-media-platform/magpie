@@ -70,13 +70,7 @@ public sealed class BooksExtension : IExtensionLifecycle
     public Guid Id => ExtensionId;
 
     /// <inheritdoc />
-    public Version Version => new(1, 0, 1);
-
-    /// <inheritdoc />
     public string Name => "Books";
-
-    /// <inheritdoc />
-    public string? TargetABI => "[1.0.0,)";
 
     /// <inheritdoc />
     public void RegisterServices(IServiceCollection services)

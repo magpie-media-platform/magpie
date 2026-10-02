@@ -87,12 +87,16 @@ internal sealed class TagRepository(MagpieDbContext context, ILogger<TagReposito
                 var contentContainerIds = context.ContentHierarchyItems
                     .Where(item => item.Id == entityId)
                     .Select(item => item.MetadataContainerId);
+                var subjectContainerIds = context.Subjects
+                    .Where(subject => subject.Id == entityId)
+                    .Select(subject => subject.MetadataContainerId);
                 tags = tags.Where(tag =>
                     tag.DownloadClients.Any(entity => entity.Id == entityId) ||
                     tag.IndexerConnections.Any(entity => entity.Id == entityId) ||
                     tag.MediaServers.Any(entity => entity.Id == entityId) ||
                     tag.MetadataContainers.Any(entity => entity.Id == entityId) ||
                     tag.MetadataContainers.Any(entity => contentContainerIds.Contains(entity.Id)) ||
+                    tag.MetadataContainers.Any(entity => subjectContainerIds.Contains(entity.Id)) ||
                     tag.SubjectFilters.Any(entity => entity.Id == entityId) ||
                     tag.ContentFilters.Any(entity => entity.Id == entityId) ||
                     tag.QualityTierLists.Any(entity => entity.Id == entityId) ||
@@ -104,7 +108,7 @@ internal sealed class TagRepository(MagpieDbContext context, ILogger<TagReposito
             var totalItems = await tags.CountAsync(cancellationToken).ConfigureAwait(false);
             tags = tags.Skip((paging.PageNumber - 1) * paging.PageSize).Take(paging.PageSize);
 
-            return new PagedList<Tag>
+            return new()
             {
                 Items = await tags.ToListAsync(cancellationToken).ConfigureAwait(false),
                 TotalItems = totalItems,

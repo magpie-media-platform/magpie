@@ -9,6 +9,7 @@ import {
     referenceDisplayName,
     extractTitle,
     extractOverview,
+    extractPublishDatePrecision,
     extractYear,
     type MetadataContainer,
 } from './metadata';
@@ -178,11 +179,12 @@ describe('extractImageUrl', () => {
                 },
             ],
         };
-        const first = extractImageUrl(container);
-        expect(first).toBe('https://example.com/p1.jpg');
-        for (let i = 0; i < 5; i++) {
-            expect(extractImageUrl(container)).toBe(first);
-        }
+        expect(extractImageUrl(container)).toBe('https://example.com/p1.jpg');
+        expect(extractImageUrl(container)).toBe('https://example.com/p1.jpg');
+        expect(extractImageUrl(container)).toBe('https://example.com/p1.jpg');
+        expect(extractImageUrl(container)).toBe('https://example.com/p1.jpg');
+        expect(extractImageUrl(container)).toBe('https://example.com/p1.jpg');
+        expect(extractImageUrl(container)).toBe('https://example.com/p1.jpg');
     });
 });
 
@@ -312,6 +314,31 @@ describe('extractYear', () => {
             ],
         };
         expect(extractYear(container)).toBe(2024);
+    });
+});
+
+describe('extractPublishDatePrecision', () => {
+    it('returns the precision of the first contribution with a publish date', () => {
+        const container: MetadataContainer = {
+            id: 'c1',
+            contributions: [
+                { ordinal: 2, publishDate: '1980-05-05T00:00:00Z', publishDatePrecision: 'Day' },
+                { ordinal: 0, title: 'Undated' },
+                { ordinal: 1, publishDate: '1975-01-01T00:00:00Z', publishDatePrecision: 'Year' },
+            ],
+        };
+        expect(extractPublishDatePrecision(container)).toBe('Year');
+    });
+
+    it('returns undefined when the dated contribution has no precision', () => {
+        const container: MetadataContainer = {
+            id: 'c1',
+            contributions: [
+                { ordinal: 0, publishDate: '1975-01-01T00:00:00Z' },
+                { ordinal: 1, publishDate: '1980-05-05T00:00:00Z', publishDatePrecision: 'Day' },
+            ],
+        };
+        expect(extractPublishDatePrecision(container)).toBeUndefined();
     });
 });
 

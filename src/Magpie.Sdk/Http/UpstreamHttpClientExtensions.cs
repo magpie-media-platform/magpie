@@ -19,13 +19,17 @@ public static class UpstreamHttpClientExtensions
     /// <param name="authenticationScope">The stable authentication identity, or null for anonymous access</param>
     /// <param name="followRedirects">Whether to admit redirects when automatic transport redirects are disabled</param>
     /// <returns>The provider HTTP client registration</returns>
-    public static IHttpClientBuilder AddUpstreamCooldown(this IHttpClientBuilder builder,
-        Func<HttpRequestMessage, string?>? authenticationScope = null, bool followRedirects = false)
+    public static IHttpClientBuilder AddUpstreamCooldown(
+        this IHttpClientBuilder builder,
+        Func<HttpRequestMessage, string?>? authenticationScope = null,
+        bool followRedirects = false)
     {
         builder.Services.TryAddSingleton<TimeProvider>(TimeProvider.System);
         builder.Services.TryAddSingleton<IUpstreamCooldown, UpstreamCooldown>();
         return builder.ConfigureAdditionalHttpMessageHandlers((handlers, services) =>
-            handlers.Add(new UpstreamCooldownHandler(services.GetRequiredService<IUpstreamCooldown>(),
-                authenticationScope, followRedirects)));
+            handlers.Add(new UpstreamCooldownHandler(
+                services.GetRequiredService<IUpstreamCooldown>(),
+                authenticationScope,
+                followRedirects)));
     }
 }

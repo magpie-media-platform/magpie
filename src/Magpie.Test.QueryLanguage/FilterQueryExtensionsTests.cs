@@ -151,9 +151,7 @@ public class FilterQueryExtensionsTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(result.IsSuccess, Is.True);
-            Assert.That(
-                result.Value!.ContentHierarchyItem.And.First().PendingMetadataRefresh,
-                Is.EqualTo(expected));
+            Assert.That(result.Value!.ContentHierarchyItem.And.First().PendingMetadataRefresh, Is.EqualTo(expected));
         }
     }
 

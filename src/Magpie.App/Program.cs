@@ -10,12 +10,7 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
 
-var rootCommand = new RootCommand("magpie")
-{
-    new VersionCommand(),
-    new RunCommand(),
-    new SentinelCommand(),
-};
+var rootCommand = new RootCommand("magpie") { new VersionCommand(), new RunCommand(), new SentinelCommand() };
 
 rootCommand.AddApiProxyCommands(async cancellationToken =>
 {
@@ -43,9 +38,6 @@ rootCommand.AddApiProxyCommands(async cancellationToken =>
     return app;
 });
 
-var parserConfiguration = new ParserConfiguration
-{
-    ResponseFileTokenReplacer = null
-};
+var parserConfiguration = new ParserConfiguration { ResponseFileTokenReplacer = null };
 
 return await rootCommand.Parse(args, parserConfiguration).InvokeAsync().ConfigureAwait(false);

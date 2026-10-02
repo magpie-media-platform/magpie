@@ -46,13 +46,7 @@ import {
     type ContentDetailItem,
     type ParentContentRef,
 } from '@/components/content/ContentDetailsHeader';
-import {
-    ContentDetailsActionsSlot,
-    ContentDetailsFilesSlot,
-    ContentDetailsHeaderSlot,
-    ContentDetailsMetadataSlot,
-    ContentDetailsOverviewSlot,
-} from '@/components/ui/Slot/ContentSlots';
+import { Slot } from '@/components/ui/Slot';
 import { ExtensionTabContents, useTabSlotExtensions } from '@/components/ui/Slot/ExtensionTabs';
 import { useSlotExtensions } from '@/extensions/useExtensions';
 import { QuickActionsButton, type QuickAction } from '@/components/ui/QuickActionsButton';
@@ -104,7 +98,7 @@ import {
     nonEmptyMetadataText,
     sortByOrdinal,
 } from '@/lib/materializedMetadataDisplay';
-import type { ContentListItem, ReleaseScopeStatus } from '@/types';
+import type { ApiContentItem, ContentListItem, ReleaseScopeStatus } from '@/types';
 
 import { RelatedSubjectsTab } from './RelatedSubjectsTab';
 import { ActivityTab } from './ActivityTab';
@@ -281,6 +275,7 @@ export function ContentDetailPage() {
             acquisitionStatus: contentData.acquisitionStatus,
             year: year !== undefined && !Number.isNaN(year) ? year : undefined,
             publishDate: nonEmptyMetadataText(metadata?.publishDate),
+            publishDatePrecision: metadata?.publishDatePrecision ?? undefined,
             overview: nonEmptyMetadataText(metadata?.overview),
         };
     }, [contentData, metadata]);
@@ -512,8 +507,7 @@ export function ContentDetailPage() {
     }, [childrenResult?.items]);
 
     const filesData: MediaFile[] = useMemo(() => {
-        const apiFiles = contentData?.mediaFiles ?? [];
-        return apiFiles.map((f): MediaFile => {
+        const toFile = (f: NonNullable<ApiContentItem['mediaFiles']>[number]): MediaFile => {
             const lastSep = Math.max(f.filePath.lastIndexOf('/'), f.filePath.lastIndexOf('\\'));
             return {
                 id: f.id,
@@ -522,9 +516,14 @@ export function ContentDetailPage() {
                 size: f.fileSize,
                 dateAdded: f.createdAt,
                 mediaInfo: f.mediaInfo ?? undefined,
+                coveredItemCount: f.coverage?.length ? f.coverage.length + 1 : undefined,
             };
-        });
-    }, [contentData?.mediaFiles]);
+        };
+        return [
+            ...(contentData?.mediaFiles ?? []).map(toFile),
+            ...(contentData?.coveringMediaFiles ?? []).map((f) => ({ ...toFile(f), covering: true })),
+        ];
+    }, [contentData?.mediaFiles, contentData?.coveringMediaFiles]);
 
     useEffect(() => {
         for (const release of releasesQuery.rows) {
@@ -1057,18 +1056,23 @@ export function ContentDetailPage() {
     );
 
     const extensionActions = useSlotExtensions('content.details.actions');
+    const canRenameAllFiles = canManageContent && !(filesData.length > 0 && filesData.every((file) => file.covering));
 
     const fabActions: QuickAction[] = useMemo(
         () =>
             effectiveTab === 'files' && canManageContent
                 ? [
                       ...quickActions,
-                      {
-                          id: 'rename-all-files',
-                          label: 'Apply rename mask to descendant files',
-                          icon: <PencilSimpleLineIcon weight="bold" />,
-                          onClick: () => handleRequestRename({}),
-                      },
+                      ...(canRenameAllFiles
+                          ? [
+                                {
+                                    id: 'rename-all-files',
+                                    label: 'Apply rename mask to descendant files',
+                                    icon: <PencilSimpleLineIcon weight="bold" />,
+                                    onClick: () => handleRequestRename({}),
+                                },
+                            ]
+                          : []),
                       {
                           id: 'import-file',
                           label: 'Import file',
@@ -1081,6 +1085,7 @@ export function ContentDetailPage() {
         [
             effectiveTab,
             canManageContent,
+            canRenameAllFiles,
             quickActions,
             handleRequestRename,
             handleOpenImportFile,
@@ -1093,6 +1098,7 @@ export function ContentDetailPage() {
     const isRescanningMediaInfo = rescanMediaInfoMutation.isPending;
     const isSearching = searchMutation.isPending;
     const isDeletingFile = deleteFileMutation.isPending;
+    const otherCoveredItems = (filePendingDelete?.coveredItemCount ?? 1) - 1;
     const isUnlinkingFile = unlinkFileMutation.isPending;
     const isRemoving = removeContentMutation.isPending;
 
@@ -1144,7 +1150,7 @@ export function ContentDetailPage() {
     const contentSlotEntityType = 'content';
 
     const headerActions = (
-        <ContentDetailsActionsSlot entityId={activeContentId} entityType={contentSlotEntityType}>
+        <Slot slot="content.details.actions" entityId={activeContentId} entityType={contentSlotEntityType}>
             {canEditContent && (
                 <Button
                     variant="secondary"
@@ -1207,7 +1213,7 @@ export function ContentDetailPage() {
                     Remove
                 </Button>
             )}
-        </ContentDetailsActionsSlot>
+        </Slot>
     );
 
     const detailSlotProps = {
@@ -1234,7 +1240,7 @@ export function ContentDetailPage() {
                 </Alert>
             )}
 
-            <ContentDetailsHeaderSlot {...detailSlotProps}>
+            <Slot slot="content.details.header" {...detailSlotProps}>
                 <ContentDetailsHeader
                     content={content}
                     parent={parentRef}
@@ -1243,9 +1249,9 @@ export function ContentDetailPage() {
                     awards={awards}
                     actions={headerActions}
                 />
-            </ContentDetailsHeaderSlot>
+            </Slot>
 
-            <ContentDetailsMetadataSlot className="content-detail-page__metadata-slot" {...detailSlotProps} />
+            <Slot slot="content.details.metadata" className="content-detail-page__metadata-slot" {...detailSlotProps} />
 
             <RefreshStatusBadge contentId={activeContentId} />
             <PendingFilesIndicator contentHierarchyItemId={activeContentId} onOpen={() => setActiveTab('files')} />
@@ -1272,17 +1278,12 @@ export function ContentDetailPage() {
                         contentType={contentData.contentType}
                         canEdit={canEditContent}
                     />
-                    <QualityTierControl
-                        contentHierarchyItemId={activeContentId}
-                        contentType={contentData.contentType}
-                        level={contentData.level}
-                        canEdit={canEditContent}
-                    />
+                    <QualityTierControl contentHierarchyItemId={activeContentId} canEdit={canEditContent} />
                     <TagsChipStrip contentId={activeContentId} canEdit={canEditContent} />
                     {content.publishDate && (
                         <DetailInfoRow
                             label="Publish Date"
-                            value={formatPublishDate(content.publishDate, 'Unknown')}
+                            value={formatPublishDate(content.publishDate, 'Unknown', content.publishDatePrecision)}
                             data-testid="content-publish-date-row"
                         />
                     )}
@@ -1328,11 +1329,11 @@ export function ContentDetailPage() {
                 </DetailTabsList>
 
                 <TabsContent value="details">
-                    <ContentDetailsOverviewSlot {...detailSlotProps}>
+                    <Slot slot="content.details.overview" {...detailSlotProps}>
                         <ErrorBoundary>
                             <ContentFactsPanel facts={contentFacts} />
                         </ErrorBoundary>
-                    </ContentDetailsOverviewSlot>
+                    </Slot>
                 </TabsContent>
 
                 {hasRelationships && (
@@ -1397,7 +1398,7 @@ export function ContentDetailPage() {
 
                 <TabsContent ref={filesTabPanelRef} value="files">
                     <ErrorBoundary>
-                        <ContentDetailsFilesSlot {...detailSlotProps}>
+                        <Slot slot="content.details.files" {...detailSlotProps}>
                             {activeContentId && (
                                 <PendingFileAssociations
                                     contentHierarchyItemId={activeContentId}
@@ -1420,7 +1421,7 @@ export function ContentDetailPage() {
                                         ? (mediaFileIds) => handleRequestRename({ mediaFileIds })
                                         : undefined
                                 }
-                                onRenameAllFiles={canManageContent ? () => handleRequestRename({}) : undefined}
+                                onRenameAllFiles={canRenameAllFiles ? () => handleRequestRename({}) : undefined}
                                 importing={attachFileMutation.isPending}
                                 onUnlinkFile={canManageContent ? handleRequestUnlinkFile : undefined}
                                 onReassignFile={
@@ -1430,7 +1431,7 @@ export function ContentDetailPage() {
                                 onDeleteFile={canManageContent ? handleRequestDeleteFile : undefined}
                                 deletingFileId={isDeletingFile ? (filePendingDelete?.id ?? null) : null}
                             />
-                        </ContentDetailsFilesSlot>
+                        </Slot>
                     </ErrorBoundary>
                 </TabsContent>
 
@@ -1459,7 +1460,11 @@ export function ContentDetailPage() {
                 triggerRef={contentActionsTriggerRef}
                 sheetContent={
                     extensionActions.extensions.length > 0 ? (
-                        <ContentDetailsActionsSlot entityId={activeContentId} entityType={contentSlotEntityType} />
+                        <Slot
+                            slot="content.details.actions"
+                            entityId={activeContentId}
+                            entityType={contentSlotEntityType}
+                        />
                     ) : undefined
                 }
                 data-content-id={activeContentId}
@@ -1513,6 +1518,8 @@ export function ContentDetailPage() {
                         Delete &quot;
                         <span className="content-detail-page__file-confirm-name">{filePendingDelete?.fileName}</span>
                         &quot; from disk? This removes the file from disk and the library. This cannot be undone.
+                        {otherCoveredItems > 0 &&
+                            ` This file also covers ${otherCoveredItems} other ${otherCoveredItems === 1 ? 'item' : 'items'}.`}
                     </>
                 }
                 returnFocusRef={actionReturnFocusRef}

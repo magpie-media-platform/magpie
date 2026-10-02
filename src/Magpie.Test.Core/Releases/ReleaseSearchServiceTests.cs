@@ -2,8 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics.Metrics;
 using System.Linq;
-using System.Net;
 using System.Net.Http;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -14,9 +14,6 @@ using Magpie.Core.Caching;
 using Magpie.Core.Config;
 using Magpie.Core.Observability;
 using Magpie.Core.Releases;
-using Magpie.Extensions.Cardigann;
-using Magpie.Extensions.Cardigann.Engine;
-using Magpie.Extensions.Cardigann.Engine.Session;
 using Magpie.Models;
 using Magpie.Models.Api;
 using Magpie.Models.Arguments;
@@ -33,11 +30,11 @@ using Magpie.Sdk.Jobs;
 using Magpie.Sdk.Releases;
 using Magpie.Sdk.Services;
 
+using Microsoft.AspNetCore.Builder;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
 
 using Moq;
-using Moq.Protected;
 
 using NUnit.Framework;
 
@@ -87,6 +84,14 @@ public sealed class ReleaseSearchServiceTests
     private Guid _connectionId;
     private Guid _userId;
     private List<MagpieEvent> _publishedEvents = null!;
+    private JsonSerializerOptions _bindingOptions = null!;
+
+    [OneTimeSetUp]
+    public void CreateBindingOptions()
+    {
+        _bindingOptions = new JsonSerializerOptions(JsonSerializerOptions.Web);
+        MagpieHostBuilderExtensions.ConfigureApiJsonOptions(_bindingOptions);
+    }
 
     [SetUp]
     public void SetUp()
@@ -102,7 +107,7 @@ public sealed class ReleaseSearchServiceTests
         _downloadRepository = new Mock<IDownloadRepository> { CallBase = true };
         _downloadRepository
             .Setup(repository => repository.ListByReleaseAsync(
-                It.IsAny<IReadOnlyCollection<ReleaseIdentityKey>>(),
+                It.IsAny<IReadOnlyCollection<Release>>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync([]);
         _downloadRepository
@@ -465,7 +470,7 @@ public sealed class ReleaseSearchServiceTests
     }
 
     [Test]
-    public async Task SearchAsync_CompletesAndKeepsOtherResults_WhenACardigannConnectionMeetsTheSolverBackoff()
+    public async Task SearchAsync_CompletesAndKeepsOtherResults_WhenAnIndexerConnectionThrows()
     {
         // Arrange
         var secondIndexerId = Guid.NewGuid();
@@ -476,7 +481,7 @@ public sealed class ReleaseSearchServiceTests
             [
                 new Indexer
                 {
-                    Id = _indexerId, ProviderType = "test-indexer", Name = "Unsolvable", CreatedAt = DateTime.UtcNow,
+                    Id = _indexerId, ProviderType = "test-indexer", Name = "Failing", CreatedAt = DateTime.UtcNow,
                 },
                 new Indexer
                 {
@@ -490,7 +495,7 @@ public sealed class ReleaseSearchServiceTests
             [
                 new IndexerConnection
                 {
-                    Id = _connectionId, IndexerId = _indexerId, Name = "Unsolvable", Enabled = true,
+                    Id = _connectionId, IndexerId = _indexerId, Name = "Failing", Enabled = true,
                     CreatedAt = DateTime.UtcNow,
                 },
                 new IndexerConnection
@@ -499,62 +504,12 @@ public sealed class ReleaseSearchServiceTests
                     CreatedAt = DateTime.UtcNow,
                 },
             ]);
-        var solverCalls = 0;
-        var handler = new Mock<HttpMessageHandler>();
-        handler.Protected().Setup<Task<HttpResponseMessage>>("SendAsync",
-                ItExpr.IsAny<HttpRequestMessage>(), ItExpr.IsAny<CancellationToken>())
-            .ReturnsAsync((HttpRequestMessage request, CancellationToken _) =>
-            {
-                if (request.Method == HttpMethod.Post)
-                {
-                    solverCalls++;
-                    return new HttpResponseMessage(HttpStatusCode.InternalServerError)
-                    {
-                        Content = new StringContent(
-                            """{"status":"error","message":"Error: Error solving the challenge. """ +
-                            """Timeout after 60.0 seconds."}""")
-                    };
-                }
-
-                var challenge = new HttpResponseMessage(HttpStatusCode.Forbidden)
-                {
-                    Content = new StringContent("<html>Just a moment...</html>")
-                };
-                challenge.Headers.TryAddWithoutValidation("CF-RAY", "challenge");
-                return challenge;
-            });
-        var clients = new Mock<IHttpClientFactory>();
-        clients.Setup(factory => factory.CreateClient(It.IsAny<string>()))
-            .Returns(() => new HttpClient(handler.Object, disposeHandler: false));
-        var solverSettings = new SettingsGroup { Name = "magpie.cardigann" };
-        solverSettings.Settings.Add(new Setting { Key = "flareSolverrUrl", Value = "http://solver.test:8191" });
-        var settings = new Mock<ISettingsService>();
-        settings.Setup(service => service.GetExtensionGroupAsync(
-                It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new SettingsGroupDetail { Group = solverSettings });
-        var cooldown = new Mock<IUpstreamCooldown>();
-        cooldown.Setup(value => value.SendAsync(It.IsAny<HttpRequestMessage>(), It.IsAny<string?>(),
-                It.IsAny<Func<CancellationToken, Task<HttpResponseMessage>>>(), It.IsAny<CancellationToken>()))
-            .Returns((HttpRequestMessage _, string? _, Func<CancellationToken, Task<HttpResponseMessage>> send,
-                CancellationToken token) => send(token));
-        var parser = Mock.Of<IResultParser>();
-        var definition = new CardigannDefinition { Id = "test-indexer", Name = "Unsolvable" };
-        definition.Links.Add("https://tracker.test/");
-        definition.Search.Paths.Add(new SearchPath { Path = "/search" });
-        var cardigann = new CardigannIndexerIntegration(_indexerId, definition, parser,
-            new CardigannSessionManager(clients.Object, parser,
-                new FlareSolverrClient(clients.Object, settings.Object, _cacheFactory,
-                    NullLogger<FlareSolverrClient>.Instance, cooldown.Object, new SolverQueue(),
-                    TimeProvider.System),
-                new CardigannSessionState(), TimeProvider.System, NullLogger<CardigannSessionManager>.Instance),
-            NullLogger<CardigannIndexerIntegration>.Instance);
         _indexerIntegration
             .Setup(integration => integration.SearchAsync(
                 It.IsAny<ReleaseSearchRequest>(),
                 It.IsAny<IReadOnlyDictionary<string, string>>(),
                 It.IsAny<CancellationToken>()))
-            .Returns((ReleaseSearchRequest request, IReadOnlyDictionary<string, string> connectionSettings,
-                CancellationToken token) => cardigann.SearchAsync(request, connectionSettings, token));
+            .ThrowsAsync(new HttpRequestException("Indexer search failed."));
         _secondIndexerIntegration
             .Setup(integration => integration.SearchAsync(
                 It.IsAny<ReleaseSearchRequest>(),
@@ -573,26 +528,28 @@ public sealed class ReleaseSearchServiceTests
             .ConfigureAwait(false);
 
         // Assert
-        Assert.That(solverCalls, Is.EqualTo(1));
-        _contentRepository.Verify(
-            repository => repository.UpdateAsync(
-                It.Is<ContentItem>(content => content.Id == _contentItemId && content.DateLastSearched != default),
-                _userId,
-                It.IsAny<CancellationToken>()),
-            Times.Once);
-        _releaseRepository.Verify(
-            repository => repository.CreateAsync(
-                It.Is<Release>(release => release.ExternalId == "healthy"),
-                It.IsAny<Guid?>(),
-                It.IsAny<CancellationToken>()),
-            Times.Once);
-        _indexerConnections.Verify(
-            repository => repository.PatchAsync(
-                It.Is<IndexerConnectionPatch>(patch => patch.Id == _connectionId &&
-                    patch.Status!.Value == IntegrationHealthStatus.Degraded),
-                It.IsAny<Guid?>(),
-                It.IsAny<CancellationToken>()),
-            Times.Once);
+        using (Assert.EnterMultipleScope())
+        {
+            _contentRepository.Verify(
+                repository => repository.UpdateAsync(
+                    It.Is<ContentItem>(content => content.Id == _contentItemId && content.DateLastSearched != default),
+                    _userId,
+                    It.IsAny<CancellationToken>()),
+                Times.Once);
+            _releaseRepository.Verify(
+                repository => repository.CreateAsync(
+                    It.Is<Release>(release => release.ExternalId == "healthy"),
+                    It.IsAny<Guid?>(),
+                    It.IsAny<CancellationToken>()),
+                Times.Once);
+            _indexerConnections.Verify(
+                repository => repository.PatchAsync(
+                    It.Is<IndexerConnectionPatch>(patch => patch.Id == _connectionId &&
+                        patch.Status!.Value == IntegrationHealthStatus.Degraded),
+                    It.IsAny<Guid?>(),
+                    It.IsAny<CancellationToken>()),
+                Times.Once);
+        }
     }
 
     [Test]
@@ -741,6 +698,61 @@ public sealed class ReleaseSearchServiceTests
                 It.IsAny<IReadOnlyDictionary<string, string>>(),
                 It.IsAny<CancellationToken>()),
             Times.Exactly(2));
+    }
+
+    [Test]
+    public async Task SearchAsync_RequestsTheIndexer_WhenAForcedSearchTargetsContentThatIsNotPublishedYet()
+    {
+        // Arrange
+        _metadataContribution.PublishDate = DateTime.UtcNow.AddYears(1);
+        _indexers
+            .Setup(repository => repository.ListAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(
+            [
+                new Indexer
+                {
+                    Id = _indexerId,
+                    ProviderType = "test-indexer",
+                    Name = "Test Indexer",
+                    CreatedAt = DateTime.UtcNow,
+                },
+            ]);
+        _indexerConnections
+            .Setup(repository => repository.ListAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(
+            [
+                new IndexerConnection
+                {
+                    Id = _connectionId,
+                    IndexerId = _indexerId,
+                    Name = "Test Connection",
+                    Enabled = true,
+                    CreatedAt = DateTime.UtcNow,
+                },
+            ]);
+        _indexerIntegration
+            .Setup(integration => integration.SearchAsync(
+                It.IsAny<ReleaseSearchRequest>(),
+                It.IsAny<IReadOnlyDictionary<string, string>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
+
+        // Act
+        await _subject.SearchAsync(
+            _contentHierarchyItemId,
+            _userId,
+            correlationId: null,
+            currentExecutionId: null,
+            progress: null,
+            force: true).ConfigureAwait(false);
+
+        // Assert
+        _indexerIntegration.Verify(
+            integration => integration.SearchAsync(
+                It.IsAny<ReleaseSearchRequest>(),
+                It.IsAny<IReadOnlyDictionary<string, string>>(),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
     }
 
     [NonParallelizable]
@@ -934,19 +946,22 @@ public sealed class ReleaseSearchServiceTests
             progress: null).ConfigureAwait(false);
 
         // Assert
-        _releaseRepository.Verify(
-            repository => repository.CreateAsync(
-                It.IsAny<Release>(),
-                It.IsAny<Guid?>(),
-                It.IsAny<CancellationToken>()),
-            Times.Exactly(expectedCreates));
-        _releaseEvaluationService.Verify(
-            service => service.ResolveScopeAsync(
-                It.IsAny<Release>(),
-                It.Is<IReadOnlyList<ContentFact>>(facts => facts.Count == 1 && facts[0].Value == "Pilot"),
-                _contentHierarchyItemId,
-                It.IsAny<CancellationToken>()),
-            Times.Exactly(expectedCreates));
+        using (Assert.EnterMultipleScope())
+        {
+            _releaseRepository.Verify(
+                repository => repository.CreateAsync(
+                    It.IsAny<Release>(),
+                    It.IsAny<Guid?>(),
+                    It.IsAny<CancellationToken>()),
+                Times.Exactly(expectedCreates));
+            _releaseEvaluationService.Verify(
+                service => service.ResolveScopeAsync(
+                    It.IsAny<Release>(),
+                    It.Is<IReadOnlyList<ContentFact>>(facts => facts.Count == 1 && facts[0].Value == "Pilot"),
+                    _contentHierarchyItemId,
+                    It.IsAny<CancellationToken>()),
+                Times.Exactly(expectedCreates));
+        }
     }
 
     [Test]
@@ -1023,14 +1038,17 @@ public sealed class ReleaseSearchServiceTests
             progress: null).ConfigureAwait(false);
 
         // Assert
-        _releaseRepository.Verify(repository => repository.UpdateAsync(
-            It.IsAny<Release>(),
-            _userId,
-            It.IsAny<CancellationToken>()), Times.Exactly(2));
-        _releaseRepository.Verify(repository => repository.CreateAsync(
-            It.IsAny<Release>(),
-            _userId,
-            It.IsAny<CancellationToken>()), Times.Once);
+        using (Assert.EnterMultipleScope())
+        {
+            _releaseRepository.Verify(repository => repository.UpdateAsync(
+                It.IsAny<Release>(),
+                _userId,
+                It.IsAny<CancellationToken>()), Times.Exactly(2));
+            _releaseRepository.Verify(repository => repository.CreateAsync(
+                It.IsAny<Release>(),
+                _userId,
+                It.IsAny<CancellationToken>()), Times.Once);
+        }
     }
 
     [TestCase("weak", "strong", "strong")]
@@ -1132,26 +1150,29 @@ public sealed class ReleaseSearchServiceTests
             progress: null).ConfigureAwait(false);
 
         // Assert
-        _releaseRepository.Verify(
-            repository => repository.CreateAsync(
-                It.IsAny<Release>(),
-                It.IsAny<Guid?>(),
-                It.IsAny<CancellationToken>()),
-            Times.Once);
-        _releaseEvaluationService.Verify(
-            service => service.ResolveScopeAsync(
-                It.IsAny<Release>(),
-                It.Is<IReadOnlyList<ContentFact>>(facts =>
-                    facts.Select(fact => fact.Value).SequenceEqual(new[] { firstTerm, secondTerm })),
-                _contentHierarchyItemId,
-                It.IsAny<CancellationToken>()),
-            Times.Once);
-        _releaseEvaluationService.Verify(
-            service => service.AssessMatch(
-                It.IsAny<Release>(),
-                It.IsAny<IReadOnlyList<ContentFact>>(),
-                It.IsAny<ReleaseEvaluationContext>()),
-            Times.Once);
+        using (Assert.EnterMultipleScope())
+        {
+            _releaseRepository.Verify(
+                repository => repository.CreateAsync(
+                    It.IsAny<Release>(),
+                    It.IsAny<Guid?>(),
+                    It.IsAny<CancellationToken>()),
+                Times.Once);
+            _releaseEvaluationService.Verify(
+                service => service.ResolveScopeAsync(
+                    It.IsAny<Release>(),
+                    It.Is<IReadOnlyList<ContentFact>>(facts =>
+                        facts.Select(fact => fact.Value).SequenceEqual(new[] { firstTerm, secondTerm })),
+                    _contentHierarchyItemId,
+                    It.IsAny<CancellationToken>()),
+                Times.Once);
+            _releaseEvaluationService.Verify(
+                service => service.AssessMatch(
+                    It.IsAny<Release>(),
+                    It.IsAny<IReadOnlyList<ContentFact>>(),
+                    It.IsAny<ReleaseEvaluationContext>()),
+                Times.Once);
+        }
     }
 
     [TestCase(true)]
@@ -2841,9 +2862,15 @@ public sealed class ReleaseSearchServiceTests
     }
 
     [Test]
-    public async Task SearchInteractiveAsync_MarksEarlierDownloads_WhenReleasesWereImportedOrFailed()
+    public async Task SearchInteractiveAsync_ShowsTheReleaseListStatus_WhenStoredReleasesHaveDownloads()
     {
         // Arrange
+        var otherIndexerId = Guid.NewGuid();
+        var otherItemId = Guid.NewGuid();
+        var downloadingReleaseId = Guid.NewGuid();
+        var failedElsewhereReleaseId = Guid.NewGuid();
+        var importedElsewhereReleaseId = Guid.NewGuid();
+        var otherIndexerReleaseId = Guid.NewGuid();
         _indexers
             .Setup(repository => repository.ListAllAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(
@@ -2881,49 +2908,164 @@ public sealed class ReleaseSearchServiceTests
                 {
                     Protocol = "torrent",
                     Title = "Pilot.1080p.WEB-GRP",
-                    ExternalId = "imported-release",
+                    ExternalId = "downloading-release",
                     PublishDate = DateTime.UtcNow,
-                    IdentityKeys = { new ReleaseIdentityKey { Authority = "btih", Value = "imported-key" } },
+                    IdentityKeys = { new ReleaseIdentityKey { Authority = "btih", Value = "downloading-key" } },
                 },
                 new Release
                 {
                     Protocol = "torrent",
                     Title = "Pilot.720p.WEB-GRP",
-                    ExternalId = "failed-release",
+                    ExternalId = "failed-elsewhere-release",
                     PublishDate = DateTime.UtcNow,
                     IdentityKeys = { new ReleaseIdentityKey { Authority = "btih", Value = "failed-key" } },
                 },
                 new Release
                 {
                     Protocol = "torrent",
+                    Title = "Pilot.480p.WEB-GRP",
+                    ExternalId = "imported-elsewhere-release",
+                    PublishDate = DateTime.UtcNow,
+                    IdentityKeys = { new ReleaseIdentityKey { Authority = "btih", Value = "imported-key" } },
+                },
+                new Release
+                {
+                    Protocol = "torrent",
                     Title = "Pilot.2160p.WEB-GRP",
+                    ExternalId = "other-indexer-release",
+                    PublishDate = DateTime.UtcNow,
+                    IdentityKeys = { new ReleaseIdentityKey { Authority = "btih", Value = "shared-key" } },
+                },
+                new Release
+                {
+                    Protocol = "torrent",
+                    Title = "Pilot.1080p.BluRay-GRP",
                     ExternalId = "new-release",
                     PublishDate = DateTime.UtcNow,
                     IdentityKeys = { new ReleaseIdentityKey { Authority = "btih", Value = "new-key" } },
                 },
             ]);
-        _downloadRepository
-            .Setup(repository => repository.ListByReleaseAsync(
-                It.IsAny<IReadOnlyCollection<ReleaseIdentityKey>>(),
+        _releaseRepository
+            .Setup(repository => repository.QueryAsync(
+                It.Is<ReleaseQuery>(query =>
+                    query.IncludeUnmatched &&
+                    query.ContentHierarchyItemIds != null &&
+                    query.ContentHierarchyItemIds.Contains(_contentHierarchyItemId)),
+                It.IsAny<PagingParameter>(),
+                It.IsAny<SortParameter?>(),
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(
-            [
-                new Download
-                {
-                    ExternalId = "imported",
-                    Title = "earlier import",
-                    Status = DownloadStatus.Imported,
-                    ReleaseIdentityKeys = { new ReleaseIdentityKey { Authority = "btih", Value = "imported-key" } },
-                },
-                new Download
-                {
-                    ExternalId = "failed",
-                    Title = "earlier failure",
-                    Status = DownloadStatus.Failed,
-                    FailureReason = DownloadFailureReason.NoUsableContent,
-                    ReleaseIdentityKeys = { new ReleaseIdentityKey { Authority = "btih", Value = "failed-key" } },
-                },
-            ]);
+            .ReturnsAsync(new PagedList<Release>
+            {
+                Items =
+                [
+                    new Release
+                    {
+                        Id = downloadingReleaseId,
+                        IndexerId = _indexerId,
+                        Protocol = "torrent",
+                        Title = "Pilot.1080p.WEB-GRP",
+                        ExternalId = "downloading-release",
+                        IdentityKeys = { new ReleaseIdentityKey { Authority = "btih", Value = "downloading-key" } },
+                    },
+                    new Release
+                    {
+                        Id = failedElsewhereReleaseId,
+                        IndexerId = _indexerId,
+                        Protocol = "torrent",
+                        Title = "Pilot.720p.WEB-GRP",
+                        ExternalId = "failed-elsewhere-release",
+                        IdentityKeys = { new ReleaseIdentityKey { Authority = "btih", Value = "failed-key" } },
+                    },
+                    new Release
+                    {
+                        Id = importedElsewhereReleaseId,
+                        IndexerId = _indexerId,
+                        Protocol = "torrent",
+                        Title = "Pilot.480p.WEB-GRP",
+                        ExternalId = "imported-elsewhere-release",
+                        IdentityKeys = { new ReleaseIdentityKey { Authority = "btih", Value = "imported-key" } },
+                    },
+                    new Release
+                    {
+                        Id = otherIndexerReleaseId,
+                        IndexerId = otherIndexerId,
+                        Protocol = "torrent",
+                        Title = "Pilot.2160p.WEB-GRP",
+                        ExternalId = "copy-on-another-indexer",
+                        IdentityKeys = { new ReleaseIdentityKey { Authority = "btih", Value = "shared-key" } },
+                    },
+                ],
+            });
+        _downloadRepository
+            .Setup(repository => repository.QueryAsync(
+                It.Is<DownloadQuery>(query =>
+                    query.ContentHierarchyItemIds != null &&
+                    query.ContentHierarchyItemIds.Contains(_contentHierarchyItemId)),
+                It.IsAny<PagingParameter>(),
+                It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<Download>
+            {
+                Items =
+                [
+                    new Download
+                    {
+                        ReleaseId = downloadingReleaseId,
+                        ExternalId = "regrab",
+                        Title = "Pilot.1080p.WEB-GRP",
+                        Status = DownloadStatus.Downloading,
+                        CreatedAt = new DateTime(2026, 9, 28, 11, 0, 0, DateTimeKind.Utc),
+                    },
+                    new Download
+                    {
+                        ReleaseId = downloadingReleaseId,
+                        ExternalId = "stuck",
+                        Title = "Pilot.1080p.WEB-GRP",
+                        Status = DownloadStatus.Faulted,
+                        FailureReason = DownloadFailureReason.DownloadStuck,
+                        CreatedAt = new DateTime(2026, 9, 28, 10, 0, 0, DateTimeKind.Utc),
+                    },
+                    new Download
+                    {
+                        ReleaseId = otherIndexerReleaseId,
+                        ExternalId = "importing",
+                        Title = "Pilot.2160p.WEB-GRP",
+                        Status = DownloadStatus.Importing,
+                        CreatedAt = new DateTime(2026, 9, 28, 9, 0, 0, DateTimeKind.Utc),
+                    },
+                ],
+            });
+        _downloadRepository
+            .Setup(repository => repository.QueryAsync(
+                It.Is<DownloadQuery>(query => query.ReleaseIds != null),
+                It.IsAny<PagingParameter>(),
+                It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<Download>
+            {
+                Items =
+                [
+                    new Download
+                    {
+                        ReleaseId = failedElsewhereReleaseId,
+                        ExternalId = "failed",
+                        Title = "Pilot.720p.WEB-GRP",
+                        Status = DownloadStatus.Failed,
+                        FailureReason = DownloadFailureReason.NoUsableContent,
+                        CreatedAt = new DateTime(2026, 9, 27, 8, 0, 0, DateTimeKind.Utc),
+                        Scope = { new DownloadScope { ContentHierarchyItemId = otherItemId } },
+                    },
+                    new Download
+                    {
+                        ReleaseId = importedElsewhereReleaseId,
+                        ExternalId = "imported",
+                        Title = "Pilot.480p.WEB-GRP",
+                        Status = DownloadStatus.Imported,
+                        CreatedAt = new DateTime(2026, 9, 27, 8, 0, 0, DateTimeKind.Utc),
+                        Scope = { new DownloadScope { ContentHierarchyItemId = otherItemId } },
+                    },
+                ],
+            });
 
         // Act
         var candidates = await _subject.SearchInteractiveAsync(_contentHierarchyItemId).ConfigureAwait(false);
@@ -2934,15 +3076,21 @@ public sealed class ReleaseSearchServiceTests
             candidate => (candidate.AcquisitionStatus, candidate.FailureReason));
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(statuses, Has.Count.EqualTo(3));
+            Assert.That(statuses, Has.Count.EqualTo(5));
             Assert.That(
-                statuses["imported-release"],
-                Is.EqualTo(((DownloadStatus?)DownloadStatus.Imported, (DownloadFailureReason?)null)));
+                statuses["downloading-release"],
+                Is.EqualTo(((DownloadStatus?)DownloadStatus.Downloading, (DownloadFailureReason?)null)));
             Assert.That(
-                statuses["failed-release"],
+                statuses["failed-elsewhere-release"],
                 Is.EqualTo((
                     (DownloadStatus?)DownloadStatus.Failed,
                     (DownloadFailureReason?)DownloadFailureReason.NoUsableContent)));
+            Assert.That(
+                statuses["imported-elsewhere-release"],
+                Is.EqualTo(((DownloadStatus?)null, (DownloadFailureReason?)null)));
+            Assert.That(
+                statuses["other-indexer-release"],
+                Is.EqualTo(((DownloadStatus?)DownloadStatus.Importing, (DownloadFailureReason?)null)));
             Assert.That(statuses["new-release"], Is.EqualTo(((DownloadStatus?)null, (DownloadFailureReason?)null)));
         }
     }
@@ -3818,7 +3966,7 @@ public sealed class ReleaseSearchServiceTests
             .ReturnsAsync(new PagedList<Release> { Items = [release], TotalItems = 1 });
         _downloadRepository
             .Setup(repository => repository.ListByReleaseAsync(
-                It.IsAny<IReadOnlyCollection<ReleaseIdentityKey>>(),
+                It.IsAny<IReadOnlyCollection<Release>>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(
             [
@@ -5944,6 +6092,168 @@ public sealed class ReleaseSearchServiceTests
         }
     }
 
+    [TestCase("The work is incomplete while its upstream is throttled.", true, false, 0)]
+    [TestCase("The work is incomplete while its upstream is throttled.", false, false, 1)]
+    [TestCase("The work is incomplete while its upstream is throttled.", true, true, 0)]
+    [TestCase("The search will save the results.", true, false, 1)]
+    [TestCase(null, true, false, 1)]
+    [TestCase(null, true, true, 1)]
+    public void SearchAsync_PublishesReleaseMatchedUnlessAResumedPassMeetsAnExistingScope_WhenAnIndexerThrottles(
+        string? statusMessage,
+        bool scoped,
+        bool force,
+        int expectedMatchedCount)
+    {
+        // Arrange
+        var executionId = new Guid("16ff318a-6cb0-48df-9dd2-8d69171be1eb");
+        var execution = new JobExecution
+        {
+            Id = executionId,
+            JobType = "ReleaseSearchItem",
+            Status = JobExecutionStatus.Running,
+            StatusMessage = statusMessage,
+        };
+        _jobExecutions
+            .Setup(repository => repository.GetByIdAsync(executionId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(execution);
+        var progress = new Mock<IProgressReporter>();
+        progress
+            .Setup(reporter => reporter.Report(It.IsAny<double?>(), It.IsAny<string?>()))
+            .Callback((double? _, string? message) => execution.StatusMessage = message);
+        _indexers.Setup(repository => repository.ListAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync([new Indexer { Id = _indexerId, ProviderType = "test-indexer", Name = "Test Indexer" }]);
+        _indexerConnections.Setup(repository => repository.ListAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync([
+                new IndexerConnection
+                {
+                    Id = _connectionId,
+                    IndexerId = _indexerId,
+                    Name = "Throttled",
+                    Enabled = true,
+                    Settings = new() { ["throttled"] = "true" },
+                },
+                new IndexerConnection
+                {
+                    Id = new Guid("ae6d6e56-c33b-4326-9088-c33f03b7c41a"),
+                    IndexerId = _indexerId,
+                    Name = "Healthy",
+                    Enabled = true,
+                },
+            ]);
+        _indexerIntegration
+            .Setup(integration => integration.SearchAsync(
+                It.IsAny<ReleaseSearchRequest>(),
+                It.Is<IReadOnlyDictionary<string, string>>(settings => settings.ContainsKey("throttled")),
+                It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new UpstreamThrottledException(new DateTimeOffset(2027, 1, 1, 0, 0, 0, TimeSpan.Zero)));
+        _indexerIntegration
+            .Setup(integration => integration.SearchAsync(
+                It.IsAny<ReleaseSearchRequest>(),
+                It.Is<IReadOnlyDictionary<string, string>>(settings => !settings.ContainsKey("throttled")),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync([new Release { Title = "Pilot healthy", Protocol = "torrent", ExternalId = "healthy" }]);
+        _releaseScopeRepository
+            .Setup(repository => repository.QueryAsync(
+                It.Is<ReleaseScopeQuery>(query => query.ReleaseId != null),
+                It.IsAny<PagingParameter>(),
+                It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<ReleaseScope>
+            {
+                Items = scoped
+                    ?
+                    [
+                        new ReleaseScope
+                        {
+                            Id = new Guid("715274d0-e7f1-4edb-83be-0c2045a479ad"),
+                            ContentHierarchyItemId = _contentHierarchyItemId,
+                            Status = ReleaseScopeStatus.Matched,
+                        },
+                    ]
+                    : [],
+            });
+
+        // Act
+        async Task Act() => await _subject
+            .SearchAsync(
+                _contentHierarchyItemId,
+                _userId,
+                correlationId: null,
+                executionId,
+                progress.Object,
+                force)
+            .ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.ThrowsAsync<UpstreamThrottledException>(Act);
+            Assert.That(
+                _publishedEvents.Count(published => published.Name == "release.matched"),
+                Is.EqualTo(expectedMatchedCount));
+        }
+    }
+
+    [Test]
+    public void SearchAsync_PublishesReleaseMatchedWithoutMarkingSearched_WhenAThrottledPassHasNoSuccessfulConnection()
+    {
+        // Arrange
+        _indexers.Setup(repository => repository.ListAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync([new Indexer { Id = _indexerId, ProviderType = "test-indexer", Name = "Test Indexer" }]);
+        _indexerConnections.Setup(repository => repository.ListAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync([
+                new IndexerConnection
+                {
+                    Id = _connectionId,
+                    IndexerId = _indexerId,
+                    Name = "Test Connection",
+                    Enabled = true,
+                },
+            ]);
+        _contentFactProvider
+            .Setup(value => value.GetFactsAsync(
+                It.IsAny<ContentTarget>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync([[new ContentFact { Value = "Pilot" }], [new ContentFact { Value = "Alternate Pilot" }]]);
+        _indexerIntegration
+            .Setup(integration => integration.SearchAsync(
+                It.Is<ReleaseSearchRequest>(request => request.Title == "Pilot"),
+                It.IsAny<IReadOnlyDictionary<string, string>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync([new Release { Title = "Pilot", Protocol = "torrent", ExternalId = "pilot" }]);
+        _indexerIntegration
+            .Setup(integration => integration.SearchAsync(
+                It.Is<ReleaseSearchRequest>(request => request.Title == "Alternate Pilot"),
+                It.IsAny<IReadOnlyDictionary<string, string>>(),
+                It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new UpstreamThrottledException(new DateTimeOffset(2027, 1, 1, 0, 0, 0, TimeSpan.Zero)));
+
+        // Act
+        async Task Act() => await _subject
+            .SearchAsync(
+                _contentHierarchyItemId,
+                _userId,
+                correlationId: null,
+                currentExecutionId: null,
+                progress: null)
+            .ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.ThrowsAsync<UpstreamThrottledException>(Act);
+            Assert.That(
+                _publishedEvents.Count(published => published.Name == "release.matched"),
+                Is.EqualTo(1));
+            _contentRepository.Verify(
+                repository => repository.UpdateAsync(
+                    It.IsAny<ContentItem>(),
+                    It.IsAny<Guid?>(),
+                    It.IsAny<CancellationToken>()),
+                Times.Never);
+        }
+    }
+
     [Test]
     public async Task SearchAsync_EnqueuesNoAutoGrab_WhenAPackCoversMoreThanTheSearchedItem()
     {
@@ -6186,6 +6496,120 @@ public sealed class ReleaseSearchServiceTests
     }
 
     [Test]
+    public async Task GrabInteractiveAsync_StoresTheIdentityKeysOfThePostedRelease_WhenTheBodyCarriesThem()
+    {
+        // Arrange
+        var body = """
+            {"title":"Pilot","protocol":"torrent",
+            "identityKeys":[{"authority":"btih","value":"0123456789abcdef0123456789abcdef01234567","ordinal":0}]}
+            """;
+        var release = JsonSerializer.Deserialize<Release>(body, _bindingOptions)!;
+        _hierarchyItem.EffectiveQualityTierListId = Guid.NewGuid();
+        _hierarchyItem.ContentItem = new ContentItem { Id = _contentItemId };
+        _downloadClients
+            .Setup(r => r.ListAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(
+            [
+                new DownloadClient { Id = Guid.NewGuid(), Name = "Client", ProviderType = "test", Enabled = true }
+            ]);
+        _releaseRepository
+            .Setup(r => r.UpdateAsync(It.IsAny<Release>(), _userId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        _jobManager
+            .Setup(m => m.ExecuteAsync(It.IsAny<JobEnqueueRequest>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Guid.NewGuid());
+
+        // Act
+        await _subject.GrabInteractiveAsync(_contentHierarchyItemId, release, _userId).ConfigureAwait(false);
+
+        // Assert
+        _releaseRepository.Verify(
+            r => r.UpdateAsync(
+                It.Is<Release>(stored => stored.IdentityKeys.Any(key =>
+                    key.Authority == "btih" && key.Value == "0123456789abcdef0123456789abcdef01234567")),
+                _userId,
+                It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Test]
+    public async Task GrabInteractiveAsync_StoresNoIdentityKeysOrExternalIds_WhenTheBodyPostsThemAsNull()
+    {
+        // Arrange
+        var body = """{"title":"Pilot","protocol":"torrent","identityKeys":null,"externalIds":null}""";
+        var release = JsonSerializer.Deserialize<Release>(body, _bindingOptions)!;
+        _hierarchyItem.EffectiveQualityTierListId = Guid.NewGuid();
+        _hierarchyItem.ContentItem = new ContentItem { Id = _contentItemId };
+        _downloadClients
+            .Setup(r => r.ListAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(
+            [
+                new DownloadClient { Id = Guid.NewGuid(), Name = "Client", ProviderType = "test", Enabled = true }
+            ]);
+        _releaseRepository
+            .Setup(r => r.UpdateAsync(It.IsAny<Release>(), _userId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        _jobManager
+            .Setup(m => m.ExecuteAsync(It.IsAny<JobEnqueueRequest>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Guid.NewGuid());
+
+        // Act
+        await _subject.GrabInteractiveAsync(_contentHierarchyItemId, release, _userId).ConfigureAwait(false);
+
+        // Assert
+        _releaseRepository.Verify(
+            r => r.UpdateAsync(
+                It.Is<Release>(stored => stored.IdentityKeys.Count == 0 && stored.ExternalIds.Count == 0),
+                _userId,
+                It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Test]
+    public async Task GrabInteractiveAsync_KeepsTheExternalIdsButNotTheSourcesOrRelations_WhenTheBodyCarriesThem()
+    {
+        // Arrange
+        var body = """
+            {"title":"Pilot","protocol":"torrent",
+            "externalIds":[{"source":"imdb","value":"tt0000001","ordinal":0}],
+            "sources":[{"key":"","protocol":"torrent","title":"Pilot","externalId":"indexer-release-1"}],
+            "downloads":[{"title":"Injected","externalId":"injected"}],
+            "scope":[{"releaseId":"00000000-0000-0000-0000-000000000000",
+            "contentHierarchyItemId":"7b1e4c2a-3f5d-4e6b-8a9c-0d1e2f3a4b5c"}]}
+            """;
+        var release = JsonSerializer.Deserialize<Release>(body, _bindingOptions)!;
+        _hierarchyItem.EffectiveQualityTierListId = Guid.NewGuid();
+        _hierarchyItem.ContentItem = new ContentItem { Id = _contentItemId };
+        _downloadClients
+            .Setup(r => r.ListAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(
+            [
+                new DownloadClient { Id = Guid.NewGuid(), Name = "Client", ProviderType = "test", Enabled = true }
+            ]);
+        _releaseRepository
+            .Setup(r => r.UpdateAsync(It.IsAny<Release>(), _userId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        _jobManager
+            .Setup(m => m.ExecuteAsync(It.IsAny<JobEnqueueRequest>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Guid.NewGuid());
+
+        // Act
+        await _subject.GrabInteractiveAsync(_contentHierarchyItemId, release, _userId).ConfigureAwait(false);
+
+        // Assert
+        _releaseRepository.Verify(
+            r => r.UpdateAsync(
+                It.Is<Release>(stored =>
+                    stored.ExternalIds.Any(id => id.Source == "imdb" && id.Value == "tt0000001") &&
+                    stored.Sources.Count == 0 &&
+                    stored.Downloads.Count == 0 &&
+                    stored.Scope.Count == 0),
+                _userId,
+                It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Test]
     public async Task GrabInteractiveAsync_QueuesReleaseDownloadItem_WhenNoDownloadIsActive()
     {
         // Arrange
@@ -6329,7 +6753,7 @@ public sealed class ReleaseSearchServiceTests
 
     [TestCase(false, 0)]
     [TestCase(true, 2)]
-    public async Task SearchAsync_SearchesAnItemWithAPendingImport_OnlyWhenTheUserForcesTheSearch(
+    public async Task SearchAsync_SearchesAnItemWithAPendingImport_WhenTheUserForcesTheSearch(
         bool force, int expectedIndexerQueries)
     {
         // Arrange
@@ -6386,7 +6810,7 @@ public sealed class ReleaseSearchServiceTests
     [TestCase(FulfillmentStatus.Missing, false, false, false, false)]
     [TestCase(FulfillmentStatus.Fulfilled, true, false, true, false)]
     [TestCase(FulfillmentStatus.Fulfilled, true, true, true, null)]
-    public async Task SearchAsync_IgnoresAnImportPendingLeafForEscalation_WhetherOrNotItWasSearchedBefore(
+    public async Task SearchAsync_IgnoresAnImportPendingLeafForEscalation_WhenTheLeafWasSearchedBeforeOrNot(
         FulfillmentStatus otherLeafFulfillment,
         bool pendingLeafSearchedBefore,
         bool force,
@@ -6491,7 +6915,7 @@ public sealed class ReleaseSearchServiceTests
 
     [TestCase(false, 0)]
     [TestCase(true, 1)]
-    public async Task SearchAsync_QueuesASeasonWhoseOnlyMissingLeafIsImportPending_OnlyWhenTheSearchIsForced(
+    public async Task SearchAsync_QueuesASeasonWhoseOnlyMissingLeafIsImportPending_WhenTheSearchIsForced(
         bool force, int expectedSeasonSearches)
     {
         // Arrange

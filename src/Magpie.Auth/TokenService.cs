@@ -59,9 +59,7 @@ internal sealed class TokenService(
         return Convert.ToBase64String(SHA256.HashData(Encoding.UTF8.GetBytes(token)));
     }
 
-    public async Task<IssuedAccessToken> GenerateAccessTokenAsync(
-        User user,
-        CancellationToken cancellationToken)
+    public async Task<IssuedAccessToken> GenerateAccessTokenAsync(User user, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(user);
 
@@ -123,25 +121,6 @@ internal sealed class TokenService(
 
         Telemetry.TokensIssued.Add(1, new KeyValuePair<string, object?>("kind", "refresh"));
         return new IssuedToken(token, expiresAt);
-    }
-
-    public async Task<Guid?> TryValidateRefreshTokenAsync(string refreshToken, CancellationToken cancellationToken)
-    {
-        var tokenHash = ComputeHash(refreshToken);
-        var storedToken = await refreshTokenRepository.GetByHashAsync(tokenHash, cancellationToken)
-            .ConfigureAwait(false);
-
-        if (storedToken is null)
-        {
-            return null;
-        }
-
-        if (storedToken.ExpiresAt <= timeProvider.GetUtcNow().UtcDateTime)
-        {
-            return null;
-        }
-
-        return storedToken.UserId;
     }
 
     public async Task<Guid?> TryConsumeRefreshTokenAsync(string refreshToken, CancellationToken cancellationToken)

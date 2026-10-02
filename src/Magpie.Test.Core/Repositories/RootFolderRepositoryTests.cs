@@ -80,11 +80,10 @@ public sealed class RootFolderRepositoryTests
         _userId = user.Id;
         _contentType = "type-a";
 
-        var loggerFactory = NullLoggerFactory.Instance;
         var auditRecordRepository = new AuditRecordRepository(
             _context,
             Mock.Of<IEventBus>(),
-            loggerFactory.CreateLogger<AuditRecordRepository>(),
+            NullLogger<AuditRecordRepository>.Instance,
             new TransactionManager(_context, NullLogger<TransactionManager>.Instance),
             Mock.Of<IJobExecutionScopeFactory>(),
             timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
@@ -104,14 +103,13 @@ public sealed class RootFolderRepositoryTests
             transactionManager,
             _contentHierarchyItems.Object,
             events.Object,
-            loggerFactory.CreateLogger<RootFolderRepository>(),
+            NullLogger<RootFolderRepository>.Instance,
             timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
     }
 
     [TearDown]
     public void TearDown()
     {
-        _context.Database.CloseConnection();
         _context.Dispose();
     }
 
@@ -281,7 +279,7 @@ public sealed class RootFolderRepositoryTests
             Path = "/media/movies",
             ContentType = _contentType,
             ImportMode = ImportMode.Move,
-            DefaultMonitoring = true,
+            DefaultMonitoring = MonitoringMode.Monitored,
             RenameTemplate = null,
             DefaultImportCollisionMode = ImportCollisionMode.Fail,
             CreatedAt = DateTime.UtcNow,
@@ -686,11 +684,10 @@ public sealed class RootFolderRepositoryTests
     public async Task CreateAsync_ThrowsAfterCommittedWrite_WhenEventPublishFails()
     {
         // Arrange
-        var loggerFactory = NullLoggerFactory.Instance;
         var auditRecordRepository = new AuditRecordRepository(
             _context,
             Mock.Of<IEventBus>(),
-            loggerFactory.CreateLogger<AuditRecordRepository>(),
+            NullLogger<AuditRecordRepository>.Instance,
             new TransactionManager(_context, NullLogger<TransactionManager>.Instance),
             Mock.Of<IJobExecutionScopeFactory>(),
             timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
@@ -705,7 +702,7 @@ public sealed class RootFolderRepositoryTests
             transactionManager,
             Mock.Of<IContentHierarchyItemRepository>(),
             failing.Object,
-            loggerFactory.CreateLogger<RootFolderRepository>(),
+            NullLogger<RootFolderRepository>.Instance,
             timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
         var model = new RootFolder
         {
@@ -985,7 +982,7 @@ public sealed class RootFolderRepositoryTests
             Path = "/library/books",
             ContentType = _contentType,
             IsDefault = true,
-            DefaultMonitoring = true,
+            DefaultMonitoring = MonitoringMode.Monitored,
             RenameTemplate = "{Title}.{Ext}",
             UpgradeFileHandling = UpgradeFileHandling.KeepBoth,
             CreatedAt = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc),
@@ -1023,7 +1020,7 @@ public sealed class RootFolderRepositoryTests
             Assert.That(stored.Path, Is.EqualTo("/library/books"));
             Assert.That(stored.ContentType, Is.EqualTo(_contentType));
             Assert.That(stored.IsDefault, Is.True);
-            Assert.That(stored.DefaultMonitoring, Is.True);
+            Assert.That(stored.DefaultMonitoring, Is.EqualTo(MonitoringMode.Monitored));
             Assert.That(stored.RenameTemplate, Is.EqualTo("{Title}.{Ext}"));
             Assert.That(stored.UpgradeFileHandling, Is.EqualTo(UpgradeFileHandling.KeepBoth));
             Assert.That(stored.Defaults["book"].QualityTierListId, Is.EqualTo(tierList.Id));

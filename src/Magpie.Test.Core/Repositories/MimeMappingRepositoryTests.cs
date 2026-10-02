@@ -74,7 +74,6 @@ public sealed class MimeMappingRepositoryTests
     [TearDown]
     public void TearDown()
     {
-        _context.Database.CloseConnection();
         _context.Dispose();
     }
 

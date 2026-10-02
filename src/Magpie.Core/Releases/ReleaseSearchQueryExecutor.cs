@@ -496,8 +496,10 @@ internal sealed class ReleaseSearchQueryExecutor(
             }
         }
 
-        var rootUnion = UnionRoundRobin(branches.OrderBy(branch => branch.Connection.Order)
-            .Select(branch => branch.Results).ToArray(), evaluationContext);
+        var rootUnion = UnionRoundRobin(
+            branches.OrderBy(branch => branch.Connection.Order)
+                .Select(branch => branch.Results).ToArray(),
+            evaluationContext);
         var combined = RankResults(rootUnion.Results, evaluationContext);
         var eligible = automatic
             ? combined.Where(result => result.Assessment.MatchResult is
@@ -656,11 +658,7 @@ internal sealed class ReleaseSearchQueryExecutor(
                         RecordSkippedNode(activity, remaining.NodeId, "external-id", "coalesce-satisfied");
                     }
 
-                    RecordSkippedNode(
-                        activity,
-                        planned.NodeId + "-keywords",
-                        "union",
-                        "coalesce-satisfied");
+                    RecordSkippedNode(activity, planned.NodeId + "-keywords", "union", "coalesce-satisfied");
                     foreach (var remaining in planned.Routes.Where(candidate => !candidate.IsIdentity))
                     {
                         RecordSkippedNode(activity, remaining.NodeId, "keyword", "coalesce-satisfied");
@@ -783,11 +781,13 @@ internal sealed class ReleaseSearchQueryExecutor(
                 activity?.SetStatus(ActivityStatusCode.Error, failure);
             }
 
-            activity?.SetTag("magpie.query.terminal_reason", failure is not null
-                ? "failed"
-                : results.Any(result => IsAccepted(result.Assessment))
-                    ? "accepted"
-                    : "exhausted");
+            activity?.SetTag(
+                "magpie.query.terminal_reason",
+                failure is not null
+                    ? "failed"
+                    : results.Any(result => IsAccepted(result.Assessment))
+                        ? "accepted"
+                        : "exhausted");
 
             return new ConnectionExecution(planned, results, executedRoutes, attempted, failure, rawCount)
             {
@@ -818,7 +818,6 @@ internal sealed class ReleaseSearchQueryExecutor(
                 "release-query",
                 () => new CachePolicy
                 {
-                    MaximumLevel = CacheLevel.Memory,
                     Freshness = searchOptions.CoalescingWindow,
                     Retention = searchOptions.CoalescingWindow,
                     MaximumEntries = 1000,
@@ -882,7 +881,7 @@ internal sealed class ReleaseSearchQueryExecutor(
                     throttles.Add(new UpstreamThrottledException(retryAt));
                 }
 
-                routeResult = new CachedRouteResult([], ex.Attempted, ex.Failure, 0);
+                routeResult = new([], ex.Attempted, ex.Failure, 0);
             }
 
             var cacheOutcome = cache is null
@@ -956,11 +955,7 @@ internal sealed class ReleaseSearchQueryExecutor(
                     throw new RouteCachePopulationException(result.Attempted, failure.Error, throttle?.RetryAt);
                 }
 
-                return new CachedRouteResult(
-                    result.Releases,
-                    result.Attempted,
-                    null,
-                    maximumResults);
+                return new CachedRouteResult(result.Releases, result.Attempted, null, maximumResults);
             }
         }
 
@@ -984,9 +979,7 @@ internal sealed class ReleaseSearchQueryExecutor(
             }
             catch (Exception ex)
             {
-                logger.LogWarning(
-                    ex,
-                    "Release evaluation failed");
+                logger.LogWarning(ex, "Release evaluation failed");
                 return new EvaluatedRelease(
                     observation.Release,
                     observation.ReleaseFacts,
@@ -1062,10 +1055,7 @@ internal sealed class ReleaseSearchQueryExecutor(
         return result;
     }
 
-    private void AddObservation(
-        List<PlannedObservation> observations,
-        PlannedRoute route,
-        Release release)
+    private void AddObservation(List<PlannedObservation> observations, PlannedRoute route, Release release)
     {
         var matchingIndexes = observations
             .Select((existing, index) => (existing, index))
@@ -1195,9 +1185,7 @@ internal sealed class ReleaseSearchQueryExecutor(
         return changed ? ContributionKind.Enriched : ContributionKind.Unchanged;
     }
 
-    private IReadOnlyList<string> MergePlanNodeIds(
-        IReadOnlyList<string> first,
-        IReadOnlyList<string> second) =>
+    private IReadOnlyList<string> MergePlanNodeIds(IReadOnlyList<string> first, IReadOnlyList<string> second) =>
         first.Concat(second).Distinct(StringComparer.Ordinal).ToArray();
 
     private IReadOnlyList<ContentFact> MergeReleaseFacts(
@@ -1440,9 +1428,7 @@ internal sealed class ReleaseSearchQueryExecutor(
     private string Fingerprint(object value) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(value))));
 
-    private List<EvaluatedRelease> RankResults(
-        List<EvaluatedRelease> results,
-        ReleaseEvaluationContext context)
+    private List<EvaluatedRelease> RankResults(List<EvaluatedRelease> results, ReleaseEvaluationContext context)
     {
         var comparers = releaseComparers.ToArray();
         var candidates = results.Select((result, inputOrder) => (
@@ -1504,9 +1490,7 @@ internal sealed class ReleaseSearchQueryExecutor(
                         return comparison;
                     }
 
-                    comparison = string.CompareOrdinal(
-                        StableKey(left.Result.Release),
-                        StableKey(right.Result.Release));
+                    comparison = string.CompareOrdinal(StableKey(left.Result.Release), StableKey(right.Result.Release));
                     return comparison != 0 ? comparison : left.InputOrder.CompareTo(right.InputOrder);
                 });
                 ranked.AddRange(tieGroup);
@@ -1634,10 +1618,7 @@ internal sealed class ReleaseSearchQueryExecutor(
         {
             activity?.SetTag("outcome", outcome);
             activity?.SetTag("result_count", resultCount);
-            ReleaseTelemetry.IndexerQueries.Add(
-                1,
-                indexerIdTag,
-                new KeyValuePair<string, object?>("outcome", outcome));
+            ReleaseTelemetry.IndexerQueries.Add(1, indexerIdTag, new KeyValuePair<string, object?>("outcome", outcome));
             if (attempted)
             {
                 ReleaseTelemetry.IndexerQueryDuration.Record(

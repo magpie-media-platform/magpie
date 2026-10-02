@@ -99,15 +99,23 @@ export function BulkTagAssignment({
         return states;
     }, [availableTags, selectedItems]);
 
-    const [tagStates, setTagStates] = useState<Record<string, TagState>>(initialTagStates);
+    const [actions, setActions] = useState<Record<string, TagAssignmentAction>>({});
     const [searchQuery, setSearchQuery] = useState('');
 
     useEffect(() => {
         if (open) {
-            setTagStates(initialTagStates);
+            setActions({});
             setSearchQuery('');
         }
     }, [open, initialTagStates]);
+
+    const tagStates = useMemo(() => {
+        const states: Record<string, TagState> = {};
+        for (const [tagId, state] of Object.entries(initialTagStates)) {
+            states[tagId] = { presence: state.presence, action: actions[tagId] ?? 'unchanged' };
+        }
+        return states;
+    }, [initialTagStates, actions]);
 
     const filteredTags = useMemo(() => {
         if (!searchQuery) {
@@ -117,36 +125,35 @@ export function BulkTagAssignment({
         return availableTags.filter((tag) => tag.name.toLowerCase().includes(query));
     }, [availableTags, searchQuery]);
 
-    const handleTagClick = useCallback((tagId: string) => {
-        setTagStates((prev) => {
-            const current = prev[tagId];
-            if (!current) {
-                return prev;
+    const handleTagClick = useCallback(
+        (tagId: string) => {
+            const initial = initialTagStates[tagId];
+            if (!initial) {
+                return;
             }
 
-            let newAction: TagAssignmentAction;
+            setActions((prev) => {
+                const currentAction = prev[tagId] ?? 'unchanged';
 
-            if (current.action === 'unchanged') {
-                if (current.presence === 'all') {
+                let newAction: TagAssignmentAction;
+
+                if (currentAction === 'unchanged') {
+                    if (initial.presence === 'all') {
+                        newAction = 'remove';
+                    } else {
+                        newAction = 'add';
+                    }
+                } else if (currentAction === 'add') {
                     newAction = 'remove';
                 } else {
-                    newAction = 'add';
+                    newAction = 'unchanged';
                 }
-            } else if (current.action === 'add') {
-                newAction = 'remove';
-            } else {
-                newAction = 'unchanged';
-            }
 
-            return {
-                ...prev,
-                [tagId]: {
-                    ...current,
-                    action: newAction,
-                },
-            };
-        });
-    }, []);
+                return { ...prev, [tagId]: newAction };
+            });
+        },
+        [initialTagStates],
+    );
 
     const changes = useMemo(() => {
         const tagsToAdd: string[] = [];

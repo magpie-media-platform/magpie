@@ -36,6 +36,78 @@ public sealed class NotificationServiceTestPathTests
     private bool _providerThrows;
     private INotificationService _subject = null!;
 
+    public static IEnumerable<TestCaseData> PatchAllowedCases
+    {
+        get
+        {
+            yield return new TestCaseData(new Guid(CallerUserId), false)
+                .SetName("PatchAsync_AppliesThePatch_WhenTheCallerOwnsTheRule");
+            yield return new TestCaseData(new Guid(OtherUserId), true)
+                .SetName("PatchAsync_AppliesThePatch_WhenTheCallerIsAnAdministrator");
+            yield return new TestCaseData((Guid?)null, true)
+                .SetName("PatchAsync_AppliesThePatch_WhenTheRuleIsGlobalAndTheCallerIsAnAdministrator");
+        }
+    }
+
+    public static IEnumerable<TestCaseData> PatchDeniedCases
+    {
+        get
+        {
+            yield return new TestCaseData(new Guid(OtherUserId))
+                .SetName("PatchAsync_ReturnsFalse_WhenAnotherUserOwnsTheRule");
+            yield return new TestCaseData((Guid?)null)
+                .SetName("PatchAsync_ReturnsFalse_WhenTheRuleIsGlobalAndTheCallerIsNotAnAdministrator");
+        }
+    }
+
+    public static IEnumerable<TestCaseData> DeleteAllowedCases
+    {
+        get
+        {
+            yield return new TestCaseData(new Guid(CallerUserId), false)
+                .SetName("DeleteAsync_DeletesTheRule_WhenTheCallerOwnsIt");
+            yield return new TestCaseData(new Guid(OtherUserId), true)
+                .SetName("DeleteAsync_DeletesTheRule_WhenTheCallerIsAnAdministrator");
+            yield return new TestCaseData((Guid?)null, true)
+                .SetName("DeleteAsync_DeletesTheRule_WhenTheRuleIsGlobalAndTheCallerIsAnAdministrator");
+        }
+    }
+
+    public static IEnumerable<TestCaseData> DeleteDeniedCases
+    {
+        get
+        {
+            yield return new TestCaseData(new Guid(OtherUserId))
+                .SetName("DeleteAsync_ReturnsFalse_WhenAnotherUserOwnsTheRule");
+            yield return new TestCaseData((Guid?)null)
+                .SetName("DeleteAsync_ReturnsFalse_WhenTheRuleIsGlobalAndTheCallerIsNotAnAdministrator");
+        }
+    }
+
+    public static IEnumerable<TestCaseData> TestAllowedCases
+    {
+        get
+        {
+            yield return new TestCaseData(new Guid(CallerUserId), false)
+                .SetName("TestAsync_SendsTheNotification_WhenTheCallerOwnsTheRule");
+            yield return new TestCaseData(new Guid(OtherUserId), true)
+                .SetName("TestAsync_SendsTheNotification_WhenTheCallerIsAnAdministrator");
+            yield return new TestCaseData((Guid?)null, true)
+                .SetName("TestAsync_SendsTheNotification_WhenTheRuleIsGlobalAndTheCallerIsAnAdministrator");
+        }
+    }
+
+    public static IEnumerable<TestCaseData> TestDeniedCases
+    {
+        get
+        {
+            yield return new TestCaseData(new Guid(OtherUserId))
+                .SetName("TestAsync_ReturnsNull_WhenAnotherUserOwnsTheRule");
+            yield return new TestCaseData((Guid?)null)
+                .SetName("TestAsync_ReturnsNull_WhenTheRuleIsGlobalAndTheCallerIsNotAnAdministrator");
+        }
+    }
+
     [SetUp]
     public void SetUp()
     {
@@ -71,17 +143,15 @@ public sealed class NotificationServiceTestPathTests
             NullLogger<NotificationService>.Instance);
     }
 
-    [TestCase(CallerUserId, false, TestName = "PatchAsync_AppliesThePatch_WhenTheCallerOwnsTheRule")]
-    [TestCase(OtherUserId, true, TestName = "PatchAsync_AppliesThePatch_WhenTheCallerIsAnAdministrator")]
-    [TestCase(null, true, TestName = "PatchAsync_AppliesThePatch_WhenTheRuleIsGlobalAndTheCallerIsAnAdministrator")]
-    public async Task PatchAsync_AppliesThePatch_WhenTheCallerMayEditTheRule(string? ownerUserId, bool callerIsAdmin)
+    [TestCaseSource(nameof(PatchAllowedCases))]
+    public async Task PatchAsync_AppliesThePatch_WhenTheCallerMayEditTheRule(Guid? ownerUserId, bool callerIsAdmin)
     {
         // Arrange
         var rule = new NotificationRule
         {
             Id = new Guid(RuleId),
             Name = "original",
-            OwnerUserId = ownerUserId is null ? null : new Guid(ownerUserId),
+            OwnerUserId = ownerUserId,
             ProviderType = "webhook",
         };
         _rules
@@ -118,16 +188,15 @@ public sealed class NotificationServiceTestPathTests
         }
     }
 
-    [TestCase(OtherUserId, TestName = "PatchAsync_ReturnsFalse_WhenAnotherUserOwnsTheRule")]
-    [TestCase(null, TestName = "PatchAsync_ReturnsFalse_WhenTheRuleIsGlobalAndTheCallerIsNotAnAdministrator")]
-    public async Task PatchAsync_ReturnsFalse_WhenTheCallerMayNotEditTheRule(string? ownerUserId)
+    [TestCaseSource(nameof(PatchDeniedCases))]
+    public async Task PatchAsync_ReturnsFalse_WhenTheCallerMayNotEditTheRule(Guid? ownerUserId)
     {
         // Arrange
         var rule = new NotificationRule
         {
             Id = new Guid(RuleId),
             Name = "original",
-            OwnerUserId = ownerUserId is null ? null : new Guid(ownerUserId),
+            OwnerUserId = ownerUserId,
             ProviderType = "webhook",
         };
         _rules
@@ -187,17 +256,15 @@ public sealed class NotificationServiceTestPathTests
         }
     }
 
-    [TestCase(CallerUserId, false, TestName = "DeleteAsync_DeletesTheRule_WhenTheCallerOwnsIt")]
-    [TestCase(OtherUserId, true, TestName = "DeleteAsync_DeletesTheRule_WhenTheCallerIsAnAdministrator")]
-    [TestCase(null, true, TestName = "DeleteAsync_DeletesTheRule_WhenTheRuleIsGlobalAndTheCallerIsAnAdministrator")]
-    public async Task DeleteAsync_DeletesTheRule_WhenTheCallerMayDeleteIt(string? ownerUserId, bool callerIsAdmin)
+    [TestCaseSource(nameof(DeleteAllowedCases))]
+    public async Task DeleteAsync_DeletesTheRule_WhenTheCallerMayDeleteIt(Guid? ownerUserId, bool callerIsAdmin)
     {
         // Arrange
         var rule = new NotificationRule
         {
             Id = new Guid(RuleId),
             Name = "rule",
-            OwnerUserId = ownerUserId is null ? null : new Guid(ownerUserId),
+            OwnerUserId = ownerUserId,
             ProviderType = "webhook",
         };
         _rules
@@ -225,16 +292,15 @@ public sealed class NotificationServiceTestPathTests
         }
     }
 
-    [TestCase(OtherUserId, TestName = "DeleteAsync_ReturnsFalse_WhenAnotherUserOwnsTheRule")]
-    [TestCase(null, TestName = "DeleteAsync_ReturnsFalse_WhenTheRuleIsGlobalAndTheCallerIsNotAnAdministrator")]
-    public async Task DeleteAsync_ReturnsFalse_WhenTheCallerMayNotDeleteTheRule(string? ownerUserId)
+    [TestCaseSource(nameof(DeleteDeniedCases))]
+    public async Task DeleteAsync_ReturnsFalse_WhenTheCallerMayNotDeleteTheRule(Guid? ownerUserId)
     {
         // Arrange
         var rule = new NotificationRule
         {
             Id = new Guid(RuleId),
             Name = "rule",
-            OwnerUserId = ownerUserId is null ? null : new Guid(ownerUserId),
+            OwnerUserId = ownerUserId,
             ProviderType = "webhook",
         };
         _rules
@@ -291,14 +357,9 @@ public sealed class NotificationServiceTestPathTests
         }
     }
 
-    [TestCase(CallerUserId, false, TestName = "TestAsync_SendsTheNotification_WhenTheCallerOwnsTheRule")]
-    [TestCase(OtherUserId, true, TestName = "TestAsync_SendsTheNotification_WhenTheCallerIsAnAdministrator")]
-    [TestCase(
-        null,
-        true,
-        TestName = "TestAsync_SendsTheNotification_WhenTheRuleIsGlobalAndTheCallerIsAnAdministrator")]
+    [TestCaseSource(nameof(TestAllowedCases))]
     public async Task TestAsync_SendsTheNotification_WhenTheCallerMayTestTheRule(
-        string? ownerUserId,
+        Guid? ownerUserId,
         bool callerIsAdmin)
     {
         // Arrange
@@ -308,7 +369,7 @@ public sealed class NotificationServiceTestPathTests
             {
                 Id = new Guid(RuleId),
                 Name = "rule",
-                OwnerUserId = ownerUserId is null ? null : new Guid(ownerUserId),
+                OwnerUserId = ownerUserId,
                 ProviderType = "webhook",
             });
 
@@ -325,9 +386,8 @@ public sealed class NotificationServiceTestPathTests
         }
     }
 
-    [TestCase(OtherUserId, TestName = "TestAsync_ReturnsNull_WhenAnotherUserOwnsTheRule")]
-    [TestCase(null, TestName = "TestAsync_ReturnsNull_WhenTheRuleIsGlobalAndTheCallerIsNotAnAdministrator")]
-    public async Task TestAsync_ReturnsNull_WhenTheCallerMayNotTestTheRule(string? ownerUserId)
+    [TestCaseSource(nameof(TestDeniedCases))]
+    public async Task TestAsync_ReturnsNull_WhenTheCallerMayNotTestTheRule(Guid? ownerUserId)
     {
         // Arrange
         _rules
@@ -336,7 +396,7 @@ public sealed class NotificationServiceTestPathTests
             {
                 Id = new Guid(RuleId),
                 Name = "rule",
-                OwnerUserId = ownerUserId is null ? null : new Guid(ownerUserId),
+                OwnerUserId = ownerUserId,
                 ProviderType = "webhook",
             });
 

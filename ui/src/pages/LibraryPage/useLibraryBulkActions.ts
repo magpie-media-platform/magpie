@@ -14,8 +14,6 @@ import { getErrorMessage } from '@/lib/errors';
 interface UseLibraryBulkActionsArgs {
     selection: BulkSelection;
     bulkFilter: string;
-    contentType?: string;
-    level?: string;
 }
 
 type BulkTargetResolution =
@@ -43,7 +41,7 @@ function resolveBulkTarget(selection: BulkSelection, bulkFilter: string): BulkTa
     return { kind: 'target', target: { filter: bulkFilter } };
 }
 
-export function useLibraryBulkActions({ selection, bulkFilter, contentType, level }: UseLibraryBulkActionsArgs) {
+export function useLibraryBulkActions({ selection, bulkFilter }: UseLibraryBulkActionsArgs) {
     const queryClient = useQueryClient();
     const { toast } = useToast();
 
@@ -60,7 +58,7 @@ export function useLibraryBulkActions({ selection, bulkFilter, contentType, leve
     const bulkQualityTierListMutation = useBulkPatchContent();
 
     const { folders: rootFolders } = useRootFolders();
-    const { tierLists: qualityTierLists } = useQualityTierLists(contentType ? { contentType, level } : undefined);
+    const { tierLists: qualityTierLists } = useQualityTierLists();
 
     const rootFolderOptions: BulkValuePickerOption[] = useMemo(
         () => rootFolders.map((folder) => ({ id: folder.id, label: `${folder.name} (${folder.path})` })),

@@ -1132,7 +1132,9 @@ describe('MyJobsPage owned triggers outside the eligible catalog', () => {
         enabled: true,
         onDemand: false,
         supportedTriggerModes: ['Schedule', 'Event'],
-        parameters: [{ name: 'maxAgeHours', description: 'Maximum age', type: 1, required: false, defaultValue: null }],
+        parameters: [
+            { name: 'maxAgeHours', description: 'Maximum age', type: 'Number', required: false, defaultValue: null },
+        ],
     };
 
     beforeEach(() => {

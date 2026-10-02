@@ -142,10 +142,7 @@ internal sealed class UserService(
         }, cancellationToken).ConfigureAwait(false);
     }
 
-    public async Task<bool> UnlockAsync(
-        Guid userId,
-        Guid callerUserId,
-        CancellationToken cancellationToken = default)
+    public async Task<bool> UnlockAsync(Guid userId, Guid callerUserId, CancellationToken cancellationToken = default)
     {
         var user = await users.GetByIdAsync(userId, cancellationToken).ConfigureAwait(false);
         if (user is null || IsSystemAccount(user))
@@ -275,9 +272,7 @@ internal sealed class UserService(
             .ConfigureAwait(false);
     }
 
-    private async Task<HashedPassword> HashPasswordAsync(
-        string password,
-        CancellationToken cancellationToken)
+    private async Task<HashedPassword> HashPasswordAsync(string password, CancellationToken cancellationToken)
     {
         var policyResult = await passwordPolicy
             .ValidatePasswordAsync(password, cancellationToken)

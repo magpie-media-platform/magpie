@@ -30,6 +30,10 @@ public sealed class MediaFileRepositoryTests
     private SqliteConnection _template = null!;
     private List<MagpieEvent> _events = null!;
     private IMediaFileRepository _subject = null!;
+    private Guid _movieItemId;
+    private Guid _firstEpisodeItemId;
+    private Guid _secondEpisodeItemId;
+    private Guid _thirdEpisodeItemId;
 
     [OneTimeSetUp]
     public void CreateTemplate()
@@ -77,7 +81,60 @@ public sealed class MediaFileRepositoryTests
             Fulfillment = FulfillmentStatus.Fulfilled,
             CreatedAt = DateTime.UtcNow
         };
-        _context.AddRange(metadataContainer, hierarchyItem, contentItem);
+        var season = new ContentHierarchyItem
+        {
+            Id = Guid.NewGuid(),
+            MetadataContainer = new() { CreatedAt = DateTime.UtcNow },
+            ContentType = "tv",
+            Level = "season",
+            Slug = "season-1",
+            Name = "Season 1",
+            CreatedAt = DateTime.UtcNow
+        };
+        var firstEpisode = new ContentHierarchyItem
+        {
+            MetadataContainer = new() { CreatedAt = DateTime.UtcNow },
+            ParentId = season.Id,
+            ContentType = "tv",
+            Level = "episode",
+            Slug = "episode-1",
+            Name = "Episode 1",
+            Ordinal = 1,
+            CreatedAt = DateTime.UtcNow,
+            ContentItem = new() { CreatedAt = DateTime.UtcNow }
+        };
+        var secondEpisode = new ContentHierarchyItem
+        {
+            MetadataContainer = new() { CreatedAt = DateTime.UtcNow },
+            ParentId = season.Id,
+            ContentType = "tv",
+            Level = "episode",
+            Slug = "episode-2",
+            Name = "Episode 2",
+            Ordinal = 2,
+            CreatedAt = DateTime.UtcNow,
+            ContentItem = new() { CreatedAt = DateTime.UtcNow }
+        };
+        var thirdEpisode = new ContentHierarchyItem
+        {
+            MetadataContainer = new() { CreatedAt = DateTime.UtcNow },
+            ParentId = season.Id,
+            ContentType = "tv",
+            Level = "episode",
+            Slug = "episode-3",
+            Name = "Episode 3",
+            Ordinal = 3,
+            CreatedAt = DateTime.UtcNow,
+            ContentItem = new() { CreatedAt = DateTime.UtcNow }
+        };
+        _context.AddRange(
+            metadataContainer,
+            hierarchyItem,
+            contentItem,
+            season,
+            firstEpisode,
+            secondEpisode,
+            thirdEpisode);
         _context.MediaFiles.Add(new MediaFile
         {
             ContentItemId = contentItem.Id,
@@ -87,8 +144,15 @@ public sealed class MediaFileRepositoryTests
             CreatedAt = DateTime.UtcNow
         });
         await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.ChangeTracker.Clear();
+        _movieItemId = contentItem.Id;
+        _firstEpisodeItemId = firstEpisode.ContentItem.Id;
+        _secondEpisodeItemId = secondEpisode.ContentItem.Id;
+        _thirdEpisodeItemId = thirdEpisode.ContentItem.Id;
 
         var hierarchy = new Moq.Mock<IContentHierarchyItemRepository>();
+        hierarchy.Setup(repository => repository.GetLineageAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
         hierarchy.Setup(repository => repository.GetLineageAsync(hierarchyItem.Id,
                 Moq.It.IsAny<System.Threading.CancellationToken>())).ReturnsAsync([hierarchyItem]);
         _events = [];
@@ -109,6 +173,7 @@ public sealed class MediaFileRepositoryTests
     }
 
     [Test]
+    [Platform("Win", Reason = "Only Windows looks up media file paths without case.")]
     public async Task GetByPathAsync_ReturnsTheStoredFile_WhenThePathDiffersOnlyByCase()
     {
         // Act
@@ -211,5 +276,266 @@ public sealed class MediaFileRepositoryTests
                 .ToListAsync()
                 .ConfigureAwait(false),
             Is.EqualTo(["/media/Film.mkv", "/media/Second.mkv"]));
+    }
+
+    [Test]
+    public async Task CreateAsync_StoresTheLowestOrdinalItemAsTheOwner_WhenTheFileCoversSiblings()
+    {
+        // Arrange
+        var mediaFile = new MediaFile
+        {
+            ContentItemId = _secondEpisodeItemId,
+            FileKind = "Video",
+            FilePath = "/tv/S01E01-E03.mkv",
+            CreatedAt = DateTime.UtcNow
+        };
+        mediaFile.Coverage.Add(new() { ContentItemId = _thirdEpisodeItemId });
+        mediaFile.Coverage.Add(new() { ContentItemId = _firstEpisodeItemId });
+
+        // Act
+        await _subject.CreateAsync(mediaFile, null).ConfigureAwait(false);
+
+        // Assert
+        var stored = await _context.MediaFiles.AsNoTracking()
+            .Include(file => file.Coverage)
+            .SingleAsync(file => file.FilePath == "/tv/S01E01-E03.mkv")
+            .ConfigureAwait(false);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(stored.ContentItemId, Is.EqualTo(_firstEpisodeItemId));
+            Assert.That(
+                stored.Coverage.Select(coverage => coverage.ContentItemId),
+                Is.EquivalentTo([_secondEpisodeItemId, _thirdEpisodeItemId]));
+        }
+    }
+
+    [Test]
+    public async Task CreateAsync_ThrowsAndStoresNothing_WhenACoveredItemHasAnotherParent()
+    {
+        // Arrange
+        var otherSeason = new ContentHierarchyItem
+        {
+            Id = Guid.NewGuid(),
+            MetadataContainer = new() { CreatedAt = DateTime.UtcNow },
+            ContentType = "tv",
+            Level = "season",
+            Slug = "season-2",
+            Name = "Season 2",
+            CreatedAt = DateTime.UtcNow
+        };
+        var otherEpisode = new ContentHierarchyItem
+        {
+            MetadataContainer = new() { CreatedAt = DateTime.UtcNow },
+            ParentId = otherSeason.Id,
+            ContentType = "tv",
+            Level = "episode",
+            Slug = "season-2-episode-1",
+            Name = "Episode 1",
+            Ordinal = 1,
+            CreatedAt = DateTime.UtcNow,
+            ContentItem = new() { CreatedAt = DateTime.UtcNow }
+        };
+        _context.ContentHierarchyItems.AddRange(otherSeason, otherEpisode);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        var mediaFile = new MediaFile
+        {
+            ContentItemId = _firstEpisodeItemId,
+            FileKind = "Video",
+            FilePath = "/tv/S01E01.mkv",
+            CreatedAt = DateTime.UtcNow
+        };
+        mediaFile.Coverage.Add(new() { ContentItemId = otherEpisode.ContentItem.Id });
+
+        // Act
+        var exception = Assert.ThrowsAsync<InvalidOperationException>(() => _subject.CreateAsync(mediaFile, null));
+
+        // Assert
+        var stored = await _context.MediaFiles.AsNoTracking().CountAsync().ConfigureAwait(false);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(exception.Message, Is.EqualTo("The items that the media file covers are not siblings."));
+            Assert.That(stored, Is.EqualTo(1));
+        }
+    }
+
+    [Test]
+    public async Task CreateAsync_ThrowsAndStoresNothing_WhenACoveredItemHasNoParent()
+    {
+        // Arrange
+        var mediaFile = new MediaFile
+        {
+            ContentItemId = _firstEpisodeItemId,
+            FileKind = "Video",
+            FilePath = "/tv/S01E01.mkv",
+            CreatedAt = DateTime.UtcNow
+        };
+        mediaFile.Coverage.Add(new() { ContentItemId = _movieItemId });
+
+        // Act
+        var exception = Assert.ThrowsAsync<InvalidOperationException>(() => _subject.CreateAsync(mediaFile, null));
+
+        // Assert
+        var stored = await _context.MediaFiles.AsNoTracking().CountAsync().ConfigureAwait(false);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(exception.Message, Is.EqualTo("The items that the media file covers are not siblings."));
+            Assert.That(stored, Is.EqualTo(1));
+        }
+    }
+
+    [Test]
+    public async Task UpdateAsync_PromotesTheNextCoveredItem_WhenTheOwnerLetsGoOfTheFile()
+    {
+        // Arrange
+        var mediaFile = new MediaFile
+        {
+            ContentItemId = _firstEpisodeItemId,
+            FileKind = "Video",
+            FilePath = "/tv/S01E01-E03.mkv",
+            PathKey = "/TV/S01E01-E03.MKV",
+            CreatedAt = DateTime.UtcNow
+        };
+        mediaFile.Coverage.Add(new() { ContentItemId = _secondEpisodeItemId });
+        mediaFile.Coverage.Add(new() { ContentItemId = _thirdEpisodeItemId });
+        _context.MediaFiles.Add(mediaFile);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        var current = await _subject.GetByIdAsync(mediaFile.Id).ConfigureAwait(false);
+
+        // Act
+        var result = await _subject.UpdateAsync(current! with { ContentItemId = _thirdEpisodeItemId }, null)
+            .ConfigureAwait(false);
+
+        // Assert
+        var stored = await _context.MediaFiles.AsNoTracking()
+            .Include(file => file.Coverage)
+            .SingleAsync(file => file.Id == mediaFile.Id)
+            .ConfigureAwait(false);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result, Is.True);
+            Assert.That(stored.ContentItemId, Is.EqualTo(_secondEpisodeItemId));
+            Assert.That(stored.Coverage.Select(coverage => coverage.ContentItemId), Is.EqualTo([_thirdEpisodeItemId]));
+        }
+    }
+
+    [Test]
+    public async Task UpdateAsync_LeavesTheNewOwnerWithoutCoverage_WhenTheOwnerOfATwoEpisodeFileLetsGo()
+    {
+        // Arrange
+        var mediaFile = new MediaFile
+        {
+            ContentItemId = _firstEpisodeItemId,
+            FileKind = "Video",
+            FilePath = "/tv/S01E01-E02.mkv",
+            PathKey = "/TV/S01E01-E02.MKV",
+            CreatedAt = DateTime.UtcNow
+        };
+        mediaFile.Coverage.Add(new() { ContentItemId = _secondEpisodeItemId });
+        _context.MediaFiles.Add(mediaFile);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        var current = await _subject.GetByIdAsync(mediaFile.Id).ConfigureAwait(false);
+
+        // Act
+        var result = await _subject.UpdateAsync(current! with { ContentItemId = _secondEpisodeItemId }, null)
+            .ConfigureAwait(false);
+
+        // Assert
+        var stored = await _context.MediaFiles.AsNoTracking()
+            .Include(file => file.Coverage)
+            .SingleAsync(file => file.Id == mediaFile.Id)
+            .ConfigureAwait(false);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result, Is.True);
+            Assert.That(stored.ContentItemId, Is.EqualTo(_secondEpisodeItemId));
+            Assert.That(stored.Coverage, Is.Empty);
+        }
+    }
+
+    [Test]
+    public async Task UpdateAsync_KeepsTheCoverage_WhenOnlyFilePropertiesChange()
+    {
+        // Arrange
+        var mediaFile = new MediaFile
+        {
+            ContentItemId = _firstEpisodeItemId,
+            FileKind = "Video",
+            FilePath = "/tv/S01E01-E03.mkv",
+            PathKey = "/TV/S01E01-E03.MKV",
+            CreatedAt = DateTime.UtcNow
+        };
+        mediaFile.Coverage.Add(new() { ContentItemId = _secondEpisodeItemId });
+        mediaFile.Coverage.Add(new() { ContentItemId = _thirdEpisodeItemId });
+        _context.MediaFiles.Add(mediaFile);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        var current = await _subject.GetByIdAsync(mediaFile.Id).ConfigureAwait(false);
+
+        // Act
+        await _subject.UpdateAsync(current! with { FileSize = 1_000 }, null).ConfigureAwait(false);
+
+        // Assert
+        var stored = await _context.MediaFiles.AsNoTracking()
+            .Include(file => file.Coverage)
+            .SingleAsync(file => file.Id == mediaFile.Id)
+            .ConfigureAwait(false);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(stored.FileSize, Is.EqualTo(1_000));
+            Assert.That(stored.ContentItemId, Is.EqualTo(_firstEpisodeItemId));
+            Assert.That(
+                stored.Coverage.Select(coverage => coverage.ContentItemId),
+                Is.EquivalentTo([_secondEpisodeItemId, _thirdEpisodeItemId]));
+        }
+    }
+
+    [Test]
+    public async Task UpdateAsync_AddsTheCoverage_WhenTheFileWasCreatedInTheSameScope()
+    {
+        // Arrange
+        var created = await _subject.CreateAsync(
+            new MediaFile
+            {
+                ContentItemId = _firstEpisodeItemId,
+                FileKind = "Video",
+                FilePath = "/tv/S01E01-E02.mkv",
+                CreatedAt = DateTime.UtcNow
+            },
+            null).ConfigureAwait(false);
+        var current = await _subject.GetByIdAsync(created.Id).ConfigureAwait(false);
+        current!.Coverage.Add(new() { ContentItemId = _secondEpisodeItemId });
+
+        // Act
+        await _subject.UpdateAsync(current, null).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(
+            await _context.MediaFileCoverages.AsNoTracking()
+                .Select(coverage => coverage.ContentItemId)
+                .ToListAsync()
+                .ConfigureAwait(false),
+            Is.EqualTo([_secondEpisodeItemId]));
+    }
+
+    [Test]
+    public async Task DeleteAsync_RemovesTheCoverage_WhenTheFileIsDeleted()
+    {
+        // Arrange
+        var mediaFile = new MediaFile
+        {
+            ContentItemId = _firstEpisodeItemId,
+            FileKind = "Video",
+            FilePath = "/tv/S01E01-E02.mkv",
+            PathKey = "/TV/S01E01-E02.MKV",
+            CreatedAt = DateTime.UtcNow
+        };
+        mediaFile.Coverage.Add(new() { ContentItemId = _secondEpisodeItemId });
+        _context.MediaFiles.Add(mediaFile);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        // Act
+        await _subject.DeleteAsync(mediaFile.Id, null).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(await _context.MediaFileCoverages.AsNoTracking().CountAsync().ConfigureAwait(false), Is.Zero);
     }
 }

@@ -7,8 +7,6 @@ import { useQualityTierLists } from '@/hooks/useQualityTierLists';
 
 interface QualityTierControlProps {
     contentHierarchyItemId: string;
-    contentType?: string;
-    level?: string;
     canEdit?: boolean;
 }
 
@@ -16,25 +14,15 @@ const INHERIT_VALUE = '__inherit__';
 
 const describeMimeTypes = (patterns: string[]) => (patterns.length === 0 ? 'Any MIME type' : patterns.join(', '));
 
-export function QualityTierControl({
-    contentHierarchyItemId,
-    contentType,
-    level,
-    canEdit = true,
-}: QualityTierControlProps) {
+export function QualityTierControl({ contentHierarchyItemId, canEdit = true }: QualityTierControlProps) {
     const { toast } = useToast();
     const effectiveQuery = useEffectiveQualityTierList(contentHierarchyItemId);
     const { data: effective, isLoading, isFetching, refetch } = effectiveQuery;
     const lookupError = useLookupError(effectiveQuery);
     const selectedTierListId = effective?.ownQualityTierListId ?? '';
-    const { tierLists, isLoading: tierListsLoading } = useQualityTierLists(
-        contentType ? { contentType, level } : undefined,
-    );
-    const { tierLists: allTierLists, isLoading: allTierListsLoading } = useQualityTierLists({
-        enabled: !!contentType && !!selectedTierListId,
-    });
+    const { tierLists, isLoading: tierListsLoading } = useQualityTierLists();
     const setMutation = useSetQualityTierList();
-    const selectedTierList = (contentType ? allTierLists : tierLists).find((list) => list.id === selectedTierListId);
+    const selectedTierList = tierLists.find((list) => list.id === selectedTierListId);
 
     const handleChange = async (value: string, close: () => void) => {
         const nextTierListId = value === INHERIT_VALUE ? null : value;
@@ -103,7 +91,7 @@ export function QualityTierControl({
                         {selectedTierListId
                             ? selectedTierList
                                 ? `${selectedTierList.name} - ${describeMimeTypes(selectedTierList.mimeTypes)}`
-                                : contentType && allTierListsLoading
+                                : tierListsLoading
                                   ? 'Loading...'
                                   : 'Unknown tier list'
                             : tierListsLoading

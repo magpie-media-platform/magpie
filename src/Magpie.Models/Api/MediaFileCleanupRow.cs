@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 
 using Magpie.Models.Enums;
 
@@ -35,14 +36,29 @@ public sealed record MediaFileCleanupRow
     public required string CurrentItem { get; set; }
 
     /// <summary>
-    /// The id of the item that the binding matched, for a reassign row.
+    /// The id of the item that owns the file after the row applies, for a reassign or cover row.
     /// </summary>
     public Guid? TargetItemId { get; set; }
 
     /// <summary>
-    /// The names of the matched item and of its ancestors, from the root, for a reassign row.
+    /// The names of the item that owns the file after the row applies and of its ancestors, from the root, for a
+    /// reassign or cover row.
     /// </summary>
     public string? TargetItem { get; set; }
+
+    /// <summary>
+    /// The ids of the items that the row adds to the items that the file covers.
+    /// </summary>
+    public List<Guid> CoveredItemIds
+    {
+        get;
+        set => field = value ?? [];
+    } = [];
+
+    /// <summary>
+    /// The names of the items that the row adds, each with its ancestors from the root.
+    /// </summary>
+    public List<string> CoveredItems { get; set; } = [];
 
     /// <summary>
     /// The action of the row.

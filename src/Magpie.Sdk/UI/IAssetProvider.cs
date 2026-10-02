@@ -13,7 +13,7 @@ namespace Magpie.Sdk.UI;
 public interface IAssetProvider
 {
     /// <summary>
-    /// List the asset definitions provided by the extension.
+    /// Lists the asset definitions that the extension provides.
     /// </summary>
     IEnumerable<Asset> ListAssets();
 

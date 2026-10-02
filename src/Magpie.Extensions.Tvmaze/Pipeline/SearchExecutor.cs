@@ -435,7 +435,7 @@ internal sealed class SearchExecutor(IClient client, ILogger<SearchExecutor> log
         };
         if (!string.IsNullOrWhiteSpace(show.Externals?.Imdb))
         {
-            entries.Add((Constants.ImdbSource, show.Externals!.Imdb!.Trim()));
+            entries.Add((Constants.ImdbSource, show.Externals.Imdb.Trim()));
         }
 
         if (show.Externals?.TheTvdb is { } theTvdb && theTvdb > 0)
@@ -846,7 +846,7 @@ internal sealed class SearchExecutor(IClient client, ILogger<SearchExecutor> log
                     Supported = true,
                     Matches = [],
                     Warnings = context.Warnings,
-                    PageInfo = new ProviderSearchPageInfo { RequestedPage = 1, HasMore = true }
+                    PageInfo = new() { RequestedPage = 1, HasMore = true }
                 };
             }
         }
@@ -894,7 +894,7 @@ internal sealed class SearchExecutor(IClient client, ILogger<SearchExecutor> log
             Supported = true,
             Matches = matches,
             Warnings = [.. context.Warnings.Distinct()],
-            PageInfo = new ProviderSearchPageInfo
+            PageInfo = new()
             {
                 RequestedPage = 1,
                 HasMore = execution.Candidates.Count > plan.MaximumResults ||
@@ -1110,13 +1110,13 @@ internal sealed class SearchExecutor(IClient client, ILogger<SearchExecutor> log
         }
         catch (OperationCanceledException exception)
         {
-            logger.LogWarning(exception, "The TVmaze plan node {NodeId} timed out.", node.Id);
+            logger.LogWarning(exception, "TVmaze plan node {NodeId} timed out", node.Id);
             AddWarning(context, SearchWarnings.ExecutionFailed);
             result = NodeExecutionResult.Failed;
         }
         catch (HttpRequestException exception)
         {
-            logger.LogWarning(exception, "The TVmaze plan node {NodeId} failed.", node.Id);
+            logger.LogWarning(exception, "TVmaze plan node {NodeId} failed", node.Id);
             AddWarning(context, SearchWarnings.ExecutionFailed);
             result = NodeExecutionResult.Failed;
         }
@@ -1233,7 +1233,7 @@ internal sealed class SearchExecutor(IClient client, ILogger<SearchExecutor> log
                 {
                     logger.LogWarning(
                         exception,
-                        "The TVmaze cast-credits request failed for person {PersonId}.",
+                        "TVmaze cast-credits request failed for person {PersonId}",
                         identity.Person.Id);
                     AddWarning(context, SearchWarnings.ExecutionFailed);
                     failed = true;
@@ -1276,7 +1276,7 @@ internal sealed class SearchExecutor(IClient client, ILogger<SearchExecutor> log
             {
                 logger.LogWarning(
                     exception,
-                    "The TVmaze crew-credits request failed for person {PersonId}.",
+                    "TVmaze crew-credits request failed for person {PersonId}",
                     identity.Person.Id);
                 AddWarning(context, SearchWarnings.ExecutionFailed);
                 failed = true;
@@ -1327,7 +1327,7 @@ internal sealed class SearchExecutor(IClient client, ILogger<SearchExecutor> log
             }
             catch (Exception exception) when (IsExecutionFailure(exception))
             {
-                logger.LogWarning(exception, "The TVmaze person lookup failed for person {PersonId}.", personId);
+                logger.LogWarning(exception, "TVmaze person lookup failed for person {PersonId}", personId);
                 AddWarning(context, SearchWarnings.ExecutionFailed);
                 failed = true;
             }
@@ -1352,7 +1352,7 @@ internal sealed class SearchExecutor(IClient client, ILogger<SearchExecutor> log
             }
             catch (Exception exception) when (IsExecutionFailure(exception))
             {
-                logger.LogWarning(exception, "The TVmaze person search failed for term {Term}.", term);
+                logger.LogWarning(exception, "TVmaze person search failed for term {Term}", term);
                 AddWarning(context, SearchWarnings.ExecutionFailed);
                 failed = true;
             }
@@ -1366,7 +1366,7 @@ internal sealed class SearchExecutor(IClient client, ILogger<SearchExecutor> log
             var signature = JsonSerializer.Serialize(people.Select(person => person.Person.Id));
             if (progress.ResolvedSources.TryGetValue(node.Id, out var previous) && previous != signature)
             {
-                throw new MetadataSearchContinuationException("TVmaze resolved people changed. Start a new search.");
+                throw new MetadataSearchContinuationException("TVmaze resolved people changed.");
             }
 
             progress.ResolvedSources[node.Id] = signature;
@@ -1503,14 +1503,14 @@ internal sealed class SearchExecutor(IClient client, ILogger<SearchExecutor> log
             }
             catch (OperationCanceledException exception)
             {
-                logger.LogWarning(exception, "The request for TVmaze show-index page {Page} timed out.", page);
+                logger.LogWarning(exception, "TVmaze show-index page {Page} request timed out", page);
                 AddWarning(context, SearchWarnings.ExecutionFailed);
                 status = MergeVerificationStatus(status, NodeExecutionStatus.Failed);
                 break;
             }
             catch (HttpRequestException exception)
             {
-                logger.LogWarning(exception, "The request for TVmaze show-index page {Page} failed.", page);
+                logger.LogWarning(exception, "TVmaze show-index page {Page} request failed", page);
                 AddWarning(context, SearchWarnings.ExecutionFailed);
                 status = MergeVerificationStatus(status, NodeExecutionStatus.Failed);
                 break;
@@ -1763,7 +1763,7 @@ internal sealed class SearchExecutor(IClient client, ILogger<SearchExecutor> log
                 {
                     logger.LogWarning(
                         exception,
-                        "The TVmaze residual verification failed for show {ShowId}.",
+                        "TVmaze residual verification failed for show {ShowId}",
                         candidate.Id);
                     AddVerificationWarnings(
                         context,

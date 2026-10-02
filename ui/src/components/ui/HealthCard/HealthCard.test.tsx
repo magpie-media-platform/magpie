@@ -213,11 +213,6 @@ describe('HealthCard accessibility', () => {
         expect(screen.getByRole('heading', { level: 2, name: 'Indexers' })).toBeInTheDocument();
     });
 
-    it('supports custom heading level', () => {
-        renderWithRouter(<HealthCard heading="Indexers" counts={defaultCounts} headingLevel={3} />);
-        expect(screen.getByRole('heading', { level: 3, name: 'Indexers' })).toBeInTheDocument();
-    });
-
     it('clickable rows have aria-label', () => {
         renderWithRouter(<HealthCard heading="Indexers" counts={defaultCounts} getStatusUrl={getStatusUrl} />);
 

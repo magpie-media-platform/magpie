@@ -77,14 +77,30 @@ test.describe.serial('Journey 17: read and navigate a populated library', () => 
             await page.getByRole('button', { name: 'Title filtered, edit filter' }).click();
             await page.getByRole('button', { name: 'Clear' }).click();
 
+            const typeFiltered = page.waitForResponse((response) => {
+                const url = new URL(response.url());
+                return (
+                    url.pathname === '/api/content' && (url.searchParams.get('filter') ?? '').includes('contentType')
+                );
+            });
             await page.getByRole('button', { name: 'Filter by Type' }).click();
             await page.getByRole('menuitemradio', { name: 'Movie', exact: true }).click();
+            await typeFiltered;
+            await expect(page.getByTestId('library-page__loading')).toBeHidden();
             await expect(grid.locator('tbody tr').first()).toContainText('Movie');
             await page.getByRole('button', { name: 'Type filtered, edit filter' }).click();
             await page.getByRole('menuitemradio', { name: 'Any' }).click({ force: true });
 
+            const statusFiltered = page.waitForResponse((response) => {
+                const url = new URL(response.url());
+                return (
+                    url.pathname === '/api/content' && (url.searchParams.get('filter') ?? '').includes('fulfillment')
+                );
+            });
             await page.getByRole('button', { name: 'Filter by Status' }).click();
             await page.getByRole('menuitemradio', { name: 'Upgradable', exact: true }).click();
+            await statusFiltered;
+            await expect(page.getByTestId('library-page__loading')).toBeHidden();
             await expect(grid.locator(`[data-row-id="${ids.movie}"]`)).toContainText('Upgradable');
             await page.getByRole('button', { name: 'Status filtered, edit filter' }).click();
             await page.getByRole('menuitemradio', { name: 'Any' }).click({ force: true });
@@ -298,6 +314,7 @@ test.describe.serial('Journey 17: read and navigate a populated library', () => 
             const subjectContent = page.locator('[data-component="subject-content-tab"]');
             await expect(subjectContent.getByText('Journey Feature', { exact: true })).toBeVisible();
             await subjectContent.getByText('Journey Feature', { exact: true }).click();
+            await page.locator('[data-action="open-content"]').click();
             await expect(page).toHaveURL(new RegExp(`/library/${ids.movie}`));
 
             await page.goto(`/subjects/${ids.subject}`);
@@ -362,6 +379,7 @@ test.describe.serial('Journey 17: read and navigate a populated library', () => 
             const calendarEntry = page.locator(`[data-content-id="${ids.upcoming}"]`);
             await expect(calendarEntry).toContainText('Journey Catalog 26');
             await calendarEntry.click();
+            await page.locator('[data-action="open-content"]').click();
             await expect(page).toHaveURL(new RegExp(`/library/${ids.upcoming}`));
 
             await page.goto('/filters');

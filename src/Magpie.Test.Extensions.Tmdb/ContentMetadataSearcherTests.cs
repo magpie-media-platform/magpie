@@ -117,8 +117,7 @@ public class ContentMetadataSearcherTests
         };
 
         // Act
-        var results = await _searcher.SearchAsync(level, searchTerm, "en-US", 1, default)
-            .ConfigureAwait(false);
+        var results = await _searcher.SearchAsync(level, searchTerm, "en-US", 1, default).ConfigureAwait(false);
 
         // Assert
         Assert.That(results, Is.Empty);
@@ -138,8 +137,7 @@ public class ContentMetadataSearcherTests
         };
 
         // Act
-        var results = await _searcher.SearchAsync(level, "Iron Man", "en-US", 1, default)
-            .ConfigureAwait(false);
+        var results = await _searcher.SearchAsync(level, "Iron Man", "en-US", 1, default).ConfigureAwait(false);
 
         // Assert
         Assert.That(results, Is.Empty);
@@ -233,8 +231,7 @@ public class ContentMetadataSearcherTests
         };
 
         // Act
-        var result = await _searcher.AdvancedSearchAsync("tv", query, 25, "en-US", default)
-            .ConfigureAwait(false);
+        var result = await _searcher.AdvancedSearchAsync("tv", query, 25, "en-US", default).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -279,8 +276,7 @@ public class ContentMetadataSearcherTests
         };
 
         // Act
-        var result = await _searcher.AdvancedSearchAsync("tv", query, 25, "en-US", default)
-            .ConfigureAwait(false);
+        var result = await _searcher.AdvancedSearchAsync("tv", query, 25, "en-US", default).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())

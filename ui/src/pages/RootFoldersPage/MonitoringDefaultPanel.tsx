@@ -4,6 +4,7 @@ import { EyeIcon, CircleNotchIcon, FloppyDiskIcon, WarningCircleIcon } from '@ph
 import { Alert } from '@/components/ui/Alert';
 import { Button } from '@/components/ui/Button';
 import { ExternalChangeConflictWarning, StaleSaveConfirmationDialog } from '@/components/ui/ExternalChangeConflict';
+import { Input } from '@/components/ui/Input';
 import { Label } from '@/components/ui/Label';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { Switch } from '@/components/ui/Switch';
@@ -13,15 +14,18 @@ import './MonitoringDefaultPanel.css';
 
 const SETTINGS_GROUP = 'monitoring';
 const SYSTEM_DEFAULT_KEY = 'system-default';
+const MAX_SPREAD_KEY = 'max-spread';
 
 const DEFAULT_MONITORING = true;
 
 type MonitoringFormValues = {
     systemDefault: string;
+    maxSpread: string;
 };
 
 const defaultValues: MonitoringFormValues = {
     systemDefault: String(DEFAULT_MONITORING),
+    maxSpread: '0',
 };
 
 function parseMonitoring(raw: string | undefined): boolean {
@@ -48,9 +52,11 @@ export function MonitoringDefaultPanel() {
         defaultValues,
         fromRecord: (record) => ({
             systemDefault: String(parseMonitoring(record[SYSTEM_DEFAULT_KEY])),
+            maxSpread: record[MAX_SPREAD_KEY] ?? '0',
         }),
     });
     const value = parseMonitoring(values.systemDefault);
+    const maxSpreadValid = /^\d+$/.test(values.maxSpread.trim());
 
     const handleChange = useCallback(
         (next: boolean) => {
@@ -60,8 +66,11 @@ export function MonitoringDefaultPanel() {
     );
 
     const saveSettings = useCallback(() => {
-        void save({ [SYSTEM_DEFAULT_KEY]: String(value) }, { successDescription: 'Default monitoring updated.' });
-    }, [save, value]);
+        void save(
+            { [SYSTEM_DEFAULT_KEY]: String(value), [MAX_SPREAD_KEY]: String(Number(values.maxSpread.trim())) },
+            { successDescription: 'Monitoring settings updated.' },
+        );
+    }, [save, value, values.maxSpread]);
 
     const handleSave = useCallback(() => {
         if (conflictState === 'stale') {
@@ -81,10 +90,10 @@ export function MonitoringDefaultPanel() {
                 <EyeIcon weight="duotone" className="monitoring-default-panel__icon" aria-hidden="true" />
                 <div className="monitoring-default-panel__heading">
                     <h2 id="monitoring-default-title" className="monitoring-default-panel__title">
-                        System Default Monitoring
+                        Monitoring
                     </h2>
                     <p className="monitoring-default-panel__subtitle">
-                        Applies to new content when its root folder monitoring setting is Inherit.
+                        The default monitoring applies to new content when its root folder uses the system default.
                     </p>
                 </div>
             </header>
@@ -129,11 +138,37 @@ export function MonitoringDefaultPanel() {
                                 />
                                 <span>{value ? 'Active' : 'Excluded'}</span>
                             </div>
+                        </div>
+
+                        <div className="monitoring-default-panel__row">
+                            <Label htmlFor="shotgun-max-spread">Max spread</Label>
+                            <Input
+                                id="shotgun-max-spread"
+                                type="number"
+                                inputMode="numeric"
+                                min={0}
+                                step={1}
+                                value={values.maxSpread}
+                                onChange={(event) => handleSettingChange('maxSpread', event.target.value)}
+                                className="monitoring-default-panel__number"
+                                data-setting="max-spread"
+                                error={!maxSpreadValid}
+                                errorMessage={
+                                    maxSpreadValid ? undefined : 'Max spread must be a whole number, 0 or more.'
+                                }
+                            />
+                        </div>
+                        <p className="monitoring-default-panel__info">
+                            The most releases Shotgun grabs at the same time for one item. 0 grabs every acceptable
+                            release.
+                        </p>
+
+                        <div className="monitoring-default-panel__row">
                             <Button
                                 variant="primary"
                                 size="sm"
                                 onClick={handleSave}
-                                disabled={!hasChanges || isUpdating}
+                                disabled={!hasChanges || isUpdating || !maxSpreadValid}
                                 data-action="save-monitoring-default"
                             >
                                 {isUpdating ? (

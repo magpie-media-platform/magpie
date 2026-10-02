@@ -9,67 +9,67 @@ namespace Magpie.Models.MetadataSearch;
 public sealed record MetadataSearchCandidate
 {
     /// <summary>
-    /// Provider type.
+    /// The provider type of the candidate.
     /// </summary>
     public required string ProviderType { get; set; }
 
     /// <summary>
-    /// External ID source.
+    /// The source of the external id.
     /// </summary>
     public required string ExternalIdSource { get; set; }
 
     /// <summary>
-    /// External ID.
+    /// The external id of the candidate.
     /// </summary>
     public required string ExternalId { get; set; }
 
     /// <summary>
-    /// Content type slug.
+    /// The content type slug of the candidate.
     /// </summary>
     public required string ContentType { get; set; }
 
     /// <summary>
-    /// Content hierarchy level slug.
+    /// The content hierarchy level slug of the candidate.
     /// </summary>
     public string? Level { get; set; }
 
     /// <summary>
-    /// Display title.
+    /// The display title of the candidate.
     /// </summary>
     public string? Title { get; set; }
 
     /// <summary>
-    /// Release year.
+    /// The release year of the candidate.
     /// </summary>
     public int? Year { get; set; }
 
     /// <summary>
-    /// Release date.
+    /// The release date of the candidate.
     /// </summary>
     public DateTime? ReleaseDate { get; set; }
 
     /// <summary>
-    /// Overview text.
+    /// The overview text of the candidate.
     /// </summary>
     public string? Overview { get; set; }
 
     /// <summary>
-    /// Language code.
+    /// The language code of the candidate.
     /// </summary>
     public string? Language { get; set; }
 
     /// <summary>
-    /// Thumbnail URL.
+    /// The URL of the thumbnail image.
     /// </summary>
     public Uri? ThumbnailUrl { get; set; }
 
     /// <summary>
-    /// Related subjects.
+    /// The related subjects of the candidate.
     /// </summary>
     public IReadOnlyList<ProviderMetadataSearchSubjectReference> SubjectReferences { get; set; } = [];
 
     /// <summary>
-    /// Other external ids the provider reports for the same real-world item.
+    /// The other external ids that the provider reports for the same item.
     /// </summary>
     public IReadOnlyList<MetadataSearchCandidateExternalId> AdditionalExternalIds { get; set; } = [];
 }

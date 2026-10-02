@@ -757,6 +757,153 @@ public class MusicBrainzContentMetadataProviderRelationshipTests
     }
 
     [Test]
+    public async Task GetRelationshipsAsync_Result_WhenTrackAppearsOnTheAlbumRelease()
+    {
+        // Arrange
+        _client.Setup(client => client.GetEntityAsync(
+                It.Is<EntityCacheKey>(key => key.Kind == EntityKind.ReleaseGroup),
+                It.IsAny<Settings>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new FetchResult<EntityResponseDto>
+            {
+                Outcome = FetchOutcome.Success,
+                Value = new EntityResponseDto
+                {
+                    ReleaseGroup = new ReleaseGroupDto
+                    {
+                        Id = ReleaseGroupMbid,
+                        Title = "In Sight",
+                        Releases = [new ReleaseDto { Id = ReleaseMbid, Status = "Official", Date = "2019-05-03" }]
+                    }
+                }
+            });
+        _client.Setup(client => client.GetEntityAsync(
+                It.Is<EntityCacheKey>(key => key.Kind == EntityKind.Release),
+                It.IsAny<Settings>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new FetchResult<EntityResponseDto>
+            {
+                Outcome = FetchOutcome.Success,
+                Value = new EntityResponseDto
+                {
+                    Release = new ReleaseDto
+                    {
+                        Id = ReleaseMbid,
+                        Media =
+                        [
+                            new MediumDto
+                            {
+                                Position = 1,
+                                Tracks =
+                                [
+                                    new TrackDto
+                                    {
+                                        Id = "63a9abaa-7b6c-4290-83e7-828de5802e7e",
+                                        Position = 1,
+                                        Title = "Bitter Blue",
+                                        Recording = new RecordingDto
+                                        {
+                                            Id = "e3063748-d1cb-450a-b35b-fa17446a9a6b",
+                                            Title = "Bitter Blue"
+                                        }
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                }
+            });
+        _client.Setup(client => client.GetEntityAsync(
+                It.Is<EntityCacheKey>(key =>
+                    key.Kind == EntityKind.Recording && key.Mbid == "63a9abaa-7b6c-4290-83e7-828de5802e7e"),
+                It.IsAny<Settings>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new FetchResult<EntityResponseDto> { Outcome = FetchOutcome.NotFound });
+        _client.Setup(client => client.GetEntityAsync(
+                It.Is<EntityCacheKey>(key =>
+                    key.Kind == EntityKind.Recording && key.Mbid == "e3063748-d1cb-450a-b35b-fa17446a9a6b"),
+                It.IsAny<Settings>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new FetchResult<EntityResponseDto>
+            {
+                Outcome = FetchOutcome.Success,
+                Value = new EntityResponseDto
+                {
+                    Recording = new RecordingDto
+                    {
+                        Id = "e3063748-d1cb-450a-b35b-fa17446a9a6b",
+                        ArtistCredit =
+                        [
+                            new ArtistCreditDto
+                            {
+                                Name = "Kind of Blue",
+                                Artist = new ArtistDto
+                                {
+                                    Id = "4cd13a09-ea6e-4eb5-9bc4-4b9141bdd3cd",
+                                    Name = "Kind of Blue"
+                                }
+                            }
+                        ]
+                    }
+                }
+            });
+        var contribution = new MetadataContribution
+        {
+            ProviderType = Constants.ProviderType,
+            Source = "musicbrainz:track:63a9abaa-7b6c-4290-83e7-828de5802e7e"
+        };
+        contribution.ExternalIds.Add(new ExternalId
+        {
+            Source = Constants.ProviderType,
+            Value = "63a9abaa-7b6c-4290-83e7-828de5802e7e",
+            Ordinal = 0
+        });
+        var album = new MetadataContribution
+        {
+            ProviderType = Constants.ProviderType,
+            Source = "musicbrainz:release-group:" + ReleaseGroupMbid
+        };
+        album.ExternalIds.Add(new ExternalId
+        {
+            Source = Constants.ProviderType,
+            Value = ReleaseGroupMbid,
+            Ordinal = 0
+        });
+
+        // Act
+        var relationships = await _subject.GetRelationshipsAsync(
+            new MetadataRelationshipRequest
+            {
+                Item = new ContentHierarchyItem
+                {
+                    ContentType = "music",
+                    Level = "track",
+                    Slug = "63a9abaa-7b6c-4290-83e7-828de5802e7e",
+                    Name = "Bitter Blue"
+                },
+                Contribution = contribution,
+                ExistingMetadata = [],
+                AncestorMetadata = [album],
+            },
+            default).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(relationships.Select(value => value.RelationshipKind), Is.EqualTo(["performer"]));
+            Assert.That(relationships.Select(value => value.SubjectName), Is.EqualTo(["Kind of Blue"]));
+        }
+
+        _client.Verify(
+            client => client.GetEntityAsync(
+                It.Is<EntityCacheKey>(key =>
+                    key.Kind == EntityKind.Recording && key.Mbid == "63a9abaa-7b6c-4290-83e7-828de5802e7e"),
+                It.IsAny<Settings>(),
+                It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Test]
     public async Task GetRelationshipsAsync_Result_WhenRepresentativeReleaseFails()
     {
         // Arrange

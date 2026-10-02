@@ -192,8 +192,7 @@ internal sealed class MetadataContainerRepository(
         {
             if (!currentById.TryGetValue(patchId(update), out var target))
             {
-                throw new MagpieException(
-                    $"The metadata changes do not contain {entityName} {patchId(update)}.");
+                throw new MagpieException($"The metadata changes do not contain {entityName} {patchId(update)}.");
             }
 
             applyUpdate(target, update);
@@ -255,8 +254,10 @@ internal sealed class MetadataContainerRepository(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "The metadata container repository failed to read metadata container " +
-                "{ContainerId}.", id);
+            logger.LogError(
+                ex,
+                "The metadata container repository failed to read metadata container {ContainerId}.",
+                id);
             throw;
         }
     }
@@ -368,8 +369,10 @@ internal sealed class MetadataContainerRepository(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "The metadata container repository failed to add a contribution to container " +
-                "{ContainerId}.", containerId);
+            logger.LogError(
+                ex,
+                "The metadata container repository failed to add a contribution to container {ContainerId}.",
+                containerId);
             throw;
         }
     }
@@ -419,6 +422,7 @@ internal sealed class MetadataContainerRepository(
                     existing.Language = incoming.Language;
                     existing.Overview = incoming.Overview;
                     existing.PublishDate = incoming.PublishDate;
+                    existing.PublishDatePrecision = incoming.PublishDatePrecision;
                     existing.Duration = incoming.Duration;
                     existing.SequenceNumber = incoming.SequenceNumber;
                     existing.ProductionStatus = incoming.ProductionStatus;
@@ -531,8 +535,7 @@ internal sealed class MetadataContainerRepository(
             contributionIds.Distinct().Count() != contributionIds.Count ||
             contributionIds.Any(id => !providerContributions.ContainsKey(id)))
         {
-            throw new MagpieException(
-                "The provider contribution order no longer matches the metadata container.");
+            throw new MagpieException("The provider contribution order no longer matches the metadata container.");
         }
 
         var changed = false;
@@ -598,9 +601,7 @@ internal sealed class MetadataContainerRepository(
                             i => i.MetadataContributionId,
                             c => c.Id,
                             (i, c) => new { i.Id, c.MetadataContainerId })
-                        .AnyAsync(
-                            x => x.Id == imageId && x.MetadataContainerId == containerId,
-                            cancellationToken)
+                        .AnyAsync(x => x.Id == imageId && x.MetadataContainerId == containerId, cancellationToken)
                         .ConfigureAwait(false);
 
                     if (!belongs)
@@ -695,8 +696,10 @@ internal sealed class MetadataContainerRepository(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "The metadata container repository failed to list relationship keys for contribution " +
-                "{ContributionId}.", contributionId);
+            logger.LogError(
+                ex,
+                "The metadata container repository failed to list relationship keys for contribution {ContributionId}.",
+                contributionId);
             throw;
         }
     }
@@ -804,8 +807,10 @@ internal sealed class MetadataContainerRepository(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "The metadata container repository failed to remove {ContributionCount} " +
-                "contributions.", contributions.Count);
+            logger.LogError(
+                ex,
+                "The metadata container repository failed to remove {ContributionCount} contributions.",
+                contributions.Count);
             throw;
         }
     }
@@ -845,9 +850,7 @@ internal sealed class MetadataContainerRepository(
                     await context.Set<Relationship>()
                         .Where(r => r.RelatedMetadataContainerId != null &&
                             containerIds.Contains(r.RelatedMetadataContainerId.Value))
-                        .ExecuteUpdateAsync(
-                            s => s.SetProperty(r => r.RelatedMetadataContainerId, (Guid?)null),
-                            ct)
+                        .ExecuteUpdateAsync(s => s.SetProperty(r => r.RelatedMetadataContainerId, (Guid?)null), ct)
                         .ConfigureAwait(false);
 
                     var contributionIds = await (
@@ -915,8 +918,10 @@ internal sealed class MetadataContainerRepository(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "The metadata container repository failed to remove {ContainerCount} " +
-                "containers.", containerIds.Count);
+            logger.LogError(
+                ex,
+                "The metadata container repository failed to remove {ContainerCount} containers.",
+                containerIds.Count);
             throw;
         }
     }
@@ -1064,7 +1069,10 @@ internal sealed class MetadataContainerRepository(
 
                     var contribution = existing
                         ?? await ResolveOrCreateUserContributionAsync(
-                            patch.ContainerId, modifiedByUserId, now, ct).ConfigureAwait(false);
+                            patch.ContainerId,
+                            modifiedByUserId,
+                            now,
+                            ct).ConfigureAwait(false);
 
                     ApplyScalarPatches(patch, contribution);
                     await ApplySubItemPatchesAsync(patch, contribution.Id, ct).ConfigureAwait(false);
@@ -1109,8 +1117,10 @@ internal sealed class MetadataContainerRepository(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "The metadata container repository failed to patch container " +
-                "{ContainerId}.", patch.ContainerId);
+            logger.LogError(
+                ex,
+                "The metadata container repository failed to patch container {ContainerId}.",
+                patch.ContainerId);
             throw;
         }
     }
@@ -1570,7 +1580,9 @@ internal sealed class MetadataContainerRepository(
             {
                 var kind = RequireValue(add.Kind?.Value, "Relationship 'kind' is required.");
                 var relatedContainerId = await ResolveRelatedSubjectContainerAsync(
-                    add, modifiedByUserId, cancellationToken).ConfigureAwait(false);
+                    add,
+                    modifiedByUserId,
+                    cancellationToken).ConfigureAwait(false);
                 context.Relationships.Add(new Relationship
                 {
                     Id = add.Id == Guid.Empty ? Guid.NewGuid() : add.Id,
@@ -1611,7 +1623,9 @@ internal sealed class MetadataContainerRepository(
                     !string.IsNullOrWhiteSpace(update.SubjectKind))
                 {
                     target.RelatedMetadataContainerId = await ResolveRelatedSubjectContainerAsync(
-                        update, modifiedByUserId, cancellationToken).ConfigureAwait(false);
+                        update,
+                        modifiedByUserId,
+                        cancellationToken).ConfigureAwait(false);
                 }
             }
         }

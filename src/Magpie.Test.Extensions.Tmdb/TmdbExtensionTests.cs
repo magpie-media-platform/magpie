@@ -28,8 +28,6 @@ public class TmdbExtensionTests
                 extension.Id,
                 Is.EqualTo(new Guid("FE120126-EFD7-4DB1-A3A1-8B8A881E013A")));
             Assert.That(extension.Name, Is.EqualTo("TMDb"));
-            Assert.That(extension.Version, Is.EqualTo(new Version(1, 0, 0)));
-            Assert.That(extension.TargetABI, Is.EqualTo("[1.0.0,)"));
         }
     }
 

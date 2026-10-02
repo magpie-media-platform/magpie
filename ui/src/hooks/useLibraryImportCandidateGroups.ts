@@ -85,7 +85,7 @@ export function useLibraryImportCandidateGroups(params?: LibraryImportCandidateG
     useInvalidateQueriesOnEvents(
         ['library.scan.completed', 'library.importCandidate.updated'],
         [libraryImportCandidateGroupQueryKeys.list(params)],
-        { debounceMs: 300, exact: true, maxWaitMs: 1200, owner: 'library-import-candidate-groups' },
+        { debounceMs: 300, exact: true, maxWaitMs: 1200 },
     );
 
     const query = useQuery({

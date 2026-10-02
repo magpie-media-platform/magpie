@@ -41,7 +41,7 @@ internal sealed class QueryPlanner : IQueryPlanner
 
         var ordinaryTerm = string.IsNullOrWhiteSpace(request.OrdinarySearchTerm)
             ? null
-            : request.OrdinarySearchTerm!.Trim();
+            : request.OrdinarySearchTerm.Trim();
         var requestedPage = Math.Max(1, request.Page);
         var strategy = knownEmpty
             ? QueryStrategy.Empty
@@ -976,28 +976,13 @@ internal sealed class QueryPlanner : IQueryPlanner
         ElementField field,
         List<ElementPredicate> predicates)
     {
-        foreach (var criterion in criteria.And)
-        {
-            var (op, negate) = criterion.Operator.NormalizeOperator(criterion.Negate);
-            var values = TextValues(criterion);
-            if (!IsTextOperator(op) ||
-                values.Count == 0 &&
-                op is not CriteriaValueOperator.IsNull
-                    and not CriteriaValueOperator.IsNotNull)
-            {
-                return false;
-            }
-
-            predicates.Add(new ElementPredicate
-            {
-                Field = field,
-                Operator = op,
-                Negate = negate,
-                StringValues = values
-            });
-        }
-
-        return true;
+        return TryAddPredicates(
+            criteria,
+            field,
+            predicates,
+            TextValues,
+            IsTextOperator,
+            (predicate, values) => predicate with { StringValues = values });
     }
 
     private bool TryAddUriPredicates(
@@ -1005,28 +990,13 @@ internal sealed class QueryPlanner : IQueryPlanner
         ElementField field,
         List<ElementPredicate> predicates)
     {
-        foreach (var criterion in criteria.And)
-        {
-            var (op, negate) = criterion.Operator.NormalizeOperator(criterion.Negate);
-            var values = UriValues(criterion);
-            if (!IsTextOperator(op) ||
-                values.Count == 0 &&
-                op is not CriteriaValueOperator.IsNull
-                    and not CriteriaValueOperator.IsNotNull)
-            {
-                return false;
-            }
-
-            predicates.Add(new ElementPredicate
-            {
-                Field = field,
-                Operator = op,
-                Negate = negate,
-                StringValues = values
-            });
-        }
-
-        return true;
+        return TryAddPredicates(
+            criteria,
+            field,
+            predicates,
+            UriValues,
+            IsTextOperator,
+            (predicate, values) => predicate with { StringValues = values });
     }
 
     private bool TryAddDatePredicates(
@@ -1034,28 +1004,13 @@ internal sealed class QueryPlanner : IQueryPlanner
         ElementField field,
         List<ElementPredicate> predicates)
     {
-        foreach (var criterion in criteria.And)
-        {
-            var (op, negate) = criterion.Operator.NormalizeOperator(criterion.Negate);
-            var values = DateValues(criterion);
-            if (!IsElementOrderedOperator(op) ||
-                values.Count == 0 &&
-                op is not CriteriaValueOperator.IsNull
-                    and not CriteriaValueOperator.IsNotNull)
-            {
-                return false;
-            }
-
-            predicates.Add(new ElementPredicate
-            {
-                Field = field,
-                Operator = op,
-                Negate = negate,
-                DateValues = values
-            });
-        }
-
-        return true;
+        return TryAddPredicates(
+            criteria,
+            field,
+            predicates,
+            DateValues,
+            IsElementOrderedOperator,
+            (predicate, values) => predicate with { DateValues = values });
     }
 
     private bool TryAddNumberPredicates(
@@ -1063,11 +1018,28 @@ internal sealed class QueryPlanner : IQueryPlanner
         ElementField field,
         List<ElementPredicate> predicates)
     {
+        return TryAddPredicates(
+            criteria,
+            field,
+            predicates,
+            NumberValues,
+            IsElementOrderedOperator,
+            (predicate, values) => predicate with { NumberValues = values });
+    }
+
+    private bool TryAddPredicates<T, TValue>(
+        CriteriaSet<PropertyCriterion<T>> criteria,
+        ElementField field,
+        List<ElementPredicate> predicates,
+        Func<PropertyCriterion<T>, IReadOnlyList<TValue>> readValues,
+        Func<CriteriaValueOperator, bool> isValidOperator,
+        Func<ElementPredicate, IReadOnlyList<TValue>, ElementPredicate> assignValues)
+    {
         foreach (var criterion in criteria.And)
         {
             var (op, negate) = criterion.Operator.NormalizeOperator(criterion.Negate);
-            var values = NumberValues(criterion);
-            if (!IsElementOrderedOperator(op) ||
+            var values = readValues(criterion);
+            if (!isValidOperator(op) ||
                 values.Count == 0 &&
                 op is not CriteriaValueOperator.IsNull
                     and not CriteriaValueOperator.IsNotNull)
@@ -1075,13 +1047,14 @@ internal sealed class QueryPlanner : IQueryPlanner
                 return false;
             }
 
-            predicates.Add(new ElementPredicate
-            {
-                Field = field,
-                Operator = op,
-                Negate = negate,
-                NumberValues = values
-            });
+            predicates.Add(assignValues(
+                new ElementPredicate
+                {
+                    Field = field,
+                    Operator = op,
+                    Negate = negate
+                },
+                values));
         }
 
         return true;
@@ -1388,10 +1361,7 @@ internal sealed class QueryPlanner : IQueryPlanner
                     Contributes = "candidate rows",
                     Route = route,
                     AnchorKind = anchorKind,
-                    SubjectBindings = [.. (strategy is QueryStrategy.MoviePersonCredits
-                        or QueryStrategy.TvPersonCredits
-                        ? personSubjectIndexes
-                        : subjectIndexes).Select(index => subjectBindings[index])],
+                    SubjectBindings = [.. subjectIndexes.Select(index => subjectBindings[index])],
                     PushedFilters = pushed,
                     OrdinarySearchTerm = ordinaryTerm,
                     Resolve = resolve,
@@ -1769,8 +1739,7 @@ internal sealed class QueryPlanner : IQueryPlanner
         {
             QueryStrategy.MovieSearch or QueryStrategy.TvSearch => QueryAnchorKind.Search,
             QueryStrategy.MovieDiscover or QueryStrategy.TvDiscover => QueryAnchorKind.Discover,
-            QueryStrategy.MoviePersonCredits or QueryStrategy.TvPersonCredits =>
-                QueryAnchorKind.PersonCredits,
+            QueryStrategy.TvPersonCredits => QueryAnchorKind.PersonCredits,
             QueryStrategy.ContentIds => QueryAnchorKind.ContentIds,
             _ => throw new ArgumentOutOfRangeException(nameof(strategy))
         };
@@ -1795,7 +1764,7 @@ internal sealed class QueryPlanner : IQueryPlanner
             return ["title query"];
         }
 
-        if (strategy is QueryStrategy.MoviePersonCredits or QueryStrategy.TvPersonCredits)
+        if (strategy == QueryStrategy.TvPersonCredits)
         {
             return [];
         }
@@ -1996,8 +1965,7 @@ internal sealed class QueryPlanner : IQueryPlanner
             .Select(criterion =>
             {
                 var values = TextValues(criterion);
-                var mapped = values.Select(MapRole).Where(role => role is not null).Select(role => role!.Value)
-                    .Distinct().ToList();
+                var mapped = values.Select(MapRole).OfType<SubjectRole>().Distinct().ToList();
                 hasUnmappedValues |= values.Any(value => MapRole(value) is null);
                 return mapped;
             })

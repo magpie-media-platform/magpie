@@ -28,7 +28,7 @@ public interface ILibraryImportService
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Imports a file and then applies its explicitly accepted rename preview.
+    /// Imports a file with its explicitly accepted rename preview.
     /// </summary>
     /// <param name="candidateId">The claimed import candidate</param>
     /// <param name="matchIndex">The selected metadata match</param>
@@ -226,7 +226,7 @@ public interface ILibraryImportService
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Finds the existing library item again for candidates with one match, and saves the target when it changed.
+    /// Refreshes the library targets of candidates.
     /// </summary>
     /// <param name="candidates">The candidates to resolve</param>
     /// <param name="actingUserId">The user to record as the actor, or <see langword="null"/> for the system</param>
@@ -314,8 +314,7 @@ public interface ILibraryImportService
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Lists the cleanup of files attached to containers and of duplicate copies, without a change to the library
-    /// or to storage.
+    /// Lists a file cleanup plan without a change to the library or to storage.
     /// </summary>
     /// <param name="rootId">The root item to plan for, or <see langword="null"/> for the whole library</param>
     /// <param name="cancellationToken">The token that cancels the operation</param>

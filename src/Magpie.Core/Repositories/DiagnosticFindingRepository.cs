@@ -66,7 +66,7 @@ internal sealed class DiagnosticFindingRepository(
             var totalItems = await findings.CountAsync(cancellationToken).ConfigureAwait(false);
             findings = findings.Skip((paging.PageNumber - 1) * paging.PageSize).Take(paging.PageSize);
 
-            return new PagedList<DiagnosticFinding>
+            return new()
             {
                 Items = await findings.ToListAsync(cancellationToken).ConfigureAwait(false),
                 TotalItems = totalItems,
@@ -116,10 +116,7 @@ internal sealed class DiagnosticFindingRepository(
         }
     }
 
-    public async Task<bool> DeleteAsync(
-        Guid id,
-        Guid? deletedByUserId,
-        CancellationToken cancellationToken = default)
+    public async Task<bool> DeleteAsync(Guid id, Guid? deletedByUserId, CancellationToken cancellationToken = default)
     {
         try
         {

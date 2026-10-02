@@ -8,7 +8,7 @@ namespace Magpie.Models.MetadataSearch;
 public sealed record MetadataSearchMatch
 {
     /// <summary>
-    /// Provider candidate.
+    /// The provider candidate.
     /// </summary>
     public required MetadataSearchCandidate Candidate { get; init; }
 
@@ -18,7 +18,7 @@ public sealed record MetadataSearchMatch
     public required bool InLibrary { get; init; }
 
     /// <summary>
-    /// Existing content hierarchy item identifier.
+    /// The id of the existing content hierarchy item.
     /// </summary>
     public Guid? ExistingContentHierarchyItemId { get; init; }
 }

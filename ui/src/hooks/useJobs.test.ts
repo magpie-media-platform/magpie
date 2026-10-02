@@ -91,7 +91,7 @@ const mockSpecs: ApiJobSpec[] = [
             {
                 name: 'contentHierarchyItemId',
                 description: 'The content item id.',
-                type: 0,
+                type: 'String',
                 required: true,
                 defaultValue: null,
             },

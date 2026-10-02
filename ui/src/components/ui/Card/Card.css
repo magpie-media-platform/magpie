@@ -32,16 +32,7 @@
         padding: var(--space-lg);
     }
 
-    .card-footer {
-        padding: var(--space-lg);
-        border-top: 1px solid var(--border-default);
-    }
-
     .card-header + .card-body {
-        padding-top: var(--space-lg);
-    }
-
-    .card-body + .card-footer {
         padding-top: var(--space-lg);
     }
 }

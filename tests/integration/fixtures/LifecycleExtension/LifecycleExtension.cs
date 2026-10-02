@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Reflection;
 using System.Text;
 using System.Threading;
@@ -39,13 +40,11 @@ public sealed class LifecycleExtension :
     public Guid Id => ExtensionId;
 
     /// <inheritdoc />
-    public Version Version => new(1, 0, 0);
-
-    /// <inheritdoc />
     public string Name => "Lifecycle fixture";
 
     /// <inheritdoc />
-    public string? TargetABI => "[1.0.0,)";
+    public string? TargetABI => GetType().Assembly.GetCustomAttributes<AssemblyMetadataAttribute>()
+        .FirstOrDefault(attribute => attribute.Key == nameof(TargetABI))?.Value;
 
     /// <inheritdoc />
     public string ProviderType => "lifecycle-notification";
@@ -179,7 +178,7 @@ public sealed class LifecycleExtension :
 
         using var reader = new StreamReader(stream);
         var version = GetType().Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?
-            .InformationalVersion ?? Version.ToString();
+            .InformationalVersion ?? ((IExtension)this).Version.ToString();
         var script = reader.ReadToEnd().Replace(AssetVersionToken, version, StringComparison.Ordinal);
         return Task.FromResult<Stream?>(new MemoryStream(Encoding.UTF8.GetBytes(script), writable: false));
     }

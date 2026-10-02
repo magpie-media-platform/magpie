@@ -11,6 +11,7 @@ interface TierListTiersSectionProps {
     deletingTierId: string | null;
     isDeleting: boolean;
     cloningTierId: string | null;
+    sharedListNames: ReadonlyMap<string, string[]> | null;
     onEditTier: (tierId: string) => void;
     onCloneTier: (tierId: string) => void;
     onDeleteTier: (tierId: string, tierName: string) => void;
@@ -23,6 +24,7 @@ export function TierListTiersSection({
     deletingTierId,
     isDeleting,
     cloningTierId,
+    sharedListNames,
     onEditTier,
     onCloneTier,
     onDeleteTier,
@@ -60,6 +62,7 @@ export function TierListTiersSection({
                             isDeleting={isDeleting && deletingTierId === tier.id}
                             isCloning={cloningTierId === tier.id}
                             canManage={canManage}
+                            sharedWith={sharedListNames?.get(tier.id)}
                             isMoving={sortable.movingId === tier.id}
                             isReorderDisabled={sortable.isMoving}
                             isDragging={sortable.draggedId === tier.id}

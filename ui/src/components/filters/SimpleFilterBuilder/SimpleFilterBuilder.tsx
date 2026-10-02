@@ -513,7 +513,7 @@ export function SimpleFilterBuilder({
             {context === 'subject' && (
                 <>
                     <div className="simple-filter-builder__field">
-                        <Label htmlFor="sfb-subject-name">Related</Label>
+                        <Label htmlFor="sfb-subject-name">Name</Label>
                         <div className="simple-filter-builder__subject">
                             <Select
                                 value={effectiveSubjectKind || ANY_VALUE}

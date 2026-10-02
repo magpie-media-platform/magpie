@@ -45,6 +45,13 @@ internal sealed class ContentFileServiceTemplateCases
             "source",
             new[] { "INCEPTION" });
         yield return new TestCaseData(
+            "{Title:00}.{Ext}",
+            "24-7",
+            null,
+            null,
+            "source.mkv",
+            new[] { "24-7.mkv" });
+        yield return new TestCaseData(
             "{Title:reverse}",
             "Inception",
             null,

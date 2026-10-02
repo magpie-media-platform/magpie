@@ -53,9 +53,7 @@ internal sealed class DownloadClientRepository(
                 string.Equals(pair.Value, value, StringComparison.Ordinal));
     }
 
-    private static void ApplyPatch(
-        IDictionary<string, string> values,
-        DictionaryPatch<string, string, string> patch)
+    private static void ApplyPatch(IDictionary<string, string> values, DictionaryPatch<string, string, string> patch)
     {
         if (patch.Add is not null)
         {
@@ -187,8 +185,10 @@ internal sealed class DownloadClientRepository(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "The download client repository failed to read download client " +
-                "{DownloadClientId}.", id);
+            logger.LogError(
+                ex,
+                "The download client repository failed to read download client {DownloadClientId}.",
+                id);
             throw;
         }
     }
@@ -240,8 +240,10 @@ internal sealed class DownloadClientRepository(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "The download client repository failed to create download client " +
-                "{DownloadClientName}.", model.Name);
+            logger.LogError(
+                ex,
+                "The download client repository failed to create download client {DownloadClientName}.",
+                model.Name);
             throw;
         }
     }
@@ -318,7 +320,8 @@ internal sealed class DownloadClientRepository(
                     {
                         await transactionManager.OnCommittedAsync(
                             token => eventBus.PublishAsync(
-                                DownloadEventBuilder.BuildDownloadClientUpdatedEvent(model.Id, changedFields), token),
+                                DownloadEventBuilder.BuildDownloadClientUpdatedEvent(model.Id, changedFields),
+                                token),
                             cancellationToken).ConfigureAwait(false);
                     }
 
@@ -328,8 +331,10 @@ internal sealed class DownloadClientRepository(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "The download client repository failed to update download client " +
-                "{DownloadClientId}.", model.Id);
+            logger.LogError(
+                ex,
+                "The download client repository failed to update download client {DownloadClientId}.",
+                model.Id);
             throw;
         }
     }
@@ -389,8 +394,10 @@ internal sealed class DownloadClientRepository(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "The download client repository failed to delete download client " +
-                "{DownloadClientId}.", id);
+            logger.LogError(
+                ex,
+                "The download client repository failed to delete download client {DownloadClientId}.",
+                id);
             throw;
         }
     }
@@ -584,8 +591,10 @@ internal sealed class DownloadClientRepository(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "The download client repository failed to patch download client " +
-                "{DownloadClientId}.", patch.Id);
+            logger.LogError(
+                ex,
+                "The download client repository failed to patch download client {DownloadClientId}.",
+                patch.Id);
             throw;
         }
     }

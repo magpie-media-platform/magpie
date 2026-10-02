@@ -73,7 +73,9 @@ internal sealed class RetentionCleanupJob(
     private const int DefaultFailedDownloadRetentionDays = 30;
 
     private static string? ValidateRetentionDays(
-        string? value, IReadOnlyDictionary<string, string> parameters, DateTime utcNow) =>
+        string? value,
+        IReadOnlyDictionary<string, string> parameters,
+        DateTime utcNow) =>
         int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var days) &&
         days > utcNow.Ticks / TimeSpan.TicksPerDay
             ? "exceeds the supported date range." : null;
@@ -95,10 +97,7 @@ internal sealed class RetentionCleanupJob(
                     DefaultAuditRecordDays));
         var releaseCutoff = now -
             TimeSpan.FromDays(
-                ReadRetentionDays(
-                    jobContext.Parameters,
-                    ReleaseObservationRetentionDaysParameter,
-                    DefaultReleaseDays));
+                ReadRetentionDays(jobContext.Parameters, ReleaseObservationRetentionDaysParameter, DefaultReleaseDays));
         var failedDownloadCutoff = now -
             TimeSpan.FromDays(ReadRetentionDays(
                 jobContext.Parameters,
@@ -116,7 +115,7 @@ internal sealed class RetentionCleanupJob(
                         JobExecutionStatus.Failed,
                         JobExecutionStatus.Cancelled,
                     ],
-                    CompletedAt = new Range<DateTime>(null, jobExecutionCutoff),
+                    CompletedAt = new(null, jobExecutionCutoff),
                 },
                 cancellationToken)
             .ConfigureAwait(false);
@@ -128,7 +127,7 @@ internal sealed class RetentionCleanupJob(
 
         progressReporter.Report(null, "The retention cleanup will delete old release observations.");
         var releasesDeleted = await releaseRepository.DeleteWhereAsync(
-            new ReleaseQuery { ObservedAt = new Range<DateTime>(null, releaseCutoff) },
+            new ReleaseQuery { ObservedAt = new(null, releaseCutoff) },
             cancellationToken).ConfigureAwait(false);
 
         progressReporter.Report(null, "The retention cleanup will delete old failed downloads.");
@@ -139,19 +138,19 @@ internal sealed class RetentionCleanupJob(
         progressReporter.Report(null, "The retention cleanup completed.");
 
         logger.LogInformation(
-            "The retention cleanup deleted {JobExecutionsDeleted} job executions before {JobExecutionCutoff:O}.",
+            "The retention cleanup deleted {JobExecutionsDeleted} job executions before {JobExecutionCutoff:O}",
             jobExecutionsDeleted,
             jobExecutionCutoff);
         logger.LogInformation(
-            "The retention cleanup deleted {AuditRecordsDeleted} activity records before {AuditRecordCutoff:O}.",
+            "The retention cleanup deleted {AuditRecordsDeleted} activity records before {AuditRecordCutoff:O}",
             auditRecordsDeleted,
             auditRecordCutoff);
         logger.LogInformation(
-            "The retention cleanup deleted {ReleasesDeleted} release observations before {ReleaseCutoff:O}.",
+            "The retention cleanup deleted {ReleasesDeleted} release observations before {ReleaseCutoff:O}",
             releasesDeleted,
             releaseCutoff);
         logger.LogInformation(
-            "The retention cleanup deleted {FailedDownloadsDeleted} failed downloads before {FailedDownloadCutoff:O}.",
+            "The retention cleanup deleted {FailedDownloadsDeleted} failed downloads before {FailedDownloadCutoff:O}",
             failedDownloadsDeleted,
             failedDownloadCutoff);
     }

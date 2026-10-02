@@ -20,7 +20,7 @@ import type { ContentListItem } from '@/types';
 import { LibraryGalleryTile } from './LibraryGalleryTile';
 import { LibraryGalleryToolbar } from './LibraryGalleryToolbar';
 import { LibraryMobileCard } from './LibraryMobileCard';
-import { PAGE_SIZE } from './useLibraryPage';
+import { PAGE_SIZE } from './libraryPageConstants';
 
 const LIBRARY_SORT_OPTIONS: MobileListSortOption[] = [
     { id: 'title', label: 'Title' },

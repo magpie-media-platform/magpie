@@ -70,7 +70,6 @@ public sealed class ContentHierarchyItemRepositoryDuplicateRootsTests
     [TearDown]
     public void TearDown()
     {
-        _context.Database.CloseConnection();
         _context.Dispose();
     }
 
@@ -78,9 +77,86 @@ public sealed class ContentHierarchyItemRepositoryDuplicateRootsTests
     public async Task FindDuplicateRootsAsync_ReportsRoots_WhenTheyShareAnIdentityAtTheSameTypeAndLevel()
     {
         // Arrange
-        var tvmaze = AddItem("tv", "show", null, Contribution("tvmaze", 0, ("tvmaze", "1"), ("imdb", "tt1")));
-        var wikidata = AddItem("tv", "show", null, Contribution("wikidata", 0, ("wikidata", "Q1"), ("imdb", "tt1")));
-        AddItem("tv", "show", null, Contribution("first", 0, ("imdb", "tt2")));
+        var tvmaze = new ContentHierarchyItem
+        {
+            Id = Guid.NewGuid(),
+            ParentId = null,
+            ContentType = "tv",
+            Level = "show",
+            Slug = $"item-{Guid.NewGuid():N}",
+            Name = "Item",
+            CreatedAt = new DateTime(2026, 1, 1),
+            MetadataContainer = new MetadataContainer
+            {
+                Contributions =
+                {
+                    new MetadataContribution
+                    {
+                        ProviderType = "tvmaze",
+                        Ordinal = 0,
+                        ExternalIds =
+                        {
+                            new ExternalId { Source = "tvmaze", Value = "1" },
+                            new ExternalId { Source = "imdb", Value = "tt1" },
+                        }
+                    },
+                }
+            }
+        };
+        _context.ContentHierarchyItems.Add(tvmaze);
+        var wikidata = new ContentHierarchyItem
+        {
+            Id = Guid.NewGuid(),
+            ParentId = null,
+            ContentType = "tv",
+            Level = "show",
+            Slug = $"item-{Guid.NewGuid():N}",
+            Name = "Item",
+            CreatedAt = new DateTime(2026, 1, 1),
+            MetadataContainer = new MetadataContainer
+            {
+                Contributions =
+                {
+                    new MetadataContribution
+                    {
+                        ProviderType = "wikidata",
+                        Ordinal = 0,
+                        ExternalIds =
+                        {
+                            new ExternalId { Source = "wikidata", Value = "Q1" },
+                            new ExternalId { Source = "imdb", Value = "tt1" },
+                        }
+                    },
+                }
+            }
+        };
+        _context.ContentHierarchyItems.Add(wikidata);
+        var item3 = new ContentHierarchyItem
+        {
+            Id = Guid.NewGuid(),
+            ParentId = null,
+            ContentType = "tv",
+            Level = "show",
+            Slug = $"item-{Guid.NewGuid():N}",
+            Name = "Item",
+            CreatedAt = new DateTime(2026, 1, 1),
+            MetadataContainer = new MetadataContainer
+            {
+                Contributions =
+                {
+                    new MetadataContribution
+                    {
+                        ProviderType = "first",
+                        Ordinal = 0,
+                        ExternalIds =
+                        {
+                            new ExternalId { Source = "imdb", Value = "tt2" },
+                        }
+                    },
+                }
+            }
+        };
+        _context.ContentHierarchyItems.Add(item3);
         await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
@@ -99,8 +175,58 @@ public sealed class ContentHierarchyItemRepositoryDuplicateRootsTests
     public async Task FindDuplicateRootsAsync_IgnoresCase_WhenProvidersCaseTheIdentityDifferently()
     {
         // Arrange
-        var upper = AddItem("tv", "show", null, Contribution("first", 0, ("IMDB", "TT1")));
-        var lower = AddItem("tv", "show", null, Contribution("second", 0, ("imdb", "tt1")));
+        var upper = new ContentHierarchyItem
+        {
+            Id = Guid.NewGuid(),
+            ParentId = null,
+            ContentType = "tv",
+            Level = "show",
+            Slug = $"item-{Guid.NewGuid():N}",
+            Name = "Item",
+            CreatedAt = new DateTime(2026, 1, 1),
+            MetadataContainer = new MetadataContainer
+            {
+                Contributions =
+                {
+                    new MetadataContribution
+                    {
+                        ProviderType = "first",
+                        Ordinal = 0,
+                        ExternalIds =
+                        {
+                            new ExternalId { Source = "IMDB", Value = "TT1" },
+                        }
+                    },
+                }
+            }
+        };
+        _context.ContentHierarchyItems.Add(upper);
+        var lower = new ContentHierarchyItem
+        {
+            Id = Guid.NewGuid(),
+            ParentId = null,
+            ContentType = "tv",
+            Level = "show",
+            Slug = $"item-{Guid.NewGuid():N}",
+            Name = "Item",
+            CreatedAt = new DateTime(2026, 1, 1),
+            MetadataContainer = new MetadataContainer
+            {
+                Contributions =
+                {
+                    new MetadataContribution
+                    {
+                        ProviderType = "second",
+                        Ordinal = 0,
+                        ExternalIds =
+                        {
+                            new ExternalId { Source = "imdb", Value = "tt1" },
+                        }
+                    },
+                }
+            }
+        };
+        _context.ContentHierarchyItems.Add(lower);
         await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
@@ -119,13 +245,67 @@ public sealed class ContentHierarchyItemRepositoryDuplicateRootsTests
     public async Task FindDuplicateRootsAsync_IgnoresStaleValue_WhenAHigherContributionOverridesIt()
     {
         // Arrange
-        AddItem(
-            "tv",
-            "show",
-            null,
-            Contribution("current", 0, ("imdb", "tt5")),
-            Contribution("stale", 1, ("imdb", "tt1")));
-        AddItem("tv", "show", null, Contribution("first", 0, ("imdb", "tt1")));
+        var item6 = new ContentHierarchyItem
+        {
+            Id = Guid.NewGuid(),
+            ParentId = null,
+            ContentType = "tv",
+            Level = "show",
+            Slug = $"item-{Guid.NewGuid():N}",
+            Name = "Item",
+            CreatedAt = new DateTime(2026, 1, 1),
+            MetadataContainer = new MetadataContainer
+            {
+                Contributions =
+                {
+                    new MetadataContribution
+                    {
+                        ProviderType = "current",
+                        Ordinal = 0,
+                        ExternalIds =
+                        {
+                            new ExternalId { Source = "imdb", Value = "tt5" },
+                        }
+                    },
+                    new MetadataContribution
+                    {
+                        ProviderType = "stale",
+                        Ordinal = 1,
+                        ExternalIds =
+                        {
+                            new ExternalId { Source = "imdb", Value = "tt1" },
+                        }
+                    },
+                }
+            }
+        };
+        _context.ContentHierarchyItems.Add(item6);
+        var item7 = new ContentHierarchyItem
+        {
+            Id = Guid.NewGuid(),
+            ParentId = null,
+            ContentType = "tv",
+            Level = "show",
+            Slug = $"item-{Guid.NewGuid():N}",
+            Name = "Item",
+            CreatedAt = new DateTime(2026, 1, 1),
+            MetadataContainer = new MetadataContainer
+            {
+                Contributions =
+                {
+                    new MetadataContribution
+                    {
+                        ProviderType = "first",
+                        Ordinal = 0,
+                        ExternalIds =
+                        {
+                            new ExternalId { Source = "imdb", Value = "tt1" },
+                        }
+                    },
+                }
+            }
+        };
+        _context.ContentHierarchyItems.Add(item7);
         await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
@@ -139,17 +319,171 @@ public sealed class ContentHierarchyItemRepositoryDuplicateRootsTests
     public async Task FindDuplicateRootsAsync_ReportsNothing_WhenOnlyTypeLevelChildOrSourceDiffers()
     {
         // Arrange
-        var show = AddItem("tv", "show", null, Contribution("first", 0, ("imdb", "tt1")));
-        AddItem("tv", "special", null, Contribution("first", 0, ("imdb", "tt1")));
-        AddItem("ebook", "show", null, Contribution("first", 0, ("imdb", "tt1")));
-        AddItem("tv", "show", show.Id, Contribution("first", 0, ("imdb", "tt1")));
-        AddItem("tv", "show", null, Contribution("first", 0, ("tvdb", "tt1")));
-        AddItem(
-            "tv",
-            "show",
-            null,
-            Contribution("first", 0, ("imdb", "tt9")),
-            Contribution("second", 1, ("imdb", "tt9")));
+        var show = new ContentHierarchyItem
+        {
+            Id = Guid.NewGuid(),
+            ParentId = null,
+            ContentType = "tv",
+            Level = "show",
+            Slug = $"item-{Guid.NewGuid():N}",
+            Name = "Item",
+            CreatedAt = new DateTime(2026, 1, 1),
+            MetadataContainer = new MetadataContainer
+            {
+                Contributions =
+                {
+                    new MetadataContribution
+                    {
+                        ProviderType = "first",
+                        Ordinal = 0,
+                        ExternalIds =
+                        {
+                            new ExternalId { Source = "imdb", Value = "tt1" },
+                        }
+                    },
+                }
+            }
+        };
+        _context.ContentHierarchyItems.Add(show);
+        var item9 = new ContentHierarchyItem
+        {
+            Id = Guid.NewGuid(),
+            ParentId = null,
+            ContentType = "tv",
+            Level = "special",
+            Slug = $"item-{Guid.NewGuid():N}",
+            Name = "Item",
+            CreatedAt = new DateTime(2026, 1, 1),
+            MetadataContainer = new MetadataContainer
+            {
+                Contributions =
+                {
+                    new MetadataContribution
+                    {
+                        ProviderType = "first",
+                        Ordinal = 0,
+                        ExternalIds =
+                        {
+                            new ExternalId { Source = "imdb", Value = "tt1" },
+                        }
+                    },
+                }
+            }
+        };
+        _context.ContentHierarchyItems.Add(item9);
+        var item10 = new ContentHierarchyItem
+        {
+            Id = Guid.NewGuid(),
+            ParentId = null,
+            ContentType = "ebook",
+            Level = "show",
+            Slug = $"item-{Guid.NewGuid():N}",
+            Name = "Item",
+            CreatedAt = new DateTime(2026, 1, 1),
+            MetadataContainer = new MetadataContainer
+            {
+                Contributions =
+                {
+                    new MetadataContribution
+                    {
+                        ProviderType = "first",
+                        Ordinal = 0,
+                        ExternalIds =
+                        {
+                            new ExternalId { Source = "imdb", Value = "tt1" },
+                        }
+                    },
+                }
+            }
+        };
+        _context.ContentHierarchyItems.Add(item10);
+        var item11 = new ContentHierarchyItem
+        {
+            Id = Guid.NewGuid(),
+            ParentId = show.Id,
+            ContentType = "tv",
+            Level = "show",
+            Slug = $"item-{Guid.NewGuid():N}",
+            Name = "Item",
+            CreatedAt = new DateTime(2026, 1, 1),
+            MetadataContainer = new MetadataContainer
+            {
+                Contributions =
+                {
+                    new MetadataContribution
+                    {
+                        ProviderType = "first",
+                        Ordinal = 0,
+                        ExternalIds =
+                        {
+                            new ExternalId { Source = "imdb", Value = "tt1" },
+                        }
+                    },
+                }
+            }
+        };
+        _context.ContentHierarchyItems.Add(item11);
+        var item12 = new ContentHierarchyItem
+        {
+            Id = Guid.NewGuid(),
+            ParentId = null,
+            ContentType = "tv",
+            Level = "show",
+            Slug = $"item-{Guid.NewGuid():N}",
+            Name = "Item",
+            CreatedAt = new DateTime(2026, 1, 1),
+            MetadataContainer = new MetadataContainer
+            {
+                Contributions =
+                {
+                    new MetadataContribution
+                    {
+                        ProviderType = "first",
+                        Ordinal = 0,
+                        ExternalIds =
+                        {
+                            new ExternalId { Source = "tvdb", Value = "tt1" },
+                        }
+                    },
+                }
+            }
+        };
+        _context.ContentHierarchyItems.Add(item12);
+        var item13 = new ContentHierarchyItem
+        {
+            Id = Guid.NewGuid(),
+            ParentId = null,
+            ContentType = "tv",
+            Level = "show",
+            Slug = $"item-{Guid.NewGuid():N}",
+            Name = "Item",
+            CreatedAt = new DateTime(2026, 1, 1),
+            MetadataContainer = new MetadataContainer
+            {
+                Contributions =
+                {
+                    new MetadataContribution
+                    {
+                        ProviderType = "first",
+                        Ordinal = 0,
+                        ExternalIds =
+                        {
+                            new ExternalId { Source = "imdb", Value = "tt9" },
+                        }
+                    },
+                    new MetadataContribution
+                    {
+                        ProviderType = "second",
+                        Ordinal = 1,
+                        ExternalIds =
+                        {
+                            new ExternalId { Source = "imdb", Value = "tt9" },
+                        }
+                    },
+                }
+            }
+        };
+        _context.ContentHierarchyItems.Add(item13);
         await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
@@ -157,46 +491,5 @@ public sealed class ContentHierarchyItemRepositoryDuplicateRootsTests
 
         // Assert
         Assert.That(shared, Is.Empty);
-    }
-
-    private static MetadataContribution Contribution(
-        string providerType,
-        int ordinal,
-        params (string Source, string Value)[] ids)
-    {
-        var contribution = new MetadataContribution { ProviderType = providerType, Ordinal = ordinal };
-        foreach (var (source, value) in ids)
-        {
-            contribution.ExternalIds.Add(new ExternalId { Source = source, Value = value });
-        }
-
-        return contribution;
-    }
-
-    private ContentHierarchyItem AddItem(
-        string contentType,
-        string level,
-        Guid? parentId,
-        params MetadataContribution[] contributions)
-    {
-        var container = new MetadataContainer();
-        foreach (var contribution in contributions)
-        {
-            container.Contributions.Add(contribution);
-        }
-
-        var item = new ContentHierarchyItem
-        {
-            Id = Guid.NewGuid(),
-            ParentId = parentId,
-            ContentType = contentType,
-            Level = level,
-            Slug = $"item-{Guid.NewGuid():N}",
-            Name = "Item",
-            CreatedAt = new DateTime(2026, 1, 1),
-            MetadataContainer = container
-        };
-        _context.ContentHierarchyItems.Add(item);
-        return item;
     }
 }

@@ -37,6 +37,7 @@ public sealed class ContentMetadataRefreshItemJobTests
 
     private Guid _itemId;
     private Guid _containerId;
+    private JobContext _jobContext = null!;
     private SubjectRelationshipDefinition _credit = null!;
     private Mock<IContentHierarchyItemRepository> _contentRepository = null!;
     private Mock<IMetadataContainerRepository> _containerRepository = null!;
@@ -47,11 +48,50 @@ public sealed class ContentMetadataRefreshItemJobTests
     private Mock<IJobManager> _jobManager = null!;
     private Mock<IEventBus> _eventBus = null!;
 
+    public static IEnumerable<TestCaseData> RefreshFailures()
+    {
+        yield return new TestCaseData(
+            new InvalidOperationException("The store is unavailable."),
+            CancellationToken.None);
+        yield return new TestCaseData(
+            new OperationCanceledException(new CancellationToken(true)),
+            new CancellationToken(true));
+        yield return new TestCaseData(
+            new UpstreamThrottledException(new DateTimeOffset(2099, 1, 1, 0, 0, 0, TimeSpan.Zero)),
+            CancellationToken.None);
+    }
+
+    public static IEnumerable<TestCaseData> WaitingImports()
+    {
+        yield return new TestCaseData(
+            new LibraryImportCandidate[]
+            {
+                new()
+                {
+                    RootFolderId = Guid.Empty,
+                    ScanRunId = Guid.Empty,
+                    FilePath = "/media/movies/The Matrix/The.Matrix.mkv",
+                    ContentType = "movie",
+                    Status = LibraryImportCandidateStatus.Importing
+                }
+            },
+            1);
+        yield return new TestCaseData(Array.Empty<LibraryImportCandidate>(), 0);
+    }
+
     [SetUp]
     public void SetUp()
     {
         _itemId = Guid.NewGuid();
         _containerId = Guid.NewGuid();
+        _jobContext = new JobContext(
+            ExecutionId: Guid.NewGuid(),
+            ScheduleTriggerId: null,
+            EventTriggerId: null,
+            ManualTriggerUserId: null,
+            ExecutionMode: JobExecutionMode.Queue,
+            Parameters: new Dictionary<string, string> { ["contentHierarchyItemId"] = _itemId.ToString("D") },
+            Event: null);
         _credit = new SubjectRelationshipDefinition
         {
             RelationshipKind = "cast",
@@ -204,7 +244,7 @@ public sealed class ContentMetadataRefreshItemJobTests
     }
 
     [Test]
-    public async Task RefreshAsync_LinksTheCreditOnce_WhenTheProviderNamesTheRelationship()
+    public async Task ExecuteAsync_LinksTheCreditOnce_WhenTheProviderNamesTheRelationship()
     {
         // Arrange
         var provider = new Mock<IContentHierarchyMetadataRelationshipProvider>();
@@ -231,13 +271,14 @@ public sealed class ContentMetadataRefreshItemJobTests
             _contentTypeRegistry.Object,
             _transactionManager.Object,
             _jobManager.Object,
+            Mock.Of<ILibraryImportCandidateRepository>(),
             _subjectKindRegistry.Object,
             TimeProvider.System,
             NullLogger<ContentMetadataRefreshItemJob>.Instance,
             _progressReporter);
 
         // Act
-        await subject.RefreshAsync(_itemId, null, null, _progressReporter).ConfigureAwait(false);
+        await subject.ExecuteAsync(_jobContext).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -262,7 +303,7 @@ public sealed class ContentMetadataRefreshItemJobTests
     }
 
     [Test]
-    public void RefreshAsync_SavesHealthyMetadataBeforeDeferral_WhenAnotherProviderThrottles()
+    public void ExecuteAsync_SavesHealthyMetadataBeforeDeferral_WhenAnotherProviderThrottles()
     {
         // Arrange
         var healthy = new Mock<IContentHierarchyMetadataProvider>();
@@ -283,12 +324,12 @@ public sealed class ContentMetadataRefreshItemJobTests
         var subject = new ContentMetadataRefreshItemJob(
             [healthy.Object, throttled.Object], _contentRepository.Object, _containerRepository.Object,
             _subjectRepository.Object, _eventBus.Object, _contentTypeRegistry.Object, _transactionManager.Object,
-            _jobManager.Object, _subjectKindRegistry.Object, TimeProvider.System,
-            NullLogger<ContentMetadataRefreshItemJob>.Instance, _progressReporter);
+            _jobManager.Object, Mock.Of<ILibraryImportCandidateRepository>(), _subjectKindRegistry.Object,
+            TimeProvider.System, NullLogger<ContentMetadataRefreshItemJob>.Instance, _progressReporter);
 
         // Act
         var result = Assert.ThrowsAsync<UpstreamThrottledException>(() =>
-            subject.RefreshAsync(_itemId, null, null, _progressReporter));
+            subject.ExecuteAsync(_jobContext));
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -304,7 +345,7 @@ public sealed class ContentMetadataRefreshItemJobTests
     }
 
     [Test]
-    public async Task RefreshAsync_LinksBothCredits_WhenTwoPeopleWithoutExternalIdsShareEveryCreditField()
+    public async Task ExecuteAsync_LinksBothCredits_WhenTwoPeopleWithoutExternalIdsShareEveryCreditField()
     {
         // Arrange
         var provider = new Mock<IContentHierarchyMetadataRelationshipProvider>();
@@ -346,13 +387,14 @@ public sealed class ContentMetadataRefreshItemJobTests
             _contentTypeRegistry.Object,
             _transactionManager.Object,
             _jobManager.Object,
+            Mock.Of<ILibraryImportCandidateRepository>(),
             _subjectKindRegistry.Object,
             TimeProvider.System,
             NullLogger<ContentMetadataRefreshItemJob>.Instance,
             _progressReporter);
 
         // Act
-        await subject.RefreshAsync(_itemId, null, null, _progressReporter).ConfigureAwait(false);
+        await subject.ExecuteAsync(_jobContext).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -379,7 +421,7 @@ public sealed class ContentMetadataRefreshItemJobTests
         null,
         1,
         0,
-        TestName = "RefreshAsync_UsesExistingSubject_WhenFallbackIdentityIsComplete")]
+        TestName = "ExecuteAsync_UsesExistingSubject_WhenFallbackIdentityIsComplete")]
     [TestCase(
         MetadataField.Title | MetadataField.BirthDate,
         0,
@@ -388,7 +430,7 @@ public sealed class ContentMetadataRefreshItemJobTests
         null,
         2,
         0,
-        TestName = "RefreshAsync_CreatesSubject_WhenFallbackIdentityIsMissing")]
+        TestName = "ExecuteAsync_CreatesSubject_WhenFallbackIdentityIsMissing")]
     [TestCase(
         MetadataField.Title | MetadataField.OriginalTitle,
         0,
@@ -397,7 +439,7 @@ public sealed class ContentMetadataRefreshItemJobTests
         null,
         2,
         0,
-        TestName = "RefreshAsync_CreatesSubject_WhenNameIsTheOnlyFallbackField")]
+        TestName = "ExecuteAsync_CreatesSubject_WhenNameIsTheOnlyFallbackField")]
     [TestCase(
         MetadataField.BirthDate,
         1,
@@ -406,7 +448,7 @@ public sealed class ContentMetadataRefreshItemJobTests
         null,
         1,
         0,
-        TestName = "RefreshAsync_UsesExistingSubject_WhenFallbackIdentityHasOneNonNameField")]
+        TestName = "ExecuteAsync_UsesExistingSubject_WhenFallbackIdentityHasOneNonNameField")]
     [TestCase(
         MetadataField.Title | MetadataField.BirthDate,
         1,
@@ -415,7 +457,7 @@ public sealed class ContentMetadataRefreshItemJobTests
         "shared",
         1,
         0,
-        TestName = "RefreshAsync_UsesExistingSubject_WhenExternalIdMatches")]
+        TestName = "ExecuteAsync_UsesExistingSubject_WhenExternalIdMatches")]
     [TestCase(
         MetadataField.Title | MetadataField.BirthDate,
         1,
@@ -424,7 +466,7 @@ public sealed class ContentMetadataRefreshItemJobTests
         "second",
         2,
         0,
-        TestName = "RefreshAsync_CreatesSubject_WhenExternalIdsConflict")]
+        TestName = "ExecuteAsync_CreatesSubject_WhenExternalIdsConflict")]
     [TestCase(
         MetadataField.Title | MetadataField.BirthDate | MetadataField.ExternalIds,
         1,
@@ -433,8 +475,8 @@ public sealed class ContentMetadataRefreshItemJobTests
         null,
         2,
         1,
-        TestName = "RefreshAsync_CreatesSubjectAndWarns_WhenFallbackIdentityFieldIsUnsupported")]
-    public async Task RefreshAsync_UsesExistingOrCreatesSubject_WhenFallbackIdentityVaries(
+        TestName = "ExecuteAsync_CreatesSubjectAndWarns_WhenFallbackIdentityFieldIsUnsupported")]
+    public async Task ExecuteAsync_UsesExistingOrCreatesSubject_WhenFallbackIdentityVaries(
         MetadataField fallbackFields,
         int firstBirthDay,
         int secondBirthDay,
@@ -514,13 +556,14 @@ public sealed class ContentMetadataRefreshItemJobTests
             _contentTypeRegistry.Object,
             _transactionManager.Object,
             _jobManager.Object,
+            Mock.Of<ILibraryImportCandidateRepository>(),
             _subjectKindRegistry.Object,
             TimeProvider.System,
             testLogger.Object,
             _progressReporter);
 
         // Act
-        await subject.RefreshAsync(_itemId, null, null, _progressReporter).ConfigureAwait(false);
+        await subject.ExecuteAsync(_jobContext).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -545,7 +588,7 @@ public sealed class ContentMetadataRefreshItemJobTests
     }
 
     [Test]
-    public async Task RefreshAsync_CreatesSubject_WhenContainerHasConflictingExternalId()
+    public async Task ExecuteAsync_CreatesSubject_WhenContainerHasConflictingExternalId()
     {
         // Arrange
         _subjectKindRegistry.SetupGet(registry => registry.Definitions).Returns(
@@ -626,13 +669,14 @@ public sealed class ContentMetadataRefreshItemJobTests
             _contentTypeRegistry.Object,
             _transactionManager.Object,
             _jobManager.Object,
+            Mock.Of<ILibraryImportCandidateRepository>(),
             _subjectKindRegistry.Object,
             TimeProvider.System,
             NullLogger<ContentMetadataRefreshItemJob>.Instance,
             _progressReporter);
 
         // Act
-        await subject.RefreshAsync(_itemId, null, null, _progressReporter).ConfigureAwait(false);
+        await subject.ExecuteAsync(_jobContext).ConfigureAwait(false);
 
         // Assert
         _subjectRepository.Verify(
@@ -644,7 +688,7 @@ public sealed class ContentMetadataRefreshItemJobTests
     }
 
     [Test]
-    public async Task RefreshAsync_LeavesAssociationUnresolved_WhenFallbackIdentityIsAmbiguous()
+    public async Task ExecuteAsync_LeavesAssociationUnresolved_WhenFallbackIdentityIsAmbiguous()
     {
         // Arrange
         _subjectKindRegistry.SetupGet(registry => registry.Definitions).Returns(
@@ -727,13 +771,14 @@ public sealed class ContentMetadataRefreshItemJobTests
             _contentTypeRegistry.Object,
             _transactionManager.Object,
             _jobManager.Object,
+            Mock.Of<ILibraryImportCandidateRepository>(),
             _subjectKindRegistry.Object,
             TimeProvider.System,
             testLogger.Object,
             _progressReporter);
 
         // Act
-        await subject.RefreshAsync(_itemId, null, null, _progressReporter).ConfigureAwait(false);
+        await subject.ExecuteAsync(_jobContext).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -760,7 +805,7 @@ public sealed class ContentMetadataRefreshItemJobTests
     }
 
     [Test]
-    public async Task RefreshAsync_UsesPersistedSubject_WhenInRunSubjectMatchesOnlyByFallbackIdentity()
+    public async Task ExecuteAsync_UsesPersistedSubject_WhenInRunSubjectMatchesOnlyByFallbackIdentity()
     {
         // Arrange
         var persistedContainerId = Guid.NewGuid();
@@ -856,13 +901,14 @@ public sealed class ContentMetadataRefreshItemJobTests
             _contentTypeRegistry.Object,
             _transactionManager.Object,
             _jobManager.Object,
+            Mock.Of<ILibraryImportCandidateRepository>(),
             _subjectKindRegistry.Object,
             TimeProvider.System,
             NullLogger<ContentMetadataRefreshItemJob>.Instance,
             _progressReporter);
 
         // Act
-        await subject.RefreshAsync(_itemId, null, null, _progressReporter).ConfigureAwait(false);
+        await subject.ExecuteAsync(_jobContext).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -884,7 +930,7 @@ public sealed class ContentMetadataRefreshItemJobTests
     }
 
     [Test]
-    public async Task RefreshAsync_ReusesFallbackIdentity_WhenLaterDefinitionMatchesItsExternalId()
+    public async Task ExecuteAsync_ReusesFallbackIdentity_WhenLaterDefinitionMatchesItsExternalId()
     {
         // Arrange
         _subjectKindRegistry.SetupGet(registry => registry.Definitions).Returns(
@@ -965,13 +1011,14 @@ public sealed class ContentMetadataRefreshItemJobTests
             _contentTypeRegistry.Object,
             _transactionManager.Object,
             _jobManager.Object,
+            Mock.Of<ILibraryImportCandidateRepository>(),
             _subjectKindRegistry.Object,
             TimeProvider.System,
             NullLogger<ContentMetadataRefreshItemJob>.Instance,
             _progressReporter);
 
         // Act
-        await subject.RefreshAsync(_itemId, null, null, _progressReporter).ConfigureAwait(false);
+        await subject.ExecuteAsync(_jobContext).ConfigureAwait(false);
 
         // Assert
         _subjectRepository.Verify(
@@ -983,7 +1030,7 @@ public sealed class ContentMetadataRefreshItemJobTests
     }
 
     [Test]
-    public async Task RefreshAsync_UsesExternalIdOnly_WhenKindDeclaresNoFallbackFields()
+    public async Task ExecuteAsync_UsesExternalIdOnly_WhenKindDeclaresNoFallbackFields()
     {
         // Arrange
         var existingContainerId = Guid.NewGuid();
@@ -1050,13 +1097,14 @@ public sealed class ContentMetadataRefreshItemJobTests
             _contentTypeRegistry.Object,
             _transactionManager.Object,
             _jobManager.Object,
+            Mock.Of<ILibraryImportCandidateRepository>(),
             _subjectKindRegistry.Object,
             TimeProvider.System,
             NullLogger<ContentMetadataRefreshItemJob>.Instance,
             _progressReporter);
 
         // Act
-        await subject.RefreshAsync(_itemId, null, null, _progressReporter).ConfigureAwait(false);
+        await subject.ExecuteAsync(_jobContext).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -1077,7 +1125,7 @@ public sealed class ContentMetadataRefreshItemJobTests
     }
 
     [Test]
-    public async Task RefreshAsync_MaterializesChildren_WhenProviderDeclaresHierarchy()
+    public async Task ExecuteAsync_MaterializesChildren_WhenProviderDeclaresHierarchy()
     {
         // Arrange
         var provider = new Mock<IContentHierarchyMetadataProvider>();
@@ -1143,13 +1191,14 @@ public sealed class ContentMetadataRefreshItemJobTests
             _contentTypeRegistry.Object,
             _transactionManager.Object,
             _jobManager.Object,
+            Mock.Of<ILibraryImportCandidateRepository>(),
             _subjectKindRegistry.Object,
             TimeProvider.System,
             NullLogger<ContentMetadataRefreshItemJob>.Instance,
             _progressReporter);
 
         // Act
-        await subject.RefreshAsync(_itemId, null, null, _progressReporter).ConfigureAwait(false);
+        await subject.ExecuteAsync(_jobContext).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -1229,7 +1278,7 @@ public sealed class ContentMetadataRefreshItemJobTests
     }
 
     [Test]
-    public async Task RefreshAsync_DoesNotDuplicateChildren_WhenSameHierarchyIsDeclaredTwice()
+    public async Task ExecuteAsync_DoesNotDuplicateChildren_WhenSameHierarchyIsDeclaredTwice()
     {
         // Arrange
         var existingChildId = Guid.NewGuid();
@@ -1298,14 +1347,15 @@ public sealed class ContentMetadataRefreshItemJobTests
             _contentTypeRegistry.Object,
             _transactionManager.Object,
             _jobManager.Object,
+            Mock.Of<ILibraryImportCandidateRepository>(),
             _subjectKindRegistry.Object,
             TimeProvider.System,
             NullLogger<ContentMetadataRefreshItemJob>.Instance,
             _progressReporter);
 
         // Act
-        await subject.RefreshAsync(_itemId, null, null, _progressReporter).ConfigureAwait(false);
-        await subject.RefreshAsync(_itemId, null, null, _progressReporter).ConfigureAwait(false);
+        await subject.ExecuteAsync(_jobContext).ConfigureAwait(false);
+        await subject.ExecuteAsync(_jobContext).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -1332,7 +1382,7 @@ public sealed class ContentMetadataRefreshItemJobTests
     }
 
     [Test]
-    public async Task RefreshAsync_DoesNotDuplicateChild_WhenLevelAndSlugMatchWithoutAlignmentKey()
+    public async Task ExecuteAsync_DoesNotDuplicateChild_WhenLevelAndSlugMatchWithoutAlignmentKey()
     {
         // Arrange
         var existingChildId = Guid.NewGuid();
@@ -1383,13 +1433,14 @@ public sealed class ContentMetadataRefreshItemJobTests
             _contentTypeRegistry.Object,
             _transactionManager.Object,
             _jobManager.Object,
+            Mock.Of<ILibraryImportCandidateRepository>(),
             _subjectKindRegistry.Object,
             TimeProvider.System,
             NullLogger<ContentMetadataRefreshItemJob>.Instance,
             _progressReporter);
 
         // Act
-        await subject.RefreshAsync(_itemId, null, null, _progressReporter).ConfigureAwait(false);
+        await subject.ExecuteAsync(_jobContext).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -1412,7 +1463,7 @@ public sealed class ContentMetadataRefreshItemJobTests
     }
 
     [Test]
-    public async Task RefreshAsync_DoesNotDuplicateChild_WhenSecondProviderMatchesByExternalIdOnly()
+    public async Task ExecuteAsync_DoesNotDuplicateChild_WhenSecondProviderMatchesByExternalIdOnly()
     {
         // Arrange
         const string secondProviderType = "provider-b";
@@ -1477,13 +1528,14 @@ public sealed class ContentMetadataRefreshItemJobTests
             _contentTypeRegistry.Object,
             _transactionManager.Object,
             _jobManager.Object,
+            Mock.Of<ILibraryImportCandidateRepository>(),
             _subjectKindRegistry.Object,
             TimeProvider.System,
             NullLogger<ContentMetadataRefreshItemJob>.Instance,
             _progressReporter);
 
         // Act
-        await subject.RefreshAsync(_itemId, null, null, _progressReporter).ConfigureAwait(false);
+        await subject.ExecuteAsync(_jobContext).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -1520,7 +1572,7 @@ public sealed class ContentMetadataRefreshItemJobTests
     }
 
     [Test]
-    public async Task RefreshAsync_SkipsChild_WhenProviderDeclaresInvalidLevel()
+    public async Task ExecuteAsync_SkipsChild_WhenProviderDeclaresInvalidLevel()
     {
         // Arrange
         var provider = new Mock<IContentHierarchyMetadataProvider>();
@@ -1551,13 +1603,14 @@ public sealed class ContentMetadataRefreshItemJobTests
             _contentTypeRegistry.Object,
             _transactionManager.Object,
             _jobManager.Object,
+            Mock.Of<ILibraryImportCandidateRepository>(),
             _subjectKindRegistry.Object,
             TimeProvider.System,
             NullLogger<ContentMetadataRefreshItemJob>.Instance,
             _progressReporter);
 
         // Act
-        await subject.RefreshAsync(_itemId, null, null, _progressReporter).ConfigureAwait(false);
+        await subject.ExecuteAsync(_jobContext).ConfigureAwait(false);
 
         // Assert
         _contentRepository.Verify(
@@ -1569,7 +1622,7 @@ public sealed class ContentMetadataRefreshItemJobTests
     }
 
     [Test]
-    public void RefreshAsync_ThrowsMetadataNotReturned_WhenProviderFailsAndAnotherDeclaresChildren()
+    public void ExecuteAsync_ThrowsMetadataNotReturned_WhenProviderFailsAndAnotherDeclaresChildren()
     {
         // Arrange
         _contentRepository
@@ -1620,6 +1673,7 @@ public sealed class ContentMetadataRefreshItemJobTests
             _contentTypeRegistry.Object,
             _transactionManager.Object,
             _jobManager.Object,
+            Mock.Of<ILibraryImportCandidateRepository>(),
             _subjectKindRegistry.Object,
             TimeProvider.System,
             NullLogger<ContentMetadataRefreshItemJob>.Instance,
@@ -1627,14 +1681,93 @@ public sealed class ContentMetadataRefreshItemJobTests
 
         // Act
         var exception = Assert.ThrowsAsync<MetadataNotReturnedException>(() =>
-            subject.RefreshAsync(_itemId, null, null, _progressReporter));
+            subject.ExecuteAsync(_jobContext));
 
         // Assert
-        Assert.That(exception, Is.Not.Null);
+        Assert.That(exception!.Message, Is.EqualTo("A metadata provider failed."));
     }
 
     [Test]
-    public async Task RefreshAsync_StampsTheAttemptAndKeepsTheItemPending_WhenNoProviderReturnsMetadata()
+    public async Task ExecuteAsync_MarksRefreshed_WhenAProviderFailsAndAnotherDeclaresChildrenForATitledItem()
+    {
+        // Arrange
+        var container = new MetadataContainer { Id = _containerId };
+        container.Contributions.Add(new MetadataContribution { ProviderType = ProviderType, Title = "The Matrix" });
+        _contentRepository
+            .Setup(repository => repository.GetByIdAsync(_itemId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ContentHierarchyItem
+            {
+                Id = _itemId,
+                MetadataContainerId = _containerId,
+                MetadataContainer = container,
+                ContentType = "movie",
+                Level = "movie",
+                Slug = "the-matrix",
+                Name = "The Matrix"
+            });
+        _contentRepository
+            .Setup(repository => repository.TryCreateAsync(
+                It.IsAny<ContentHierarchyItem>(),
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+
+        var failingProvider = new Mock<IContentHierarchyMetadataProvider>();
+        failingProvider.Setup(p => p.ProviderType).Returns(ProviderType);
+        failingProvider.Setup(p => p.SupportedContentTypes).Returns(["movie"]);
+        failingProvider
+            .Setup(p => p.TryGetMetadataAsync(It.IsAny<MetadataFetchRequest>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("transient failure"));
+
+        var childProvider = new Mock<IContentHierarchyMetadataProvider>();
+        childProvider.Setup(p => p.ProviderType).Returns("provider-b");
+        childProvider.Setup(p => p.SupportedContentTypes).Returns(["movie"]);
+        childProvider
+            .Setup(p => p.TryGetMetadataAsync(It.IsAny<MetadataFetchRequest>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ContentHierarchyMetadataResult
+            {
+                Children =
+                [
+                    new ChildHierarchyDefinition
+                    {
+                        Level = "season",
+                        Name = "Season One",
+                        Slug = "season-1"
+                    }
+                ]
+            });
+
+        var subject = new ContentMetadataRefreshItemJob(
+            [failingProvider.Object, childProvider.Object],
+            _contentRepository.Object,
+            _containerRepository.Object,
+            _subjectRepository.Object,
+            _eventBus.Object,
+            _contentTypeRegistry.Object,
+            _transactionManager.Object,
+            _jobManager.Object,
+            Mock.Of<ILibraryImportCandidateRepository>(),
+            _subjectKindRegistry.Object,
+            new FakeTimeProvider(new DateTimeOffset(2026, 9, 1, 12, 0, 0, TimeSpan.Zero)),
+            NullLogger<ContentMetadataRefreshItemJob>.Instance,
+            _progressReporter);
+
+        // Act
+        await subject.ExecuteAsync(_jobContext).ConfigureAwait(false);
+
+        // Assert
+        _contentRepository.Verify(
+            repository => repository.PatchAsync(
+                It.Is<ContentHierarchyItemPatch>(patch =>
+                    !patch.PendingMetadataRefresh!.Value &&
+                    patch.DateLastRefreshed!.Value == new DateTime(2026, 9, 1, 12, 0, 0, DateTimeKind.Utc)),
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Test]
+    public async Task ExecuteAsync_StampsTheAttemptAndKeepsTheItemPending_WhenNoProviderReturnsMetadata()
     {
         const string supportedContentType = "movie";
 
@@ -1669,13 +1802,14 @@ public sealed class ContentMetadataRefreshItemJobTests
             _contentTypeRegistry.Object,
             _transactionManager.Object,
             _jobManager.Object,
+            Mock.Of<ILibraryImportCandidateRepository>(),
             _subjectKindRegistry.Object,
             new FakeTimeProvider(new DateTimeOffset(2026, 9, 1, 12, 0, 0, TimeSpan.Zero)),
             NullLogger<ContentMetadataRefreshItemJob>.Instance,
             _progressReporter);
 
         // Act
-        await subject.RefreshAsync(_itemId, null, null, _progressReporter).ConfigureAwait(false);
+        await subject.ExecuteAsync(_jobContext).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -1701,11 +1835,11 @@ public sealed class ContentMetadataRefreshItemJobTests
         }
     }
 
-    [TestCase("book", false)]
-    [TestCase("movie", true)]
-    public async Task RefreshAsync_DoesNotStampTheAttempt_WhenNoProviderWasAskedOrTheOperatorAsked(
+    [TestCase("book", JobExecutionMode.Queue)]
+    [TestCase("movie", JobExecutionMode.Immediate)]
+    public async Task ExecuteAsync_DoesNotStampTheAttempt_WhenNoProviderWasAskedOrTheOperatorAsked(
         string supportedContentType,
-        bool operatorRequested)
+        JobExecutionMode executionMode)
     {
         // Arrange
         _contentRepository
@@ -1738,13 +1872,22 @@ public sealed class ContentMetadataRefreshItemJobTests
             _contentTypeRegistry.Object,
             _transactionManager.Object,
             _jobManager.Object,
+            Mock.Of<ILibraryImportCandidateRepository>(),
             _subjectKindRegistry.Object,
             new FakeTimeProvider(new DateTimeOffset(2026, 9, 1, 12, 0, 0, TimeSpan.Zero)),
             NullLogger<ContentMetadataRefreshItemJob>.Instance,
             _progressReporter);
+        var context = new JobContext(
+            ExecutionId: Guid.NewGuid(),
+            ScheduleTriggerId: null,
+            EventTriggerId: null,
+            ManualTriggerUserId: null,
+            ExecutionMode: executionMode,
+            Parameters: new Dictionary<string, string> { ["contentHierarchyItemId"] = _itemId.ToString("D") },
+            Event: null);
 
         // Act
-        await subject.RefreshAsync(_itemId, null, null, _progressReporter, operatorRequested).ConfigureAwait(false);
+        await subject.ExecuteAsync(context).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -1765,7 +1908,7 @@ public sealed class ContentMetadataRefreshItemJobTests
     }
 
     [Test]
-    public async Task RefreshAsync_EnqueuesExistingChildren_WhenProviderDeclaresNoChildren()
+    public async Task ExecuteAsync_EnqueuesExistingChildren_WhenProviderDeclaresNoChildren()
     {
         // Arrange
         var existingChildId = Guid.NewGuid();
@@ -1814,13 +1957,14 @@ public sealed class ContentMetadataRefreshItemJobTests
             _contentTypeRegistry.Object,
             _transactionManager.Object,
             _jobManager.Object,
+            Mock.Of<ILibraryImportCandidateRepository>(),
             _subjectKindRegistry.Object,
             TimeProvider.System,
             NullLogger<ContentMetadataRefreshItemJob>.Instance,
             _progressReporter);
 
         // Act
-        await subject.RefreshAsync(_itemId, null, null, _progressReporter).ConfigureAwait(false);
+        await subject.ExecuteAsync(_jobContext).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -1845,7 +1989,7 @@ public sealed class ContentMetadataRefreshItemJobTests
     }
 
     [Test]
-    public void RefreshAsync_StampsTheAttemptBeforeItThrows_WhenAProviderFails()
+    public void ExecuteAsync_StampsTheAttemptBeforeItThrows_WhenAProviderFails()
     {
         // Arrange
         _contentRepository
@@ -1878,13 +2022,14 @@ public sealed class ContentMetadataRefreshItemJobTests
             _contentTypeRegistry.Object,
             _transactionManager.Object,
             _jobManager.Object,
+            Mock.Of<ILibraryImportCandidateRepository>(),
             _subjectKindRegistry.Object,
             new FakeTimeProvider(new DateTimeOffset(2026, 9, 1, 12, 0, 0, TimeSpan.Zero)),
             NullLogger<ContentMetadataRefreshItemJob>.Instance,
             _progressReporter);
 
         // Act
-        var act = () => subject.RefreshAsync(_itemId, null, null, _progressReporter);
+        var act = () => subject.ExecuteAsync(_jobContext);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -1901,8 +2046,86 @@ public sealed class ContentMetadataRefreshItemJobTests
         }
     }
 
+    [TestCase(false, 0)]
+    [TestCase(true, 1)]
+    public void ExecuteAsync_ThrowsMetadataNotReturned_WhenEveryProviderFailsForATitledItem(
+        bool pendingMetadataRefresh,
+        int expectedStamps)
+    {
+        // Arrange
+        var container = new MetadataContainer { Id = _containerId };
+        container.Contributions.Add(new MetadataContribution
+        {
+            ProviderType = ProviderType,
+            Title = "The Matrix",
+            DateLastRefreshed = new DateTime(2026, 8, 1, 0, 0, 0, DateTimeKind.Utc)
+        });
+        _contentRepository
+            .Setup(repository => repository.GetByIdAsync(_itemId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ContentHierarchyItem
+            {
+                Id = _itemId,
+                MetadataContainerId = _containerId,
+                MetadataContainer = container,
+                ContentType = "movie",
+                Level = "movie",
+                Slug = "the-matrix",
+                Name = "The Matrix",
+                PendingMetadataRefresh = pendingMetadataRefresh
+            });
+
+        var provider = new Mock<IContentHierarchyMetadataProvider>();
+        provider.Setup(p => p.ProviderType).Returns(ProviderType);
+        provider.Setup(p => p.SupportedContentTypes).Returns(["movie"]);
+        provider
+            .Setup(p => p.TryGetMetadataAsync(It.IsAny<MetadataFetchRequest>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("The provider could not read the stored identifier."));
+
+        var subject = new ContentMetadataRefreshItemJob(
+            [provider.Object],
+            _contentRepository.Object,
+            _containerRepository.Object,
+            _subjectRepository.Object,
+            _eventBus.Object,
+            _contentTypeRegistry.Object,
+            _transactionManager.Object,
+            _jobManager.Object,
+            Mock.Of<ILibraryImportCandidateRepository>(),
+            _subjectKindRegistry.Object,
+            new FakeTimeProvider(new DateTimeOffset(2026, 9, 1, 12, 0, 0, TimeSpan.Zero)),
+            NullLogger<ContentMetadataRefreshItemJob>.Instance,
+            _progressReporter);
+
+        // Act
+        var exception = Assert.ThrowsAsync<MetadataNotReturnedException>(() =>
+            subject.ExecuteAsync(_jobContext));
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(exception!.Message, Is.EqualTo("A metadata provider failed."));
+            _transactionManager.Verify(
+                manager => manager.ExecuteWithTransactionAsync(
+                    It.IsAny<Func<CancellationToken, Task>>(),
+                    It.IsAny<CancellationToken>()),
+                Times.Never);
+            _contentRepository.Verify(
+                repository => repository.PatchAsync(
+                    It.Is<ContentHierarchyItemPatch>(patch => patch.PendingMetadataRefresh != null),
+                    It.IsAny<Guid?>(),
+                    It.IsAny<CancellationToken>()),
+                Times.Never);
+            _contentRepository.Verify(
+                repository => repository.PatchAsync(
+                    It.Is<ContentHierarchyItemPatch>(patch => patch.DateLastRefreshed != null),
+                    It.IsAny<Guid?>(),
+                    It.IsAny<CancellationToken>()),
+                Times.Exactly(expectedStamps));
+        }
+    }
+
     [Test]
-    public void RefreshAsync_KeepsTheMonitoringEdit_WhenAProviderFailsAfterTheUserUnmonitorsTheItem()
+    public void ExecuteAsync_KeepsTheMonitoringEdit_WhenAProviderFailsAfterTheUserUnmonitorsTheItem()
     {
         // Arrange
         _contentRepository
@@ -1936,13 +2159,14 @@ public sealed class ContentMetadataRefreshItemJobTests
             _contentTypeRegistry.Object,
             _transactionManager.Object,
             _jobManager.Object,
+            Mock.Of<ILibraryImportCandidateRepository>(),
             _subjectKindRegistry.Object,
             new FakeTimeProvider(new DateTimeOffset(2026, 9, 1, 12, 0, 0, TimeSpan.Zero)),
             NullLogger<ContentMetadataRefreshItemJob>.Instance,
             _progressReporter);
 
         // Act
-        var act = () => subject.RefreshAsync(_itemId, null, null, _progressReporter);
+        var act = () => subject.ExecuteAsync(_jobContext);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -1958,7 +2182,7 @@ public sealed class ContentMetadataRefreshItemJobTests
     }
 
     [Test]
-    public async Task RefreshAsync_KeepsTheMonitoringEdit_WhenTheUserUnmonitorsTheItemDuringTheFetch()
+    public async Task ExecuteAsync_KeepsTheMonitoringEdit_WhenTheUserUnmonitorsTheItemDuringTheFetch()
     {
         // Arrange
         _contentRepository
@@ -2007,13 +2231,14 @@ public sealed class ContentMetadataRefreshItemJobTests
             _contentTypeRegistry.Object,
             _transactionManager.Object,
             _jobManager.Object,
+            Mock.Of<ILibraryImportCandidateRepository>(),
             _subjectKindRegistry.Object,
             new FakeTimeProvider(new DateTimeOffset(2026, 9, 1, 12, 0, 0, TimeSpan.Zero)),
             NullLogger<ContentMetadataRefreshItemJob>.Instance,
             _progressReporter);
 
         // Act
-        await subject.RefreshAsync(_itemId, null, null, _progressReporter).ConfigureAwait(false);
+        await subject.ExecuteAsync(_jobContext).ConfigureAwait(false);
 
         // Assert
         _contentRepository.Verify(
@@ -2026,5 +2251,165 @@ public sealed class ContentMetadataRefreshItemJobTests
                 It.IsAny<Guid?>(),
                 It.IsAny<CancellationToken>()),
             Times.Once);
+    }
+
+    [TestCaseSource(nameof(RefreshFailures))]
+    public void ExecuteAsync_QueuesOneResumeAndRethrows_WhenTheRefreshThrowsWhileAnImportWaits(
+        Exception failure,
+        CancellationToken cancellationToken)
+    {
+        // Arrange
+        _contentRepository
+            .Setup(repository => repository.GetByIdAsync(_itemId, It.IsAny<CancellationToken>()))
+            .ThrowsAsync(failure);
+        var candidates = new Mock<ILibraryImportCandidateRepository>();
+        candidates
+            .Setup(repository => repository.QueryAsync(
+                It.Is<LibraryImportCandidateQuery>(query =>
+                    query.Status == LibraryImportCandidateStatus.Importing &&
+                    query.ContentHierarchyItemIds!.Contains(_itemId)),
+                It.IsAny<PagingParameter>(),
+                It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<LibraryImportCandidate>
+            {
+                Items =
+                [
+                    new LibraryImportCandidate
+                    {
+                        RootFolderId = Guid.Empty,
+                        ScanRunId = Guid.Empty,
+                        FilePath = "/media/movies/The Matrix/The.Matrix.mkv",
+                        ContentType = "movie",
+                        Status = LibraryImportCandidateStatus.Importing
+                    }
+                ]
+            });
+        var subject = new ContentMetadataRefreshItemJob(
+            [],
+            _contentRepository.Object,
+            _containerRepository.Object,
+            _subjectRepository.Object,
+            _eventBus.Object,
+            _contentTypeRegistry.Object,
+            _transactionManager.Object,
+            _jobManager.Object,
+            candidates.Object,
+            _subjectKindRegistry.Object,
+            TimeProvider.System,
+            NullLogger<ContentMetadataRefreshItemJob>.Instance,
+            _progressReporter);
+        var context = new JobContext(
+            Guid.NewGuid(), null, null, null, JobExecutionMode.Queue,
+            new Dictionary<string, string> { ["contentHierarchyItemId"] = _itemId.ToString("D") }, null);
+
+        // Act
+        var thrown = Assert.CatchAsync(() => subject.ExecuteAsync(context, cancellationToken));
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(thrown, Is.SameAs(failure));
+            candidates.Verify(
+                repository => repository.QueryAsync(
+                    It.IsAny<LibraryImportCandidateQuery>(),
+                    It.IsAny<PagingParameter>(),
+                    It.IsAny<SortParameter?>(),
+                    CancellationToken.None),
+                Times.Once);
+            _jobManager.Verify(
+                manager => manager.ExecuteAsync(
+                    It.Is<JobEnqueueRequest>(request =>
+                        request.JobType == "RootFolderContentImportResume" &&
+                        request.Parameters!["contentHierarchyItemId"] == _itemId.ToString("D")),
+                    CancellationToken.None),
+                Times.Once);
+        }
+    }
+
+    [TestCaseSource(nameof(WaitingImports))]
+    public async Task ExecuteAsync_QueuesAResumeOnlyForAWaitingImport_WhenTheRefreshCompletes(
+        LibraryImportCandidate[] waiting,
+        int expectedResumes)
+    {
+        // Arrange
+        var candidates = new Mock<ILibraryImportCandidateRepository>();
+        candidates
+            .Setup(repository => repository.QueryAsync(
+                It.Is<LibraryImportCandidateQuery>(query =>
+                    query.Status == LibraryImportCandidateStatus.Importing &&
+                    query.ContentHierarchyItemIds!.Contains(_itemId)),
+                It.IsAny<PagingParameter>(),
+                It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<LibraryImportCandidate> { Items = waiting });
+        var subject = new ContentMetadataRefreshItemJob(
+            [],
+            _contentRepository.Object,
+            _containerRepository.Object,
+            _subjectRepository.Object,
+            _eventBus.Object,
+            _contentTypeRegistry.Object,
+            _transactionManager.Object,
+            _jobManager.Object,
+            candidates.Object,
+            _subjectKindRegistry.Object,
+            TimeProvider.System,
+            NullLogger<ContentMetadataRefreshItemJob>.Instance,
+            _progressReporter);
+        var context = new JobContext(
+            Guid.NewGuid(), null, null, null, JobExecutionMode.Queue,
+            new Dictionary<string, string> { ["contentHierarchyItemId"] = _itemId.ToString("D") }, null);
+
+        // Act
+        await subject.ExecuteAsync(context).ConfigureAwait(false);
+
+        // Assert
+        _jobManager.Verify(
+            manager => manager.ExecuteAsync(
+                It.Is<JobEnqueueRequest>(request =>
+                    request.JobType == "RootFolderContentImportResume" &&
+                    request.Parameters!["contentHierarchyItemId"] == _itemId.ToString("D")),
+                CancellationToken.None),
+            Times.Exactly(expectedResumes));
+    }
+
+    [Test]
+    public void ExecuteAsync_CompletesTheRefresh_WhenTheHandOverFails()
+    {
+        // Arrange
+        var candidates = new Mock<ILibraryImportCandidateRepository>();
+        candidates
+            .Setup(repository => repository.QueryAsync(
+                It.IsAny<LibraryImportCandidateQuery>(),
+                It.IsAny<PagingParameter>(),
+                It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("The store is unavailable."));
+        var subject = new ContentMetadataRefreshItemJob(
+            [],
+            _contentRepository.Object,
+            _containerRepository.Object,
+            _subjectRepository.Object,
+            _eventBus.Object,
+            _contentTypeRegistry.Object,
+            _transactionManager.Object,
+            _jobManager.Object,
+            candidates.Object,
+            _subjectKindRegistry.Object,
+            TimeProvider.System,
+            NullLogger<ContentMetadataRefreshItemJob>.Instance,
+            _progressReporter);
+        var context = new JobContext(
+            Guid.NewGuid(), null, null, null, JobExecutionMode.Queue,
+            new Dictionary<string, string> { ["contentHierarchyItemId"] = _itemId.ToString("D") }, null);
+
+        // Act
+        Assert.DoesNotThrowAsync(() => subject.ExecuteAsync(context));
+
+        // Assert
+        _jobManager.Verify(
+            manager => manager.ExecuteAsync(It.IsAny<JobEnqueueRequest>(), It.IsAny<CancellationToken>()),
+            Times.Never);
     }
 }

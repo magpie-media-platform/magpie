@@ -4696,36 +4696,12 @@ internal sealed class QueryPlannerTests
         }
     }
 
-    [TestCase(nameof(MetadataCriteria.Awards))]
-    [TestCase(nameof(MetadataCriteria.Images))]
-    [TestCase(nameof(MetadataCriteria.References))]
-    public void Plan_IsNotASelectiveBound_WhenBareCollectionPresence(string fieldName)
+    [TestCaseSource(nameof(BareCollectionPresenceCases))]
+    public void Plan_IsNotASelectiveBound_WhenBareCollectionPresence(
+        MetadataCriteria criteria,
+        QueryFilterKind filterKind)
     {
         // Arrange
-        var criteria = fieldName switch
-        {
-            nameof(MetadataCriteria.Awards) => new MetadataCriteria
-            {
-                Awards = new CollectionCriteria<AwardCriteria> { Some = [[new AwardCriteria()]] }
-            },
-            nameof(MetadataCriteria.Images) => new MetadataCriteria
-            {
-                Images = new CollectionCriteria<ImageCriteria> { Some = [[new ImageCriteria()]] }
-            },
-            _ => new MetadataCriteria
-            {
-                References = new CollectionCriteria<ReferenceMetadataCriteria>
-                {
-                    Some = [[new ReferenceMetadataCriteria()]]
-                }
-            }
-        };
-        var filterKind = fieldName switch
-        {
-            nameof(MetadataCriteria.Awards) => QueryFilterKind.Award,
-            nameof(MetadataCriteria.Images) => QueryFilterKind.Image,
-            _ => QueryFilterKind.Reference
-        };
         var subject = new QueryPlanner();
 
         // Act
@@ -4740,6 +4716,34 @@ internal sealed class QueryPlannerTests
             Assert.That(plan.ResidualFilters, Is.Empty);
             Assert.That(plan.Warnings, Is.Empty);
         }
+    }
+
+    private static IEnumerable<TestCaseData> BareCollectionPresenceCases()
+    {
+        yield return new TestCaseData(
+            new MetadataCriteria
+            {
+                Awards = new CollectionCriteria<AwardCriteria> { Some = [[new AwardCriteria()]] }
+            },
+            QueryFilterKind.Award)
+            .SetArgDisplayNames("Awards");
+        yield return new TestCaseData(
+            new MetadataCriteria
+            {
+                Images = new CollectionCriteria<ImageCriteria> { Some = [[new ImageCriteria()]] }
+            },
+            QueryFilterKind.Image)
+            .SetArgDisplayNames("Images");
+        yield return new TestCaseData(
+            new MetadataCriteria
+            {
+                References = new CollectionCriteria<ReferenceMetadataCriteria>
+                {
+                    Some = [[new ReferenceMetadataCriteria()]]
+                }
+            },
+            QueryFilterKind.Reference)
+            .SetArgDisplayNames("References");
     }
 
     [Test]
@@ -6412,15 +6416,31 @@ internal sealed class QueryPlannerTests
         }
     }
 
-    [TestCase(nameof(MetadataCriteria.Awards))]
-    [TestCase(nameof(MetadataCriteria.Images))]
-    [TestCase(nameof(MetadataCriteria.References))]
-    public void Plan_DoesNotApplyRemoteCollectionFilter_WhenResidualCollectionNone(string fieldName)
+    [TestCaseSource(nameof(ResidualCollectionNoneCases))]
+    public void Plan_DoesNotApplyRemoteCollectionFilter_WhenResidualCollectionNone(
+        MetadataCriteria criteria,
+        QueryFilterKind filterKind)
     {
         // Arrange
-        var criteria = fieldName switch
+        var subject = new QueryPlanner();
+
+        // Act
+        var plan = subject.Plan(EntityKind.Movie, criteria, 1);
+        var residual = plan.ResidualFilters.Single();
+
+        // Assert
+        using (Assert.EnterMultipleScope())
         {
-            nameof(MetadataCriteria.Awards) => new MetadataCriteria
+            Assert.That(plan.Filters.Any(filter => filter.Kind == filterKind), Is.False);
+            Assert.That(residual.CollectionGroup!.OuterNegate, Is.True);
+            Assert.That(plan.Warnings, Is.Empty);
+        }
+    }
+
+    private static IEnumerable<TestCaseData> ResidualCollectionNoneCases()
+    {
+        yield return new TestCaseData(
+            new MetadataCriteria
             {
                 Title = new CriteriaSet<PropertyCriterion<string>>
                 {
@@ -6447,7 +6467,10 @@ internal sealed class QueryPlannerTests
                     ]
                 }
             },
-            nameof(MetadataCriteria.Images) => new MetadataCriteria
+            QueryFilterKind.Award)
+            .SetArgDisplayNames("Awards");
+        yield return new TestCaseData(
+            new MetadataCriteria
             {
                 Title = new CriteriaSet<PropertyCriterion<string>>
                 {
@@ -6474,7 +6497,10 @@ internal sealed class QueryPlannerTests
                     ]
                 }
             },
-            _ => new MetadataCriteria
+            QueryFilterKind.Image)
+            .SetArgDisplayNames("Images");
+        yield return new TestCaseData(
+            new MetadataCriteria
             {
                 Title = new CriteriaSet<PropertyCriterion<string>>
                 {
@@ -6500,27 +6526,9 @@ internal sealed class QueryPlannerTests
                         }
                     ]
                 }
-            }
-        };
-        var filterKind = fieldName switch
-        {
-            nameof(MetadataCriteria.Awards) => QueryFilterKind.Award,
-            nameof(MetadataCriteria.Images) => QueryFilterKind.Image,
-            _ => QueryFilterKind.Reference
-        };
-        var subject = new QueryPlanner();
-
-        // Act
-        var plan = subject.Plan(EntityKind.Movie, criteria, 1);
-        var residual = plan.ResidualFilters.Single();
-
-        // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(plan.Filters.Any(filter => filter.Kind == filterKind), Is.False);
-            Assert.That(residual.CollectionGroup!.OuterNegate, Is.True);
-            Assert.That(plan.Warnings, Is.Empty);
-        }
+            },
+            QueryFilterKind.Reference)
+            .SetArgDisplayNames("References");
     }
 
     [TestCase(nameof(MetadataCriteria.ContentRatings))]

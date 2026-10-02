@@ -26,9 +26,9 @@ internal static class CandidateMappingExtensions
         var endDate = Read(binding, "endDate").ToTemporalValue();
         return new SearchHit
         {
-            Qid = qid!,
-            TypeQid = typeQid!,
-            Label = label!.Trim(),
+            Qid = qid,
+            TypeQid = typeQid,
+            Label = label.Trim(),
             Description = Clean(Read(binding, "itemDescription")),
             PublishDate = Read(binding, "publishDate").ToTemporalValue(),
             EndDate = endDate,
@@ -182,7 +182,7 @@ internal static class CandidateMappingExtensions
         {
             return new TemporalValue
             {
-                Value = new DateTime(normalized.Year, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+                Value = new(normalized.Year, 1, 1, 0, 0, 0, DateTimeKind.Utc),
                 Precision = TemporalPrecision.Year
             };
         }
@@ -191,7 +191,7 @@ internal static class CandidateMappingExtensions
         {
             return new TemporalValue
             {
-                Value = new DateTime(normalized.Year, normalized.Month, 1, 0, 0, 0, DateTimeKind.Utc),
+                Value = new(normalized.Year, normalized.Month, 1, 0, 0, 0, DateTimeKind.Utc),
                 Precision = TemporalPrecision.Month
             };
         }
@@ -228,7 +228,7 @@ internal static class CandidateMappingExtensions
             return [];
         }
 
-        return [.. value!.Split(SparqlQueryBuilder.GenreSeparator)
+        return [.. value.Split(SparqlQueryBuilder.GenreSeparator)
             .Select(genre => genre.Trim())
             .Where(genre => genre.Length > 0)
             .Distinct(StringComparer.OrdinalIgnoreCase)];
@@ -239,7 +239,7 @@ internal static class CandidateMappingExtensions
         return binding.TryGetValue(key, out var value) ? value?.Value : null;
     }
 
-    private static string? Clean(string? value) => string.IsNullOrWhiteSpace(value) ? null : value!.Trim();
+    private static string? Clean(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
     internal static string? ToCommonsFilename(this string? value)
     {
@@ -248,7 +248,7 @@ internal static class CandidateMappingExtensions
             return null;
         }
 
-        var filename = value!.Trim();
+        var filename = value.Trim();
         if (filename.Any(char.IsControl))
         {
             return null;

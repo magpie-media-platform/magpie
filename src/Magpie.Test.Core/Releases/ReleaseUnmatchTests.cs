@@ -140,6 +140,7 @@ public sealed class ReleaseUnmatchTests
             Mock.Of<IDownloadScopeRepository>(),
             downloads,
             new ReleaseBlockList(downloads),
+            Mock.Of<ISettingsRepository>(),
             Mock.Of<IDownloadClientRepository>(),
             [],
             Mock.Of<IDownloadService>(),
@@ -159,7 +160,6 @@ public sealed class ReleaseUnmatchTests
     [TearDown]
     public void TearDown()
     {
-        _context.Database.CloseConnection();
         _context.Dispose();
     }
 

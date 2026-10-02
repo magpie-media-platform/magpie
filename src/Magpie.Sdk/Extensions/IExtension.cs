@@ -17,7 +17,14 @@ public interface IExtension
     /// <summary>
     /// The extension version.
     /// </summary>
-    Version Version { get; }
+    Version Version
+    {
+        get
+        {
+            var version = GetType().Assembly.GetName().Version!;
+            return new(version.Major, version.Minor, version.Build);
+        }
+    }
 
     /// <summary>
     /// The extension name.
@@ -25,9 +32,11 @@ public interface IExtension
     string Name { get; }
 
     /// <summary>
-    /// The ABI version that the extension targets.
+    /// The target ABI of the extension, as a version or an interval such as <c>[1.4.0,1.6.0)</c>. The host loads the
+    /// extension only when the host ABI satisfies the target ABI, has the same major version as the Magpie.Sdk that
+    /// the extension is built against, and is not older than that version.
     /// </summary>
-    string? TargetABI { get; }
+    string? TargetABI => null;
 
     /// <summary>
     /// Registers the services of the extension.

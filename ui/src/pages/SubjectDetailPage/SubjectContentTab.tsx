@@ -53,7 +53,9 @@ function SubjectContentMobileCard({ item }: { item: ContentListItem }) {
         >
             <ContentTypeBadge level={item.level} levelLabel={item.levelLabel} contentType={item.contentType} />
             <ContentFulfillmentBadge fulfillment={item.fulfillment} />
-            <span className="subject-content-tab__mobile-published">{formatShortDate(item.publishDate, '--')}</span>
+            <span className="subject-content-tab__mobile-published">
+                {formatShortDate(item.publishDate, '--', item.publishDatePrecision)}
+            </span>
         </MobileMediaCard>
     );
 }

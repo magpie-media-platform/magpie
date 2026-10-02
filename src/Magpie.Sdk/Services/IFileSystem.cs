@@ -78,15 +78,19 @@ public interface IFileSystem
         throw new NotSupportedException("Import destination locking is not supported.");
 
     /// <summary>
-    /// Transfers a file to a new private path after its identity is stored.
+    /// Transfers a file to a new private path.
     /// </summary>
     /// <param name="source">The completed source file</param>
     /// <param name="destination">The new private destination</param>
     /// <param name="mode">Whether to copy or move the source</param>
     /// <param name="onCreated">The callback that stores ownership before bytes can be lost</param>
     /// <param name="cancellationToken">The token that cancels the transfer</param>
-    Task TransferToOwnedPathAsync(string source, string destination, ImportMode mode,
-        Func<string, Task> onCreated, CancellationToken cancellationToken = default) =>
+    Task TransferToOwnedPathAsync(
+        string source,
+        string destination,
+        ImportMode mode,
+        Func<string, Task> onCreated,
+        CancellationToken cancellationToken = default) =>
         throw new NotSupportedException("Owned import transfers are not supported.");
 
     /// <summary>
@@ -96,9 +100,10 @@ public interface IFileSystem
     FileState ReadFileState(string path) => throw new NotSupportedException("File state inspection is not supported.");
 
     /// <summary>
-    /// Reads capacity at the resolved path, or returns null when the check is unavailable.
+    /// Gets the storage capacity at a path.
     /// </summary>
     /// <param name="path">The destination or source path to inspect</param>
+    /// <returns>The storage capacity, or <see langword="null"/> when the check is unavailable</returns>
     StorageCapacity? GetStorageCapacity(string path) => null;
 
     /// <summary>

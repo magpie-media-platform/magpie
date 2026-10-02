@@ -489,24 +489,4 @@ describe('useMediaServers', () => {
             expect(result.current.servers[0].lastChecked).toBeNull();
         });
     });
-
-    describe('status labels and variants', () => {
-        it('should export status labels for all values', async () => {
-            const { mediaServerStatusLabels } = await import('./useMediaServers');
-
-            expect(mediaServerStatusLabels.Unknown).toBe('Unknown');
-            expect(mediaServerStatusLabels.Healthy).toBe('Healthy');
-            expect(mediaServerStatusLabels.Unhealthy).toBe('Unhealthy');
-            expect(mediaServerStatusLabels.Stale).toBe('Stale');
-        });
-
-        it('should export status variants for all values', async () => {
-            const { mediaServerStatusVariants } = await import('./useMediaServers');
-
-            expect(mediaServerStatusVariants.Unknown).toBe('unknown');
-            expect(mediaServerStatusVariants.Healthy).toBe('healthy');
-            expect(mediaServerStatusVariants.Unhealthy).toBe('unhealthy');
-            expect(mediaServerStatusVariants.Stale).toBe('stale');
-        });
-    });
 });

@@ -561,8 +561,16 @@ internal sealed class MaterializedMetadataRepository(
                     from c in mc.Contributions
                     where c.PublishDate != null
                     orderby preferredLanguage == null ? 0 : (c.Language == preferredLanguage ? 0 : 1),
-                        c.Ordinal
+                        c.Ordinal,
+                        c.Id
                     select c.PublishDate).FirstOrDefault(),
+                PublishDatePrecision = (
+                    from c in mc.Contributions
+                    where c.PublishDate != null
+                    orderby preferredLanguage == null ? 0 : (c.Language == preferredLanguage ? 0 : 1),
+                        c.Ordinal,
+                        c.Id
+                    select c.PublishDatePrecision).FirstOrDefault(),
                 Duration = (
                     from c in mc.Contributions
                     where c.Duration != null
@@ -651,22 +659,28 @@ internal sealed class MaterializedMetadataRepository(
             metadata[index] = metadata[index] with
             {
                 AlternateTexts = Merge(values, value => value.AlternateTexts,
-                    value => (Key(value.Kind), Key(value.Language), Key(value.Text)), value => value.Ordinal),
+                    value => (Key(value.Kind), Key(value.Language), Key(value.Text)),
+                    value => value.Ordinal),
                 Awards = Merge(values, value => value.Awards,
                     value => (Key(value.Body), Key(value.Name), value.Year, Key(value.Category)),
                     value => value.Ordinal),
                 ContentRatings = Merge(
-                    values, value => value.ContentRatings, value => Key(value.Body), value => value.Ordinal),
+                    values,
+                    value => value.ContentRatings,
+                    value => Key(value.Body),
+                    value => value.Ordinal),
                 CustomMetadata = Merge(values, value => value.CustomMetadata, value => Key(value.Key)),
                 ExternalIds = Merge(values, value => value.ExternalIds,
                     value => value.Source == null
                         ? ((string?)null, Key(value.Value))
-                        : (Key(value.Source), (string?)null), value => value.Ordinal),
+                        : (Key(value.Source), (string?)null),
+                        value => value.Ordinal),
                 Genres = Merge(values, value => value.Genres, value => Key(value.Name), value => value.Ordinal),
                 Images = Merge(values, value => value.Images, value => Key(value.Type), value => value.Ordinal),
                 Previews = Merge(values, value => value.Previews, value => Key(value.Kind), value => value.Ordinal),
                 References = Merge(values, value => value.References,
-                    value => (Key(value.Source), Key(value.Kind), Key(value.Language)), value => value.Ordinal),
+                    value => (Key(value.Source), Key(value.Kind), Key(value.Language)),
+                    value => value.Ordinal),
                 Relationships = Merge(values, contribution => relationships
                         .Where(value => value.MetadataContributionId == contribution.Id),
                     value => (Key(value.Kind), value.RelatedMetadataContainerId, Key(value.Qualifier)),

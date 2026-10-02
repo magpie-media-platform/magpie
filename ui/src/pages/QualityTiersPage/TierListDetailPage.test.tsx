@@ -486,18 +486,14 @@ function makeCriterion(overrides: Partial<Criterion> = {}): Criterion {
 }
 
 describe('TierListDetailPage criteria operator mapping', () => {
-    it('maps numeric operators to their API wire names', () => {
-        const cases: { ui: Criterion['operator']; wire: string }[] = [
-            { ui: 'GreaterThan', wire: 'GreaterThan' },
-            { ui: 'GreaterThanOrEqual', wire: 'GreaterThanOrEqual' },
-            { ui: 'LessThan', wire: 'LessThan' },
-            { ui: 'LessThanOrEqual', wire: 'LessThanOrEqual' },
-        ];
-
-        for (const { ui, wire } of cases) {
-            const api = mapCriteriaToApi([makeCriterion({ field: 'size', operator: ui, value: '100' })]);
-            expect(api.and?.[0].items?.size.operator).toBe(wire);
-        }
+    it.each([
+        ['GreaterThan', 'GreaterThan'],
+        ['GreaterThanOrEqual', 'GreaterThanOrEqual'],
+        ['LessThan', 'LessThan'],
+        ['LessThanOrEqual', 'LessThanOrEqual'],
+    ] as const)('maps the numeric operator %s to the API wire name %s', (ui, wire) => {
+        const api = mapCriteriaToApi([makeCriterion({ field: 'size', operator: ui, value: '100' })]);
+        expect(api.and?.[0].items?.size.operator).toBe(wire);
     });
 
     it('round-trips a size criterion with a numeric operator through API and display', () => {
@@ -1221,6 +1217,165 @@ describe('TierListDetailPage delete confirmation', () => {
 
         await waitFor(() => expect(screen.getByText('Tier kept')).toBeInTheDocument());
         expect(screen.queryByText('Delete failed')).not.toBeInTheDocument();
+    });
+});
+
+describe('TierListDetailPage shared tiers', () => {
+    const { mockApiGet, mockApiPatch } = setupMockApi();
+    const copyList: ApiQualityTierList = {
+        ...mockApiTierLists['qtl-1'],
+        id: 'qtl-copy',
+        name: 'HD Standard (Copy)',
+    };
+
+    beforeEach(() => {
+        mockApiGet.mockImplementation((url: string) => {
+            if (url === '/quality-tier-lists/qtl-1') {
+                return Promise.resolve(mockApiTierLists['qtl-1']);
+            }
+            if (url.startsWith('/quality-tier-lists')) {
+                return Promise.resolve([mockApiTierLists['qtl-1'], copyList, mockApiTierLists['qtl-2']]);
+            }
+            return Promise.resolve([]);
+        });
+    });
+
+    it('marks each tier that another list uses as shared', async () => {
+        await renderAndWaitForData(Role.Manager);
+
+        const tier = document.querySelector('[data-tier-id="t1-1"]') as HTMLElement;
+        await waitFor(() => expect(within(tier).getByText('Shared')).toBeInTheDocument());
+        expect(within(tier).getByTestId('tier-shared-lists')).toHaveTextContent('Also in "HD Standard (Copy)"');
+    });
+
+    it('asks before a tier edit changes other lists and sends nothing when the user keeps editing', async () => {
+        const user = userEvent.setup();
+        await renderAndWaitForData(Role.Manager);
+        await waitFor(() => expect(document.querySelector('[data-tier-id="t1-1"][data-shared]')).toBeInTheDocument());
+
+        await user.click(screen.getByRole('button', { name: 'Edit Bluray-1080p' }));
+        const form = document.querySelector('[data-component="tier-form"]') as HTMLElement;
+        expect(within(form).getByTestId('shared-tier-notice')).toHaveTextContent(
+            'Name, criteria and exclusions also change in "HD Standard (Copy)".',
+        );
+        await user.type(within(form).getByLabelText(/name/i), ' Remux');
+        await user.click(within(form).getByRole('button', { name: 'Save' }));
+
+        const dialog = screen.getByRole('dialog', { name: 'Save changes to 2 lists?' });
+        expect(dialog).toHaveTextContent('"HD Standard", "HD Standard (Copy)"');
+        await user.click(within(dialog).getByRole('button', { name: 'Keep editing' }));
+
+        expect(mockApiPatch).not.toHaveBeenCalledWith('/quality-tiers/t1-1', expect.anything());
+    });
+
+    it('patches the shared tier once the user confirms the change', async () => {
+        const user = userEvent.setup();
+        await renderAndWaitForData(Role.Manager);
+        await waitFor(() => expect(document.querySelector('[data-tier-id="t1-1"][data-shared]')).toBeInTheDocument());
+
+        await user.click(screen.getByRole('button', { name: 'Edit Bluray-1080p' }));
+        const form = document.querySelector('[data-component="tier-form"]') as HTMLElement;
+        await user.type(within(form).getByLabelText(/name/i), ' Remux');
+        await user.click(within(form).getByRole('button', { name: 'Save' }));
+        await user.click(screen.getByRole('button', { name: 'Save anyway' }));
+
+        await waitFor(() =>
+            expect(mockApiPatch).toHaveBeenCalledWith(
+                '/quality-tiers/t1-1',
+                expect.objectContaining({ name: { value: 'Bluray-1080p Remux' } }),
+            ),
+        );
+    });
+
+    it('keeps save disabled until the tier list collection loads', async () => {
+        mockApiGet.mockImplementation((url: string) => {
+            if (url === '/quality-tier-lists/qtl-1') {
+                return Promise.resolve(mockApiTierLists['qtl-1']);
+            }
+            if (url.startsWith('/quality-tier-lists')) {
+                return new Promise<ApiQualityTierList[]>(() => {});
+            }
+            return Promise.resolve([]);
+        });
+        const user = userEvent.setup();
+        await renderAndWaitForData(Role.Manager);
+
+        await user.click(screen.getByRole('button', { name: 'Edit Bluray-1080p' }));
+        const form = document.querySelector('[data-component="tier-form"]') as HTMLElement;
+
+        expect(within(form).getByRole('button', { name: 'Save' })).toBeDisabled();
+    });
+
+    it('shows the load error with save disabled and enables save once a retry loads the tier lists', async () => {
+        let listRequests = 0;
+        mockApiGet.mockImplementation((url: string) => {
+            if (url === '/quality-tier-lists/qtl-1') {
+                return Promise.resolve(mockApiTierLists['qtl-1']);
+            }
+            if (url.startsWith('/quality-tier-lists')) {
+                listRequests += 1;
+                return listRequests === 1
+                    ? Promise.reject(new ApiError(500, 'Server error'))
+                    : Promise.resolve([mockApiTierLists['qtl-1'], copyList]);
+            }
+            return Promise.resolve([]);
+        });
+        const user = userEvent.setup();
+        await renderAndWaitForData(Role.Manager);
+
+        await user.click(screen.getByRole('button', { name: 'Edit Bluray-1080p' }));
+        const form = document.querySelector('[data-component="tier-form"]') as HTMLElement;
+        await waitFor(() => expect(within(form).getByTestId('shared-tier-error')).toBeInTheDocument());
+        expect(within(form).getByRole('button', { name: 'Save' })).toBeDisabled();
+        await user.click(within(form).getByRole('button', { name: 'Retry' }));
+
+        await waitFor(() => expect(within(form).getByRole('button', { name: 'Save' })).toBeEnabled());
+        expect(within(form).queryByTestId('shared-tier-error')).not.toBeInTheDocument();
+        expect(within(form).getByTestId('shared-tier-notice')).toBeInTheDocument();
+    });
+
+    it('shows the tier list load error on the page and marks shared tiers once a retry loads them', async () => {
+        let listRequests = 0;
+        mockApiGet.mockImplementation((url: string) => {
+            if (url === '/quality-tier-lists/qtl-1') {
+                return Promise.resolve(mockApiTierLists['qtl-1']);
+            }
+            if (url.startsWith('/quality-tier-lists')) {
+                listRequests += 1;
+                return listRequests === 1
+                    ? Promise.reject(new ApiError(500, 'Server error'))
+                    : Promise.resolve([mockApiTierLists['qtl-1'], copyList]);
+            }
+            return Promise.resolve([]);
+        });
+        const user = userEvent.setup();
+        await renderAndWaitForData(Role.Manager);
+
+        const error = await screen.findByTestId('shared-tiers-error');
+        expect(error).toHaveTextContent('Failed to load the tier listsThe lists that use these tiers are unknown.');
+        expect(document.querySelector('[data-tier-id][data-shared]')).not.toBeInTheDocument();
+        await user.click(within(error).getByRole('button', { name: 'Retry' }));
+
+        await waitFor(() => expect(document.querySelectorAll('[data-tier-id][data-shared]')).toHaveLength(4));
+        expect(screen.queryByTestId('shared-tiers-error')).not.toBeInTheDocument();
+    });
+
+    it('clones the shared tier from the edit form notice', async () => {
+        const mockApiPost = vi.mocked(apiPost);
+        const user = userEvent.setup();
+        await renderAndWaitForData(Role.Manager);
+        await waitFor(() => expect(document.querySelector('[data-tier-id="t1-1"][data-shared]')).toBeInTheDocument());
+
+        await user.click(screen.getByRole('button', { name: 'Edit Bluray-1080p' }));
+        const form = document.querySelector('[data-component="tier-form"]') as HTMLElement;
+        await user.click(within(form).getByRole('button', { name: 'Clone Tier' }));
+
+        await waitFor(() =>
+            expect(mockApiPost).toHaveBeenCalledWith(
+                '/quality-tiers',
+                expect.objectContaining({ name: 'Bluray-1080p (Copy)' }),
+            ),
+        );
     });
 });
 

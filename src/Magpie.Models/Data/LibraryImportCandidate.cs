@@ -51,7 +51,7 @@ public record LibraryImportCandidate
     public string? LayoutKey { get; set; }
 
     /// <summary>
-    /// The key of the candidate group this candidate collapses into, derived by the repository on every write.
+    /// The key of the candidate group that this candidate collapses into.
     /// </summary>
     public string? GroupKey { get; set; }
 

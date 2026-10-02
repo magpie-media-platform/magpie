@@ -306,12 +306,6 @@
         box-shadow: 0 0 0 2px var(--accent-primary);
     }
 
-    .library-gallery-tile--selectable {
-        cursor: pointer;
-        user-select: none;
-        -webkit-user-select: none;
-    }
-
     .library-gallery-tile__title-row {
         display: flex;
         align-items: flex-start;
