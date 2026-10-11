@@ -2,16 +2,21 @@ name: CI
 
 on:
   push:
-    branches: [main, develop]
+    branches: ['**']
     tags: ['v*']
   pull_request:
-    branches: [main, develop]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/develop' && !startsWith(github.ref, 'refs/tags/') }}
 
 permissions:
   contents: read
 
 env:
-  DOTNET_NOLOGO: true
+  DOTNET_NOLOGO: 'true'
+  DOTNET_CLI_TELEMETRY_OPTOUT: '1'
   CONTRACT_PROJECTS: Magpie.Models Magpie.Sdk
   EXTENSION_PROJECTS: >-
     Magpie.Extensions.Books
@@ -40,11 +45,15 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
-      - uses: actions/setup-node@v5
+      - uses: pnpm/action-setup@v6
+        with:
+          package_json_file: ui/package.json
+
+      - uses: actions/setup-node@v6
         with:
           node-version: '22'
-
-      - run: corepack enable
+          cache: pnpm
+          cache-dependency-path: ui/pnpm-lock.yaml
 
       - name: Set version
         id: version
@@ -57,6 +66,9 @@ jobs:
             fi
           else
             version="$(dotnet msbuild src/Magpie.Sdk/Magpie.Sdk.csproj -getProperty:Version)"
+            if [[ "$GITHUB_REF" == refs/heads/develop ]]; then
+              version="${version%%-*}-dev.$GITHUB_RUN_NUMBER"
+            fi
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
@@ -109,11 +121,15 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
-      - uses: actions/setup-node@v5
+      - uses: pnpm/action-setup@v6
+        with:
+          package_json_file: ui/package.json
+
+      - uses: actions/setup-node@v6
         with:
           node-version: '22'
-
-      - run: corepack enable
+          cache: pnpm
+          cache-dependency-path: ui/pnpm-lock.yaml
 
       - run: bash scripts/package-app.sh "$VERSION" "$RID" artifacts/app
 
@@ -195,10 +211,12 @@ jobs:
           docker build --platform linux/amd64 --file Dockerfile --target standard --tag "magpie:$VERSION" \
             --label "org.opencontainers.image.version=$VERSION" \
             --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+            --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" \
             artifacts/image
           docker build --platform linux/amd64 --file Dockerfile --target bare --tag "magpie:$VERSION-bare" \
             --label "org.opencontainers.image.version=$VERSION" \
             --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+            --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" \
             artifacts/image
 
       - run: bash scripts/verify-images.sh "$VERSION" $EXTENSION_PROJECTS
@@ -238,11 +256,16 @@ jobs:
 
   publish:
     needs: [build, pack, app, installer, image, verify]
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: >-
+      github.event_name == 'push' &&
+      (github.ref == 'refs/heads/develop' || startsWith(github.ref, 'refs/tags/v')) &&
+      github.repository == 'magpie-media-platform/magpie'
     runs-on: ubuntu-latest
     environment: release
     permissions:
       contents: write
+      packages: write
+      id-token: write
     env:
       VERSION: ${{ needs.build.outputs.version }}
     steps:
@@ -251,25 +274,35 @@ jobs:
           fetch-depth: 0
 
       - name: Require the tagged commit on main
+        if: startsWith(github.ref, 'refs/tags/v')
         run: git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
 
       - uses: actions/download-artifact@v8
         with:
           path: artifacts
 
+      - name: Authenticate to NuGet
+        uses: NuGet/login@v1
+        id: nuget-login
+        with:
+          user: ${{ secrets.NUGET_USER }}
+
       - name: Publish NuGet packages
         env:
-          NUGET_SOURCE: ${{ vars.NUGET_SOURCE }}
-          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+          NUGET_API_KEY: ${{ steps.nuget-login.outputs.NUGET_API_KEY }}
         run: >
           dotnet nuget push "artifacts/packages/*.nupkg"
-          --source "$NUGET_SOURCE" --api-key "$NUGET_API_KEY" --skip-duplicate
+          --source https://api.nuget.org/v3/index.json --api-key "$NUGET_API_KEY" --skip-duplicate
 
       - name: Publish image
         env:
-          MAGPIE_IMAGE: ${{ vars.MAGPIE_IMAGE }}
-          REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
-          REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
+          MAGPIE_IMAGE: ghcr.io/magpie-media-platform/magpie
+          REGISTRY_USERNAME: ${{ github.actor }}
+          REGISTRY_PASSWORD: ${{ github.token }}
         run: |
           docker load --input "artifacts/image/magpie-$VERSION-image.tar.gz"
           echo "$REGISTRY_PASSWORD" | docker login "${MAGPIE_IMAGE%%/*}" --username "$REGISTRY_USERNAME" --password-stdin
@@ -286,9 +319,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          prerelease=()
-          if [[ "$VERSION" == *-* ]]; then
-            prerelease=(--prerelease)
+          tag="$GITHUB_REF_NAME"
+          release_args=(--verify-tag)
+          if [[ "$GITHUB_REF" == refs/heads/develop ]]; then
+            tag="v$VERSION"
+            release_args=(--target "$GITHUB_SHA")
           fi
-          gh release create "$GITHUB_REF_NAME" artifacts/app-*/*.tar.gz artifacts/installer/*.msi \
-            --verify-tag --title "$VERSION" --notes "" "${prerelease[@]}"
+          if [[ "$VERSION" == *-* ]]; then
+            release_args+=(--prerelease --latest=false)
+          fi
+          gh release create "$tag" artifacts/app-*/*.tar.gz artifacts/installer/*.msi \
+            --title "$VERSION" --notes "" "${release_args[@]}"
