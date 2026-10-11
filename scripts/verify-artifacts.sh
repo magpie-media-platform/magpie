@@ -79,6 +79,7 @@ stops_gracefully() {
 
 for package in "$packages"/*.nupkg; do
     nuspec="$(unzip -p "$package" '*.nuspec')"
+    cmp -s "$repo_root/LICENSE" <(unzip -p "$package" LICENSE) || fail "$package does not include the license"
     grep -qF "<version>$version</version>" <<< "$nuspec" || fail "$package does not have version $version"
     if grep -o '<dependency id="Magpie\.[^"]*" version="[^"]*"' <<< "$nuspec" |
         grep -vF "version=\"[$version, $next)\"" > /dev/null; then
@@ -103,6 +104,8 @@ for package in "$packages"/*.nupkg; do
         fail "$package has the magpie tag"
     fi
 done
+
+cmp -s "$repo_root/LICENSE" <(tar -xOzf "$app_archive" ./LICENSE) || fail "the application archive does not include the license"
 
 docker run --detach --name "$host" mcr.microsoft.com/dotnet/runtime-deps:10.0 sleep infinity > /dev/null
 docker exec "$host" mkdir -p /app /placed/extensions /packages

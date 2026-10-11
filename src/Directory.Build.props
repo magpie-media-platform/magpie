@@ -1,5 +1,10 @@
 <Project>
   <PropertyGroup>
+    <Version>0.0.1</Version>
+    <PackageLicenseFile>LICENSE</PackageLicenseFile>
+    <PackageProjectUrl>https://github.com/magpie-media-platform/magpie</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/magpie-media-platform/magpie</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
     <LangVersion>preview</LangVersion>
     <Nullable>enable</Nullable>
     <ImplicitUsings>disable</ImplicitUsings>
@@ -19,6 +24,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <None Include="$(MSBuildThisFileDirectory)..\LICENSE" Pack="true" PackagePath="" />
     <PackageReference Include="Microsoft.CodeAnalysis.BannedApiAnalyzers" PrivateAssets="all" />
     <PackageReference Include="Meziantou.Analyzer" PrivateAssets="all" />
     <PackageReference Include="NewStyleCop.Analyzers" PrivateAssets="all" />
