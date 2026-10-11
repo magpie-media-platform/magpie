@@ -1,14 +1,17 @@
 import { useState, useCallback } from 'react';
 import { EyeIcon, CircleNotchIcon, FloppyDiskIcon, WarningCircleIcon } from '@phosphor-icons/react';
 
+import { parseSystemDefaultMonitoring } from '@/components/configuration/RootFolderForm';
 import { Alert } from '@/components/ui/Alert';
 import { Button } from '@/components/ui/Button';
 import { ExternalChangeConflictWarning, StaleSaveConfirmationDialog } from '@/components/ui/ExternalChangeConflict';
 import { Input } from '@/components/ui/Input';
 import { Label } from '@/components/ui/Label';
+import { MonitoringToggle } from '@/components/ui/MonitoringToggle';
 import { Skeleton } from '@/components/ui/Skeleton';
-import { Switch } from '@/components/ui/Switch';
+import { settingsToRecord, useSystemSettingsGroup } from '@/hooks/useSettings';
 import { useSettingsGroupForm } from '@/hooks/useSettingsGroupForm';
+import type { MonitoringMode } from '@/types';
 
 import './MonitoringDefaultPanel.css';
 
@@ -16,23 +19,22 @@ const SETTINGS_GROUP = 'monitoring';
 const SYSTEM_DEFAULT_KEY = 'system-default';
 const MAX_SPREAD_KEY = 'max-spread';
 
-const DEFAULT_MONITORING = true;
-
 type MonitoringFormValues = {
-    systemDefault: string;
+    systemDefault: MonitoringMode;
     maxSpread: string;
 };
 
 const defaultValues: MonitoringFormValues = {
-    systemDefault: String(DEFAULT_MONITORING),
-    maxSpread: '0',
+    systemDefault: 'Monitored',
+    maxSpread: '',
 };
 
-function parseMonitoring(raw: string | undefined): boolean {
-    if (raw === 'false' || raw === '0') {
-        return false;
-    }
-    return DEFAULT_MONITORING;
+function fromRecord(record: Record<string, string>): MonitoringFormValues {
+    const systemDefault = parseSystemDefaultMonitoring(record[SYSTEM_DEFAULT_KEY]);
+    return {
+        systemDefault,
+        maxSpread: systemDefault === 'Shotgun' ? (record[MAX_SPREAD_KEY] ?? '0') : '',
+    };
 }
 
 export function MonitoringDefaultPanel() {
@@ -50,27 +52,41 @@ export function MonitoringDefaultPanel() {
     } = useSettingsGroupForm<MonitoringFormValues>({
         settingsGroup: SETTINGS_GROUP,
         defaultValues,
-        fromRecord: (record) => ({
-            systemDefault: String(parseMonitoring(record[SYSTEM_DEFAULT_KEY])),
-            maxSpread: record[MAX_SPREAD_KEY] ?? '0',
-        }),
+        fromRecord,
     });
-    const value = parseMonitoring(values.systemDefault);
-    const maxSpreadValid = /^\d+$/.test(values.maxSpread.trim());
+    const { group, dataUpdatedAt } = useSystemSettingsGroup(SETTINGS_GROUP);
+    const [savedMaxSpread, setSavedMaxSpread] = useState<{ value: string; dataUpdatedAt: number } | null>(null);
+    const storedMaxSpread =
+        savedMaxSpread?.dataUpdatedAt === dataUpdatedAt
+            ? savedMaxSpread.value
+            : (settingsToRecord(group?.settings ?? [])[MAX_SPREAD_KEY] ?? '0');
+    const shotgun = values.systemDefault === 'Shotgun';
+    const maxSpreadValid = !shotgun || /^\d+$/.test(values.maxSpread.trim());
 
     const handleChange = useCallback(
-        (next: boolean) => {
-            handleSettingChange('systemDefault', String(next));
+        (next: MonitoringMode) => {
+            handleSettingChange('systemDefault', next);
+            if ((next === 'Shotgun') !== shotgun) {
+                handleSettingChange('maxSpread', next === 'Shotgun' ? storedMaxSpread : '');
+            }
         },
-        [handleSettingChange],
+        [handleSettingChange, shotgun, storedMaxSpread],
     );
 
     const saveSettings = useCallback(() => {
         void save(
-            { [SYSTEM_DEFAULT_KEY]: String(value), [MAX_SPREAD_KEY]: String(Number(values.maxSpread.trim())) },
-            { successDescription: 'Monitoring settings updated.' },
+            shotgun
+                ? {
+                      [SYSTEM_DEFAULT_KEY]: values.systemDefault,
+                      [MAX_SPREAD_KEY]: String(Number(values.maxSpread.trim())),
+                  }
+                : { [SYSTEM_DEFAULT_KEY]: values.systemDefault },
+            {
+                successDescription: 'Monitoring settings updated.',
+                onSuccess: () => setSavedMaxSpread(shotgun ? { value: values.maxSpread, dataUpdatedAt } : null),
+            },
         );
-    }, [save, value, values.maxSpread]);
+    }, [save, shotgun, values.systemDefault, values.maxSpread, dataUpdatedAt]);
 
     const handleSave = useCallback(() => {
         if (conflictState === 'stale') {
@@ -114,7 +130,7 @@ export function MonitoringDefaultPanel() {
                     <>
                         {isUncreated && (
                             <p className="monitoring-default-panel__info" data-testid="monitoring-default-info">
-                                Active is used until a default is saved.
+                                Monitored is used until a default is saved.
                             </p>
                         )}
 
@@ -127,41 +143,44 @@ export function MonitoringDefaultPanel() {
                         )}
 
                         <div className="monitoring-default-panel__row">
-                            <Label htmlFor="system-default-monitoring">Default monitoring</Label>
-                            <div className="monitoring-default-panel__toggle">
-                                <Switch
-                                    id="system-default-monitoring"
-                                    checked={value}
-                                    onCheckedChange={handleChange}
-                                    aria-label="System default monitoring"
-                                    data-setting="system-default-monitoring"
-                                />
-                                <span>{value ? 'Active' : 'Excluded'}</span>
-                            </div>
-                        </div>
-
-                        <div className="monitoring-default-panel__row">
-                            <Label htmlFor="shotgun-max-spread">Max spread</Label>
-                            <Input
-                                id="shotgun-max-spread"
-                                type="number"
-                                inputMode="numeric"
-                                min={0}
-                                step={1}
-                                value={values.maxSpread}
-                                onChange={(event) => handleSettingChange('maxSpread', event.target.value)}
-                                className="monitoring-default-panel__number"
-                                data-setting="max-spread"
-                                error={!maxSpreadValid}
-                                errorMessage={
-                                    maxSpreadValid ? undefined : 'Max spread must be a whole number, 0 or more.'
-                                }
+                            <span id="system-default-monitoring-label" className="label label--md">
+                                Default monitoring
+                            </span>
+                            <MonitoringToggle<MonitoringMode>
+                                value={values.systemDefault}
+                                onChange={handleChange}
+                                aria-labelledby="system-default-monitoring-label"
+                                data-field="system-default-monitoring"
+                                shotgun
+                                inherit={false}
                             />
                         </div>
-                        <p className="monitoring-default-panel__info">
-                            The most releases Shotgun grabs at the same time for one item. 0 grabs every acceptable
-                            release.
-                        </p>
+
+                        {shotgun && (
+                            <>
+                                <div className="monitoring-default-panel__row">
+                                    <Label htmlFor="shotgun-max-spread">Max spread</Label>
+                                    <Input
+                                        id="shotgun-max-spread"
+                                        type="number"
+                                        inputMode="numeric"
+                                        min={0}
+                                        step={1}
+                                        value={values.maxSpread}
+                                        onChange={(event) => handleSettingChange('maxSpread', event.target.value)}
+                                        className="monitoring-default-panel__number"
+                                        data-setting="max-spread"
+                                        error={!maxSpreadValid}
+                                        errorMessage={
+                                            maxSpreadValid ? undefined : 'Max spread must be a whole number, 0 or more.'
+                                        }
+                                    />
+                                </div>
+                                <p className="monitoring-default-panel__info">
+                                    How many to grab at once per item. 0 means all.
+                                </p>
+                            </>
+                        )}
 
                         <div className="monitoring-default-panel__row">
                             <Button

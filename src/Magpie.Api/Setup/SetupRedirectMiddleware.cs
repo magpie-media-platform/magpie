@@ -14,6 +14,7 @@ internal sealed class SetupRedirectMiddleware(RequestDelegate next, ILogger<Setu
     private static readonly string[] AlwaysAllowedApiPrefixes =
     [
         "/api/system/health",
+        "/api/system/instance-name",
         "/api/system/ready",
         "/api/system/setup",
         "/api/auth",

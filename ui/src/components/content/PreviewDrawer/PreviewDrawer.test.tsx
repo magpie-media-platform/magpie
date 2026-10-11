@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { useState } from 'react';
+import type { UseMutationResult } from '@tanstack/react-query';
 vi.mock('@/hooks/useLocalContentPreview', () => ({
     useLocalContentPreview: () => ({ data: undefined, error: null, isPending: false }),
 }));
@@ -25,7 +26,11 @@ vi.mock('@/hooks/useLibraryTypes', () => ({
     }),
 }));
 
-import { usePreviewByExternalId, type ContentPreview } from '@/hooks/usePreviewByExternalId';
+import {
+    usePreviewByExternalId,
+    type ContentPreview,
+    type PreviewByExternalIdRequest,
+} from '@/hooks/usePreviewByExternalId';
 import { ApiError } from '@/lib/api';
 import { PreviewDrawer, type PreviewDrawerTarget } from './PreviewDrawer';
 
@@ -77,18 +82,47 @@ const sparsePreview: ContentPreview = {
     relatedSubjects: [],
 };
 
+const mutate = vi.fn();
+const reset = vi.fn();
+
+const successResult: UseMutationResult<ContentPreview, Error, PreviewByExternalIdRequest> = {
+    data: preview,
+    error: null,
+    variables: {
+        providerType: 'provider-a',
+        externalIdKey: 'provider-a.movie',
+        externalId: '27205',
+        contentType: 'movies',
+    },
+    context: undefined,
+    failureCount: 0,
+    failureReason: null,
+    isError: false,
+    isIdle: false,
+    isPaused: false,
+    isPending: false,
+    isSuccess: true,
+    status: 'success',
+    submittedAt: 0,
+    mutate,
+    mutateAsync: vi.fn(),
+    reset,
+};
+
+const notFoundResult: UseMutationResult<ContentPreview, Error, PreviewByExternalIdRequest> = {
+    ...successResult,
+    data: undefined,
+    error: new ApiError(404, 'Not found'),
+    isError: true,
+    isSuccess: false,
+    status: 'error',
+};
+
 describe('PreviewDrawer', () => {
     beforeEach(() => vi.clearAllMocks());
 
     it('fetches the preview with the target identifiers when opened', async () => {
-        const mutate = vi.fn();
-        mockUsePreview.mockReturnValue({
-            mutate,
-            reset: vi.fn(),
-            data: preview,
-            error: null,
-            isPending: false,
-        } as unknown as ReturnType<typeof usePreviewByExternalId>);
+        mockUsePreview.mockReturnValue(successResult);
 
         render(
             <PreviewDrawer
@@ -112,13 +146,7 @@ describe('PreviewDrawer', () => {
     });
 
     it('returns focus to the opener after Escape', async () => {
-        mockUsePreview.mockReturnValue({
-            mutate: vi.fn(),
-            reset: vi.fn(),
-            data: preview,
-            error: null,
-            isPending: false,
-        } as unknown as ReturnType<typeof usePreviewByExternalId>);
+        mockUsePreview.mockReturnValue(successResult);
         const user = userEvent.setup();
         function Opener() {
             const [open, setOpen] = useState(false);
@@ -142,13 +170,7 @@ describe('PreviewDrawer', () => {
     });
 
     it('returns focus to the opener after Close', async () => {
-        mockUsePreview.mockReturnValue({
-            mutate: vi.fn(),
-            reset: vi.fn(),
-            data: preview,
-            error: null,
-            isPending: false,
-        } as unknown as ReturnType<typeof usePreviewByExternalId>);
+        mockUsePreview.mockReturnValue(successResult);
         const user = userEvent.setup();
         function Opener() {
             const [open, setOpen] = useState(false);
@@ -172,13 +194,7 @@ describe('PreviewDrawer', () => {
     });
 
     it('renders title, preview hero, and related subjects from the preview', async () => {
-        mockUsePreview.mockReturnValue({
-            mutate: vi.fn(),
-            reset: vi.fn(),
-            data: preview,
-            error: null,
-            isPending: false,
-        } as unknown as ReturnType<typeof usePreviewByExternalId>);
+        mockUsePreview.mockReturnValue(successResult);
 
         render(
             <PreviewDrawer
@@ -201,8 +217,7 @@ describe('PreviewDrawer', () => {
 
     it('uses provider ordering without interpreting preview or image kinds', async () => {
         mockUsePreview.mockReturnValue({
-            mutate: vi.fn(),
-            reset: vi.fn(),
+            ...successResult,
             data: {
                 ...preview,
                 images: [
@@ -222,9 +237,7 @@ describe('PreviewDrawer', () => {
                     },
                 ],
             },
-            error: null,
-            isPending: false,
-        } as unknown as ReturnType<typeof usePreviewByExternalId>);
+        });
 
         render(
             <PreviewDrawer
@@ -243,8 +256,7 @@ describe('PreviewDrawer', () => {
 
     it('groups related subjects by their generic subject kind', async () => {
         mockUsePreview.mockReturnValue({
-            mutate: vi.fn(),
-            reset: vi.fn(),
+            ...successResult,
             data: {
                 ...preview,
                 relatedSubjects: [
@@ -257,9 +269,7 @@ describe('PreviewDrawer', () => {
                     },
                 ],
             },
-            error: null,
-            isPending: false,
-        } as unknown as ReturnType<typeof usePreviewByExternalId>);
+        });
 
         render(
             <PreviewDrawer
@@ -282,8 +292,7 @@ describe('PreviewDrawer', () => {
 
     it('caps each related-subject group after grouping', async () => {
         mockUsePreview.mockReturnValue({
-            mutate: vi.fn(),
-            reset: vi.fn(),
+            ...successResult,
             data: {
                 ...preview,
                 relatedSubjects: [
@@ -300,9 +309,7 @@ describe('PreviewDrawer', () => {
                     },
                 ],
             },
-            error: null,
-            isPending: false,
-        } as unknown as ReturnType<typeof usePreviewByExternalId>);
+        });
 
         render(
             <PreviewDrawer
@@ -321,13 +328,7 @@ describe('PreviewDrawer', () => {
     });
 
     it('hides the related-subject section when the preview has no related subjects', async () => {
-        mockUsePreview.mockReturnValue({
-            mutate: vi.fn(),
-            reset: vi.fn(),
-            data: { ...preview, relatedSubjects: [] },
-            error: null,
-            isPending: false,
-        } as unknown as ReturnType<typeof usePreviewByExternalId>);
+        mockUsePreview.mockReturnValue({ ...successResult, data: { ...preview, relatedSubjects: [] } });
 
         render(
             <PreviewDrawer
@@ -347,13 +348,7 @@ describe('PreviewDrawer', () => {
     });
 
     it('renders artwork-only previews inside the bounded artwork frame', async () => {
-        mockUsePreview.mockReturnValue({
-            mutate: vi.fn(),
-            reset: vi.fn(),
-            data: { ...preview, previews: [] },
-            error: null,
-            isPending: false,
-        } as unknown as ReturnType<typeof usePreviewByExternalId>);
+        mockUsePreview.mockReturnValue({ ...successResult, data: { ...preview, previews: [] } });
 
         render(
             <PreviewDrawer
@@ -380,13 +375,7 @@ describe('PreviewDrawer', () => {
 
     it('calls onAdd with the target when the Add button is clicked', async () => {
         const user = userEvent.setup();
-        mockUsePreview.mockReturnValue({
-            mutate: vi.fn(),
-            reset: vi.fn(),
-            data: preview,
-            error: null,
-            isPending: false,
-        } as unknown as ReturnType<typeof usePreviewByExternalId>);
+        mockUsePreview.mockReturnValue(successResult);
         const onAdd = vi.fn();
 
         render(
@@ -407,13 +396,7 @@ describe('PreviewDrawer', () => {
 
     it('adds straight to the sole destination when one addOption is given', async () => {
         const user = userEvent.setup();
-        mockUsePreview.mockReturnValue({
-            mutate: vi.fn(),
-            reset: vi.fn(),
-            data: preview,
-            error: null,
-            isPending: false,
-        } as unknown as ReturnType<typeof usePreviewByExternalId>);
+        mockUsePreview.mockReturnValue(successResult);
         const onAdd = vi.fn();
 
         render(
@@ -435,13 +418,7 @@ describe('PreviewDrawer', () => {
 
     it('opens a destination menu on Add when several addOptions are given', async () => {
         const user = userEvent.setup();
-        mockUsePreview.mockReturnValue({
-            mutate: vi.fn(),
-            reset: vi.fn(),
-            data: preview,
-            error: null,
-            isPending: false,
-        } as unknown as ReturnType<typeof usePreviewByExternalId>);
+        mockUsePreview.mockReturnValue(successResult);
         const onAdd = vi.fn();
 
         render(
@@ -466,13 +443,7 @@ describe('PreviewDrawer', () => {
     });
 
     it('disables Add and shows the reason when addDisabledReason is set', async () => {
-        mockUsePreview.mockReturnValue({
-            mutate: vi.fn(),
-            reset: vi.fn(),
-            data: preview,
-            error: null,
-            isPending: false,
-        } as unknown as ReturnType<typeof usePreviewByExternalId>);
+        mockUsePreview.mockReturnValue(successResult);
         const onAdd = vi.fn();
 
         render(
@@ -493,14 +464,30 @@ describe('PreviewDrawer', () => {
         expect(screen.getByTestId('preview-drawer__add-hint')).toHaveTextContent(/configure a root folder/i);
     });
 
-    it('shows the empty state on a 404', async () => {
+    it('PreviewDrawer_RendersReadableOverview_WhenOverviewHasMarkdown', async () => {
+        // Arrange
         mockUsePreview.mockReturnValue({
-            mutate: vi.fn(),
-            reset: vi.fn(),
-            data: undefined,
-            error: new ApiError(404, 'Not found'),
-            isPending: false,
-        } as unknown as ReturnType<typeof usePreviewByExternalId>);
+            ...successResult,
+            data: {
+                ...preview,
+                overview:
+                    "[Comment by Kim Stanley Robinson, on The Guardian's website][1]: The Left Hand of Darkness by Ursula K Le Guin (1969) > One of my favorite novels is The Left Hand of Darkness. [1]: https://www.theguardian.com/books/2011/may/14/science-fiction-authors-choice",
+            },
+        });
+
+        // Act
+        render(<PreviewDrawer open onOpenChange={() => {}} target={target} />);
+
+        // Assert
+        expect(
+            await screen.findByText(
+                "Comment by Kim Stanley Robinson, on The Guardian's website: The Left Hand of Darkness by Ursula K Le Guin (1969) One of my favorite novels is The Left Hand of Darkness.",
+            ),
+        ).toBeInTheDocument();
+    });
+
+    it('shows the empty state on a 404', async () => {
+        mockUsePreview.mockReturnValue(notFoundResult);
 
         render(
             <PreviewDrawer
@@ -520,13 +507,7 @@ describe('PreviewDrawer', () => {
     });
 
     it('shows the no-details state when a successful preview has only its identity', async () => {
-        mockUsePreview.mockReturnValue({
-            mutate: vi.fn(),
-            reset: vi.fn(),
-            data: sparsePreview,
-            error: null,
-            isPending: false,
-        } as unknown as ReturnType<typeof usePreviewByExternalId>);
+        mockUsePreview.mockReturnValue({ ...successResult, data: sparsePreview });
 
         render(<PreviewDrawer open onOpenChange={() => {}} target={target} />);
 
@@ -554,13 +535,7 @@ describe('PreviewDrawer', () => {
             },
         ],
     ])('does not show the no-details state when the preview has only %s', async (_, details) => {
-        mockUsePreview.mockReturnValue({
-            mutate: vi.fn(),
-            reset: vi.fn(),
-            data: { ...sparsePreview, ...details },
-            error: null,
-            isPending: false,
-        } as unknown as ReturnType<typeof usePreviewByExternalId>);
+        mockUsePreview.mockReturnValue({ ...successResult, data: { ...sparsePreview, ...details } });
 
         render(<PreviewDrawer open onOpenChange={() => {}} target={target} />);
 
@@ -569,13 +544,7 @@ describe('PreviewDrawer', () => {
     });
 
     it('reflects an added candidate on the Add button', async () => {
-        mockUsePreview.mockReturnValue({
-            mutate: vi.fn(),
-            reset: vi.fn(),
-            data: preview,
-            error: null,
-            isPending: false,
-        } as unknown as ReturnType<typeof usePreviewByExternalId>);
+        mockUsePreview.mockReturnValue(successResult);
 
         render(
             <PreviewDrawer open onOpenChange={() => {}} target={target} isAdded isAdding={false} onAdd={() => {}} />,

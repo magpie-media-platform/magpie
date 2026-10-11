@@ -43,12 +43,14 @@ public interface IUserRepository :
     /// Records a failed login of a user.
     /// </summary>
     /// <param name="userId">The id of the user</param>
-    /// <param name="lockedUntil">The end of the lockout, or <c>null</c> to keep the stored value</param>
+    /// <param name="maxFailedAttempts">The number of failed attempts that causes a lockout</param>
+    /// <param name="lockedUntil">The end of the lockout</param>
     /// <param name="cancellationToken">The token that cancels the operation</param>
     /// <returns>The failed-login state with its new values</returns>
     Task<FailedLoginResult> RecordFailedLoginAsync(
         Guid userId,
-        DateTime? lockedUntil,
+        int maxFailedAttempts,
+        DateTime lockedUntil,
         CancellationToken cancellationToken = default);
 
     /// <summary>

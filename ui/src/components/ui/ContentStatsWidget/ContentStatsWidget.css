@@ -115,6 +115,7 @@
         height: 6px;
         border-radius: var(--radius-full);
         flex-shrink: 0;
+        background-color: currentcolor;
     }
 
     .content-stats-widget__item--missing .content-stats-widget__item-indicator {

@@ -99,7 +99,7 @@
         margin: var(--space-2xs) 0 0;
         font-size: var(--text-sm);
         color: var(--text-secondary);
-        overflow-wrap: break-word;
+        overflow-wrap: anywhere;
     }
 
     .diagnostics__affected {

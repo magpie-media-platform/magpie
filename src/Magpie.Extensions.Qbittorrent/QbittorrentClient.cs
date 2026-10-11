@@ -219,7 +219,6 @@ internal sealed class QbittorrentClient(
             content.Add(new StringContent(tags), "tags");
         }
 
-        // qBittorrent 4.x reads paused and 5.x reads stopped. Each version ignores the other field.
         var paused = settings.AddPaused ? "true" : "false";
         content.Add(new StringContent(paused), "paused");
         content.Add(new StringContent(paused), "stopped");

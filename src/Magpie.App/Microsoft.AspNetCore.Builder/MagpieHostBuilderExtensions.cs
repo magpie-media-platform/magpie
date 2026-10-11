@@ -9,6 +9,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Xml.Linq;
 
 using Magpie.Abstractions;
 using Magpie.Abstractions.Database;
@@ -28,11 +29,14 @@ using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Storage;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 using OpenTelemetry.Logs;
 using OpenTelemetry.Metrics;
@@ -200,6 +204,7 @@ public static class MagpieHostBuilderExtensions
         app.UseAuthorization();
         app.UseMagpieSetupRedirect();
         app.MapMagpieEndpoints();
+        app.MapGet(WebManifest.RequestPath, WebManifest.GetAsync).AllowAnonymous();
         app.MapFallbackToFile("index.html").AllowAnonymous();
         return app;
     }
@@ -259,20 +264,33 @@ public static class MagpieHostBuilderExtensions
         });
 
         var logger = loggerFactory.CreateLogger(nameof(MagpieHostBuilderExtensions));
-        var register = false;
-        var extensions = await ReadInstalledExtensionsAsync(builder, cancellationToken).ConfigureAwait(false);
+        var options = builder.Configuration.GetSection(MagpieHostOptions.SectionName).Get<MagpieHostOptions>()
+            ?? new();
+        var extensionsRoot = ResolveExtensionsRoot(options.Extensions.Path, builder.Environment.ContentRootPath);
+        var context = CreateBootstrapDbContext(builder.Configuration, builder.Environment.ContentRootPath);
+        await using var contextHandle = context.ConfigureAwait(false);
 
-        if (extensions is { Count: 0 })
+        var newInstance = !await HasSchemaAsync(context, cancellationToken).ConfigureAwait(false);
+        var extensions = newInstance
+            ? DiscoverExtensions(extensionsRoot, logger)
+            : await ReadInstalledExtensionsAsync(context, cancellationToken).ConfigureAwait(false);
+        var packageVersions = new Dictionary<Guid, string>();
+        foreach (var extension in extensions)
         {
-            extensions = await DiscoverExtensionsAsync(builder, logger, cancellationToken).ConfigureAwait(false);
-            register = true;
+            var packageVersion = newInstance
+                ? extension.Version
+                : ReadPackageVersion(extensionsRoot, extension.FilePath, logger);
+            if (packageVersion is not null)
+            {
+                packageVersions[extension.Id] = packageVersion;
+            }
         }
 
         var loaded = builder.Services.AddMagpieExtensions(extensions, BuiltInExtensions, loggerFactory);
 
         builder.Services.AddDefaultProviders();
         builder.AddMagpieClusterBackplane();
-        builder.Services.AddSingleton(new LoadedExtensionSet(register ? extensions : [], loaded));
+        builder.Services.AddSingleton(new LoadedExtensionSet(newInstance ? extensions : [], loaded, packageVersions));
         builder.Services.AddSingleton<DatabaseStartupService>();
     }
 
@@ -316,6 +334,24 @@ public static class MagpieHostBuilderExtensions
         });
     }
 
+    internal static TimeSpan ResolveMagpieShutdownTimeout(this WebApplicationBuilder builder)
+    {
+        AddMagpieConfiguration(builder);
+        using var app = builder.Build();
+
+        return app.Services.GetRequiredService<IOptions<HostOptions>>().Value.ShutdownTimeout;
+    }
+
+    private static void AddMagpieConfiguration(IHostApplicationBuilder builder)
+    {
+        builder.Configuration.AddJsonFile("appsettings.json", optional: true, reloadOnChange: false);
+        builder.Configuration.AddJsonFile(
+            Path.Combine(builder.Environment.ContentRootPath, "config", "appsettings.json"),
+            optional: true,
+            reloadOnChange: false);
+        builder.Configuration.AddEnvironmentVariables();
+    }
+
     private static IHostApplicationBuilder AddMagpie(IHostApplicationBuilder builder, bool startHostedServices)
     {
         ArgumentNullException.ThrowIfNull(builder);
@@ -326,12 +362,7 @@ public static class MagpieHostBuilderExtensions
             ValidateScopes = true,
         }));
 
-        builder.Configuration.AddJsonFile("appsettings.json", optional: true, reloadOnChange: false);
-        builder.Configuration.AddJsonFile(
-            Path.Combine(builder.Environment.ContentRootPath, "config", "appsettings.json"),
-            optional: true,
-            reloadOnChange: false);
-        builder.Configuration.AddEnvironmentVariables();
+        AddMagpieConfiguration(builder);
 
         var hostOptions = builder.Configuration.GetSection(MagpieHostOptions.SectionName).Get<MagpieHostOptions>()
             ?? new();
@@ -475,18 +506,9 @@ public static class MagpieHostBuilderExtensions
     }
 
     private static async Task<IReadOnlyList<Extension>> ReadInstalledExtensionsAsync(
-        IHostApplicationBuilder builder,
+        MagpieDbContext context,
         CancellationToken cancellationToken)
     {
-        var context = CreateBootstrapDbContext(builder.Configuration, builder.Environment.ContentRootPath);
-
-        await using var _ = context.ConfigureAwait(false);
-
-        if (!await HasSchemaAsync(context, cancellationToken).ConfigureAwait(false))
-        {
-            return [];
-        }
-
         return await (
             from extension in context.Extensions.AsNoTracking()
             where extension.Installed && extension.Enabled
@@ -507,29 +529,13 @@ public static class MagpieHostBuilderExtensions
             .ConfigureAwait(false);
     }
 
-    private static async Task<IReadOnlyList<Extension>> DiscoverExtensionsAsync(
-        IHostApplicationBuilder builder,
-        ILogger logger,
-        CancellationToken cancellationToken)
+    private static List<Extension> DiscoverExtensions(string extensionsRoot, ILogger logger)
     {
-        var options = builder.Configuration.GetSection(MagpieHostOptions.SectionName).Get<MagpieHostOptions>()
-            ?? new();
-        var extensionsRoot = ResolveExtensionsRoot(options.Extensions.Path, builder.Environment.ContentRootPath);
+        var discovered = new List<Extension>();
         if (!Directory.Exists(extensionsRoot))
         {
-            return [];
+            return discovered;
         }
-
-        var context = CreateBootstrapDbContext(builder.Configuration, builder.Environment.ContentRootPath);
-        await using var contextHandle = context.ConfigureAwait(false);
-
-        if (await HasSchemaAsync(context, cancellationToken).ConfigureAwait(false) &&
-            await context.Extensions.AnyAsync(cancellationToken).ConfigureAwait(false))
-        {
-            return [];
-        }
-
-        var discovered = new List<Extension>();
 
         foreach (var directory in Directory
             .EnumerateDirectories(extensionsRoot)
@@ -540,40 +546,91 @@ public static class MagpieHostBuilderExtensions
                 continue;
             }
 
-            var depsPath = Directory.EnumerateFiles(directory, "*.deps.json").FirstOrDefault();
-            if (depsPath is null)
+            var nuspec = ReadNuspec(directory, logger);
+            var packageId = nuspec?.Id;
+            if (packageId is null || nuspec?.Version is not { } version)
             {
-                logger.LogWarning(
-                    "Extension directory {Directory} has no deps.json, skipped",
-                    directory);
+                logger.LogWarning("Extension directory {Directory} has no valid nuspec, skipped", directory);
                 continue;
             }
 
-            var assemblyName = Path.GetFileName(depsPath)[..^".deps.json".Length];
-            var assemblyPath = Path.Combine(directory, assemblyName + ".dll");
-            if (!File.Exists(assemblyPath))
+            var assemblyPath = Directory
+                .EnumerateFiles(directory, packageId + ".dll", SearchOption.AllDirectories)
+                .FirstOrDefault();
+            if (assemblyPath is null)
             {
                 logger.LogWarning(
-                    "Extension assembly {AssemblyPath} does not exist, skipped",
-                    assemblyPath);
+                    "Extension directory {Directory} has no {AssemblyName}.dll, skipped",
+                    directory,
+                    packageId);
                 continue;
             }
 
             discovered.Add(new Extension
             {
                 Id = Guid.NewGuid(),
-                PackageId = assemblyName,
-                Name = assemblyName,
-                Version = AssemblyName.GetAssemblyName(assemblyPath).Version?.ToString(3) ?? "0.0.0",
+                PackageId = packageId,
+                Name = nuspec.Title ?? packageId,
+                Author = nuspec.Authors,
+                Description = nuspec.Description,
+                Version = version,
                 FilePath = assemblyPath,
-                AssemblyName = assemblyName,
+                AssemblyName = packageId,
                 Installed = true,
                 Enabled = true,
+                Managed = true,
+                NuGetId = packageId,
                 CreatedAt = DateTime.UtcNow,
             });
         }
 
         return discovered;
+    }
+
+    private static string? ReadPackageVersion(string extensionsRoot, string filePath, ILogger logger)
+    {
+        var relativePath = Path.GetRelativePath(extensionsRoot, filePath);
+        var packageDirectory = relativePath.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)[0];
+        return Path.IsPathRooted(relativePath) || packageDirectory == ".."
+            ? null
+            : ReadNuspec(Path.Combine(extensionsRoot, packageDirectory), logger)?.Version;
+    }
+
+    private static NuspecMetadata? ReadNuspec(string directory, ILogger logger)
+    {
+        if (!Directory.Exists(directory))
+        {
+            return null;
+        }
+
+        try
+        {
+            var nuspecPath = Directory.EnumerateFiles(directory, "*.nuspec").FirstOrDefault();
+            if (nuspecPath is null)
+            {
+                return null;
+            }
+
+            var metadata = XDocument.Load(nuspecPath).Root?.Elements()
+                .FirstOrDefault(element => element.Name.LocalName == "metadata");
+            return new(
+                ReadNuspecValue(metadata, "id"),
+                ReadNuspecValue(metadata, "version"),
+                ReadNuspecValue(metadata, "title"),
+                ReadNuspecValue(metadata, "authors"),
+                ReadNuspecValue(metadata, "description"));
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "The host failed to read the extension nuspec in {Directory}", directory);
+            return null;
+        }
+    }
+
+    private static string? ReadNuspecValue(XElement? metadata, string name)
+    {
+        var value = metadata?.Elements().FirstOrDefault(element => element.Name.LocalName == name)?.Value.Trim();
+        return string.IsNullOrEmpty(value) ? null : value;
     }
 
     private static string ResolveExtensionsRoot(string? configuredPath, string contentRoot)
@@ -587,7 +644,8 @@ public static class MagpieHostBuilderExtensions
 
     private static async Task<bool> HasSchemaAsync(MagpieDbContext context, CancellationToken cancellationToken)
     {
-        return await context.Database.CanConnectAsync(cancellationToken).ConfigureAwait(false) &&
+        var databaseCreator = context.GetService<IRelationalDatabaseCreator>();
+        return await databaseCreator.ExistsAsync(cancellationToken).ConfigureAwait(false) &&
             (await context.Database.GetAppliedMigrationsAsync(cancellationToken).ConfigureAwait(false)).Any();
     }
 
@@ -643,4 +701,11 @@ public static class MagpieHostBuilderExtensions
             _ => throw new InvalidOperationException($"Unknown database provider {provider}.")
         };
     }
+
+    private sealed record NuspecMetadata(
+        string? Id,
+        string? Version,
+        string? Title,
+        string? Authors,
+        string? Description);
 }

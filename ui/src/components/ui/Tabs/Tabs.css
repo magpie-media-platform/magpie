@@ -6,11 +6,15 @@
     }
 
     .tabs-list {
+        --tab-gap: var(--space-xs);
+
         display: flex;
-        flex-wrap: wrap;
         align-items: center;
-        gap: var(--space-xs);
+        gap: var(--tab-gap);
         padding: var(--space-xs);
+        min-width: 0;
+        overflow-x: auto;
+        scrollbar-width: thin;
         background-color: var(--bg-secondary);
         border-radius: var(--radius-md);
     }
@@ -65,6 +69,11 @@
         gap: var(--space-xs);
     }
 
+    .tabs-trigger svg,
+    .detail-tab-trigger__anchor {
+        flex-shrink: 0;
+    }
+
     .tabs-content {
         padding: var(--space-md) 0;
 
@@ -97,33 +106,58 @@
         }
     }
 
-    .tabs-list--detail {
-        flex-wrap: nowrap;
+    .tabs-list--detail[data-fit='icons'] .detail-tab-trigger__label,
+    .tabs-list--detail[data-fit='rows'] .detail-tab-trigger__label {
+        display: none;
+    }
+
+    .tabs-list--detail[data-fit='rows'] {
+        flex-wrap: wrap;
+    }
+
+    .tabs-list--detail[data-fit='rows'] .tabs-trigger {
+        flex: 1 1 calc((100% - (var(--tab-row-size, 1) - 1) * var(--tab-gap)) / var(--tab-row-size, 1) - 1px);
         min-width: 0;
-        overflow-x: auto;
-        scrollbar-width: thin;
     }
 
     @media (max-width: 767px) {
         .tabs-list:not(.tabs-list--detail) .tabs-trigger {
-            flex: 1 1 0;
-            min-width: 0;
+            flex: 1 1 auto;
+            align-self: stretch;
             min-height: var(--touch-target-min);
+            padding-inline: var(--space-xs);
+            text-align: center;
+            white-space: normal;
+        }
+
+        .tabs-list:not(.tabs-list--detail) .tabs-trigger:has(.tab-count) {
+            flex-wrap: wrap;
+        }
+
+        .tabs-list:not(.tabs-list--detail)[data-fit='equal'] .tabs-trigger {
+            flex: 1 1 0;
+            min-width: max-content;
+            white-space: nowrap;
+        }
+
+        .tabs-list:not(.tabs-list--detail)[data-fit='equal'] .tabs-trigger:has(.tab-count) {
+            flex-wrap: nowrap;
         }
 
         .tabs-list--detail {
-            gap: var(--space-2xs);
-        }
-
-        .tabs-list--detail .detail-tab-trigger__label {
-            display: none;
+            --tab-gap: var(--space-2xs);
         }
 
         .tabs-list--detail .tabs-trigger {
-            flex: 1 0 var(--touch-target-min);
+            flex: 1 0 auto;
             min-width: var(--touch-target-min);
             min-height: var(--touch-target-min);
-            padding: var(--space-sm);
+            padding: var(--space-sm) var(--space-xs);
+        }
+
+        .tabs-list--detail[data-fit='labels'] .tabs-trigger {
+            flex: 1 1 0;
+            min-width: max-content;
         }
 
         .tabs-list--detail .detail-tab-trigger__anchor svg {

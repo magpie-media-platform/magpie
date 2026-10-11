@@ -1,10 +1,13 @@
 import { useMemo, useState } from 'react';
-import { render, screen, within } from '@testing-library/react';
+import { act, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { type ColumnDef } from '@tanstack/react-table';
 
+import type { BulkSelectionState } from '@/types/bulkSelection';
+
 import { DataTable } from './DataTable';
+import { selectColumn } from './selectColumn';
 
 interface TestData {
     id: number;
@@ -81,6 +84,21 @@ describe('DataTable', () => {
     it('renders custom empty state', () => {
         render(<DataTable columns={testColumns} data={[]} emptyState={<div>Custom empty message</div>} />);
         expect(screen.getByText('Custom empty message')).toBeInTheDocument();
+    });
+
+    it('renders the empty state outside the horizontally scrolling wrapper', () => {
+        const { container } = render(
+            <DataTable
+                columns={testColumns}
+                data={[]}
+                keepHeaderWhenEmpty
+                emptyState={<div>Custom empty message</div>}
+            />,
+        );
+
+        expect(container.querySelector('.data-table__wrapper')).not.toContainElement(
+            screen.getByText('Custom empty message'),
+        );
     });
 
     it('hides the column header row on a cold-start empty', () => {
@@ -314,6 +332,100 @@ describe('DataTable', () => {
             expect(screen.getByText('Page 1 of 3')).toBeInTheDocument();
         });
 
+        it('keeps the current page when the data is replaced by an equal copy', async () => {
+            const user = userEvent.setup();
+            const { rerender } = render(
+                <DataTable columns={testColumns} data={testData} enablePagination pageSize={2} />,
+            );
+            await user.click(screen.getByRole('button', { name: /next/i }));
+
+            rerender(<DataTable columns={testColumns} data={[...testData]} enablePagination pageSize={2} />);
+            await act(async () => {});
+
+            expect(screen.getByText('Page 2 of 3')).toBeInTheDocument();
+            expect(screen.getByText('Item Three')).toBeInTheDocument();
+        });
+
+        it('clamps the current page to the last page when the data shrinks', async () => {
+            const user = userEvent.setup();
+            const { rerender } = render(
+                <DataTable columns={testColumns} data={testData} enablePagination pageSize={2} />,
+            );
+            await user.click(screen.getByRole('button', { name: /last/i }));
+
+            rerender(<DataTable columns={testColumns} data={testData.slice(0, 3)} enablePagination pageSize={2} />);
+
+            expect(screen.getByText('Page 2 of 2')).toBeInTheDocument();
+            expect(screen.getByText('Item Three')).toBeInTheDocument();
+
+            await user.click(screen.getByRole('button', { name: /previous/i }));
+
+            expect(screen.getByText('Page 1 of 2')).toBeInTheDocument();
+        });
+
+        it('returns to the first page when the sorting changes', async () => {
+            const user = userEvent.setup();
+            render(<DataTable columns={testColumns} data={testData} enablePagination pageSize={2} />);
+            await user.click(screen.getByRole('button', { name: /next/i }));
+
+            await user.click(screen.getByRole('button', { name: /sort by name/i }));
+
+            expect(screen.getByText('Page 1 of 3')).toBeInTheDocument();
+        });
+
+        it('returns to the first page when the controlled sorting changes', async () => {
+            const user = userEvent.setup();
+            const { rerender } = render(
+                <DataTable
+                    columns={testColumns}
+                    data={testData}
+                    enablePagination
+                    pageSize={2}
+                    sorting={[{ id: 'name', desc: false }]}
+                />,
+            );
+            await user.click(screen.getByRole('button', { name: /next/i }));
+
+            rerender(
+                <DataTable
+                    columns={testColumns}
+                    data={testData}
+                    enablePagination
+                    pageSize={2}
+                    sorting={[{ id: 'name', desc: true }]}
+                />,
+            );
+
+            expect(await screen.findByText('Page 1 of 3')).toBeInTheDocument();
+        });
+
+        it('keeps the current page when the controlled sorting is replaced by an equal copy', async () => {
+            const user = userEvent.setup();
+            const { rerender } = render(
+                <DataTable
+                    columns={testColumns}
+                    data={testData}
+                    enablePagination
+                    pageSize={2}
+                    sorting={[{ id: 'name', desc: false }]}
+                />,
+            );
+            await user.click(screen.getByRole('button', { name: /next/i }));
+
+            rerender(
+                <DataTable
+                    columns={testColumns}
+                    data={testData}
+                    enablePagination
+                    pageSize={2}
+                    sorting={[{ id: 'name', desc: false }]}
+                />,
+            );
+            await act(async () => {});
+
+            expect(screen.getByText('Page 2 of 3')).toBeInTheDocument();
+        });
+
         it('supports controlled pagination', () => {
             const handlePaginationChange = vi.fn();
             render(
@@ -394,6 +506,39 @@ describe('DataTable', () => {
 
             const rows = screen.getAllByRole('row').slice(1);
             expect(rows[0]).toHaveAttribute('data-state', 'selected');
+        });
+    });
+
+    describe('select column', () => {
+        const selection: BulkSelectionState = {
+            allPages: false,
+            hasSelection: false,
+            headerChecked: false,
+            selectedCount: 0,
+            pageSelectedCount: 0,
+            totalCount: 5,
+            showAcrossPagesPrompt: false,
+            isRowChecked: () => false,
+            toggleRow: vi.fn(),
+            toggleHeader: vi.fn(),
+            selectAllAcrossPages: vi.fn(),
+            clear: vi.fn(),
+        };
+
+        it('is wide enough for the checkbox and the cell padding', () => {
+            const columns = [
+                selectColumn<TestData>({
+                    selection,
+                    getId: (row) => String(row.id),
+                    headerLabel: 'Select all',
+                    rowLabel: (row) => row.name,
+                }),
+                ...testColumns,
+            ];
+
+            render(<DataTable columns={columns} data={testData} />);
+
+            expect(document.querySelector('th[data-column="select"]')).toHaveStyle({ width: '52px' });
         });
     });
 

@@ -1,7 +1,7 @@
 namespace Magpie.Models.Storage;
 
 /// <summary>
-/// The available bytes and volume identity at a file-system path.
+/// The available bytes, total bytes and volume identity at a file-system path.
 /// </summary>
 public sealed record StorageCapacity
 {
@@ -14,4 +14,9 @@ public sealed record StorageCapacity
     /// The bytes available to the current process.
     /// </summary>
     public long AvailableBytes { get; set; }
+
+    /// <summary>
+    /// The total bytes of the resolved volume.
+    /// </summary>
+    public long TotalBytes { get; set; }
 }

@@ -49,6 +49,14 @@
         display: flex;
         align-items: center;
         gap: var(--space-xs);
+        min-width: 0;
+    }
+
+    .backups-page__summary-text {
+        display: flex;
+        flex-wrap: wrap;
+        column-gap: var(--space-xs);
+        min-width: 0;
     }
 
     .backups-page__summary-icon {
@@ -59,6 +67,7 @@
     .backups-page__summary-label {
         font-size: var(--text-sm);
         color: var(--text-secondary);
+        white-space: nowrap;
     }
 
     .backups-page__summary-value {
@@ -66,6 +75,7 @@
         font-weight: var(--weight-semibold);
         font-family: var(--font-mono);
         color: var(--text-primary);
+        white-space: nowrap;
     }
 
     .backups-page__list {
@@ -115,9 +125,7 @@
         font-weight: var(--weight-medium);
         font-family: var(--font-mono);
         color: var(--text-primary);
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
+        overflow-wrap: anywhere;
     }
 
     .backups-page__item-meta {
@@ -203,10 +211,6 @@
         .backups-page__item-actions {
             width: 100%;
             justify-content: flex-end;
-        }
-
-        .backups-page__item-name {
-            max-width: 100%;
         }
 
         .backups-page__item-date-relative {

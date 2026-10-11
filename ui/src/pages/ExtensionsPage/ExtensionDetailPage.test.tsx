@@ -364,16 +364,54 @@ describe('ExtensionDetailPage', () => {
 
         expect(screen.getByText('Package Management')).toBeInTheDocument();
         expect(screen.getByRole('button', { name: 'Uninstall Extension' })).toBeInTheDocument();
-        expect(screen.queryByRole('switch', { name: /toggle auto-upgrade/i })).not.toBeInTheDocument();
         expect(screen.queryByRole('button', { name: /update now/i })).not.toBeInTheDocument();
     });
 
-    it('renders auto-upgrade toggle in management section', async () => {
+    it('management_UpdatesTheExtension_WhenASourceHasTheUnmanagedExtension', async () => {
+        // Arrange
+        const user = userEvent.setup();
+        vi.mocked(apiGet).mockImplementation((url: string) =>
+            Promise.resolve(
+                url === '/extensions'
+                    ? [
+                          {
+                              extension: mockLocalExtension,
+                              updateInfo: {
+                                  extensionId: 'ext-local',
+                                  packageId: 'Magpie.Extensions.Local',
+                                  currentVersion: '1.0.0',
+                                  latestVersion: '1.0.0',
+                                  hasUpdate: true,
+                              },
+                          },
+                      ]
+                    : [],
+            ),
+        );
+        vi.mocked(apiPost).mockResolvedValue({
+            extension: { ...mockLocalExtension, managed: true },
+            restartRequired: true,
+        });
+        render(<ExtensionDetailPage />, { wrapper: createWrapper('/admin/extensions/ext-local') });
+
+        // Act
+        await user.click(await screen.findByRole('button', { name: /update now/i }));
+
+        // Assert
+        await waitFor(() => {
+            expect(apiPost).toHaveBeenCalledWith('/extensions/ext-local/upgrade/latest');
+        });
+    });
+
+    it('management_OffersTheManualUpdateOnly_WhenExtensionIsManaged', async () => {
+        // Arrange
+        // Act
         render(<ExtensionDetailPage />, { wrapper: createWrapper() });
 
-        await waitFor(() => {
-            expect(screen.getByRole('switch', { name: /toggle auto-upgrade/i })).toBeInTheDocument();
-        });
+        // Assert
+        expect(await screen.findByRole('button', { name: /update now/i })).toBeInTheDocument();
+        expect(screen.queryByText(/auto-upgrade/i)).not.toBeInTheDocument();
+        expect(screen.queryByText(/automatically/i)).not.toBeInTheDocument();
     });
 
     it('shows error banner when extension has disabledReason', async () => {

@@ -3169,16 +3169,12 @@ internal sealed class QueryPlanner : IQueryPlanner
         }
 
         var normalized = actualSource?.Trim().ToLowerInvariant();
-        string[] propertyIds = normalized switch
+        var propertyIds = normalized switch
         {
-            Constants.ImdbSource or "p345" => [Constants.ImdbPropertyId],
-            Constants.TmdbSource =>
-                [Constants.TmdbPersonPropertyId, Constants.TmdbCompanyPropertyId],
-            "p4985" => [Constants.TmdbPersonPropertyId],
-            "p11806" => [Constants.TmdbCompanyPropertyId],
             null when actualValue.StartsWith("nm", StringComparison.OrdinalIgnoreCase) =>
                 [Constants.ImdbPropertyId],
-            _ => []
+            null => [],
+            _ => SubjectPropertyIds(normalized)
         };
         if (propertyIds.Length == 0 || string.IsNullOrWhiteSpace(actualValue))
         {
@@ -3193,10 +3189,18 @@ internal sealed class QueryPlanner : IQueryPlanner
     private bool IsSupportedSubjectExternalSource(string source)
     {
         var normalized = source.Trim().ToLowerInvariant();
-        return IsQidSource(normalized) ||
-            normalized is Constants.ImdbSource or "p345"
-                or Constants.TmdbSource or "p4985" or "p11806";
+        return IsQidSource(normalized) || SubjectPropertyIds(normalized).Length > 0;
     }
+
+    private string[] SubjectPropertyIds(string source) =>
+    [
+        .. Constants.PersonExternalIds
+            .Concat(Constants.StudioExternalIds)
+            .Where(id => id.Source == source ||
+                string.Equals(id.PropertyId, source, StringComparison.OrdinalIgnoreCase))
+            .Select(id => id.PropertyId)
+            .Distinct()
+    ];
 
     private string? MapExternalProperty(EntityKind kind, string source)
     {

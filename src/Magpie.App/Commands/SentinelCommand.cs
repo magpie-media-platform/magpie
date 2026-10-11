@@ -1,11 +1,13 @@
 using System;
 using System.CommandLine;
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 
 using Magpie.Abstractions;
 
+using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.Logging;
 
 namespace Magpie.App.Commands;
@@ -13,6 +15,8 @@ namespace Magpie.App.Commands;
 internal sealed class SentinelCommand : Command
 {
     private const int MaxConsecutiveFailedStarts = 5;
+
+    private const int Sigterm = 15;
 
     private static readonly TimeSpan FirstRelaunchDelay = TimeSpan.FromSeconds(5);
 
@@ -42,6 +46,13 @@ internal sealed class SentinelCommand : Command
         using var loggerFactory = LoggerFactory.Create(builder => builder.AddConsole());
         var logger = loggerFactory.CreateLogger<SentinelCommand>();
         using var stopCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        using var terminationRegistration = PosixSignalRegistration.Create(
+            PosixSignal.SIGTERM,
+            context =>
+            {
+                context.Cancel = true;
+                stopCts.Cancel();
+            });
 
         void OnCancelKeyPress(object? sender, ConsoleCancelEventArgs e)
         {
@@ -147,13 +158,21 @@ internal sealed class SentinelCommand : Command
 
     private static void StopChild(Process child)
     {
-        if (child.HasExited)
+        if (!OperatingSystem.IsWindows())
+        {
+            _ = SendSignal(child.Id, Sigterm);
+        }
+
+        if (child.WaitForExit(WebApplication.CreateBuilder().ResolveMagpieShutdownTimeout()))
         {
             return;
         }
 
         child.Kill(entireProcessTree: true);
     }
+
+    [DllImport("libc", EntryPoint = "kill")]
+    private static extern int SendSignal(int processId, int signal);
 
     private static string ResolveProcessPath()
     {

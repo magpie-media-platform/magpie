@@ -32,11 +32,6 @@ const mockSystemStatusData: SystemStatusData = {
         nodeId: 'node-abc123',
         startedAt: '2024-01-01T12:00:00Z',
     },
-    diskSpaceTotals: {
-        usedBytes: 2.1 * 1024 * 1024 * 1024 * 1024,
-        totalBytes: 4 * 1024 * 1024 * 1024 * 1024,
-        freeBytes: 1.9 * 1024 * 1024 * 1024 * 1024,
-    },
     diskSpace: [
         {
             id: 'rf-1',
@@ -45,6 +40,7 @@ const mockSystemStatusData: SystemStatusData = {
             usedBytes: 2.1 * 1024 * 1024 * 1024 * 1024,
             totalBytes: 4 * 1024 * 1024 * 1024 * 1024,
             freeBytes: 1.9 * 1024 * 1024 * 1024 * 1024,
+            contentBytes: 1.5 * 1024 * 1024 * 1024 * 1024,
         },
         {
             id: 'rf-2',
@@ -53,6 +49,7 @@ const mockSystemStatusData: SystemStatusData = {
             usedBytes: 3.5 * 1024 * 1024 * 1024 * 1024,
             totalBytes: 4 * 1024 * 1024 * 1024 * 1024,
             freeBytes: 0.5 * 1024 * 1024 * 1024 * 1024,
+            contentBytes: 3 * 1024 * 1024 * 1024 * 1024,
         },
     ],
     isLoading: false,
@@ -60,6 +57,7 @@ const mockSystemStatusData: SystemStatusData = {
 
 vi.mock('@/hooks/useSystemStatus', () => ({
     useSystemStatus: () => mockSystemStatusData,
+    useDiskSpace: () => ({ error: null, refetch: vi.fn() }),
 }));
 
 vi.mock('./RestartHostPanel', () => ({

@@ -44,7 +44,6 @@ function SubjectContentMobileCard({ item }: { item: ContentListItem }) {
             data-content-id={item.id}
             titleAccessory={
                 <ContentMonitoringIndicator
-                    monitoring={item.monitoring}
                     effectiveMonitoring={item.effectiveMonitoring}
                     className="subject-content-tab__mobile-monitoring"
                     activeClassName="subject-content-tab__mobile-monitoring--active"
@@ -52,7 +51,11 @@ function SubjectContentMobileCard({ item }: { item: ContentListItem }) {
             }
         >
             <ContentTypeBadge level={item.level} levelLabel={item.levelLabel} contentType={item.contentType} />
-            <ContentFulfillmentBadge fulfillment={item.fulfillment} />
+            <ContentFulfillmentBadge
+                fulfillment={item.fulfillment}
+                publishDate={item.publishDate}
+                publishDatePrecision={item.publishDatePrecision}
+            />
             <span className="subject-content-tab__mobile-published">
                 {formatShortDate(item.publishDate, '--', item.publishDatePrecision)}
             </span>

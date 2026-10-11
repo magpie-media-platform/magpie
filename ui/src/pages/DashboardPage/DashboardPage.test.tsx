@@ -246,7 +246,7 @@ describe('DashboardPage', () => {
         mockUpcomingContentResult.mockReturnValue(makeResult(defaultUpcomingContent));
         mockOnboardingStatus.mockReturnValue({
             status: completeOnboarding,
-            steps: deriveOnboardingSteps(completeOnboarding),
+            steps: deriveOnboardingSteps(completeOnboarding, 'Magpie'),
             isComplete: true,
             isLoading: false,
             error: null,
@@ -615,7 +615,7 @@ describe('DashboardPage', () => {
             // Arrange
             mockOnboardingStatus.mockReturnValue({
                 status: partialOnboarding,
-                steps: deriveOnboardingSteps(partialOnboarding).map((step) => ({
+                steps: deriveOnboardingSteps(partialOnboarding, 'Magpie').map((step) => ({
                     ...step,
                     failed: step.key === 'indexer',
                 })),
@@ -645,7 +645,7 @@ describe('DashboardPage', () => {
             // Arrange
             mockOnboardingStatus.mockReturnValue({
                 status: partialOnboarding,
-                steps: deriveOnboardingSteps(partialOnboarding).map((step) => ({ ...step, failed: true })),
+                steps: deriveOnboardingSteps(partialOnboarding, 'Magpie').map((step) => ({ ...step, failed: true })),
                 isComplete: false,
                 isLoading: false,
                 error: new Error('Host unreachable'),

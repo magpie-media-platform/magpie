@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import {
     ArrowSquareOutIcon,
     CheckIcon,
@@ -24,7 +24,6 @@ import { BulkActionsToolbar, SelectModeToggle } from '@/components/ui/BulkAction
 import { Skeleton } from '@/components/ui/Skeleton';
 import { Tooltip } from '@/components/ui/Tooltip';
 import { useToast } from '@/components/ui/Toast';
-import type { BadgeVariant } from '@/types/badge';
 
 import { Role } from '@/auth';
 import { useBulkSelection } from '@/hooks/useBulkSelection';
@@ -39,13 +38,14 @@ import { isApiError } from '@/lib/api';
 import {
     useLibraryImportCandidateGroups,
     type LibraryImportCandidateGroup,
-    type LibraryImportCandidateStatusCounts,
 } from '@/hooks/useLibraryImportCandidateGroups';
+import { useInstanceName } from '@/hooks/useInstanceName';
 
 import { libraryImportPath } from './libraryImportPath';
 import { ManualMatchDialog, type ManualMatchTarget } from './ManualMatchDialog';
 import { AcceptImportDialog, type ImportAcceptAction } from './AcceptImportDialog';
 import { LibraryImportGroupPage } from './LibraryImportGroupPage';
+import { GroupLink, StatusRollup } from './importDisplay';
 import { useImportScanController, type ScanSummary } from './useImportScanController';
 
 import '@/styles/bulk-actions-toolbar.css';
@@ -55,21 +55,6 @@ const PAGE_SIZE = 25;
 
 const ALL_VALUE = '__all__';
 
-const STATUS_BADGE_VARIANT: Record<string, BadgeVariant> = {
-    Pending: 'pending',
-    Queued: 'queued',
-    Importing: 'importing',
-    Failed: 'failed',
-    Invalidated: 'stale',
-    MatchingPending: 'warning',
-    Rejected: 'stale',
-};
-
-const STATUS_LABEL: Record<string, string> = {
-    MatchingPending: 'Matching pending',
-    Rejected: 'Silenced',
-};
-
 function isMatchingPending(group: LibraryImportCandidateGroup): boolean {
     return !group.match && (group.statusCounts.MatchingPending ?? 0) > 0;
 }
@@ -78,17 +63,16 @@ function isSilenced(group: LibraryImportCandidateGroup): boolean {
     return Object.entries(group.statusCounts).every(([status, count]) => status === 'Rejected' || !count);
 }
 
-// Mirrors the claim criteria SubmitImportAsync applies.
 function canAcceptGroup(group: LibraryImportCandidateGroup): boolean {
     return Boolean(group.match) && ((group.statusCounts.Pending ?? 0) > 0 || (group.statusCounts.Failed ?? 0) > 0);
 }
 
-function summaryLine(summary: ScanSummary): string {
+function summaryLine(summary: ScanSummary, instanceName: string): string {
     if (summary.outcome === 'failed') {
         return `Scan of "${summary.rootFolderName}" failed.`;
     }
     if (summary.outcome === 'cancelled') {
-        return `Magpie canceled the scan of "${summary.rootFolderName}".`;
+        return `${instanceName} canceled the scan of "${summary.rootFolderName}".`;
     }
     if (summary.toImport === null) {
         return `Scan of "${summary.rootFolderName}" completed. The import count is unavailable.`;
@@ -124,6 +108,7 @@ function ScanHeader({
     lastSummary,
     onClearSummary,
 }: ScanHeaderProps) {
+    const instanceName = useInstanceName();
     const selectedName = rootFolderFilter
         ? (rootFolderOptions.find((o) => o.value === rootFolderFilter)?.label ?? 'Unknown')
         : null;
@@ -234,7 +219,9 @@ function ScanHeader({
                     ) : (
                         <WarningCircleIcon weight="bold" aria-hidden="true" />
                     )}
-                    <span className="library-import-page__scan-summary-text">{summaryLine(lastSummary)}</span>
+                    <span className="library-import-page__scan-summary-text">
+                        {summaryLine(lastSummary, instanceName)}
+                    </span>
                     <Button
                         variant="ghost"
                         size="sm"
@@ -251,15 +238,15 @@ function ScanHeader({
     );
 }
 
-function GroupTitleCell({ group }: { group: LibraryImportCandidateGroup }) {
+function GroupTitleCell({ group, rootFolderId }: { group: LibraryImportCandidateGroup; rootFolderId: string }) {
     const sourcePath = group.sourcePath ?? '';
 
     return (
         <div className="library-import-page__group-title-cell" data-group-key={group.groupKey}>
-            <span className="library-import-page__group-title">
+            <GroupLink to={libraryImportPath({ groupKey: group.groupKey, rootFolderId, title: group.title })}>
                 {group.title}
                 {group.subtitle ? <span className="library-import-page__group-subtitle"> {group.subtitle}</span> : null}
-            </span>
+            </GroupLink>
             {group.match ? (
                 <Badge size="sm" variant="info" badgeStyle="outline">
                     {group.match.providerType}
@@ -278,40 +265,16 @@ function GroupTitleCell({ group }: { group: LibraryImportCandidateGroup }) {
     );
 }
 
-function statusRollup(statusCounts: LibraryImportCandidateStatusCounts): ReactNode {
-    const entries = Object.entries(statusCounts).filter(([status, count]) => status !== 'Pending' && (count ?? 0) > 0);
-    if (entries.length === 0) {
-        return null;
-    }
-    return (
-        <div className="library-import-page__status-rollup">
-            {entries.map(([status, count]) => (
-                <Badge key={status} size="sm" variant={STATUS_BADGE_VARIANT[status] ?? 'default'}>
-                    {count} {STATUS_LABEL[status] ?? status}
-                </Badge>
-            ))}
-        </div>
-    );
-}
-
 interface GroupRowActionsProps {
     group: LibraryImportCandidateGroup;
     onAccept: (group: LibraryImportCandidateGroup) => void;
-    onDigIn: (group: LibraryImportCandidateGroup) => void;
     onMatch: (group: LibraryImportCandidateGroup) => void;
     acceptingKeys: Set<string>;
 }
 
-function GroupRowActions({ group, onAccept, onDigIn, onMatch, acceptingKeys }: GroupRowActionsProps) {
-    const hasDescendantLevels = group.topLevelSlug !== group.leafLevelSlug;
-    const digInButton = (
-        <Button variant="secondary" size="sm" onClick={() => onDigIn(group)} data-action="dig-in">
-            {hasDescendantLevels && group.childLevelDisplayName ? group.childLevelDisplayName : 'Details'}
-        </Button>
-    );
-
+function GroupRowActions({ group, onAccept, onMatch, acceptingKeys }: GroupRowActionsProps) {
     if (isSilenced(group)) {
-        return <div className="library-import-page__row-actions">{digInButton}</div>;
+        return null;
     }
 
     if (!group.match) {
@@ -327,7 +290,6 @@ function GroupRowActions({ group, onAccept, onDigIn, onMatch, acceptingKeys }: G
                     <LinkSimpleIcon weight="bold" aria-hidden="true" />
                     Match
                 </Button>
-                {digInButton}
             </div>
         );
     }
@@ -346,7 +308,6 @@ function GroupRowActions({ group, onAccept, onDigIn, onMatch, acceptingKeys }: G
                 <CheckIcon weight="bold" aria-hidden="true" />
                 Accept
             </Button>
-            {digInButton}
         </div>
     );
 }
@@ -357,10 +318,10 @@ interface LibraryImportPageProps {
 }
 
 export function LibraryImportPage({ monitoringMode, onMonitoringModeChange }: LibraryImportPageProps) {
+    const instanceName = useInstanceName();
     const usesCardLayout = useCardLayout();
     useDocumentTitle('Library import');
     const { toast } = useToast();
-    const navigate = useNavigate();
     const [searchParams, setSearchParams] = useSearchParams();
 
     const rootFolderFilter = searchParams.get('rootFolderId') ?? '';
@@ -494,15 +455,6 @@ export function LibraryImportPage({ monitoringMode, onMonitoringModeChange }: Li
         }
     }, [rootFolderFilter, rootFolderOptions, scan, refetch, toast]);
 
-    const handleDigIn = useCallback(
-        (group: LibraryImportCandidateGroup) => {
-            void navigate(
-                libraryImportPath({ groupKey: group.groupKey, rootFolderId: rootFolderFilter, title: group.title }),
-            );
-        },
-        [navigate, rootFolderFilter],
-    );
-
     const handleAccept = useCallback(
         async (group: LibraryImportCandidateGroup, monitoringMode: LibraryImportMonitoringMode) => {
             setAcceptingKeys((prev) => new Set(prev).add(group.groupKey));
@@ -526,7 +478,7 @@ export function LibraryImportPage({ monitoringMode, onMonitoringModeChange }: Li
                 if (isApiError(error) && error.status === 404) {
                     toast({
                         title: 'Group is gone',
-                        description: 'The queue was out of date. Magpie refreshed it and removed this group.',
+                        description: `The queue was out of date. ${instanceName} refreshed it and removed this group.`,
                         variant: 'error',
                     });
                 } else {
@@ -544,7 +496,7 @@ export function LibraryImportPage({ monitoringMode, onMonitoringModeChange }: Li
                 });
             }
         },
-        [acceptGroup, rootFolderFilter, toast],
+        [acceptGroup, rootFolderFilter, toast, instanceName],
     );
 
     const handleBulkAccept = useCallback(
@@ -657,7 +609,7 @@ export function LibraryImportPage({ monitoringMode, onMonitoringModeChange }: Li
                 header: 'Title',
                 meta: { mobileRole: 'header' },
                 enableSorting: false,
-                cell: ({ row }) => <GroupTitleCell group={row.original} />,
+                cell: ({ row }) => <GroupTitleCell group={row.original} rootFolderId={rootFolderFilter} />,
             },
             {
                 id: 'count',
@@ -673,12 +625,12 @@ export function LibraryImportPage({ monitoringMode, onMonitoringModeChange }: Li
                 id: 'status',
                 header: 'Status',
                 enableSorting: false,
-                cell: ({ row }) => statusRollup(row.original.statusCounts),
+                cell: ({ row }) => <StatusRollup statusCounts={row.original.statusCounts} />,
             },
             {
                 id: 'actions',
                 header: '',
-                size: 220,
+                size: 120,
                 enableSorting: false,
                 cell: ({ row }) => (
                     <GroupRowActions
@@ -694,7 +646,6 @@ export function LibraryImportPage({ monitoringMode, onMonitoringModeChange }: Li
                                 }),
                             )
                         }
-                        onDigIn={handleDigIn}
                         onMatch={(group) =>
                             setManualMatchTarget({ kind: 'group', group, rootFolderId: rootFolderFilter || undefined })
                         }
@@ -703,7 +654,7 @@ export function LibraryImportPage({ monitoringMode, onMonitoringModeChange }: Li
                 ),
             },
         ],
-        [acceptingKeys, handleAccept, handleDigIn, rootFolderFilter, selection],
+        [acceptingKeys, handleAccept, rootFolderFilter, selection],
     );
 
     const getRowId = useCallback((group: LibraryImportCandidateGroup) => group.groupKey, []);
@@ -748,11 +699,7 @@ export function LibraryImportPage({ monitoringMode, onMonitoringModeChange }: Li
             <EmptyState
                 icon={<WarningCircleIcon weight="duotone" />}
                 title="Failed to load import queue"
-                action={
-                    <Button variant="secondary" size="sm" onClick={() => refetch()}>
-                        Retry
-                    </Button>
-                }
+                onRetry={refetch}
                 size="sm"
             />
         );

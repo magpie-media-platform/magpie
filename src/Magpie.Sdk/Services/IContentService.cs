@@ -221,6 +221,17 @@ public interface IContentService
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Lists the files that a bulk delete removes from disk.
+    /// </summary>
+    /// <param name="action">The selection of items to delete</param>
+    /// <param name="deleteFromLibrary">Whether the delete also removes the files from disk</param>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
+    Task<IReadOnlyList<ContentDeleteFile>> PreviewBulkDeleteAsync(
+        BulkAction<ContentFilterCriteria> action,
+        bool deleteFromLibrary,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Gets the aggregate fulfillment counts for the content library.
     /// </summary>
     /// <param name="cancellationToken">The token that cancels the operation</param>

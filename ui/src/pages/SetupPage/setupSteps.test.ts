@@ -20,6 +20,17 @@ describe('setupSteps order', () => {
         expect(rootIndex).toBeLessThan(serverIndex);
     });
 
+    it('nextStepAfter_ReturnsExtensions_WhenTheStepIsAdmin', () => {
+        // Arrange
+        const availability = { includeMetadata: false };
+
+        // Act
+        const next = nextStepAfter('admin', availability);
+
+        // Assert
+        expect(next).toBe('extensions');
+    });
+
     it('walks download -> root -> server -> done', () => {
         const availability = { includeMetadata: true };
 
@@ -32,20 +43,31 @@ describe('setupSteps order', () => {
 
 describe('setupSteps metadata availability', () => {
     it('includes the metadata step when an extension settings group exists', () => {
-        expect(nextStepAfter('admin', { includeMetadata: true })).toBe('metadata');
+        expect(nextStepAfter('extensions', { includeMetadata: true })).toBe('metadata');
     });
 
     it('drops the metadata step when no extension settings group exists', () => {
-        expect(nextStepAfter('admin', { includeMetadata: false })).toBe('indexer');
+        expect(nextStepAfter('extensions', { includeMetadata: false })).toBe('indexer');
     });
 
     it('defaults to including the metadata step when availability is omitted', () => {
-        expect(nextStepAfter('admin')).toBe('metadata');
+        expect(nextStepAfter('extensions')).toBe('metadata');
     });
 });
 
 describe('pickInitialStep', () => {
     it('always starts the walk at the database step', () => {
         expect(pickInitialStep(SETUP_STATUS)).toBe('db');
+    });
+
+    it('pickInitialStep_ReturnsExtensions_WhenTheAdministratorExists', () => {
+        // Arrange
+        const status: SetupStatus = { isRequired: true, isComplete: false, requiresAdminClaim: false };
+
+        // Act
+        const step = pickInitialStep(status);
+
+        // Assert
+        expect(step).toBe('extensions');
     });
 });

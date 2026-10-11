@@ -98,8 +98,10 @@ public class JellyfinMediaServerIntegrationTests
     {
         // Arrange
         var systemInfoRequest = _handler.Expect(HttpMethod.Get, "http://jellyfin.local:8096/System/Info")
-            .WithHeaders("X-Emby-Token", "test-api-key")
+            .WithHeaders("Authorization", "MediaBrowser Token=\"test-api-key\"")
+            .With(request => !request.Headers.Contains("X-Emby-Token"))
             .Respond("application/json", SystemInfoJson);
+        _handler.Fallback.Respond(HttpStatusCode.Unauthorized);
 
         // Act
         var result = await _integration.TestConnectionAsync(ValidSettings, default).ConfigureAwait(false);
@@ -252,7 +254,7 @@ public class JellyfinMediaServerIntegrationTests
     {
         // Arrange
         var refreshRequest = _handler.Expect(HttpMethod.Post, "http://jellyfin.local:8096/Library/Refresh")
-            .WithHeaders("X-Emby-Token", ValidSettings["apiKey"])
+            .WithHeaders("Authorization", "MediaBrowser Token=\"test-api-key\"")
             .Respond(HttpStatusCode.NoContent);
 
         var server = new MediaServer
@@ -281,12 +283,15 @@ public class JellyfinMediaServerIntegrationTests
         _handler.VerifyNoOutstandingExpectation();
     }
 
-    [Test]
-    public async Task RefreshForContentAsync_ReturnsFalse_WhenServerReturnsNotFound()
+    [TestCase(HttpStatusCode.Unauthorized)]
+    [TestCase(HttpStatusCode.Forbidden)]
+    [TestCase(HttpStatusCode.NotFound)]
+    public async Task RefreshForContentAsync_ReturnsFalse_WhenServerReturnsClientError(HttpStatusCode status)
     {
         // Arrange
         _handler.Expect(HttpMethod.Post, "http://jellyfin.local:8096/Library/Refresh")
-            .Respond(HttpStatusCode.NotFound);
+            .WithHeaders("Authorization", "MediaBrowser Token=\"test-api-key\"")
+            .Respond(status);
 
         var server = new MediaServer
         {
@@ -316,6 +321,7 @@ public class JellyfinMediaServerIntegrationTests
             HttpMethod.Post,
             "http://jellyfin.local:8096/Items/lib-7/Refresh" +
             "?Recursive=true&ImageRefreshMode=Default&MetadataRefreshMode=Default")
+                .WithHeaders("Authorization", "MediaBrowser Token=\"test-api-key\"")
                 .Respond(HttpStatusCode.NoContent);
 
         var settings = new Dictionary<string, string>(ValidSettings)
@@ -346,6 +352,78 @@ public class JellyfinMediaServerIntegrationTests
         {
             Assert.That(ok, Is.True);
             Assert.That(_handler.GetMatchCount(refreshRequest), Is.EqualTo(1));
+        }
+
+        _handler.VerifyNoOutstandingExpectation();
+    }
+
+    [Test]
+    public async Task GetVirtualFoldersAsync_ReturnsLibraries_WhenApiKeyIsAccepted()
+    {
+        // Arrange
+        _handler.Expect(HttpMethod.Get, "http://jellyfin.local:8096/Library/VirtualFolders")
+            .WithHeaders("Authorization", "MediaBrowser Token=\"test-api-key\"")
+            .Respond("application/json", "[{\"Name\":\"Movies\",\"ItemId\":\"lib-7\",\"CollectionType\":\"movies\"}]");
+        var client = new JellyfinClient(new HttpClient(_handler, false), NullLogger<JellyfinClient>.Instance);
+
+        // Act
+        var result = await client.GetVirtualFoldersAsync(ValidSettings.ToJellyfinSettings(), default)
+            .ConfigureAwait(false);
+
+        // Assert
+        Assert.That(result, Has.Count.EqualTo(1));
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result[0].Name, Is.EqualTo("Movies"));
+            Assert.That(result[0].ItemId, Is.EqualTo("lib-7"));
+            Assert.That(result[0].CollectionType, Is.EqualTo("movies"));
+        }
+
+        _handler.VerifyNoOutstandingExpectation();
+    }
+
+    [TestCase(HttpStatusCode.Unauthorized)]
+    [TestCase(HttpStatusCode.Forbidden)]
+    public void GetVirtualFoldersAsync_ThrowsAuthenticationException_WhenApiKeyIsRejected(HttpStatusCode status)
+    {
+        // Arrange
+        _handler.Expect(HttpMethod.Get, "http://jellyfin.local:8096/Library/VirtualFolders")
+            .WithHeaders("Authorization", "MediaBrowser Token=\"test-api-key\"")
+            .Respond(status);
+        var client = new JellyfinClient(new HttpClient(_handler, false), NullLogger<JellyfinClient>.Instance);
+
+        // Act
+        // Assert
+        Assert.ThrowsAsync<JellyfinAuthenticationException>(() =>
+            client.GetVirtualFoldersAsync(ValidSettings.ToJellyfinSettings(), default));
+        _handler.VerifyNoOutstandingExpectation();
+    }
+
+    [Test]
+    public async Task TestConnectionAsync_UsesEachConfiguredApiKey_WhenClientIsShared()
+    {
+        // Arrange
+        _handler.Expect(HttpMethod.Get, "http://jellyfin.local:8096/System/Info")
+            .WithHeaders("Authorization", "MediaBrowser Token=\"test-api-key\"")
+            .Respond("application/json", SystemInfoJson);
+        _handler.Expect(HttpMethod.Get, "http://other-jellyfin.local:8096/System/Info")
+            .WithHeaders("Authorization", "MediaBrowser Token=\"other-test-api-key\"")
+            .Respond("application/json", SystemInfoJson);
+        var otherSettings = new Dictionary<string, string>
+        {
+            ["host"] = "http://other-jellyfin.local:8096",
+            ["apiKey"] = "other-test-api-key"
+        };
+
+        // Act
+        var first = await _integration.TestConnectionAsync(ValidSettings, default).ConfigureAwait(false);
+        var second = await _integration.TestConnectionAsync(otherSettings, default).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(first.Success, Is.True);
+            Assert.That(second.Success, Is.True);
         }
 
         _handler.VerifyNoOutstandingExpectation();
@@ -468,6 +546,7 @@ public class JellyfinMediaServerIntegrationTests
         Uri? requestUri = null;
         var handler = new MockHttpMessageHandler();
         handler.Expect(HttpMethod.Get, "http://jellyfin.local:8096/Items*")
+            .WithHeaders("Authorization", "MediaBrowser Token=\"test-api-key\"")
             .With(request =>
             {
                 requestUri = request.RequestUri;
@@ -566,13 +645,16 @@ public class JellyfinMediaServerIntegrationTests
         Assert.That(result.ItemId, Is.Null);
     }
 
-    [Test]
-    public async Task TryFindItemIdByExternalIdsAsync_ReturnsNull_WhenUpstreamErrorStatus()
+    [TestCase(HttpStatusCode.Unauthorized)]
+    [TestCase(HttpStatusCode.Forbidden)]
+    [TestCase(HttpStatusCode.InternalServerError)]
+    public async Task TryFindItemIdByExternalIdsAsync_ReturnsNull_WhenUpstreamErrorStatus(HttpStatusCode status)
     {
         // Arrange
         var handler = new MockHttpMessageHandler();
         handler.Expect(HttpMethod.Get, "http://jellyfin.local:8096/Items*")
-            .Respond(HttpStatusCode.InternalServerError);
+            .WithHeaders("Authorization", "MediaBrowser Token=\"test-api-key\"")
+            .Respond(status);
 
         var client = new JellyfinClient(
             new HttpClient(handler, disposeHandler: false),
@@ -587,7 +669,13 @@ public class JellyfinMediaServerIntegrationTests
             default).ConfigureAwait(false);
 
         // Assert
-        Assert.That(result.ItemId, Is.Null);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.ItemId, Is.Null);
+            Assert.That(result.Status, Is.EqualTo(DeepLinkLookupStatus.LookupError));
+        }
+
+        handler.VerifyNoOutstandingExpectation();
     }
 
     [Test]

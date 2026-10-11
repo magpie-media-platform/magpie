@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 
+using Magpie.Models.Filtering;
+
 namespace Magpie.Models.MetadataSearch;
 
 /// <summary>
@@ -47,6 +49,11 @@ public sealed record MetadataSearchCandidate
     /// The release date of the candidate.
     /// </summary>
     public DateTime? ReleaseDate { get; set; }
+
+    /// <summary>
+    /// The calendar precision of <see cref="ReleaseDate"/>.
+    /// </summary>
+    public TemporalPrecision? ReleaseDatePrecision { get; set; }
 
     /// <summary>
     /// The overview text of the candidate.

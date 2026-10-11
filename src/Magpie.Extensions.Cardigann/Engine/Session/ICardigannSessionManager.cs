@@ -31,5 +31,7 @@ internal interface ICardigannSessionManager
 
     bool IsLoggedOut(LoginBlock login, HttpStatusCode statusCode, string body);
 
-    void InvalidateSession(string sessionKey);
+    int GetSessionGeneration(string sessionKey);
+
+    void InvalidateSession(string sessionKey, int generation);
 }

@@ -44,6 +44,10 @@ internal static class Constants
 
     public const string LibraryThingSource = "librarything";
 
+    public const string ImdbSource = "imdb";
+
+    public const string MusicBrainzSource = "musicbrainz";
+
     public const string TranslatorRelationshipKind = "translator";
 
     public const string IllustratorRelationshipKind = "illustrator";

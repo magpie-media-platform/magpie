@@ -435,7 +435,7 @@ internal sealed class JobManager(
     {
         if (spec?.Scope == JobScopeKind.System)
         {
-            throw new MagpieException("Only Magpie can create, change, or delete built-in triggers.");
+            throw new MagpieException("Built-in triggers cannot be created, changed, or deleted.");
         }
 
         if (callerRole < Role.Admin && (scope != JobScopeKind.User || ownerUserId != callerUserId))
@@ -458,7 +458,7 @@ internal sealed class JobManager(
 
         if (spec.Scope == JobScopeKind.System)
         {
-            throw new MagpieException("Only Magpie can create, change, or delete built-in triggers.");
+            throw new MagpieException("Built-in triggers cannot be created, changed, or deleted.");
         }
 
         if (ownerRole < GetRequiredRole(spec.Scope) &&

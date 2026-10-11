@@ -114,14 +114,14 @@ internal sealed class CardigannSessionManager(
         return new Uri(uri.AbsoluteUri + separator + query);
     }
 
-    public void InvalidateSession(string sessionKey)
+    public int GetSessionGeneration(string sessionKey) =>
+        state.Sessions.TryGetValue(sessionKey, out var session) ? session.Generation : 0;
+
+    public void InvalidateSession(string sessionKey, int generation)
     {
         if (state.Sessions.TryGetValue(sessionKey, out var session))
         {
-            session.Authenticated = false;
-            session.ClearanceUserAgent = null;
-            session.Cookies = new CookieContainer();
-            session.ClearTlsBinding();
+            session.Replace(generation);
         }
     }
 

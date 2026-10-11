@@ -55,21 +55,41 @@ const Toast = forwardRef<ComponentRef<typeof ToastPrimitive.Root>, ToastProps>(
 Toast.displayName = 'Toast';
 
 const ToastAction = forwardRef<ComponentRef<typeof ToastPrimitive.Action>, ToastActionProps>(
-    ({ className, ...props }, ref) => {
+    ({ className, onPointerDown, ...props }, ref) => {
         const classes = ['toast-action', className].filter(Boolean).join(' ');
 
-        return <ToastPrimitive.Action ref={ref} className={classes} {...props} />;
+        return (
+            <ToastPrimitive.Action
+                ref={ref}
+                className={classes}
+                onPointerDown={(event) => {
+                    onPointerDown?.(event);
+                    event.stopPropagation();
+                }}
+                draggable={false}
+                {...props}
+            />
+        );
     },
 );
 
 ToastAction.displayName = 'ToastAction';
 
 const ToastClose = forwardRef<ComponentRef<typeof ToastPrimitive.Close>, ToastCloseProps>(
-    ({ className, ...props }, ref) => {
+    ({ className, onPointerDown, ...props }, ref) => {
         const classes = ['toast-close', className].filter(Boolean).join(' ');
 
         return (
-            <ToastPrimitive.Close ref={ref} className={classes} aria-label="Close" {...props}>
+            <ToastPrimitive.Close
+                ref={ref}
+                className={classes}
+                aria-label="Close"
+                onPointerDown={(event) => {
+                    onPointerDown?.(event);
+                    event.stopPropagation();
+                }}
+                {...props}
+            >
                 <XIcon size={16} weight="bold" aria-hidden="true" />
             </ToastPrimitive.Close>
         );

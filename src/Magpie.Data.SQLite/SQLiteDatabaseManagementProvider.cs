@@ -11,6 +11,7 @@ using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 
+using Magpie.Abstractions;
 using Magpie.Abstractions.Database;
 using Magpie.Abstractions.Repositories;
 using Magpie.Models;
@@ -20,6 +21,8 @@ using Magpie.Models.Enums;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+
+using SQLitePCL;
 
 namespace Magpie.Data.SQLite;
 
@@ -67,6 +70,9 @@ internal sealed class SQLiteDatabaseManagementProvider(
 
     private const string WalSuffix = "-wal";
     private const string ShmSuffix = "-shm";
+    private const string JournalSuffix = "-journal";
+
+    private bool? _canWriteBackupDirectory;
 
     public string Provider => "SQLite";
 
@@ -174,11 +180,20 @@ internal sealed class SQLiteDatabaseManagementProvider(
 
     private static async Task WriteJsonAsync<T>(string path, T value, CancellationToken cancellationToken)
     {
-        await File.WriteAllTextAsync(
-            path + ".tmp",
-            JsonSerializer.Serialize(value, MarkerJsonOptions),
-            cancellationToken).ConfigureAwait(false);
-        File.Move(path + ".tmp", path, overwrite: true);
+        var tempPath = path + ".tmp";
+        try
+        {
+            await File.WriteAllTextAsync(
+                tempPath,
+                JsonSerializer.Serialize(value, MarkerJsonOptions),
+                cancellationToken).ConfigureAwait(false);
+            File.Move(tempPath, path, overwrite: true);
+        }
+        catch
+        {
+            File.Delete(tempPath);
+            throw;
+        }
     }
 
     private static void DeleteRollbackTempFiles(string rollbackPath)
@@ -290,12 +305,6 @@ internal sealed class SQLiteDatabaseManagementProvider(
         {
             Directory.Delete(stagingDirectory, recursive: true);
         }
-    }
-
-    private static void ClearMarkerAndStaging(string dataDirectory)
-    {
-        File.Delete(GetMarkerPath(dataDirectory));
-        CleanStaging(dataDirectory);
     }
 
     private static BackupMetadata CreateFallbackBackupMetadata(string backupId, DateTime createdAtUtc)
@@ -414,10 +423,12 @@ internal sealed class SQLiteDatabaseManagementProvider(
     {
         ArgumentNullException.ThrowIfNull(options);
 
+        if (await GetBackupDeniedReasonAsync(cancellationToken).ConfigureAwait(false) is { } deniedReason)
+        {
+            throw new MagpieException(deniedReason);
+        }
+
         var backupDirectory = await GetBackupDirectoryAsync(cancellationToken).ConfigureAwait(false);
-
-        Directory.CreateDirectory(backupDirectory);
-
         var now = timeProvider.GetUtcNow().UtcDateTime;
         var timestamp = now.ToString("yyyyMMdd_HHmmss", CultureInfo.InvariantCulture);
         var kind = ValidateBackupKind(options.Kind);
@@ -440,8 +451,8 @@ internal sealed class SQLiteDatabaseManagementProvider(
             ? $"{backupId}.db"
             : $"{backupId}{NameSeparator}{sanitizedName}.db";
         var backupPath = Path.Combine(backupDirectory, backupFileName);
-
-        await CopyDatabaseAsync(GetLiveDatabasePath(), backupPath, cancellationToken).ConfigureAwait(false);
+        var backupTempPath = backupPath + ".tmp";
+        var metadataPath = GetBackupMetadataPath(backupPath);
 
         var metadata = new BackupMetadata
         {
@@ -450,7 +461,19 @@ internal sealed class SQLiteDatabaseManagementProvider(
             CreatedAtUtc = now
         };
 
-        await WriteJsonAsync(GetBackupMetadataPath(backupPath), metadata, cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await CopyDatabaseAsync(GetLiveDatabasePath(), backupTempPath, cancellationToken).ConfigureAwait(false);
+            await WriteJsonAsync(metadataPath, metadata, cancellationToken).ConfigureAwait(false);
+            File.Move(backupTempPath, backupPath);
+        }
+        catch
+        {
+            File.Delete(backupTempPath);
+            File.Delete(backupTempPath + JournalSuffix);
+            File.Delete(metadataPath);
+            throw;
+        }
 
         return backupId;
     }
@@ -466,6 +489,11 @@ internal sealed class SQLiteDatabaseManagementProvider(
         if (backupPath is null)
         {
             return false;
+        }
+
+        if (await GetRestoreDeniedReasonAsync(cancellationToken).ConfigureAwait(false) is { } deniedReason)
+        {
+            throw new MagpieException(deniedReason);
         }
 
         var dataDirectory = GetDataDirectory(liveDatabasePath);
@@ -531,7 +559,7 @@ internal sealed class SQLiteDatabaseManagementProvider(
             return false;
         }
 
-        var marker = await ReadMarkerAsync(markerPath, cancellationToken).ConfigureAwait(false);
+        var marker = await ReadMarkerAsync<RestorePendingMarker>(markerPath, cancellationToken).ConfigureAwait(false);
         if (marker is null)
         {
             logger.LogError(
@@ -542,6 +570,15 @@ internal sealed class SQLiteDatabaseManagementProvider(
                 backupId: null,
                 reason: "The restore marker file could not be parsed.",
                 cancellationToken).ConfigureAwait(false);
+            ClearMarkerAndStaging(dataDirectory);
+            return false;
+        }
+
+        if (await IsRestoreAppliedAsync(dataDirectory, marker, cancellationToken).ConfigureAwait(false))
+        {
+            logger.LogInformation(
+                "Restore of backup {BackupId} was applied before; clearing its marker and staging.",
+                marker.BackupId);
             ClearMarkerAndStaging(dataDirectory);
             return false;
         }
@@ -675,6 +712,11 @@ internal sealed class SQLiteDatabaseManagementProvider(
             return false;
         }
 
+        if (await GetDeleteDeniedReasonAsync(cancellationToken).ConfigureAwait(false) is { } deniedReason)
+        {
+            throw new MagpieException(deniedReason);
+        }
+
         File.Delete(backupPath);
         File.Delete(GetBackupMetadataPath(backupPath));
 
@@ -688,6 +730,26 @@ internal sealed class SQLiteDatabaseManagementProvider(
         var backupDirectory = await GetBackupDirectoryAsync(cancellationToken).ConfigureAwait(false);
 
         return ResolveBackupPath(backupDirectory, backupId);
+    }
+
+    public Task<string?> GetBackupDeniedReasonAsync(CancellationToken cancellationToken)
+    {
+        return GetBackupDirectoryDeniedReasonAsync("Create", cancellationToken);
+    }
+
+    public async Task<string?> GetRestoreDeniedReasonAsync(CancellationToken cancellationToken)
+    {
+        using var connection = new SqliteConnection(CreatePoolingDisabledConnectionString());
+        await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
+
+        return raw.sqlite3_db_readonly(connection.Handle, "main") == 0
+            ? null
+            : "Restore needs write access to the database file";
+    }
+
+    public Task<string?> GetDeleteDeniedReasonAsync(CancellationToken cancellationToken)
+    {
+        return GetBackupDirectoryDeniedReasonAsync("Delete", cancellationToken);
     }
 
     public async Task<DateTime?> GetLastOptimizedAsync(CancellationToken cancellationToken)
@@ -755,6 +817,19 @@ internal sealed class SQLiteDatabaseManagementProvider(
             cancellationToken).ConfigureAwait(false);
     }
 
+    private void ClearMarkerAndStaging(string dataDirectory)
+    {
+        try
+        {
+            File.Delete(GetMarkerPath(dataDirectory));
+            CleanStaging(dataDirectory);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            logger.LogWarning(ex, "Clearing the restore marker and staging in {DataDirectory} failed.", dataDirectory);
+        }
+    }
+
     private string GetLiveDatabasePath()
     {
         var connectionString = context.Database.GetDbConnection().ConnectionString
@@ -780,14 +855,32 @@ internal sealed class SQLiteDatabaseManagementProvider(
         return builder.ConnectionString;
     }
 
-    private async Task<RestorePendingMarker?> ReadMarkerAsync(
-        string markerPath,
+    private async Task<bool> IsRestoreAppliedAsync(
+        string dataDirectory,
+        RestorePendingMarker marker,
         CancellationToken cancellationToken)
+    {
+        var appliedPath = Path.Combine(dataDirectory, RestoreAppliedFileName);
+        if (!File.Exists(appliedPath))
+        {
+            return false;
+        }
+
+        var applied = await ReadMarkerAsync<RestoreAppliedMarker>(appliedPath, cancellationToken)
+            .ConfigureAwait(false);
+
+        return applied is not null &&
+            applied.BackupId == marker.BackupId &&
+            applied.AppliedAtUtc >= marker.RequestedAtUtc;
+    }
+
+    private async Task<TMarker?> ReadMarkerAsync<TMarker>(string markerPath, CancellationToken cancellationToken)
+        where TMarker : class
     {
         try
         {
             var json = await File.ReadAllTextAsync(markerPath, cancellationToken).ConfigureAwait(false);
-            return JsonSerializer.Deserialize<RestorePendingMarker>(json, MarkerJsonOptions);
+            return JsonSerializer.Deserialize<TMarker>(json, MarkerJsonOptions);
         }
         catch (JsonException ex)
         {
@@ -867,6 +960,29 @@ internal sealed class SQLiteDatabaseManagementProvider(
             "Recorded restore-applied marker for backup {BackupId} at {AppliedAtUtc}.",
             backupId,
             appliedAtUtc);
+    }
+
+    private async Task<string?> GetBackupDirectoryDeniedReasonAsync(string action, CancellationToken cancellationToken)
+    {
+        if (_canWriteBackupDirectory is null)
+        {
+            var backupDirectory = await GetBackupDirectoryAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                Directory.CreateDirectory(backupDirectory);
+                await File.Create(Path.Combine(backupDirectory, Path.GetRandomFileName()), 1, FileOptions.DeleteOnClose)
+                    .DisposeAsync()
+                    .ConfigureAwait(false);
+                _canWriteBackupDirectory = true;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                logger.LogWarning(ex, "Writing to the backup directory {BackupDirectory} failed.", backupDirectory);
+                _canWriteBackupDirectory = false;
+            }
+        }
+
+        return _canWriteBackupDirectory.Value ? null : $"{action} needs write access to the backup directory";
     }
 
     private async Task<string> GetBackupDirectoryAsync(CancellationToken cancellationToken)

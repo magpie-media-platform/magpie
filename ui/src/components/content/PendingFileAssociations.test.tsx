@@ -4,13 +4,11 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { ToastProvider, ToastStateProvider, ToastViewport } from '@/components/ui/Toast';
-import { ToastList } from '@/components/ui/Toast/ToastList';
+import { ToastProvider, ToastStateProvider } from '@/components/ui/Toast';
 import { TooltipProvider } from '@/components/ui/Tooltip';
 
 const apiGet = vi.fn();
 const apiPost = vi.fn();
-const startDiscovery = vi.fn();
 
 vi.mock('@/lib/api', () => ({
     apiGet: (url: string) => apiGet(url),
@@ -19,10 +17,6 @@ vi.mock('@/lib/api', () => ({
 
 vi.mock('@/hooks/useInvalidateQueriesOnEvents', () => ({
     useInvalidateQueriesOnEvents: () => {},
-}));
-
-vi.mock('@/hooks/useStartRootFolderContentDiscovery', () => ({
-    useStartRootFolderContentDiscovery: () => ({ mutate: startDiscovery, isStarting: false }),
 }));
 
 import { PendingFileAssociations, PendingFilesIndicator } from './PendingFileAssociations';
@@ -214,12 +208,7 @@ describe('PendingFileAssociations', () => {
                 <TooltipProvider>
                     <ToastStateProvider>
                         <ToastProvider>
-                            <PendingFileAssociations
-                                contentHierarchyItemId="item-1"
-                                rootFolderId="root-1"
-                                title="Bluey"
-                                canManage
-                            />
+                            <PendingFileAssociations contentHierarchyItemId="item-1" canManage />
                         </ToastProvider>
                     </ToastStateProvider>
                 </TooltipProvider>
@@ -273,70 +262,57 @@ describe('PendingFileAssociations', () => {
         const queryClient = new QueryClient({
             defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
         });
-        const { rerender } = render(
-            <PendingFileAssociations contentHierarchyItemId="item-1" rootFolderId="root-1" title="Bluey" canManage />,
-            {
-                wrapper: ({ children }: { children: ReactNode }) => (
-                    <QueryClientProvider client={queryClient}>
-                        <TooltipProvider>
-                            <ToastStateProvider>
-                                <ToastProvider>{children}</ToastProvider>
-                            </ToastStateProvider>
-                        </TooltipProvider>
-                    </QueryClientProvider>
-                ),
-            },
-        );
+        const { rerender } = render(<PendingFileAssociations contentHierarchyItemId="item-1" canManage />, {
+            wrapper: ({ children }: { children: ReactNode }) => (
+                <QueryClientProvider client={queryClient}>
+                    <TooltipProvider>
+                        <ToastStateProvider>
+                            <ToastProvider>{children}</ToastProvider>
+                        </ToastStateProvider>
+                    </TooltipProvider>
+                </QueryClientProvider>
+            ),
+        });
 
         await screen.findByText('/media/tv/Bluey/a.mkv');
         const accept = within(screen.getByTitle('/media/tv/Bluey/a.mkv').closest('tr') as HTMLElement).getByRole(
             'button',
             { name: 'Accept' },
         );
-        rerender(
-            <PendingFileAssociations contentHierarchyItemId="item-1" rootFolderId="root-1" title="Bluey" canManage />,
-        );
+        rerender(<PendingFileAssociations contentHierarchyItemId="item-1" canManage />);
 
         expect(accept).toBeInTheDocument();
     });
 
-    it('scans the item folder when the user asks to find missing files', async () => {
-        const user = userEvent.setup();
+    it('PendingFileAssociations_RendersNothing_WhenNothingIsPending', async () => {
+        // Arrange
         apiGet.mockResolvedValue([]);
 
-        render(
+        // Act
+        const { container } = render(
             <QueryClientProvider
                 client={new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })}
             >
                 <TooltipProvider>
                     <ToastStateProvider>
                         <ToastProvider>
-                            <PendingFileAssociations
-                                contentHierarchyItemId="item-1"
-                                rootFolderId="root-1"
-                                title="Bluey"
-                                canManage
-                            />
+                            <PendingFileAssociations contentHierarchyItemId="item-1" canManage />
                         </ToastProvider>
                     </ToastStateProvider>
                 </TooltipProvider>
             </QueryClientProvider>,
         );
 
-        const section = await screen.findByRole('region', { name: 'No pending files' });
-        await user.click(within(section).getByRole('button', { name: 'Find missing files' }));
-
-        expect(startDiscovery).toHaveBeenCalledWith(
-            { rootFolderId: 'root-1', contentHierarchyItemId: 'item-1', rootFolderName: 'Bluey' },
-            expect.anything(),
-        );
+        // Assert
+        await waitFor(() => expect(apiGet).toHaveBeenCalled());
+        await waitFor(() => expect(container).toBeEmptyDOMElement());
     });
 
-    it('confirms that the scan for missing files is queued', async () => {
-        const user = userEvent.setup();
-        apiGet.mockResolvedValue([]);
-        startDiscovery.mockImplementationOnce((_variables, options: { onSuccess: () => void }) => options.onSuccess());
+    it('PendingFileAssociations_ShowsALoadingState_WhileTheQueryLoads', async () => {
+        // Arrange
+        apiGet.mockReturnValue(new Promise(() => {}));
 
+        // Act
         render(
             <QueryClientProvider
                 client={new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })}
@@ -344,84 +320,44 @@ describe('PendingFileAssociations', () => {
                 <TooltipProvider>
                     <ToastStateProvider>
                         <ToastProvider>
-                            <>
-                                <PendingFileAssociations
-                                    contentHierarchyItemId="item-1"
-                                    rootFolderId="root-1"
-                                    title="Bluey"
-                                    canManage
-                                />
-                                <ToastList />
-                                <ToastViewport />
-                            </>
-                        </ToastProvider>
-                    </ToastStateProvider>
-                </TooltipProvider>
-            </QueryClientProvider>,
-        );
-        const section = await screen.findByRole('region', { name: 'No pending files' });
-        await user.click(within(section).getByRole('button', { name: 'Find missing files' }));
-
-        expect(await screen.findByText('Magpie is looking for missing files of "Bluey".')).toBeInTheDocument();
-    });
-
-    it('collapses to one line with the scan action when nothing is pending', async () => {
-        apiGet.mockResolvedValue([]);
-
-        render(
-            <QueryClientProvider
-                client={new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })}
-            >
-                <TooltipProvider>
-                    <ToastStateProvider>
-                        <ToastProvider>
-                            <PendingFileAssociations
-                                contentHierarchyItemId="item-1"
-                                rootFolderId="root-1"
-                                title="Bluey"
-                                canManage
-                            />
+                            <PendingFileAssociations contentHierarchyItemId="item-1" canManage />
                         </ToastProvider>
                     </ToastStateProvider>
                 </TooltipProvider>
             </QueryClientProvider>,
         );
 
-        const section = await screen.findByRole('region', { name: 'No pending files' });
-        expect(within(section).getByRole('button', { name: 'Find missing files' })).toBeInTheDocument();
-        expect(within(section).queryByRole('table')).toBeNull();
-        expect(section).not.toHaveTextContent('Accepting links a file');
-    });
-
-    it.each([
-        ['while the query loads', () => new Promise(() => {})],
-        ['after the query fails', () => Promise.reject(new Error('offline'))],
-    ])('does not claim that nothing is pending %s', async (_name, response) => {
-        apiGet.mockImplementation(response);
-
-        render(
-            <QueryClientProvider
-                client={new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })}
-            >
-                <TooltipProvider>
-                    <ToastStateProvider>
-                        <ToastProvider>
-                            <PendingFileAssociations
-                                contentHierarchyItemId="item-1"
-                                rootFolderId="root-1"
-                                title="Bluey"
-                                canManage
-                            />
-                        </ToastProvider>
-                    </ToastStateProvider>
-                </TooltipProvider>
-            </QueryClientProvider>,
-        );
-
+        // Assert
         const section = await screen.findByRole('region', { name: 'Pending files' });
         await waitFor(() => expect(apiGet).toHaveBeenCalled());
-        expect(screen.queryByText('No pending files')).toBeNull();
-        expect(within(section).getByRole('button', { name: 'Find missing files' })).toBeInTheDocument();
+        expect(within(section).getByRole('status', { name: 'Loading' })).toBeInTheDocument();
+    });
+
+    it('PendingFileAssociations_ShowsTheFailedRequestStateAndRetries_WhenTheQueryFails', async () => {
+        // Arrange
+        const user = userEvent.setup();
+        apiGet.mockRejectedValue(new Error('offline'));
+        render(
+            <QueryClientProvider
+                client={new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })}
+            >
+                <TooltipProvider>
+                    <ToastStateProvider>
+                        <ToastProvider>
+                            <PendingFileAssociations contentHierarchyItemId="item-1" canManage />
+                        </ToastProvider>
+                    </ToastStateProvider>
+                </TooltipProvider>
+            </QueryClientProvider>,
+        );
+        const section = await screen.findByRole('region', { name: 'Pending files' });
+
+        // Act
+        await user.click(await within(section).findByRole('button', { name: 'Try again' }));
+
+        // Assert
+        expect(section).toHaveTextContent('Failed to load');
+        await waitFor(() => expect(apiGet).toHaveBeenCalledTimes(2));
     });
 
     it('explains pending files and lists them when some wait', async () => {
@@ -455,12 +391,7 @@ describe('PendingFileAssociations', () => {
                 <TooltipProvider>
                     <ToastStateProvider>
                         <ToastProvider>
-                            <PendingFileAssociations
-                                contentHierarchyItemId="item-1"
-                                rootFolderId="root-1"
-                                title="Bluey"
-                                canManage
-                            />
+                            <PendingFileAssociations contentHierarchyItemId="item-1" canManage />
                         </ToastProvider>
                     </ToastStateProvider>
                 </TooltipProvider>
@@ -468,8 +399,8 @@ describe('PendingFileAssociations', () => {
         );
 
         const section = await screen.findByRole('region', { name: 'Pending files' });
-        expect(section).toHaveTextContent('Accepting links a file');
         expect(await within(section).findByText('/media/tv/Bluey/a.mkv')).toBeInTheDocument();
+        expect(section).toHaveTextContent('Accepting links a file');
     });
 
     it('offers no actions to a user who cannot manage content', async () => {
@@ -503,12 +434,7 @@ describe('PendingFileAssociations', () => {
                 <TooltipProvider>
                     <ToastStateProvider>
                         <ToastProvider>
-                            <PendingFileAssociations
-                                contentHierarchyItemId="item-1"
-                                rootFolderId="root-1"
-                                title="Bluey"
-                                canManage={false}
-                            />
+                            <PendingFileAssociations contentHierarchyItemId="item-1" canManage={false} />
                         </ToastProvider>
                     </ToastStateProvider>
                 </TooltipProvider>
@@ -518,6 +444,5 @@ describe('PendingFileAssociations', () => {
         await screen.findByText('/media/tv/Bluey/a.mkv');
         expect(screen.queryByRole('button', { name: 'Accept' })).toBeNull();
         expect(screen.queryByRole('button', { name: 'Reject' })).toBeNull();
-        expect(screen.queryByRole('button', { name: 'Find missing files' })).toBeNull();
     });
 });

@@ -40,7 +40,6 @@ function readJwtClaims(token: string) {
 }
 
 export function getStoredSessionCacheUserId(): string | undefined {
-    // Expired claims identify the cache owner, but must not authenticate the user.
     const claims = readJwtClaims(tokenStorage.get() ?? '');
     const id =
         claims?.['http://schemas.xmlsoap.org/ws/2005/05/identity/claims/nameidentifier'] ||
@@ -111,7 +110,6 @@ export async function logout(): Promise<void> {
     clearAuthStorage();
     try {
         await withAuthSessionLock(authScope(), async (signal) => {
-            // A later login waits behind this revocation; it must not cancel the queued logout.
             await apiFetch('/auth/logout', {
                 method: 'POST',
                 signal,

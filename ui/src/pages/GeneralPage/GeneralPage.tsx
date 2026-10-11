@@ -11,6 +11,7 @@ import { Label } from '@/components/ui/Label';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { useSettingsGroupForm } from '@/hooks/useSettingsGroupForm';
+import { DEFAULT_INSTANCE_NAME } from '@/hooks/useInstanceName';
 
 import { JobRetryPolicyPanel } from './JobRetryPolicyPanel';
 
@@ -57,7 +58,9 @@ export function GeneralPage() {
                 instanceName: values.instanceName,
                 baseUrl: values.baseUrl,
             },
-            { successDescription: 'Magpie updated the general settings.' },
+            {
+                successDescription: `${values.instanceName.trim() || DEFAULT_INSTANCE_NAME} updated the general settings.`,
+            },
         );
     }, [save, values]);
 

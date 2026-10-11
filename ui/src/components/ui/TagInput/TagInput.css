@@ -101,7 +101,7 @@
     .tag-input__listbox {
         z-index: var(--z-popover);
         margin: var(--space-2xs) 0 0;
-        max-height: 240px;
+        max-height: min(240px, calc(var(--tag-input-listbox-room) - var(--space-sm)));
         overflow-y: auto;
         padding: var(--space-2xs);
         list-style: none;

@@ -27,7 +27,7 @@ function Filters({ initial = '' }: { initial?: string }) {
 }
 
 describe('local content filters', () => {
-    it('places Monitoring, Status and the sync hint in the simple builder grid', () => {
+    it('places Monitoring and Status in the simple builder grid with no sync hint', () => {
         // Arrange
         // Act
         render(<Filters />);
@@ -40,10 +40,9 @@ describe('local content filters', () => {
         const statusField = screen
             .getByRole('combobox', { name: 'Status filter' })
             .closest('.simple-filter-builder__field');
-        const syncHint = screen.getByText(/These filters and the table headers edit the same MQL query/);
         expect(monitoringField?.parentElement).toBe(builder);
         expect(statusField?.parentElement).toBe(builder);
-        expect(syncHint.parentElement).toBe(builder);
+        expect(screen.queryByText(/same MQL query/)).not.toBeInTheDocument();
     });
 
     it('shows only the MQL editor in advanced mode and restores synced fields in simple mode', async () => {

@@ -3,6 +3,10 @@
         margin-block: var(--space-sm);
     }
 
+    .list-filter-toolbar:empty {
+        display: none;
+    }
+
     .list-filter-toolbar__controls,
     .list-filter-toolbar__inline,
     .list-filter-toolbar__active,
@@ -18,6 +22,16 @@
 
     .list-filter-toolbar__compact {
         white-space: nowrap;
+    }
+
+    @media (max-width: 420px) {
+        .list-filter-toolbar__compact {
+            min-width: var(--touch-target-min);
+        }
+
+        .list-filter-toolbar__compact-label {
+            display: none;
+        }
     }
 
     .list-filter-toolbar__active {

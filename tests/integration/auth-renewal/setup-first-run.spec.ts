@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 
-test('first administrator claim retains loading and retry state, then skips unavailable metadata in wizard order', async ({ page, request }, testInfo) => {
+test('extensions step retains loading and retry state, then skips unavailable metadata in wizard order', async ({ page, request }, testInfo) => {
   let releaseSettings!: () => void;
   const settingsHeld = new Promise<void>((resolve) => { releaseSettings = resolve; });
   let settingsStarted = false;
@@ -23,20 +23,19 @@ test('first administrator claim retains loading and retry state, then skips unav
     await page.locator('#setup-password').fill('Local-Setup-Fixture!123');
     await page.locator('#setup-confirm-password').fill('Local-Setup-Fixture!123');
     await page.getByRole('button', { name: 'Create administrator' }).click();
+    await expect(page.locator('[data-step="extensions"]')).toBeVisible();
     await expect.poll(() => settingsStarted).toBe(true);
-    await expect(page.locator('[data-action="create-admin"]')).toBeDisabled();
-    await expect(page.locator('[data-action="create-admin"]')).toContainText('Continue setup');
-    await expect(page.locator('#setup-username')).toBeDisabled();
+    await page.locator('[data-action="continue-extensions"]').click();
+    await expect(page.locator('[data-action="continue-extensions"]')).toBeDisabled();
     expect(claims).toBe(1);
     expect(logins).toBe(1);
     await page.screenshot({ path: testInfo.outputPath('claimed-settings-pending.png'), fullPage: true });
     releaseSettings();
-    await expect(page.getByTestId('setup-error')).toContainText('Administrator created, but setup failed to continue');
-    await expect(page.getByRole('button', { name: 'Continue setup' })).toBeEnabled();
-    await expect(page.locator('#setup-username')).toBeDisabled();
+    await expect(page.getByTestId('setup-error')).toContainText('Temporary settings failure');
+    await expect(page.locator('[data-action="continue-extensions"]')).toBeEnabled();
     await page.screenshot({ path: testInfo.outputPath('claimed-settings-failed.png'), fullPage: true });
     await page.unroute('**/api/settings/groups');
-    await page.getByRole('button', { name: 'Continue setup' }).click();
+    await page.locator('[data-action="continue-extensions"]').click();
     await expect(page.locator('[data-step="indexer"]')).toBeVisible();
     await expect(page.locator('[data-step="metadata"]')).toHaveCount(0);
     expect(claims).toBe(1);

@@ -94,7 +94,6 @@ export function MetadataProviderStep({ onAdvance }: MetadataProviderStepProps): 
 
 MetadataProviderStep.displayName = 'MetadataProviderStep';
 
-// The settings-group response identifies a group by its extension and name; it carries no id.
 function groupKey(group: ApiSettingsGroup): string {
     return `${group.extensionId ?? 'system'}-${group.name}`.replace(/[^A-Za-z0-9_-]/g, '-');
 }

@@ -3,11 +3,14 @@ import {
     useCallback,
     useEffect,
     useRef,
+    useState,
     type ComponentPropsWithoutRef,
     type ComponentRef,
-    type RefObject,
 } from 'react';
 import * as TabsPrimitive from '@radix-ui/react-tabs';
+
+import { useFit } from '@/hooks/ui/useFit';
+import { useMergedRef } from '@/hooks/ui/useMergedRef';
 
 import './Tabs.css';
 
@@ -31,11 +34,17 @@ export type TabsProps = ComponentPropsWithoutRef<typeof TabsPrimitive.Root> & {
     holdHeightOnValueChange?: boolean;
 };
 
-export type TabsListProps = ComponentPropsWithoutRef<typeof TabsPrimitive.List>;
+export type TabFit = 'equal' | 'content' | 'labels' | 'icons' | 'rows';
+
+export type TabsListProps = ComponentPropsWithoutRef<typeof TabsPrimitive.List> & {
+    fits?: readonly TabFit[];
+};
 
 export type TabsTriggerProps = ComponentPropsWithoutRef<typeof TabsPrimitive.Trigger>;
 
 export type TabsContentProps = ComponentPropsWithoutRef<typeof TabsPrimitive.Content>;
+
+const EQUAL_FITS: readonly TabFit[] = ['equal', 'content'];
 
 const Tabs = forwardRef<TabsRootElement, TabsProps>(
     ({ className, holdHeightOnValueChange = false, onValueChange, ...props }, ref) => {
@@ -54,17 +63,7 @@ const Tabs = forwardRef<TabsRootElement, TabsProps>(
             backstopTimer.current = 0;
         }, []);
 
-        const setRefs = useCallback(
-            (node: TabsRootElement | null) => {
-                rootRef.current = node;
-                if (typeof ref === 'function') {
-                    ref(node);
-                } else if (ref) {
-                    (ref as RefObject<TabsRootElement | null>).current = node;
-                }
-            },
-            [ref],
-        );
+        const setRefs = useMergedRef(rootRef, ref);
 
         const handleValueChange = useCallback(
             (next: string) => {
@@ -135,11 +134,17 @@ const Tabs = forwardRef<TabsRootElement, TabsProps>(
 
 Tabs.displayName = 'Tabs';
 
-const TabsList = forwardRef<ComponentRef<typeof TabsPrimitive.List>, TabsListProps>(({ className, ...props }, ref) => {
-    const classes = ['tabs-list', className].filter(Boolean).join(' ');
+const TabsList = forwardRef<ComponentRef<typeof TabsPrimitive.List>, TabsListProps>(
+    ({ className, fits = EQUAL_FITS, ...props }, ref) => {
+        const classes = ['tabs-list', className].filter(Boolean).join(' ');
+        const [list, setList] = useState<HTMLElement | null>(null);
+        useFit(list, fits);
 
-    return <TabsPrimitive.List ref={ref} className={classes} {...props} />;
-});
+        const setRefs = useMergedRef(setList, ref);
+
+        return <TabsPrimitive.List ref={setRefs} className={classes} {...props} />;
+    },
+);
 
 TabsList.displayName = 'TabsList';
 

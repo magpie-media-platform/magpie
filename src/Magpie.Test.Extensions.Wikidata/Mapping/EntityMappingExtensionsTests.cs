@@ -2270,6 +2270,130 @@ internal sealed class EntityMappingExtensionsTests
     }
 
     [Test]
+    public void ToMetadataContribution_MapsTheExternalIdsOfMagpieSources_WhenPerson()
+    {
+        // Arrange
+        var entity = new EntityDto
+        {
+            Id = "Q616886",
+            Labels = new Dictionary<string, MonolingualTextDto>
+            {
+                ["en"] = new MonolingualTextDto { Value = "Ken Burns", Language = "en" }
+            },
+            Claims = new Dictionary<string, List<StatementDto>>
+            {
+                ["P31"] =
+                [
+                    new StatementDto
+                    {
+                        Rank = "normal",
+                        Mainsnak = new SnakDto
+                        {
+                            SnakType = "value",
+                            DataValue = new DataValueDto
+                            {
+                                Value = JsonDocument.Parse("{\"id\":\"Q5\"}").RootElement.Clone()
+                            }
+                        }
+                    }
+                ],
+                ["P345"] =
+                [
+                    new StatementDto
+                    {
+                        Rank = "normal",
+                        Mainsnak = new SnakDto
+                        {
+                            SnakType = "value",
+                            DataValue = new DataValueDto
+                            {
+                                Value = JsonDocument.Parse("\"nm0122741\"").RootElement.Clone()
+                            }
+                        }
+                    }
+                ],
+                ["P4985"] =
+                [
+                    new StatementDto
+                    {
+                        Rank = "normal",
+                        Mainsnak = new SnakDto
+                        {
+                            SnakType = "value",
+                            DataValue = new DataValueDto
+                            {
+                                Value = JsonDocument.Parse("\"204484\"").RootElement.Clone()
+                            }
+                        }
+                    }
+                ],
+                ["P11449"] =
+                [
+                    new StatementDto
+                    {
+                        Rank = "normal",
+                        Mainsnak = new SnakDto
+                        {
+                            SnakType = "value",
+                            DataValue = new DataValueDto { Value = JsonDocument.Parse("\"64989\"").RootElement.Clone() }
+                        }
+                    }
+                ],
+                ["P434"] =
+                [
+                    new StatementDto
+                    {
+                        Rank = "normal",
+                        Mainsnak = new SnakDto
+                        {
+                            SnakType = "value",
+                            DataValue = new DataValueDto
+                            {
+                                Value = JsonDocument.Parse("\"9e5e41c7-4ec2-4e18-b210-0241c666b462\"")
+                                    .RootElement.Clone()
+                            }
+                        }
+                    }
+                ],
+                ["P244"] =
+                [
+                    new StatementDto
+                    {
+                        Rank = "normal",
+                        Mainsnak = new SnakDto
+                        {
+                            SnakType = "value",
+                            DataValue = new DataValueDto
+                            {
+                                Value = JsonDocument.Parse("\"n91020856\"").RootElement.Clone()
+                            }
+                        }
+                    }
+                ]
+            }
+        };
+
+        // Act
+        var result = entity.ToMetadataContribution(
+            EntityKind.Person,
+            "en",
+            new Dictionary<string, EntityDto>(),
+            DateTime.UtcNow);
+
+        // Assert
+        Assert.That(
+            result!.ExternalIds.Select(external => (external.Source, external.Value)),
+            Is.EqualTo(new (string?, string)[]
+            {
+                ("wikidata", "Q616886"),
+                ("tmdb", "204484"),
+                ("imdb", "nm0122741"),
+                ("tvmaze", "64989"),
+                ("musicbrainz", "9e5e41c7-4ec2-4e18-b210-0241c666b462")
+            }));
+    }
+
+    [Test]
     public void ToMetadataContribution_MapsAwards_WhenStudio()
     {
         // Arrange

@@ -10,6 +10,7 @@ import {
 } from 'react';
 import {
     flexRender,
+    functionalUpdate,
     getCoreRowModel,
     getSortedRowModel,
     getPaginationRowModel,
@@ -32,7 +33,6 @@ import { SelectionCircleToggle } from '@/components/ui/SelectionCircleToggle';
 import './DataTable.css';
 
 declare module '@tanstack/react-table' {
-    // TanStack declaration merging needs both generic parameters, unused or not.
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     interface ColumnMeta<TData extends RowData, TValue> {
         headerLabel?: string;
@@ -55,6 +55,9 @@ export interface DataTableMobileSelectionOverlay<TData> {
 
 /** Role a cell plays in the mobile card collapse. */
 export type DataTableMobileRole = 'header' | 'field' | 'actions' | 'hidden';
+
+/** Row layout below the table breakpoint. */
+export type DataTableMobileVariant = 'card' | 'compact';
 
 function sameIds(left: readonly string[], right: readonly string[]): boolean {
     return left.length === right.length && left.every((id, index) => id === right[index]);
@@ -127,6 +130,9 @@ export interface DataTableProps<TData> extends Omit<ComponentPropsWithoutRef<'di
 
     getRowId?: (row: TData, index: number) => string;
 
+    /** The row layout below the table breakpoint. */
+    mobileVariant?: DataTableMobileVariant;
+
     /** On the mobile card collapse, whether a selection-mode toggle on the page is currently active. */
     mobileSelectionActive?: boolean;
 
@@ -161,6 +167,7 @@ function DataTableInner<TData>(
         keepHeaderWhenEmpty = false,
         loading = false,
         getRowId,
+        mobileVariant = 'card',
         mobileSelectionActive,
         mobileSelectionOverlay,
         className,
@@ -181,6 +188,25 @@ function DataTableInner<TData>(
     const rowSelectionState = controlledRowSelection ?? internalRowSelection;
     const pagination = controlledPagination ?? internalPagination;
 
+    const lastPageIndex = Math.max(0, Math.ceil(data.length / pagination.pageSize) - 1);
+    const clampPagination = useCallback(
+        (state: PaginationState): PaginationState =>
+            manualPagination || state.pageIndex <= lastPageIndex ? state : { ...state, pageIndex: lastPageIndex },
+        [manualPagination, lastPageIndex],
+    );
+
+    const handlePaginationChange: OnChangeFn<PaginationState> = useCallback(
+        (updater) => {
+            const fromCurrentPage = (old: PaginationState) => functionalUpdate(updater, clampPagination(old));
+            if (onPaginationChange) {
+                onPaginationChange(fromCurrentPage);
+            } else {
+                setInternalPagination(fromCurrentPage);
+            }
+        },
+        [onPaginationChange, clampPagination],
+    );
+
     const handleSortingChange: OnChangeFn<SortingState> = useCallback(
         (updater) => {
             if (onSortingChange) {
@@ -191,6 +217,18 @@ function DataTableInner<TData>(
         },
         [onSortingChange],
     );
+
+    const sortingKey = JSON.stringify(sorting);
+    const sortingKeyRef = useRef(sortingKey);
+    useEffect(() => {
+        if (sortingKeyRef.current === sortingKey) {
+            return;
+        }
+        sortingKeyRef.current = sortingKey;
+        if (!manualPagination) {
+            handlePaginationChange((old) => ({ ...old, pageIndex: 0 }));
+        }
+    }, [sortingKey, manualPagination, handlePaginationChange]);
 
     const handleRowSelectionChange: OnChangeFn<RowSelectionState> = useCallback(
         (updater) => {
@@ -203,27 +241,17 @@ function DataTableInner<TData>(
         [onRowSelectionChange],
     );
 
-    const handlePaginationChange: OnChangeFn<PaginationState> = useCallback(
-        (updater) => {
-            if (onPaginationChange) {
-                onPaginationChange(updater);
-            } else {
-                setInternalPagination(updater);
-            }
-        },
-        [onPaginationChange],
-    );
-
     const table = useReactTable({
         data,
         columns,
         state: {
             sorting,
             rowSelection: rowSelectionState,
-            pagination,
+            pagination: clampPagination(pagination),
             ...(columnVisibility ? { columnVisibility } : {}),
         },
         enableRowSelection,
+        autoResetPageIndex: false,
         onSortingChange: handleSortingChange,
         onRowSelectionChange: handleRowSelectionChange,
         onPaginationChange: handlePaginationChange,
@@ -256,13 +284,14 @@ function DataTableInner<TData>(
             [
                 'data-table',
                 `data-table--${size}`,
+                mobileVariant === 'compact' && 'data-table--mobile-compact',
                 loading && 'data-table--loading',
                 filterActions && 'data-table--with-filter-bar',
                 className,
             ]
                 .filter(Boolean)
                 .join(' '),
-        [size, loading, filterActions, className],
+        [size, mobileVariant, loading, filterActions, className],
     );
 
     return (
@@ -362,90 +391,82 @@ function DataTableInner<TData>(
                         ))}
                     </thead>
                     <tbody role="rowgroup" className="data-table__body">
-                        {rows.length === 0 ? (
-                            <tr role="row" className="data-table__empty-row">
-                                <td
-                                    role="gridcell"
-                                    colSpan={table.getVisibleLeafColumns().length}
-                                    className="data-table__empty-cell"
-                                >
-                                    {emptyState ?? <div className="data-table__empty-state">No data available</div>}
-                                </td>
-                            </tr>
-                        ) : (
-                            rows.map((row) => (
-                                <tr
-                                    role="row"
-                                    key={row.id}
-                                    className={[
-                                        'data-table__row',
-                                        row.getIsSelected() && 'data-table__row--selected',
-                                        onRowClick && 'data-table__row--clickable',
-                                    ]
-                                        .filter(Boolean)
-                                        .join(' ')}
-                                    onClick={onRowClick ? () => onRowClick(row.original) : undefined}
-                                    onKeyDown={
-                                        onRowClick
-                                            ? (e) => {
-                                                  if (e.key === 'Enter' || e.key === ' ') {
-                                                      e.preventDefault();
-                                                      onRowClick(row.original);
-                                                  }
+                        {rows.map((row) => (
+                            <tr
+                                role="row"
+                                key={row.id}
+                                className={[
+                                    'data-table__row',
+                                    row.getIsSelected() && 'data-table__row--selected',
+                                    onRowClick && 'data-table__row--clickable',
+                                ]
+                                    .filter(Boolean)
+                                    .join(' ')}
+                                onClick={onRowClick ? () => onRowClick(row.original) : undefined}
+                                onKeyDown={
+                                    onRowClick
+                                        ? (e) => {
+                                              if (e.key === 'Enter' || e.key === ' ') {
+                                                  e.preventDefault();
+                                                  onRowClick(row.original);
                                               }
-                                            : undefined
-                                    }
-                                    tabIndex={onRowClick ? 0 : undefined}
-                                    data-row-id={row.id}
-                                    data-state={row.getIsSelected() ? 'selected' : undefined}
-                                    data-clickable={onRowClick ? true : undefined}
-                                    aria-selected={row.getIsSelected() ? true : undefined}
-                                >
-                                    {mobileSelectionActive && mobileSelectionOverlay && (
-                                        <td role="gridcell" className="data-table__mobile-select-cell">
-                                            {(mobileSelectionOverlay.canSelect?.(row.original) ?? true) && (
-                                                <SelectionCircleToggle
-                                                    selected={mobileSelectionOverlay.isSelected(row.original)}
-                                                    onToggle={() => mobileSelectionOverlay.onToggle(row.original)}
-                                                    aria-label={`${
-                                                        mobileSelectionOverlay.isSelected(row.original)
-                                                            ? 'Deselect'
-                                                            : 'Select'
-                                                    } ${mobileSelectionOverlay.rowLabel?.(row.original) ?? 'row'}`}
-                                                    data-action="toggle-row-mobile"
-                                                />
-                                            )}
+                                          }
+                                        : undefined
+                                }
+                                tabIndex={onRowClick ? 0 : undefined}
+                                data-row-id={row.id}
+                                data-state={row.getIsSelected() ? 'selected' : undefined}
+                                data-clickable={onRowClick ? true : undefined}
+                                aria-selected={row.getIsSelected() ? true : undefined}
+                            >
+                                {mobileSelectionActive && mobileSelectionOverlay && (
+                                    <td role="gridcell" className="data-table__mobile-select-cell">
+                                        {(mobileSelectionOverlay.canSelect?.(row.original) ?? true) && (
+                                            <SelectionCircleToggle
+                                                selected={mobileSelectionOverlay.isSelected(row.original)}
+                                                onToggle={() => mobileSelectionOverlay.onToggle(row.original)}
+                                                aria-label={`${
+                                                    mobileSelectionOverlay.isSelected(row.original)
+                                                        ? 'Deselect'
+                                                        : 'Select'
+                                                } ${mobileSelectionOverlay.rowLabel?.(row.original) ?? 'row'}`}
+                                                data-action="toggle-row-mobile"
+                                            />
+                                        )}
+                                    </td>
+                                )}
+                                {row.getVisibleCells().map((cell) => {
+                                    const header = cell.column.columnDef.header;
+                                    const label =
+                                        typeof header === 'string' ? header : cell.column.columnDef.meta?.headerLabel;
+                                    const mobileRole = resolveMobileRole(
+                                        Boolean(label),
+                                        cell.column.columnDef.meta?.mobileRole,
+                                    );
+                                    return (
+                                        <td
+                                            role="gridcell"
+                                            key={cell.id}
+                                            className="data-table__cell"
+                                            data-label={label || undefined}
+                                            data-column={cell.column.id}
+                                            data-mobile-role={mobileRole}
+                                        >
+                                            {flexRender(cell.column.columnDef.cell, cell.getContext())}
                                         </td>
-                                    )}
-                                    {row.getVisibleCells().map((cell) => {
-                                        const header = cell.column.columnDef.header;
-                                        const label =
-                                            typeof header === 'string'
-                                                ? header
-                                                : cell.column.columnDef.meta?.headerLabel;
-                                        const mobileRole = resolveMobileRole(
-                                            Boolean(label),
-                                            cell.column.columnDef.meta?.mobileRole,
-                                        );
-                                        return (
-                                            <td
-                                                role="gridcell"
-                                                key={cell.id}
-                                                className="data-table__cell"
-                                                data-label={label || undefined}
-                                                data-column={cell.column.id}
-                                                data-mobile-role={mobileRole}
-                                            >
-                                                {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                                            </td>
-                                        );
-                                    })}
-                                </tr>
-                            ))
-                        )}
+                                    );
+                                })}
+                            </tr>
+                        ))}
                     </tbody>
                 </table>
             </div>
+
+            {isEmpty && (
+                <div className="data-table__empty">
+                    {emptyState ?? <div className="data-table__empty-state">No data available</div>}
+                </div>
+            )}
 
             {shouldPaginate && !hidePagination && table.getPageCount() > 1 && (
                 <Pager

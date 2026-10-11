@@ -26,6 +26,10 @@
         gap: var(--space-xs);
     }
 
+    .root-folder-form__field .monitoring-toggle__segments {
+        align-self: flex-start;
+    }
+
     .root-folder-form__help {
         margin: 0;
         font-size: var(--text-xs);

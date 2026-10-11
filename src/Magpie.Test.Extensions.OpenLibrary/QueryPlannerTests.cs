@@ -316,7 +316,23 @@ public sealed class QueryPlannerTests
                         AncestorId = Guid.Parse("55555555-5555-5555-5555-555555555555")
                     },
                     "Empty",
-                    "ancestorId:constant-root").SetName("ancestor contradicts")
+                    "ancestorId:constant-root").SetName("ancestor contradicts"),
+                new TestCaseData(
+                    new ContentHierarchyItemCriteria
+                    {
+                        Name = new() { And = [new() { Value = "Dune" }] },
+                        Subtree = new() { Some = [[new() { EffectiveMonitoring = true }]] }
+                    },
+                    "Empty",
+                    "subtree:constant-absent").SetName("local subtree match contradicts"),
+                new TestCaseData(
+                    new ContentHierarchyItemCriteria
+                    {
+                        Name = new() { And = [new() { Value = "Dune" }] },
+                        Subtree = new() { None = [new() { EffectiveMonitoring = true }] }
+                    },
+                    "Ready",
+                    "subtree:constant-absent").SetName("local subtree exclusion cannot match")
             ];
         }
     }

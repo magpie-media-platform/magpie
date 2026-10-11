@@ -168,7 +168,7 @@ test.describe.serial("Journey 13: chase what's missing and upgrade what's medioc
                 const knownIds = new Set(before.items.map((job) => job.id));
 
                 await page
-                    .locator(`[data-row-id="${target!.id}"] [data-action="search-now"]`)
+                    .locator(`[data-row-id="${target!.id}"] [data-action="search-releases"]`)
                     .click();
 
                 const execution = await until(
@@ -210,7 +210,7 @@ test.describe.serial("Journey 13: chase what's missing and upgrade what's medioc
                     '/api/jobs?jobType=ReleaseSearchItem&pageSize=250',
                 );
                 const knownIds = new Set(before.items.map((job) => job.id));
-                await page.locator('[data-action="bulk-search-now"]').click();
+                await page.locator('[data-action="bulk-search-releases"]').click();
 
                 const completed = await until(
                     'one bulk search execution per selected wanted item',

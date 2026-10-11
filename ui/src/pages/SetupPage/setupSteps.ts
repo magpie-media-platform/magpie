@@ -1,10 +1,20 @@
 import type { SetupStatus } from '@/lib/setupApi';
 
-export type SetupStepId = 'db' | 'admin' | 'metadata' | 'indexer' | 'download' | 'server' | 'root' | 'done';
+export type SetupStepId =
+    | 'db'
+    | 'admin'
+    | 'extensions'
+    | 'metadata'
+    | 'indexer'
+    | 'download'
+    | 'server'
+    | 'root'
+    | 'done';
 
 export const SETUP_STEP_ORDER: readonly SetupStepId[] = [
     'db',
     'admin',
+    'extensions',
     'metadata',
     'indexer',
     'download',
@@ -13,15 +23,16 @@ export const SETUP_STEP_ORDER: readonly SetupStepId[] = [
     'done',
 ] as const;
 
-export const SETUP_STEPS: Record<SetupStepId, string> = {
-    db: 'Database Magpie will use.',
-    admin: 'Create the first administrator account to get started.',
-    metadata: 'Provide API keys so Magpie can fetch art and details.',
-    indexer: 'Connect a release source so Magpie can search for content.',
-    download: 'Connect a downloader so Magpie can grab releases.',
-    server: 'Tell Magpie about your media server so library refreshes work.',
-    root: 'Choose the folder where Magpie organizes imported files.',
-    done: 'Review what you configured and finish setup.',
+export const SETUP_STEPS: Record<SetupStepId, (instanceName: string) => string> = {
+    db: (instanceName) => `Database ${instanceName} will use.`,
+    admin: () => 'Create the first administrator account to get started.',
+    extensions: () => 'Install extensions.',
+    metadata: (instanceName) => `Provide API keys so ${instanceName} can fetch art and details.`,
+    indexer: (instanceName) => `Connect a release source so ${instanceName} can search for content.`,
+    download: (instanceName) => `Connect a downloader so ${instanceName} can grab releases.`,
+    server: (instanceName) => `Tell ${instanceName} about your media server so library refreshes work.`,
+    root: (instanceName) => `Choose the folder where ${instanceName} organizes imported files.`,
+    done: () => 'Review what you configured and finish setup.',
 };
 
 export interface SetupStepAvailability {
@@ -56,7 +67,7 @@ export function nextStepAfter(
 
 export function pickInitialStep(status: SetupStatus): SetupStepId {
     if (!status.requiresAdminClaim) {
-        return 'metadata';
+        return 'extensions';
     }
     return SETUP_STEP_ORDER[0];
 }

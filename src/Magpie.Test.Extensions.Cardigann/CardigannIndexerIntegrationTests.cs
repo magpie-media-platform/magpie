@@ -26,6 +26,10 @@ public sealed class CardigannIndexerIntegrationTests
 {
     private const string Magnet = "magnet:?xt=urn:btih:abcdef0123456789abcdef0123456789abcdef01";
 
+    private const string TorrentPayload =
+        "d8:announce31:http://tracker.example/announce4:infod6:lengthi100e4:name8:test.bin" +
+        "12:piece lengthi65536e6:pieces20:01234567890123456789ee";
+
     private CardigannDefinition _definition = null!;
     private Mock<IResultParser> _parser = null!;
     private Mock<ICardigannSessionManager> _sessions = null!;
@@ -164,6 +168,7 @@ public sealed class CardigannIndexerIntegrationTests
         _sessions
             .Setup(s => s.IsLoggedOut(It.IsAny<LoginBlock>(), HttpStatusCode.Forbidden, It.IsAny<string>()))
             .Returns(true);
+        _sessions.Setup(s => s.GetSessionGeneration("priv@https://tracker.test")).Returns(7);
         _sessions
             .SetupSequence(s => s.SendAsync(
                 It.IsAny<string>(),
@@ -197,7 +202,7 @@ public sealed class CardigannIndexerIntegrationTests
         // Assert
         Assert.That(releases.ToList(), Has.Count.EqualTo(1));
 
-        _sessions.Verify(s => s.InvalidateSession("priv@https://tracker.test"), Times.Once);
+        _sessions.Verify(s => s.InvalidateSession("priv@https://tracker.test", 7), Times.Once);
         _sessions.Verify(
             s => s.SendAsync(
                 It.IsAny<string>(),
@@ -391,6 +396,65 @@ public sealed class CardigannIndexerIntegrationTests
 
         // Assert
         Assert.That(releases, Is.Empty);
+    }
+
+    [Test]
+    public async Task SearchAsync_DropsOnlyTheSlowRow_WhenADetailFetchTimesOut()
+    {
+        // Arrange
+        _definition.Download = new DownloadBlock { Selector = "a.magnet", Attribute = "href" };
+        _parser
+            .Setup(p => p.Parse(
+                It.IsAny<string>(),
+                It.IsAny<CardigannDefinition>(),
+                It.IsAny<Uri>(),
+                It.IsAny<IReadOnlyDictionary<string, object?>>()))
+            .Returns(
+            [
+                new Release
+                {
+                    Protocol = "torrent",
+                    Title = "Slow Release",
+                    InfoUrl = new Uri("https://tracker.test/details/1"),
+                },
+                new Release
+                {
+                    Protocol = "torrent",
+                    Title = "Fast Release",
+                    InfoUrl = new Uri("https://tracker.test/details/2"),
+                },
+            ]);
+        _parser
+            .Setup(p => p.ExtractDownloadTarget(
+                It.IsAny<string>(),
+                It.IsAny<DownloadBlock>(),
+                It.IsAny<IReadOnlyDictionary<string, object?>>()))
+            .Returns(Magnet);
+        _sessions
+            .Setup(s => s.SendAsync(
+                It.IsAny<string>(),
+                It.IsAny<Uri>(),
+                It.IsAny<HttpMethod>(),
+                new Uri("https://tracker.test/details/1"),
+                It.IsAny<string?>(),
+                It.IsAny<string>(),
+                It.IsAny<bool>(),
+                It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new TaskCanceledException("The HttpClient timeout elapsed."));
+        var integration = new CardigannIndexerIntegration(
+            Guid.Empty,
+            _definition,
+            _parser.Object,
+            _sessions.Object,
+            NullLogger<CardigannIndexerIntegration>.Instance);
+
+        // Act
+        var releases = await integration
+            .SearchAsync(new ReleaseSearchRequest { Title = "cool" }, new Dictionary<string, string>(), default)
+            .ConfigureAwait(false);
+
+        // Assert
+        Assert.That(releases.Select(release => release.Title), Is.EqualTo(["Fast Release"]));
     }
 
     [Test]
@@ -625,6 +689,178 @@ public sealed class CardigannIndexerIntegrationTests
             Is.EqualTo(
                 "Cardigann tracker priv is behind Cloudflare (HTTP 403 with CF headers) and the challenge " +
                 "could not be solved."));
+    }
+
+    [Test]
+    public async Task FetchPayloadAsync_SendsThePayloadRequestInTheTrackerSession_WhenTheDefinitionLogsIn()
+    {
+        // Arrange
+        _definition.Login = new LoginBlock { Test = new LoginTest { Path = "/", Selector = "a.logout" } };
+        _sessions
+            .Setup(s => s.SendAsync(
+                "priv@https://tracker.test",
+                new Uri("https://tracker.test/"),
+                HttpMethod.Get,
+                new Uri("https://tracker.test/download.php?id=7"),
+                null,
+                It.IsAny<string>(),
+                true,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() => new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(TorrentPayload),
+            });
+        var integration = new CardigannIndexerIntegration(
+            Guid.Empty,
+            _definition,
+            _parser.Object,
+            _sessions.Object,
+            NullLogger<CardigannIndexerIntegration>.Instance);
+
+        // Act
+        using var response = await integration
+            .FetchPayloadAsync(
+                new Uri("https://tracker.test/download.php?id=7"),
+                new Dictionary<string, string>(),
+                default)
+            .ConfigureAwait(false);
+        var payload = await response!.Content.ReadAsStringAsync(default).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(payload, Is.EqualTo(TorrentPayload));
+            _sessions.Verify(
+                s => s.EnsureLoggedInAsync(
+                    "priv@https://tracker.test",
+                    _definition.Login,
+                    new Uri("https://tracker.test/"),
+                    It.IsAny<IReadOnlyDictionary<string, object?>>(),
+                    It.IsAny<string?>(),
+                    It.IsAny<string>(),
+                    false,
+                    It.IsAny<CancellationToken>()),
+                Times.Once);
+        }
+    }
+
+    [Test]
+    public async Task FetchPayloadAsync_LogsInAgainAndRetries_WhenThePayloadResponseShowsALoggedOutSession()
+    {
+        // Arrange
+        _definition.Login = new LoginBlock { Test = new LoginTest { Path = "/", Selector = "a.logout" } };
+        _sessions
+            .Setup(s => s.IsLoggedOut(It.IsAny<LoginBlock>(), HttpStatusCode.OK, "<html>login</html>"))
+            .Returns(true);
+        _sessions.Setup(s => s.GetSessionGeneration("priv@https://tracker.test")).Returns(3);
+        _sessions
+            .SetupSequence(s => s.SendAsync(
+                It.IsAny<string>(),
+                It.IsAny<Uri>(),
+                It.IsAny<HttpMethod>(),
+                It.IsAny<Uri>(),
+                It.IsAny<string?>(),
+                It.IsAny<string>(),
+                It.IsAny<bool>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("<html>login</html>"),
+            })
+            .ReturnsAsync(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(TorrentPayload) });
+        var integration = new CardigannIndexerIntegration(
+            Guid.Empty,
+            _definition,
+            _parser.Object,
+            _sessions.Object,
+            NullLogger<CardigannIndexerIntegration>.Instance);
+
+        // Act
+        using var response = await integration
+            .FetchPayloadAsync(
+                new Uri("https://tracker.test/download.php?id=7"),
+                new Dictionary<string, string>(),
+                default)
+            .ConfigureAwait(false);
+        var payload = await response!.Content.ReadAsStringAsync(default).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(payload, Is.EqualTo(TorrentPayload));
+            _sessions.Verify(s => s.InvalidateSession("priv@https://tracker.test", 3), Times.Once);
+        }
+    }
+
+    [Test]
+    public async Task FetchPayloadAsync_InvalidatesTheGenerationReadBeforeTheRequest_WhenTheSessionChangesDuringIt()
+    {
+        // Arrange
+        _definition.Login = new LoginBlock { Test = new LoginTest { Path = "/", Selector = "a.logout" } };
+        var generation = 3;
+        _sessions.Setup(s => s.GetSessionGeneration("priv@https://tracker.test")).Returns(() => generation);
+        _sessions
+            .Setup(s => s.IsLoggedOut(It.IsAny<LoginBlock>(), HttpStatusCode.OK, "<html>login</html>"))
+            .Returns(true);
+        _sessions
+            .Setup(s => s.SendAsync(
+                It.IsAny<string>(),
+                It.IsAny<Uri>(),
+                It.IsAny<HttpMethod>(),
+                It.IsAny<Uri>(),
+                It.IsAny<string?>(),
+                It.IsAny<string>(),
+                It.IsAny<bool>(),
+                It.IsAny<CancellationToken>()))
+            .Callback(() => generation = 4)
+            .ReturnsAsync(() => new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("<html>login</html>"),
+            });
+        var integration = new CardigannIndexerIntegration(
+            Guid.Empty,
+            _definition,
+            _parser.Object,
+            _sessions.Object,
+            NullLogger<CardigannIndexerIntegration>.Instance);
+
+        // Act
+        using var response = await integration
+            .FetchPayloadAsync(
+                new Uri("https://tracker.test/download.php?id=7"),
+                new Dictionary<string, string>(),
+                default)
+            .ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            _sessions.Verify(s => s.InvalidateSession("priv@https://tracker.test", 3), Times.Once);
+            _sessions.Verify(s => s.InvalidateSession("priv@https://tracker.test", 4), Times.Never);
+        }
+    }
+
+    [Test]
+    public async Task FetchPayloadAsync_ReturnsNull_WhenTheDefinitionHasNoLogin()
+    {
+        // Arrange
+        var integration = new CardigannIndexerIntegration(
+            Guid.Empty,
+            _definition,
+            _parser.Object,
+            _sessions.Object,
+            NullLogger<CardigannIndexerIntegration>.Instance);
+
+        // Act
+        var response = await integration
+            .FetchPayloadAsync(
+                new Uri("https://tracker.test/download.php?id=7"),
+                new Dictionary<string, string>(),
+                default)
+            .ConfigureAwait(false);
+
+        // Assert
+        Assert.That(response, Is.Null);
     }
 
     [Test]
@@ -993,5 +1229,39 @@ public sealed class CardigannIndexerIntegrationTests
         Assert.That(
             activity.GetTagItem("magpie.request.target"),
             Is.EqualTo("/secret-value/search?key=secret-value"));
+    }
+
+    [TestCase("true", "/search?q=cool&freeleech=1")]
+    [TestCase("false", "/search?q=cool&freeleech=0")]
+    public async Task SearchAsync_SendsCheckboxGatedInputValue_WhenCheckboxSettingIsStored(
+        string freeleech,
+        string target)
+    {
+        // Arrange
+        _definition.Settings.Add(new CardigannSettingDefinition
+        {
+            Name = "freeleech",
+            Type = "checkbox",
+            Default = false,
+        });
+        _definition.Search.Inputs["q"] = "{{ .Keywords }}";
+        _definition.Search.Inputs["freeleech"] = "{{ if .Config.freeleech }}1{{ else }}0{{ end }}";
+        var integration = new CardigannIndexerIntegration(
+            Guid.Empty,
+            _definition,
+            _parser.Object,
+            _sessions.Object,
+            NullLogger<CardigannIndexerIntegration>.Instance);
+        using var activity = new Activity("magpie.release-query.request").Start();
+
+        // Act
+        await integration.SearchAsync(
+            new ReleaseSearchRequest { Title = "cool" },
+            new Dictionary<string, string> { ["freeleech"] = freeleech },
+            default)
+            .ConfigureAwait(false);
+
+        // Assert
+        Assert.That(activity.GetTagItem("magpie.request.target"), Is.EqualTo(target));
     }
 }

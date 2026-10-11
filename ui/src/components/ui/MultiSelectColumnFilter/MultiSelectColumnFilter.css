@@ -60,8 +60,67 @@
         outline-offset: var(--focus-ring-offset);
     }
 
+    .multiselect-column-filter--field {
+        display: flex;
+        width: 100%;
+    }
+
+    .multiselect-column-filter__field {
+        display: flex;
+        flex: 1;
+        align-items: center;
+        gap: var(--space-2xs);
+        min-width: 0;
+        min-height: var(--touch-target-min);
+        padding: var(--space-2xs) var(--space-sm);
+        border: 1px solid var(--border-default);
+        border-radius: var(--radius-sm);
+        background: var(--bg-secondary);
+        color: var(--text-primary);
+    }
+
+    .multiselect-column-filter__field-trigger {
+        display: flex;
+        flex: 1;
+        align-items: center;
+        min-width: 2rem;
+        min-height: 1.75rem;
+        padding: 0;
+        border: none;
+        background: transparent;
+        color: var(--text-primary);
+        font: inherit;
+        cursor: pointer;
+    }
+
+    .multiselect-column-filter__field-chips {
+        display: flex;
+        flex: 1;
+        flex-wrap: wrap;
+        gap: var(--space-2xs);
+        min-width: 0;
+    }
+
+    .multiselect-column-filter__field-trigger[data-active] {
+        flex: none;
+    }
+
+    .multiselect-column-filter__field-trigger:focus-visible {
+        outline: var(--focus-ring-width) solid var(--focus-ring-color);
+        outline-offset: var(--focus-ring-offset);
+    }
+
+    .multiselect-column-filter__field-caret {
+        margin-left: auto;
+        color: var(--text-muted);
+    }
+
     .multiselect-column-filter__menu {
         padding: 0;
+    }
+
+    .multiselect-column-filter__menu--field {
+        width: var(--radix-popover-trigger-width);
     }
 
     .multiselect-column-filter__body {

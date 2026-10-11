@@ -41,7 +41,6 @@ export function renewAccessToken(baseUrl?: string): Promise<string> {
                     method: 'POST',
                     skipAuth: true,
                     signal,
-                    // The previous bearer survives a reload and identifies retries of this rotation.
                     headers: { Authorization: `Bearer ${renewalToken}` },
                 });
                 signal.throwIfAborted();

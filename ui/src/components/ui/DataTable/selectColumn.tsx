@@ -26,7 +26,7 @@ export function selectColumn<TData>({
     return {
         id: 'select',
         enableSorting: false,
-        size: 44,
+        size: 52,
         meta: { mobileRole: 'hidden' },
         header: () => (
             <Checkbox

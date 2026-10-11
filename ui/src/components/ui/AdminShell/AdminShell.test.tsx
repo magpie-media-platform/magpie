@@ -27,7 +27,7 @@ describe('AdminHeader', () => {
         renderWithRouter(
             <AppShell>
                 <AppShellHeader>
-                    <AdminHeader />
+                    <AdminHeader instanceName="Home Lab" />
                 </AppShellHeader>
                 <AppShellSidebar ariaLabel="Admin navigation">Navigation</AppShellSidebar>
             </AppShell>,
@@ -36,16 +36,28 @@ describe('AdminHeader', () => {
         expect(screen.getByRole('button', { name: 'Collapse sidebar' })).toHaveAttribute('aria-expanded', 'true');
     });
 
-    it('offers library search on administration pages', () => {
+    it('shows the instance name in the header brand', () => {
         renderWithRouter(
             <AppShell>
                 <AppShellHeader>
-                    <AdminHeader />
+                    <AdminHeader instanceName="Home Lab" />
                 </AppShellHeader>
             </AppShell>,
         );
 
-        expect(screen.getByRole('button', { name: 'Search library' })).toBeInTheDocument();
+        expect(screen.getByRole('link', { name: 'Home Lab' })).toHaveAttribute('href', '/admin');
+    });
+
+    it('offers library search on administration pages', () => {
+        renderWithRouter(
+            <AppShell>
+                <AppShellHeader>
+                    <AdminHeader instanceName="Home Lab" />
+                </AppShellHeader>
+            </AppShell>,
+        );
+
+        expect(screen.getByRole('button', { name: 'Search' })).toBeInTheDocument();
     });
 });
 
@@ -79,7 +91,7 @@ describe('AdminSidebar', () => {
         renderWithRouter(
             <AppShell>
                 <AppShellHeader>
-                    <AdminHeader />
+                    <AdminHeader instanceName="Home Lab" />
                 </AppShellHeader>
                 <AppShellSidebar ariaLabel="Admin navigation">
                     <AdminSidebar />

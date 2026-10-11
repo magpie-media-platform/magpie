@@ -181,7 +181,7 @@
         color: var(--status-healthy);
     }
 
-    .upcoming-content-widget__item-meta > .upcoming-content-widget__item-kind::after {
+    .upcoming-content-widget__item-meta > .upcoming-content-widget__item-kind:not(:last-child)::after {
         content: '\00b7';
         margin-left: var(--space-sm);
         color: var(--text-muted);

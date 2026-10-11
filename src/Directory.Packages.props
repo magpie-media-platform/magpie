@@ -78,6 +78,9 @@
     <PackageVersion Include="System.IdentityModel.Tokens.Jwt" Version="8.7.0" />
     <PackageVersion Include="System.Reactive" Version="6.1.0" />
     <PackageVersion Include="System.Text.Json" Version="10.0.9" />
+    <PackageVersion Include="WixToolset.Firewall.wixext" Version="5.0.2" />
+    <PackageVersion Include="WixToolset.UI.wixext" Version="5.0.2" />
+    <PackageVersion Include="WixToolset.Util.wixext" Version="5.0.2" />
     <PackageVersion Include="YamlDotNet" Version="17.1.0" />
   </ItemGroup>
 </Project>

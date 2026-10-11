@@ -22,6 +22,15 @@
         gap: var(--space-md);
     }
 
+    .content-detail-page__action-group {
+        display: flex;
+        gap: var(--space-sm);
+    }
+
+    .content-detail-page__action-group:empty {
+        display: none;
+    }
+
     .content-detail-page__metadata-slot.slot {
         display: flex;
         flex-wrap: wrap;

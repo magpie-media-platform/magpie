@@ -38,23 +38,26 @@ const allDone: OnboardingStatus = {
 
 describe('deriveOnboardingSteps', () => {
     it('returns the four steps in pipeline order', () => {
-        const steps = deriveOnboardingSteps(undefined);
+        const steps = deriveOnboardingSteps(undefined, 'Magpie');
         expect(steps.map((s) => s.key)).toEqual(['indexer', 'downloadClient', 'rootFolder', 'monitoredContent']);
     });
 
     it('treats every step as not done when status is undefined', () => {
-        const steps = deriveOnboardingSteps(undefined);
+        const steps = deriveOnboardingSteps(undefined, 'Magpie');
         expect(steps.every((s) => !s.done)).toBe(true);
     });
 
     it('maps each flag to the matching step done-state', () => {
-        const steps = deriveOnboardingSteps({
-            hasIndexer: true,
-            hasDownloadClient: false,
-            hasRootFolder: true,
-            hasMonitoredContent: false,
-            isComplete: false,
-        });
+        const steps = deriveOnboardingSteps(
+            {
+                hasIndexer: true,
+                hasDownloadClient: false,
+                hasRootFolder: true,
+                hasMonitoredContent: false,
+                isComplete: false,
+            },
+            'Magpie',
+        );
         const byKey = Object.fromEntries(steps.map((s) => [s.key, s.done]));
         expect(byKey).toEqual({
             indexer: true,
@@ -65,7 +68,7 @@ describe('deriveOnboardingSteps', () => {
     });
 
     it('points each step at its setup route', () => {
-        const steps = deriveOnboardingSteps(allDone);
+        const steps = deriveOnboardingSteps(allDone, 'Magpie');
         const byKey = Object.fromEntries(steps.map((s) => [s.key, s.to]));
         expect(byKey).toEqual({
             indexer: '/admin/indexers',
@@ -76,7 +79,7 @@ describe('deriveOnboardingSteps', () => {
     });
 
     it('gives every step a one-line reason', () => {
-        const steps = deriveOnboardingSteps(undefined);
+        const steps = deriveOnboardingSteps(undefined, 'Magpie');
         expect(steps.every((s) => s.reason.length > 0)).toBe(true);
     });
 });

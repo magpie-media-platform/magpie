@@ -1,8 +1,10 @@
-import { useId, type ReactElement } from 'react';
+import { useId, useState, type ReactElement } from 'react';
 
 import { Tooltip } from '@/components/ui/Tooltip';
 import { useAuth } from './useAuth';
 import { RoleName, Role, type Permission } from './types';
+
+import './DisabledTooltip.css';
 
 export interface DisabledTooltipPermissionProps {
     action: Permission;
@@ -77,6 +79,7 @@ function AuthDisabledTooltip(props: DisabledTooltipPermissionProps | DisabledToo
 
 export function DisabledTooltip(props: DisabledTooltipProps) {
     const descriptionId = useId();
+    const [open, setOpen] = useState(false);
 
     if (!('disabled' in props)) {
         return <AuthDisabledTooltip {...props} />;
@@ -88,9 +91,16 @@ export function DisabledTooltip(props: DisabledTooltipProps) {
 
     return (
         <>
-            <Tooltip content={props.message}>
-                {/* The wrapped control is disabled and cannot take focus, so the span carries the tab stop and the description. */}
-                <span style={{ display: 'inline-block' }} tabIndex={0} aria-describedby={descriptionId}>
+            <Tooltip content={props.message} open={open} onOpenChange={setOpen}>
+                <span
+                    className="disabled-tooltip"
+                    tabIndex={0}
+                    aria-describedby={descriptionId}
+                    onClick={(event) => {
+                        event.preventDefault();
+                        setOpen(true);
+                    }}
+                >
                     {props.children}
                 </span>
             </Tooltip>

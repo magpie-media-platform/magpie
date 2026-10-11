@@ -276,6 +276,276 @@ public sealed class ContentServiceTests
     }
 
     [Test]
+    public async Task PreviewBulkDeleteAsync_ReturnsThePathAndSizeOfEachFile_WhenDeleteFromLibrary()
+    {
+        // Arrange
+        var contentId = Guid.NewGuid();
+        var contentItemId = Guid.NewGuid();
+        var item = new ContentHierarchyItem
+        {
+            Id = contentId,
+            MetadataContainerId = Guid.NewGuid(),
+            ContentType = "movies",
+            Level = "movie",
+            Slug = "movie",
+            Name = "Movie",
+            CreatedAt = DateTime.UtcNow,
+            ContentItem = new() { Id = contentItemId, ContentHierarchyItemId = contentId, CreatedAt = DateTime.UtcNow }
+        };
+        item.ContentItem.MediaFiles.Add(new MediaFile
+        {
+            Id = Guid.NewGuid(),
+            ContentItemId = contentItemId,
+            FileKind = "Video",
+            FilePath = "/media/movie.mkv",
+            FileSize = 3_000_000_000
+        });
+        var hierarchyItems = new Mock<IContentHierarchyItemRepository> { CallBase = true };
+        hierarchyItems.Setup(repository => repository.GetByIdAsync(contentId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(item);
+        hierarchyItems.Setup(repository => repository.QueryAsync(
+                It.IsAny<ContentHierarchyItemCriteria>(),
+                It.IsAny<PagingParameter>(),
+                null,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<ContentHierarchyItem>());
+        var subject = new ContentService(
+            hierarchyItems.Object,
+            Mock.Of<IContentRepository>(),
+            Mock.Of<IAuditRecordRepository>(),
+            Mock.Of<IRootFolderRepository>(),
+            Mock.Of<IQualityTierListRepository>(),
+            Mock.Of<IMetadataContainerRepository>(),
+            [],
+            Mock.Of<IDownloadRepository>(),
+            Mock.Of<IDownloadClientRepository>(),
+            [],
+            Mock.Of<ITransactionManager>(),
+            Mock.Of<IContentTypeRegistry>(),
+            Mock.Of<IContentFileService>(),
+            TimeProvider.System,
+            NullLogger<ContentService>.Instance);
+
+        // Act
+        var result = await subject.PreviewBulkDeleteAsync(new() { Ids = [contentId] }, true).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result, Has.Count.EqualTo(1));
+            Assert.That(result[0].Path, Is.EqualTo("/media/movie.mkv"));
+            Assert.That(result[0].Size, Is.EqualTo(3_000_000_000));
+        }
+    }
+
+    [Test]
+    public async Task PreviewBulkDeleteAsync_ReturnsTheFilesSortedByPath_WhenTheItemsHoldFilesInAnotherOrder()
+    {
+        // Arrange
+        var rootId = Guid.NewGuid();
+        var rootContentId = Guid.NewGuid();
+        var childId = Guid.NewGuid();
+        var childContentId = Guid.NewGuid();
+        var root = new ContentHierarchyItem
+        {
+            Id = rootId,
+            MetadataContainerId = Guid.NewGuid(),
+            ContentType = "tv",
+            Level = "series",
+            Slug = "series",
+            Name = "Series",
+            CreatedAt = DateTime.UtcNow,
+            ContentItem = new() { Id = rootContentId, ContentHierarchyItemId = rootId, CreatedAt = DateTime.UtcNow }
+        };
+        root.ContentItem.MediaFiles.Add(new MediaFile
+        {
+            Id = Guid.NewGuid(),
+            ContentItemId = rootContentId,
+            FileKind = "Video",
+            FilePath = "/media/c.mkv",
+            FileSize = 3
+        });
+        root.ContentItem.MediaFiles.Add(new MediaFile
+        {
+            Id = Guid.NewGuid(),
+            ContentItemId = rootContentId,
+            FileKind = "Video",
+            FilePath = "/media/a.mkv",
+            FileSize = 1
+        });
+        var child = new ContentHierarchyItem
+        {
+            Id = childId,
+            MetadataContainerId = Guid.NewGuid(),
+            ContentType = "tv",
+            Level = "episode",
+            Slug = "episode",
+            Name = "Episode",
+            CreatedAt = DateTime.UtcNow,
+            ContentItem = new() { Id = childContentId, ContentHierarchyItemId = childId, CreatedAt = DateTime.UtcNow }
+        };
+        child.ContentItem.MediaFiles.Add(new MediaFile
+        {
+            Id = Guid.NewGuid(),
+            ContentItemId = childContentId,
+            FileKind = "Video",
+            FilePath = "/media/b.mkv",
+            FileSize = 2
+        });
+        var hierarchyItems = new Mock<IContentHierarchyItemRepository> { CallBase = true };
+        hierarchyItems.Setup(repository => repository.GetByIdAsync(rootId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(root);
+        hierarchyItems.Setup(repository => repository.QueryAsync(
+                It.IsAny<ContentHierarchyItemCriteria>(),
+                It.IsAny<PagingParameter>(),
+                null,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<ContentHierarchyItem> { Items = [child], TotalItems = 1 });
+        var subject = new ContentService(
+            hierarchyItems.Object,
+            Mock.Of<IContentRepository>(),
+            Mock.Of<IAuditRecordRepository>(),
+            Mock.Of<IRootFolderRepository>(),
+            Mock.Of<IQualityTierListRepository>(),
+            Mock.Of<IMetadataContainerRepository>(),
+            [],
+            Mock.Of<IDownloadRepository>(),
+            Mock.Of<IDownloadClientRepository>(),
+            [],
+            Mock.Of<ITransactionManager>(),
+            Mock.Of<IContentTypeRegistry>(),
+            Mock.Of<IContentFileService>(),
+            TimeProvider.System,
+            NullLogger<ContentService>.Instance);
+
+        // Act
+        var result = await subject.PreviewBulkDeleteAsync(new() { Ids = [rootId] }, true).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(result.Select(file => file.Path), Is.EqualTo(["/media/a.mkv", "/media/b.mkv", "/media/c.mkv"]));
+    }
+
+    [Test]
+    public async Task PreviewBulkDeleteAsync_OmitsTheFile_WhenItCoversAnItemThatStaysInTheLibrary()
+    {
+        // Arrange
+        var rootId = Guid.NewGuid();
+        var rootContentId = Guid.NewGuid();
+        var childId = Guid.NewGuid();
+        var childContentId = Guid.NewGuid();
+        var root = new ContentHierarchyItem
+        {
+            Id = rootId,
+            MetadataContainerId = Guid.NewGuid(),
+            ContentType = "tv",
+            Level = "series",
+            Slug = "series",
+            Name = "Series",
+            CreatedAt = DateTime.UtcNow,
+            ContentItem = new() { Id = rootContentId, ContentHierarchyItemId = rootId, CreatedAt = DateTime.UtcNow }
+        };
+        var keptCoverFile = new MediaFile
+        {
+            Id = Guid.NewGuid(),
+            ContentItemId = rootContentId,
+            FileKind = "Video",
+            FilePath = "/media/S01E01-E02.mkv",
+            FileSize = 100
+        };
+        keptCoverFile.Coverage.Add(new() { MediaFileId = keptCoverFile.Id, ContentItemId = Guid.NewGuid() });
+        var removedCoverFile = new MediaFile
+        {
+            Id = Guid.NewGuid(),
+            ContentItemId = rootContentId,
+            FileKind = "Video",
+            FilePath = "/media/S01E03-E04.mkv",
+            FileSize = 200
+        };
+        removedCoverFile.Coverage.Add(new() { MediaFileId = removedCoverFile.Id, ContentItemId = childContentId });
+        root.ContentItem.MediaFiles.Add(keptCoverFile);
+        root.ContentItem.MediaFiles.Add(removedCoverFile);
+        var child = new ContentHierarchyItem
+        {
+            Id = childId,
+            MetadataContainerId = Guid.NewGuid(),
+            ContentType = "tv",
+            Level = "episode",
+            Slug = "episode",
+            Name = "Episode",
+            CreatedAt = DateTime.UtcNow,
+            ContentItem = new() { Id = childContentId, ContentHierarchyItemId = childId, CreatedAt = DateTime.UtcNow }
+        };
+        var hierarchyItems = new Mock<IContentHierarchyItemRepository> { CallBase = true };
+        hierarchyItems.Setup(repository => repository.GetByIdAsync(rootId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(root);
+        hierarchyItems.Setup(repository => repository.QueryAsync(
+                It.IsAny<ContentHierarchyItemCriteria>(),
+                It.IsAny<PagingParameter>(),
+                null,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<ContentHierarchyItem> { Items = [child], TotalItems = 1 });
+        var subject = new ContentService(
+            hierarchyItems.Object,
+            Mock.Of<IContentRepository>(),
+            Mock.Of<IAuditRecordRepository>(),
+            Mock.Of<IRootFolderRepository>(),
+            Mock.Of<IQualityTierListRepository>(),
+            Mock.Of<IMetadataContainerRepository>(),
+            [],
+            Mock.Of<IDownloadRepository>(),
+            Mock.Of<IDownloadClientRepository>(),
+            [],
+            Mock.Of<ITransactionManager>(),
+            Mock.Of<IContentTypeRegistry>(),
+            Mock.Of<IContentFileService>(),
+            TimeProvider.System,
+            NullLogger<ContentService>.Instance);
+
+        // Act
+        var result = await subject.PreviewBulkDeleteAsync(new() { Ids = [rootId] }, true).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(result.Select(file => file.Path), Is.EqualTo(["/media/S01E03-E04.mkv"]));
+    }
+
+    [Test]
+    public async Task PreviewBulkDeleteAsync_ReturnsNoFiles_WhenNotDeleteFromLibrary()
+    {
+        // Arrange
+        var hierarchyItems = new Mock<IContentHierarchyItemRepository>();
+        var subject = new ContentService(
+            hierarchyItems.Object,
+            Mock.Of<IContentRepository>(),
+            Mock.Of<IAuditRecordRepository>(),
+            Mock.Of<IRootFolderRepository>(),
+            Mock.Of<IQualityTierListRepository>(),
+            Mock.Of<IMetadataContainerRepository>(),
+            [],
+            Mock.Of<IDownloadRepository>(),
+            Mock.Of<IDownloadClientRepository>(),
+            [],
+            Mock.Of<ITransactionManager>(),
+            Mock.Of<IContentTypeRegistry>(),
+            Mock.Of<IContentFileService>(),
+            TimeProvider.System,
+            NullLogger<ContentService>.Instance);
+
+        // Act
+        var result = await subject.PreviewBulkDeleteAsync(
+            new() { Ids = [Guid.NewGuid()] },
+            false).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result, Is.Empty);
+            hierarchyItems.Verify(
+                repository => repository.GetByIdAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()),
+                Times.Never);
+        }
+    }
+
+    [Test]
     public async Task DeleteAsync_DeletesTheFilesOfEveryPage_WhenAPageIsShorterThanThePageSize()
     {
         // Arrange

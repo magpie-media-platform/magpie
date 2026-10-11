@@ -731,7 +731,7 @@ public sealed class ExtensionRepositoryTests
     }
 
     [Test]
-    public async Task RegisterLoadedExtensionsAsync_RefreshesNameVersionAndTargetAbi_WhenTheRowIsRegistered()
+    public async Task RegisterLoadedExtensionsAsync_RefreshesTheAssemblyValues_WhenThePackageHasNoVersion()
     {
         // Arrange
         _context.Extensions.AddRange(
@@ -761,7 +761,8 @@ public sealed class ExtensionRepositoryTests
         await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
-        await _subject.RegisterLoadedExtensionsAsync([], [new LoadedExtension()]).ConfigureAwait(false);
+        await _subject.RegisterLoadedExtensionsAsync([], [new LoadedExtension()], new Dictionary<Guid, string>())
+            .ConfigureAwait(false);
 
         // Assert
         var refreshed = await _context.Extensions.AsNoTracking()
@@ -815,7 +816,8 @@ public sealed class ExtensionRepositoryTests
         await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
-        await _subject.RegisterLoadedExtensionsAsync([], [new LoadedExtension()]).ConfigureAwait(false);
+        await _subject.RegisterLoadedExtensionsAsync([], [new LoadedExtension()], new Dictionary<Guid, string>())
+            .ConfigureAwait(false);
 
         // Assert
         var row = await _context.Extensions.AsNoTracking().SingleAsync().ConfigureAwait(false);
@@ -855,7 +857,8 @@ public sealed class ExtensionRepositoryTests
         await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
-        await _subject.RegisterLoadedExtensionsAsync([], [new LoadedExtension()]).ConfigureAwait(false);
+        await _subject.RegisterLoadedExtensionsAsync([], [new LoadedExtension()], new Dictionary<Guid, string>())
+            .ConfigureAwait(false);
 
         // Assert
         var assemblyNames = await _context.Extensions.AsNoTracking()
@@ -866,33 +869,82 @@ public sealed class ExtensionRepositoryTests
     }
 
     [Test]
-    public async Task RegisterLoadedExtensionsAsync_AddsTheDiscoveredRowWithLoadedValues_WhenTheTableIsEmpty()
+    public async Task RegisterLoadedExtensionsAsync_StoresThePackageVersion_WhenThePackageHasAVersion()
+    {
+        // Arrange
+        var extensionId = new Guid("33333333-3333-3333-3333-333333333333");
+        _context.Extensions.Add(new Extension
+        {
+            Id = extensionId,
+            PackageId = "Magpie.Test.Core",
+            Name = "Old name",
+            Version = "1.2.3",
+            FilePath = "/app/data/extensions/Magpie.Test.Core/lib/net10.0/Magpie.Test.Core.dll",
+            AssemblyName = "Magpie.Test.Core",
+            Installed = true,
+            Enabled = true,
+        });
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        // Act
+        await _subject.RegisterLoadedExtensionsAsync(
+            [],
+            [new LoadedExtension()],
+            new Dictionary<Guid, string> { [extensionId] = "1.2.4-rc.1" }).ConfigureAwait(false);
+
+        // Assert
+        var row = await _context.Extensions.AsNoTracking().SingleAsync().ConfigureAwait(false);
+        Assert.That(row.Version, Is.EqualTo("1.2.4-rc.1"));
+    }
+
+    [Test]
+    public async Task RegisterLoadedExtensionsAsync_AddsTheDiscoveredRowWithPackageValues_WhenTheInstanceIsNew()
     {
         // Arrange
         var discovered = new Extension
         {
-            Id = Guid.NewGuid(),
+            Id = new Guid("44444444-4444-4444-4444-444444444444"),
             PackageId = "Magpie.Test.Core",
             Name = "Magpie.Test.Core",
-            Version = "0.0.0",
-            FilePath = "/app/data/extensions/loaded/Magpie.Test.Core.dll",
+            Version = "2.0.0",
+            FilePath = "/app/data/extensions/Magpie.Test.Core/lib/net10.0/Magpie.Test.Core.dll",
             AssemblyName = "Magpie.Test.Core",
             Installed = true,
             Enabled = true,
+            Managed = true,
+            NuGetId = "Magpie.Test.Core",
         };
 
         // Act
-        await _subject.RegisterLoadedExtensionsAsync([discovered], [new LoadedExtension()]).ConfigureAwait(false);
+        await _subject.RegisterLoadedExtensionsAsync(
+            [discovered],
+            [new LoadedExtension()],
+            new Dictionary<Guid, string> { [discovered.Id] = "2.0.0" }).ConfigureAwait(false);
 
         // Assert
         var row = await _context.Extensions.AsNoTracking().SingleAsync().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
+            Assert.That(row.PackageId, Is.EqualTo("Magpie.Test.Core"));
+            Assert.That(row.NuGetId, Is.EqualTo("Magpie.Test.Core"));
+            Assert.That(row.Managed, Is.True);
             Assert.That(row.Name, Is.EqualTo("Loaded name"));
-            Assert.That(row.Version, Is.EqualTo("1.2.4"));
+            Assert.That(row.Version, Is.EqualTo("2.0.0"));
             Assert.That(row.TargetABI, Is.EqualTo("[1.4.0,1.6.0)"));
             Assert.That(row.Enabled, Is.True);
         }
+    }
+
+    [Test]
+    public async Task RegisterLoadedExtensionsAsync_AddsNoRow_WhenNothingIsDiscovered()
+    {
+        // Arrange
+        // Act
+        await _subject.RegisterLoadedExtensionsAsync([], [new LoadedExtension()], new Dictionary<Guid, string>())
+            .ConfigureAwait(false);
+
+        // Assert
+        Assert.That(await _context.Extensions.AsNoTracking().AnyAsync().ConfigureAwait(false), Is.False);
     }
 
     private sealed class LoadedExtension : IExtension

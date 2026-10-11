@@ -80,6 +80,11 @@ internal sealed class ReleaseRepository(
         var selector = !string.IsNullOrWhiteSpace(source.ExternalId)
             ? $"{source.IndexerId:D}\nid:{source.ExternalId.Trim()}"
             : $"{source.IndexerId:D}\nurl:{source.InfoUrl}";
+        if (source.IndexerConnectionId is { } indexerConnectionId)
+        {
+            selector += $"\nconnection:{indexerConnectionId:D}";
+        }
+
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(selector))).ToLowerInvariant();
     }
 
@@ -810,6 +815,7 @@ internal sealed class ReleaseRepository(
             var matches = existingSources.Where(candidate =>
                 string.Equals(candidate.Key, source.Key, StringComparison.Ordinal) ||
                 (candidate.IndexerId == source.IndexerId &&
+                    candidate.IndexerConnectionId == source.IndexerConnectionId &&
                     ((!string.IsNullOrWhiteSpace(source.ExternalId) &&
                         string.Equals(candidate.ExternalId, source.ExternalId, StringComparison.Ordinal)) ||
                         (string.IsNullOrWhiteSpace(source.ExternalId) && Equals(candidate.InfoUrl, source.InfoUrl)))))
@@ -824,6 +830,7 @@ internal sealed class ReleaseRepository(
                     ReleaseId = release.Id,
                     Key = source.Key,
                     IndexerId = source.IndexerId,
+                    IndexerConnectionId = source.IndexerConnectionId,
                     Protocol = source.Protocol,
                     ExternalId = source.ExternalId,
                     Title = source.Title,
@@ -860,6 +867,7 @@ internal sealed class ReleaseRepository(
                     setters => setters
                         .SetProperty(candidate => candidate.Key, source.Key)
                         .SetProperty(candidate => candidate.IndexerId, source.IndexerId)
+                        .SetProperty(candidate => candidate.IndexerConnectionId, source.IndexerConnectionId)
                         .SetProperty(candidate => candidate.Protocol, source.Protocol)
                         .SetProperty(candidate => candidate.ExternalId, source.ExternalId)
                         .SetProperty(candidate => candidate.Title, source.Title)
@@ -900,7 +908,6 @@ internal sealed class ReleaseRepository(
                 pageNumber++;
             }
 
-            // An unmatched scope row is the only record of a user's unmatch, so its release is kept.
             var unmatchedReleaseIds = await context.ReleaseScopes
                 .AsNoTracking()
                 .Where(scope => scope.Status == ReleaseScopeStatus.Unmatched)

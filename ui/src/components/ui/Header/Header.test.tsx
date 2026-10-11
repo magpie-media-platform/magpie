@@ -3,11 +3,15 @@ import { resolve } from 'node:path';
 
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { Header } from './Header';
 
 describe('Header', () => {
+    afterEach(() => {
+        vi.restoreAllMocks();
+    });
+
     it('fits the phone header actions without horizontal overflow', () => {
         // Arrange
         const css = readFileSync(resolve(process.cwd(), 'src/components/ui/Header/Header.css'), 'utf8');
@@ -24,6 +28,74 @@ describe('Header', () => {
             /@media \(max-width: 389px\) \{\s*\.header__brand svg,\s*\.header__brand \.logo \{\s*display: none;/,
         );
         expect(css).toMatch(/@media \(max-width: 359px\) \{\s*\.header__brand \{\s*display: none;/);
+    });
+
+    it('Header_BreaksAWideBrandWordWithAHyphen_WhenTheBrandWraps', () => {
+        // Arrange
+        const css = readFileSync(resolve(process.cwd(), 'src/components/ui/Header/Header.css'), 'utf8');
+
+        // Act
+        const wrap = css.slice(css.indexOf(".header__start[data-fit='wrap'] .header__brand {"));
+
+        // Assert
+        expect(wrap).toMatch(/hyphens: auto;/);
+        expect(wrap).toMatch(/overflow-wrap: break-word;/);
+        expect(wrap).not.toMatch(/overflow-wrap: anywhere;/);
+    });
+
+    it('Header_FitsTheBrandAtFullSize_WhenTheBrandFits', () => {
+        // Arrange
+        vi.spyOn(Element.prototype, 'clientWidth', 'get').mockReturnValue(200);
+        vi.spyOn(Element.prototype, 'scrollWidth', 'get').mockReturnValue(200);
+
+        // Act
+        render(<Header brand="Home Lab" data-testid="header" />);
+
+        // Assert
+        expect(screen.getByTestId('header').querySelector('.header__start')).toHaveAttribute('data-fit', 'full');
+    });
+
+    it('Header_HidesTheLogo_WhenOnlyTheLogoMakesTheBrandOverflow', () => {
+        // Arrange
+        vi.spyOn(Element.prototype, 'clientWidth', 'get').mockReturnValue(200);
+        vi.spyOn(Element.prototype, 'scrollWidth', 'get').mockImplementation(function (this: Element) {
+            return (this as HTMLElement).dataset.fit === 'full' ? 260 : 200;
+        });
+
+        // Act
+        render(<Header brand="Home Lab" data-testid="header" />);
+
+        // Assert
+        expect(screen.getByTestId('header').querySelector('.header__start')).toHaveAttribute('data-fit', 'nologo');
+    });
+
+    it('Header_FitsTheBrandAtSmallSize_WhenTheFullSizeOverflowsWithoutTheLogo', () => {
+        // Arrange
+        vi.spyOn(Element.prototype, 'clientWidth', 'get').mockReturnValue(200);
+        vi.spyOn(Element.prototype, 'scrollWidth', 'get').mockImplementation(function (this: Element) {
+            const fit = (this as HTMLElement).dataset.fit;
+            return fit === 'full' || fit === 'nologo' ? 260 : 200;
+        });
+
+        // Act
+        render(<Header brand="Home Lab" data-testid="header" />);
+
+        // Assert
+        expect(screen.getByTestId('header').querySelector('.header__start')).toHaveAttribute('data-fit', 'small');
+    });
+
+    it('Header_WrapsTheBrand_WhenTheBrandOverflowsAtEveryNoWrapSize', () => {
+        // Arrange
+        vi.spyOn(Element.prototype, 'clientWidth', 'get').mockReturnValue(200);
+        vi.spyOn(Element.prototype, 'scrollWidth', 'get').mockImplementation(function (this: Element) {
+            return (this as HTMLElement).dataset.fit === 'wrap' ? 200 : 260;
+        });
+
+        // Act
+        render(<Header brand="Home Lab" data-testid="header" />);
+
+        // Assert
+        expect(screen.getByTestId('header').querySelector('.header__start')).toHaveAttribute('data-fit', 'wrap');
     });
 
     it('renders as a header element', () => {

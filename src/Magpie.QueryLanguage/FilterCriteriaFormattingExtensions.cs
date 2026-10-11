@@ -104,6 +104,12 @@ internal static class FilterCriteriaFormattingExtensions
             item.MediaFiles,
             FormatMediaFileCriteria,
             _ => false));
+        parts.AddRange(FormatCollectionCriteria(
+            nameof(item.Subtree),
+            nameof(item.Subtree),
+            item.Subtree,
+            subtree => JoinWithAnd([.. FormatContentHierarchyItemCriteria(subtree)]),
+            _ => false));
 
         foreach (var meta in item.Metadata.And)
         {

@@ -4488,4 +4488,135 @@ public class QueryExecutorTests
                     Is.EqualTo(["28", "35", "18", "28", "35", "18", "28", "35", "18"]));
         }
     }
+
+    [Test]
+    public async Task ExecuteAsync_ScansThePersonFilteredDiscoverFromPageOne_WhenTheFallbackScannedTheQueryFirst()
+    {
+        // Arrange
+        _cache.SetupSequence(cache => cache.GetSubjectResolutionsAsync(
+                It.IsAny<string>(),
+                It.IsAny<It.IsAnyType>(),
+                It.IsAny<Func<It.IsAnyType, CancellationToken, Task<IReadOnlyList<SubjectResolution>>>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync([
+                new SubjectResolution
+                {
+                    Kind = SubjectResolutionKind.Failed,
+                    Warning = "TMDb could not resolve one or more relationship names."
+                }
+            ])
+            .ReturnsAsync([
+                new SubjectResolution { Kind = SubjectResolutionKind.Resolved, Id = 31, Name = "Tom Hanks" }
+            ]);
+        _client.SetupSequence(client => client.GetAsync<SearchEnvelopeDto<MovieSearchHitDto>>(
+                It.IsAny<RequestContext>(),
+                It.IsAny<Request>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new SearchEnvelopeDto<MovieSearchHitDto>
+            {
+                Page = 1,
+                TotalPages = 1,
+                TotalResults = 1,
+                Results = [new MovieSearchHitDto { Id = 10, Title = "Unfiltered" }]
+            })
+            .ReturnsAsync(new SearchEnvelopeDto<MovieSearchHitDto>
+            {
+                Page = 1,
+                TotalPages = 1,
+                TotalResults = 1,
+                Results = [new MovieSearchHitDto { Id = 13, Title = "Philadelphia" }]
+            });
+        var bindings = new[]
+        {
+            new SubjectResolutionBinding(
+                "person-0",
+                new SubjectFilter(
+                    false,
+                    [new SubjectAlternative([SubjectRole.Cast], [[new SubjectIdentity("Tom Hanks", null, null)]])]))
+        };
+        var resolve = new ResolvePlanNode
+        {
+            Id = 1,
+            Precondition = PlanPrecondition.None,
+            Contributes = "resolve",
+            Route = ContentRoute.Movie,
+            SubjectBindings = bindings,
+            GenreFilters = [],
+            ResolveImageBase = false
+        };
+        var plan = new QueryPlan
+        {
+            Root = new CoalescePlanNode
+            {
+                Id = 4,
+                Precondition = PlanPrecondition.None,
+                Contributes = "first applicable anchor",
+                Children =
+                [
+                    new FetchPlanNode
+                    {
+                        Id = 2,
+                        Precondition = new PlanPrecondition { Kind = PlanPreconditionKind.NodeApplicable, NodeId = 1 },
+                        Contributes = "candidate rows",
+                        Route = ContentRoute.Movie,
+                        AnchorKind = QueryAnchorKind.Discover,
+                        SubjectBindings = bindings,
+                        PushedFilters = [],
+                        RequestedPage = 1,
+                        Fingerprint = "movie-cast",
+                        Resolve = resolve,
+                        RequiresLogicalStream = true,
+                        DiscoverParameters =
+                        [
+                            new DiscoverParameter
+                            {
+                                Name = "with_cast",
+                                Combination = DiscoverCombination.And,
+                                SubjectBindingKeys = ["person-0"]
+                            }
+                        ]
+                    },
+                    new FetchPlanNode
+                    {
+                        Id = 3,
+                        Precondition = new PlanPrecondition { Kind = PlanPreconditionKind.NodeFailed, NodeId = 1 },
+                        Contributes = "fallback candidates when relationship resolution fails",
+                        Route = ContentRoute.Movie,
+                        AnchorKind = QueryAnchorKind.Discover,
+                        SubjectBindings = [],
+                        IgnoreSubjectFilters = true,
+                        PushedFilters = [],
+                        RequestedPage = 1,
+                        Fingerprint = "movie-cast",
+                        RequiresLogicalStream = true
+                    }
+                ]
+            },
+            Warnings = [],
+            RequestedPage = 1,
+            MaximumResults = 25,
+            DefaultLanguagePreference = "en-US",
+            Fingerprint = "plan"
+        };
+
+        // Act
+        var fallback = await _subject.ExecuteAsync(plan, Context, default).ConfigureAwait(false);
+        await fallback.Hits.ToListAsync().ConfigureAwait(false);
+        var primary = await _subject.ExecuteAsync(plan, Context, default).ConfigureAwait(false);
+        var hits = await primary.Hits.ToListAsync().ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(hits.Select(hit => hit.Id), Is.EqualTo([13]));
+            _client.Verify(
+                client => client.GetAsync<SearchEnvelopeDto<MovieSearchHitDto>>(
+                    It.IsAny<RequestContext>(),
+                    It.Is<Request>(request =>
+                        request.QueryParameters.Any(pair => pair.Key == "with_cast" && pair.Value == "31") &&
+                        request.QueryParameters.Any(pair => pair.Key == "page" && pair.Value == "1")),
+                    It.IsAny<CancellationToken>()),
+                Times.Once);
+        }
+    }
 }

@@ -185,6 +185,16 @@ describe('Field Registry', () => {
                     fileSize: 'long',
                 },
             },
+            {
+                name: 'subtree',
+                aliases: [],
+                primaryField: 'monitoring',
+                itemFieldNames: ['monitoring', 'fulfillment'],
+                itemFieldTypes: {
+                    monitoring: 'enum',
+                    fulfillment: 'enum',
+                },
+            },
         ];
 
         it.each(expectedContentCollectionFields)('$name has the expected aliases', (expected) => {

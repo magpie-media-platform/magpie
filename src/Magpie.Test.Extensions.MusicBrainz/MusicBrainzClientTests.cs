@@ -1,8 +1,10 @@
 using System;
+using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 
 using Magpie.Extensions.MusicBrainz;
@@ -10,6 +12,7 @@ using Magpie.Extensions.MusicBrainz.QueryEngine;
 using Magpie.Sdk.Http;
 
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Time.Testing;
 
 using Moq;
 
@@ -22,6 +25,25 @@ namespace Magpie.Test.Extensions.MusicBrainz;
 [TestFixture]
 public class MusicBrainzClientTests
 {
+    private TaskCompletionSource _reading = null!;
+    private Mock<Stream> _body = null!;
+
+    [SetUp]
+    public void SetUp()
+    {
+        _reading = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _body = new Mock<Stream> { CallBase = true };
+        _body.SetupGet(stream => stream.CanRead).Returns(true);
+        _body
+            .Setup(stream => stream.ReadAsync(It.IsAny<Memory<byte>>(), It.IsAny<CancellationToken>()))
+            .Returns(async ValueTask<int> (Memory<byte> _, CancellationToken cancellationToken) =>
+            {
+                _reading.TrySetResult();
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken).ConfigureAwait(false);
+                return 0;
+            });
+    }
+
     [Test]
     public async Task SearchAsync_Page_WhenRequestHasBoundsAndServerReturnsJson()
     {
@@ -529,5 +551,79 @@ public class MusicBrainzClientTests
         }
 
         http.VerifyNoOutstandingExpectation();
+    }
+
+    [Test]
+    public async Task SearchAsync_ReturnsTimeout_WhenTheBodyStallsForTheClientTimeout()
+    {
+        // Arrange
+        using var http = new MockHttpMessageHandler();
+        http.Expect(HttpMethod.Get, "https://musicbrainz.org/ws/2/artist?fmt=json&query=Queen")
+            .Respond(_ => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StreamContent(_body.Object) });
+        var factory = new Mock<IHttpClientFactory>();
+        factory.Setup(value => value.CreateClient(MusicBrainzClient.HttpClientName)).Returns(() =>
+        {
+            var httpClient = http.ToHttpClient();
+            httpClient.BaseAddress = new Uri(MusicBrainzClient.DefaultBaseUrl);
+            httpClient.Timeout = TimeSpan.FromSeconds(20);
+            return httpClient;
+        });
+        var timeProvider = new FakeTimeProvider();
+        var client = new MusicBrainzClient(
+            factory.Object,
+            timeProvider,
+            NullLogger<MusicBrainzClient>.Instance,
+            Mock.Of<IUpstreamCooldown>());
+        var pending = client.SearchAsync(
+            new Request
+            {
+                RelativeTarget = "artist?fmt=json&query=Queen",
+                Target = QueryTarget.Artist,
+                Fingerprint = "stalled-body",
+                Limit = 25,
+                Offset = 0
+            },
+            new Settings(),
+            CancellationToken.None);
+        await _reading.Task.ConfigureAwait(false);
+
+        // Act
+        timeProvider.Advance(TimeSpan.FromSeconds(20));
+        var result = await pending.WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(result.Outcome, Is.EqualTo(FetchOutcome.Timeout));
+    }
+
+    [Test]
+    public async Task GetIsrcAsync_ReturnsTimeout_WhenTheBodyStallsForTheClientTimeout()
+    {
+        // Arrange
+        using var http = new MockHttpMessageHandler();
+        http.Expect(HttpMethod.Get, "https://musicbrainz.org/ws/2/isrc/GBUM71029604?fmt=json&inc=artist-credits")
+            .Respond(_ => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StreamContent(_body.Object) });
+        var factory = new Mock<IHttpClientFactory>();
+        factory.Setup(value => value.CreateClient(MusicBrainzClient.HttpClientName)).Returns(() =>
+        {
+            var httpClient = http.ToHttpClient();
+            httpClient.BaseAddress = new Uri(MusicBrainzClient.DefaultBaseUrl);
+            httpClient.Timeout = TimeSpan.FromSeconds(20);
+            return httpClient;
+        });
+        var timeProvider = new FakeTimeProvider();
+        var client = new MusicBrainzClient(
+            factory.Object,
+            timeProvider,
+            NullLogger<MusicBrainzClient>.Instance,
+            Mock.Of<IUpstreamCooldown>());
+        var pending = client.GetIsrcAsync("GBUM71029604", new Settings(), CancellationToken.None);
+        await _reading.Task.ConfigureAwait(false);
+
+        // Act
+        timeProvider.Advance(TimeSpan.FromSeconds(20));
+        var result = await pending.WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(result.Outcome, Is.EqualTo(FetchOutcome.Timeout));
     }
 }

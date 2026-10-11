@@ -28,10 +28,8 @@ interface DiskSpace {
         totalBytes: number;
         freeBytes: number;
         usedBytes: number;
+        contentBytes: number;
     }>;
-    totalBytes: number;
-    freeBytes: number;
-    usedBytes: number;
 }
 
 interface ContentType {
@@ -107,7 +105,7 @@ test.describe.serial('Journey 4: make it ours', () => {
             await page.getByLabel('Instance Name').fill('Journey Tune');
             await page.getByLabel('Base URL').fill('https://tune.magpie.invalid');
             await page.locator('[data-action="save-settings"]').click();
-            await expect(page.getByText('Magpie updated the general settings.', { exact: true })).toBeVisible();
+            await expect(page.getByText(/ updated the general settings\.$/)).toBeVisible();
 
             expect(
                 Object.fromEntries(
@@ -181,6 +179,8 @@ test.describe.serial('Journey 4: make it ours', () => {
                 },
             });
             await page.goto('/');
+            await expect(page.getByRole('banner')).toContainText('Make It Ours');
+            await expect(page).toHaveTitle(/Make It Ours/);
         });
 
         await test.step("the extension's settings group survives a host restart", async () => {
@@ -253,11 +253,13 @@ test.describe.serial('Journey 4: make it ours', () => {
                 expect(folder!.name).toBe(root.name);
                 expect(folder!.path).toBe(root.path);
                 expect(folder!.freeBytes + folder!.usedBytes).toBe(folder!.totalBytes);
+                expect(folder!.contentBytes).toBeGreaterThanOrEqual(0);
 
                 const row = page.locator(`[data-component="disk-space-widget"] [data-folder-id="${root.id}"]`);
                 await expect(row, `disk-space row for ${root.name}`).toBeVisible();
                 await expect(row).toContainText(root.name);
                 await expect(row).toContainText(root.path);
+                await expect(row).toContainText(/\d+(?:\.\d+)? (?:B|KB|MB|GB|TB|PB) content/);
                 await expect(row).toContainText(/\d+(?:\.\d+)? (?:B|KB|MB|GB|TB|PB) free/);
             }
         });

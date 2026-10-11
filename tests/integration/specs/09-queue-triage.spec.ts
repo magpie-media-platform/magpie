@@ -695,7 +695,7 @@ test.describe.serial('Journey 9: the night the downloads went wrong', () => {
                         batch.map(async (fixture) => {
                             const candidate = byExternalId.get(fixture.releaseExternalId);
                             expect(candidate).toBeDefined();
-                            await api.post(`/api/interactive-search/${movieId}/grab`, candidate!.release);
+                            await api.post(`/api/interactive-search/${movieId}/grab/${candidate!.release.id}`);
                         }),
                     );
                 }
@@ -933,7 +933,7 @@ async function grab(
         throw new Error(`Release ${fixture.releaseExternalId} was not returned for ${fixture.releaseTitle}.`);
     }
 
-    await api.post(`/api/interactive-search/${contentId}/grab`, candidate.release);
+    await api.post(`/api/interactive-search/${contentId}/grab/${candidate.release.id}`);
     return until(
         `${fixture.downloadExternalId} download row`,
         async () => {

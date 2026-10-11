@@ -4,7 +4,6 @@ using System.Threading;
 using System.Threading.Tasks;
 
 using Magpie.Models.Api;
-using Magpie.Models.Data;
 using Magpie.Sdk.Jobs;
 using Magpie.Sdk.Releases;
 
@@ -16,21 +15,21 @@ namespace Magpie.Sdk.Services;
 public interface IReleaseSearchService
 {
     /// <summary>
-    /// Grabs a release that a user chose for a content hierarchy item.
+    /// Grabs a stored release that a user chose for a content hierarchy item.
     /// </summary>
     /// <param name="contentHierarchyItemId">The id of the content hierarchy item the release fulfils</param>
-    /// <param name="release">The release to grab</param>
+    /// <param name="releaseId">The id of the stored release to grab</param>
     /// <param name="actingUserId">The user to record as the actor, or <see langword="null"/> for the system</param>
     /// <param name="cancellationToken">The token that cancels the operation</param>
     /// <returns>The grab outcome status, the queued acquisition execution id, and a problem detail</returns>
     Task<InteractiveReleaseGrabOutcome> GrabInteractiveAsync(
         Guid contentHierarchyItemId,
-        Release release,
+        Guid releaseId,
         Guid? actingUserId,
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Runs an interactive indexer search for a content hierarchy item.
+    /// Runs an interactive indexer search for a content hierarchy item and stores the candidate releases.
     /// </summary>
     /// <param name="contentHierarchyItemId">The id of the content hierarchy item to search for</param>
     /// <param name="cancellationToken">The token that cancels the operation</param>
@@ -40,7 +39,7 @@ public interface IReleaseSearchService
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Runs an interactive search and reports incomplete provider branches.
+    /// Runs an interactive search, stores the candidate releases and reports incomplete provider branches.
     /// </summary>
     /// <param name="contentHierarchyItemId">The id of the content hierarchy item to search for</param>
     /// <param name="cancellationToken">The token that cancels the operation</param>

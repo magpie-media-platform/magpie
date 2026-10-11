@@ -79,26 +79,6 @@
         border-top: 1px solid var(--border-default);
     }
 
-    .library-landing__view-all {
-        display: inline-block;
-        margin-top: var(--space-md);
-        color: var(--accent-primary);
-        text-decoration: none;
-        font-size: var(--text-sm);
-        font-weight: var(--weight-medium);
-        transition: color var(--duration-fast) var(--easing-default);
-
-        &:hover {
-            color: var(--accent-secondary);
-            text-decoration: underline;
-        }
-
-        &:focus-visible {
-            outline: var(--focus-ring-width) solid var(--focus-ring-color);
-            outline-offset: var(--focus-ring-offset);
-        }
-    }
-
     .library-landing__empty {
         color: var(--text-muted);
         font-size: var(--text-sm);

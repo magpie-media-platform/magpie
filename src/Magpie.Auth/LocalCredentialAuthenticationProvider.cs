@@ -140,12 +140,12 @@ internal sealed class LocalCredentialAuthenticationProvider(
             return;
         }
 
-        var lockedUntil = user.FailedLoginAttempts + 1 >= lockoutOptions.MaxFailedAttempts
-            ? timeProvider.GetUtcNow().UtcDateTime + lockoutOptions.LockoutDuration
-            : (DateTime?)null;
-
         var result = await userRepository
-            .RecordFailedLoginAsync(user.Id, lockedUntil, cancellationToken)
+            .RecordFailedLoginAsync(
+                user.Id,
+                lockoutOptions.MaxFailedAttempts,
+                timeProvider.GetUtcNow().UtcDateTime + lockoutOptions.LockoutDuration,
+                cancellationToken)
             .ConfigureAwait(false);
 
         if (result.LockedUntil is not null)

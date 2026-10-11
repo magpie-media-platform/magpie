@@ -8,6 +8,7 @@ import { countConfiguredIndexerInstances, indexerQueryKeys, type ApiIndexer } fr
 import { downloadClientQueryKeys } from './useDownloadClients';
 import { rootFolderQueryKeys } from './useRootFolders';
 import { useInvalidateQueriesOnEvents } from './useInvalidateQueriesOnEvents';
+import { useInstanceName } from './useInstanceName';
 
 export interface OnboardingStatus {
     hasIndexer: boolean;
@@ -28,12 +29,12 @@ export interface OnboardingStep {
     failed: boolean;
 }
 
-export function deriveOnboardingSteps(status: OnboardingStatus | undefined): OnboardingStep[] {
+export function deriveOnboardingSteps(status: OnboardingStatus | undefined, instanceName: string): OnboardingStep[] {
     return [
         {
             key: 'indexer',
             title: 'Add an indexer',
-            reason: 'Indexers are the sources Magpie searches for releases.',
+            reason: `Indexers are the sources ${instanceName} searches for releases.`,
             to: '/admin/indexers',
             done: status?.hasIndexer ?? false,
             failed: false,
@@ -57,7 +58,7 @@ export function deriveOnboardingSteps(status: OnboardingStatus | undefined): Onb
         {
             key: 'monitoredContent',
             title: 'Add content to monitor',
-            reason: 'Monitored content is what Magpie keeps searching and grabbing for.',
+            reason: `Monitored content is what ${instanceName} keeps searching and grabbing for.`,
             to: '/library/add',
             done: status?.hasMonitoredContent ?? false,
             failed: false,
@@ -79,6 +80,7 @@ const anyConfiguredIndexer = (indexers: ApiIndexer[]) => countConfiguredIndexerI
 const presenceStaleTime = POLLING_INTERVALS.normal / 2;
 
 export function useOnboardingStatus() {
+    const instanceName = useInstanceName();
     const invalidationOptions = { debounceMs: 300, exact: true, maxWaitMs: 1200 };
     useInvalidateQueriesOnEvents(
         ['indexer.created', 'indexer.updated', 'indexer.deleted'],
@@ -144,7 +146,7 @@ export function useOnboardingStatus() {
 
     return {
         status,
-        steps: deriveOnboardingSteps(status).map((step) => ({ ...step, failed: failedSteps[step.key] })),
+        steps: deriveOnboardingSteps(status, instanceName).map((step) => ({ ...step, failed: failedSteps[step.key] })),
         isComplete: isOnboardingComplete(status),
         isLoading: queries.some((query) => query.isLoading),
         error: queries.every((query) => query.isError) ? queryErrorOrNull(indexerQuery) : null,

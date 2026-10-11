@@ -1651,6 +1651,74 @@ public sealed class ReleaseSearchQueryExecutorTests
     }
 
     [Test]
+    public async Task ExecutePlanAsync_KeepsASourcePerConnection_WhenConnectionsReturnTheSameRelease()
+    {
+        // Arrange
+        _indexerConnections
+            .Setup(repository => repository.ListAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(
+            [
+                new IndexerConnection
+                {
+                    Id = Guid.Parse("0e0d6a41-5e44-4f5f-9a51-7a2f6b0c0001"),
+                    IndexerId = _indexerId,
+                    Name = "A Connection",
+                    Enabled = true,
+                    CreatedAt = new DateTime(2026, 1, 1),
+                },
+                new IndexerConnection
+                {
+                    Id = Guid.Parse("0e0d6a41-5e44-4f5f-9a51-7a2f6b0c0002"),
+                    IndexerId = _indexerId,
+                    Name = "B Connection",
+                    Enabled = true,
+                    CreatedAt = new DateTime(2026, 1, 1),
+                },
+            ]);
+        _indexerIntegration
+            .Setup(integration => integration.SearchAsync(
+                It.IsAny<ReleaseSearchRequest>(),
+                It.IsAny<IReadOnlyDictionary<string, string>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() =>
+            [
+                new Release
+                {
+                    Protocol = "torrent",
+                    Title = "Same",
+                    ExternalId = "same",
+                    InfoUrl = new Uri("https://tracker.test/download/same.torrent"),
+                },
+            ]);
+        var routes = new[]
+        {
+            new ReleaseSearchPhase
+            {
+                Request = new ReleaseSearchRequest { Title = "same" },
+                ReleaseFacts = [new ContentFact { Value = "same" }],
+            },
+        };
+
+        // Act
+        var result = await _subject.ExecutePlanAsync(
+            routes,
+            [],
+            new HashSet<Guid> { _indexerId },
+            new ReleaseEvaluationContext { ContentHierarchyItemId = Guid.NewGuid() },
+            automatic: false,
+            maximumResults: 20).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(
+            result.Results.Single().Release.Sources.Select(source => source.IndexerConnectionId),
+            Is.EquivalentTo(new Guid?[]
+            {
+                Guid.Parse("0e0d6a41-5e44-4f5f-9a51-7a2f6b0c0001"),
+                Guid.Parse("0e0d6a41-5e44-4f5f-9a51-7a2f6b0c0002"),
+            }));
+    }
+
+    [Test]
     public async Task ExecutePlanAsync_DoesNotMutateCachedConnectionResult_WhenUnionOrCallerMutatesRelease()
     {
         // Arrange

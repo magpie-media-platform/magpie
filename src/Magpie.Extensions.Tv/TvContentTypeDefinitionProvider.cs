@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using System.Text.RegularExpressions;
 
 using Magpie.Extensions.Tv.Parsing;
 using Magpie.Models;
@@ -152,12 +153,14 @@ internal sealed class TvContentTypeDefinitionProvider(ILogger<TvContentTypeDefin
         var resolved = new List<Guid>();
         foreach (var value in values)
         {
-            if (!int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var ordinal))
+            if (!int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var sequenceNumber))
             {
                 return [];
             }
 
-            var matches = children.Where(child => child.Level == childLevel && child.Ordinal == ordinal).ToArray();
+            var matches = children
+                .Where(child => child.Level == childLevel && SequenceNumberOf(child) == sequenceNumber)
+                .ToArray();
             if (matches.Length != 1)
             {
                 return [];
@@ -197,7 +200,11 @@ internal sealed class TvContentTypeDefinitionProvider(ILogger<TvContentTypeDefin
                 .Prepend(metadata?.Title)
             where !string.IsNullOrWhiteSpace(title)
             select title.Trim()).ToArray();
-        var anchorLength = -1;
+        var releaseMatchesShow = release.Scope.Any(scope =>
+            scope.Status == ReleaseScopeStatus.Matched &&
+            target.Lineage.Any(item => item.Id == scope.ContentHierarchyItemId));
+        var anchorLength = parsed.TitleTokens.Count == 0 && releaseMatchesShow ? 0 : -1;
+        var anchorTitle = string.Empty;
         foreach (var title in showTitles)
         {
             var titleTokens = title.TokeniseName();
@@ -222,6 +229,7 @@ internal sealed class TvContentTypeDefinitionProvider(ILogger<TvContentTypeDefin
             if (matches && titleTokens.Count > anchorLength)
             {
                 anchorLength = titleTokens.Count;
+                anchorTitle = title;
             }
         }
 
@@ -266,10 +274,16 @@ internal sealed class TvContentTypeDefinitionProvider(ILogger<TvContentTypeDefin
                 ? release.Title[..markerStart]
                 : release.Title;
             var releaseYears = TvParsingPatterns.Year
-                .Matches(releaseTitlePrefix);
+                .Matches(releaseTitlePrefix)
+                .Select(static match => match.Value)
+                .ToList();
+            foreach (Match titleYear in TvParsingPatterns.Year.Matches(anchorTitle))
+            {
+                releaseYears.Remove(titleYear.Value);
+            }
+
             var targetYearText = targetYear.ToString(CultureInfo.InvariantCulture);
-            if (releaseYears.Count > 0 &&
-                !releaseYears.Any(match => string.Equals(match.Value, targetYearText, StringComparison.Ordinal)))
+            if (releaseYears.Count > 0 && !releaseYears.Contains(targetYearText))
             {
                 return ReleaseMatchResult.NoMatch;
             }
@@ -283,7 +297,7 @@ internal sealed class TvContentTypeDefinitionProvider(ILogger<TvContentTypeDefin
         }
 
         var season = target.Lineage.FirstOrDefault(static item => item.Level == Constants.SeasonLevelSlug);
-        if (season?.Ordinal is not { } seasonOrdinal)
+        if (SequenceNumberOf(season) is not { } seasonNumber)
         {
             return ReleaseMatchResult.Indeterminate;
         }
@@ -356,7 +370,7 @@ internal sealed class TvContentTypeDefinitionProvider(ILogger<TvContentTypeDefin
             return ReleaseMatchResult.Indeterminate;
         }
 
-        if (!parsed.Seasons.Contains(seasonOrdinal))
+        if (!parsed.Seasons.Contains(seasonNumber))
         {
             return ReleaseMatchResult.NoMatch;
         }
@@ -368,13 +382,14 @@ internal sealed class TvContentTypeDefinitionProvider(ILogger<TvContentTypeDefin
                 : ReleaseMatchResult.Confident;
         }
 
-        if (target.Item.Level != Constants.EpisodeLevelSlug || target.Item.Ordinal is not { } episodeOrdinal)
+        if (target.Item.Level != Constants.EpisodeLevelSlug ||
+            SequenceNumberOf(target.Item) is not { } episodeNumber)
         {
             return ReleaseMatchResult.Indeterminate;
         }
 
         var included = parsed.Episodes.Count > 0
-            ? parsed.Episodes.Contains(episodeOrdinal)
+            ? parsed.Episodes.Contains(episodeNumber)
             : IsPublishedBy(target, release);
         return included switch
         {
@@ -476,9 +491,9 @@ internal sealed class TvContentTypeDefinitionProvider(ILogger<TvContentTypeDefin
             : showTitle;
         var fileName = originalFileName;
 
-        if (season?.Ordinal is { } seasonNumber)
+        if (SequenceNumberOf(season) is { } seasonNumber)
         {
-            if (episode?.Ordinal is { } episodeNumber)
+            if (episode is not null && SequenceNumberOf(episode) is { } episodeNumber)
             {
                 fileName = $"{showTitle} - " +
                     $"S{seasonNumber.ToString("D2", CultureInfo.InvariantCulture)}" +
@@ -499,4 +514,8 @@ internal sealed class TvContentTypeDefinitionProvider(ILogger<TvContentTypeDefin
 
     private static string WithExtension(string name, string extension) =>
         string.IsNullOrEmpty(extension) ? name : name + "." + extension;
+
+    private static int? SequenceNumberOf(ContentHierarchyItem? item) =>
+        item?.MetadataContainer?.Contributions.OrderBy(contribution => contribution.Ordinal)
+            .Select(contribution => contribution.SequenceNumber).FirstOrDefault(number => number is not null);
 }

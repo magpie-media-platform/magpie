@@ -105,6 +105,39 @@ describe('BulkActionsToolbar', () => {
         expect(screen.queryByRole('button', { name: 'Delete' })).not.toBeInTheDocument();
     });
 
+    it('BulkActionsToolbar_SelectsThePageFromSelectAll_WhenVisibleWithNothingSelected', async () => {
+        // Arrange
+        const toggleHeader = vi.fn();
+        const user = userEvent.setup();
+        render(
+            <BulkActionsToolbar
+                selection={{
+                    ...pageSelected,
+                    hasSelection: false,
+                    headerChecked: false,
+                    selectedCount: 0,
+                    showAcrossPagesPrompt: false,
+                    toggleHeader,
+                }}
+                label="File selection actions"
+                itemNounPlural="files"
+                visible
+                selectAll
+            >
+                <button type="button">Unlink</button>
+            </BulkActionsToolbar>,
+        );
+
+        // Act
+        await user.click(screen.getByRole('button', { name: 'Select all', pressed: false }));
+
+        // Assert
+        expect(toggleHeader).toHaveBeenCalledWith(true);
+        expect(screen.getByText('0 selected')).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Clear selection' })).toBeDisabled();
+        expect(screen.getByRole('button', { name: 'Unlink' })).toBeInTheDocument();
+    });
+
     it('clears the selection from the toolbar', async () => {
         const clear = vi.fn();
         const user = userEvent.setup();

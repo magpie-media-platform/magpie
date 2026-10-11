@@ -996,3 +996,59 @@ describe('ExtensionsPage tie-break mirrors the startup gate', () => {
         expect(renderedIds).toEqual(['ext-c', 'ext-b', 'ext-a']);
     });
 });
+
+describe('ExtensionsPage install from search', () => {
+    beforeEach(() => {
+        vi.clearAllMocks();
+        vi.mocked(apiPost).mockResolvedValue({
+            extension: { ...mockApiExtensions[0], name: 'TMDB', version: '1.2.0' },
+            restartRequired: true,
+        });
+        vi.mocked(apiGet).mockImplementation((url: string) => {
+            if (url === '/extensions') {
+                return Promise.resolve(listedExtensionItems);
+            }
+            if (url === '/extensions/search?q=') {
+                return Promise.resolve([
+                    { id: 'Magpie.Extensions.Tmdb', version: '1.2.0', title: 'TMDB', description: 'Movie metadata' },
+                ]);
+            }
+            return Promise.resolve([]);
+        });
+    });
+
+    it('install_InstallsTheFoundExtension_WhenInstallIsClickedInTheAddDialog', async () => {
+        // Arrange
+        const user = userEvent.setup();
+        render(<ExtensionsPage />, { wrapper: createWrapper() });
+        await screen.findByRole('list', { name: 'Installed extensions' });
+
+        // Act
+        await user.click(document.querySelector('[data-action="add-extension"]') as HTMLElement);
+        await user.click(await screen.findByRole('button', { name: 'Install TMDB' }));
+
+        // Assert
+        expect(vi.mocked(apiPost)).toHaveBeenCalledWith('/extensions', {
+            packageId: 'Magpie.Extensions.Tmdb',
+            version: '1.2.0',
+        });
+        expect(await screen.findByText('Extension Installed')).toBeInTheDocument();
+    });
+
+    it('install_KeepsThePackageButtonIdle_WhenAFoundExtensionIsInstalling', async () => {
+        // Arrange
+        vi.mocked(apiPost).mockReturnValue(new Promise(() => {}));
+        const user = userEvent.setup();
+        render(<ExtensionsPage />, { wrapper: createWrapper() });
+        await screen.findByRole('list', { name: 'Installed extensions' });
+        await user.click(document.querySelector('[data-action="add-extension"]') as HTMLElement);
+
+        // Act
+        await user.click(await screen.findByRole('button', { name: 'Install TMDB' }));
+
+        // Assert
+        expect(await screen.findByRole('button', { name: 'Install TMDB' })).toHaveAttribute('aria-busy', 'true');
+        expect(screen.getByRole('button', { name: 'Install Package' })).toBeInTheDocument();
+        expect(screen.queryByText('Installing...')).not.toBeInTheDocument();
+    });
+});

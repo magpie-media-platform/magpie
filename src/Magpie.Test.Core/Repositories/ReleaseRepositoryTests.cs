@@ -30,6 +30,12 @@ namespace Magpie.Test.Core.Repositories;
 [TestFixture]
 public sealed class ReleaseRepositoryTests
 {
+    private static readonly Guid?[] FirstObservationConnectionIds =
+    [
+        Guid.Parse("0e0d6a41-5e44-4f5f-9a51-7a2f6b0c0001"),
+        null,
+    ];
+
     private MagpieDbContext _context = null!;
     private SqliteConnection _template = null!;
     private IReleaseRepository _subject = null!;
@@ -1428,6 +1434,74 @@ public sealed class ReleaseRepositoryTests
             Assert.That(updated, Has.Property(nameof(updated.ModifiedByUserId)).EqualTo(_userId));
             Assert.That(updated, Has.Property(nameof(updated.ModifiedAt)).Not.Null);
         }
+    }
+
+    [TestCaseSource(nameof(FirstObservationConnectionIds))]
+    public async Task UpdateAsync_AddsASourceAndKeepsTheFirstProvenance_WhenAnotherConnectionObservesTheRelease(
+        Guid? firstConnectionId)
+    {
+        // Arrange
+        _context.IndexerConnections.AddRange(
+            new IndexerConnection
+            {
+                Id = Guid.Parse("0e0d6a41-5e44-4f5f-9a51-7a2f6b0c0001"),
+                IndexerId = _indexerId,
+                Name = "A",
+            },
+            new IndexerConnection
+            {
+                Id = Guid.Parse("0e0d6a41-5e44-4f5f-9a51-7a2f6b0c0002"),
+                IndexerId = _indexerId,
+                Name = "B",
+            });
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        var first = new Release
+        {
+            IndexerId = _indexerId,
+            Protocol = "torrent",
+            ExternalId = "same",
+            Title = "Same",
+            PublishDate = new DateTime(2026, 9, 1, 0, 0, 0, DateTimeKind.Utc),
+        };
+        first.Sources.Add(new ReleaseSource
+        {
+            Key = string.Empty,
+            IndexerId = _indexerId,
+            IndexerConnectionId = firstConnectionId,
+            Protocol = "torrent",
+            ExternalId = "same",
+            Title = "Same",
+            InfoUrl = new Uri("https://tracker.test/download/same.torrent"),
+        });
+        await _subject.CreateAsync(first, _userId).ConfigureAwait(false);
+        _context.ChangeTracker.Clear();
+        var second = new Release
+        {
+            IndexerId = _indexerId,
+            Protocol = "torrent",
+            ExternalId = "same",
+            Title = "Same",
+            PublishDate = new DateTime(2026, 9, 1, 0, 0, 0, DateTimeKind.Utc),
+        };
+        second.Sources.Add(new ReleaseSource
+        {
+            Key = string.Empty,
+            IndexerId = _indexerId,
+            IndexerConnectionId = Guid.Parse("0e0d6a41-5e44-4f5f-9a51-7a2f6b0c0002"),
+            Protocol = "torrent",
+            ExternalId = "same",
+            Title = "Same",
+            InfoUrl = new Uri("https://tracker.test/download/same.torrent"),
+        });
+
+        // Act
+        await _subject.UpdateAsync(second, _userId).ConfigureAwait(false);
+
+        // Assert
+        var stored = await _subject.GetByIdAsync(first.Id).ConfigureAwait(false);
+        Assert.That(
+            stored!.Sources.Select(source => source.IndexerConnectionId),
+            Is.EquivalentTo([firstConnectionId, Guid.Parse("0e0d6a41-5e44-4f5f-9a51-7a2f6b0c0002")]));
     }
 
     [Test]

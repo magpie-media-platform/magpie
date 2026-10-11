@@ -46,6 +46,7 @@ import { useToggle } from '@/hooks/useToggle';
 import { useUrlFilterState } from '@/hooks/useUrlFilterState';
 import { useUserMap } from '@/hooks/useUserMap';
 import { useWishlists } from '@/hooks/useWishlists';
+import { useInstanceName } from '@/hooks/useInstanceName';
 import { useAuth, Role } from '@/auth';
 import { getErrorMessage } from '@/lib/errors';
 import { formatRelativeTime } from '@/lib/formatTime';
@@ -70,6 +71,7 @@ interface EnrichedFilterItem extends ContentFilterItem {
 const EDIT_PARAM = 'edit';
 
 export function FiltersPage() {
+    const instanceName = useInstanceName();
     useDocumentTitle('Filters');
     const [searchParams, setSearchParams] = useSearchParams();
     const location = useLocation();
@@ -209,11 +211,16 @@ export function FiltersPage() {
                     ...filter,
                     id: '',
                     name: `${filter.name} (Copy)`,
+                    ownerId: user?.id ?? null,
+                    ownerName: user?.username ?? null,
+                    ownerLock: false,
+                    wishlistId: null,
+                    wishlistName: null,
                 });
                 openForm();
             }
         },
-        [enrichedFilters, openForm],
+        [enrichedFilters, openForm, user?.id, user?.username],
     );
 
     const handleDeleteFilter = useCallback(
@@ -238,7 +245,7 @@ export function FiltersPage() {
             await deleteMutation.mutateAsync({ id: deletingFilter.id });
             toast({
                 title: 'Filter Deleted',
-                description: `Magpie deleted "${deletingFilter.name}".`,
+                description: `${instanceName} deleted "${deletingFilter.name}".`,
                 variant: 'success',
             });
         } catch {
@@ -251,7 +258,7 @@ export function FiltersPage() {
             setIsDeleting(false);
             setDeletingFilter(null);
         }
-    }, [deletingFilter, deleteMutation, toast]);
+    }, [deletingFilter, deleteMutation, toast, instanceName]);
 
     const handleCancelDelete = useCallback(() => {
         setDeletingFilter(null);
@@ -380,7 +387,7 @@ export function FiltersPage() {
 
                 toast({
                     title: isNew ? 'Filter Created' : 'Filter Updated',
-                    description: `Magpie ${isNew ? 'created' : 'updated'} "${values.name}".`,
+                    description: `${instanceName} ${isNew ? 'created' : 'updated'} "${values.name}".`,
                     variant: 'success',
                 });
             } catch (error) {
@@ -392,7 +399,7 @@ export function FiltersPage() {
                 throw error;
             }
         },
-        [currentEditingFilter, enrichedFilters, createMutation, updateMutation, closeForm, toast],
+        [currentEditingFilter, enrichedFilters, createMutation, updateMutation, closeForm, toast, instanceName],
     );
 
     const isEditingOwner = currentEditingFilter ? currentEditingFilter.ownerId === user?.id : true;
@@ -425,7 +432,7 @@ export function FiltersPage() {
                 <PageHeader
                     className="filters-page__header"
                     title="Filters"
-                    description="Reusable filters for the library and wishlists."
+                    description="Create and manage saved filters."
                     icon={<FunnelIcon weight="duotone" aria-hidden="true" data-testid="filters-page__icon" />}
                     actions={
                         hasRole(Role.Requester) && (
@@ -446,11 +453,7 @@ export function FiltersPage() {
                         icon={<WarningCircleIcon weight="duotone" />}
                         title="Failed to load filters"
                         description={getErrorMessage(error)}
-                        action={
-                            <Button variant="secondary" size="sm" onClick={() => refetch()}>
-                                Retry
-                            </Button>
-                        }
+                        onRetry={refetch}
                     />
                 )}
                 <div
@@ -641,17 +644,19 @@ function FilterRow({
                     )}
                 </div>
                 <div className="filters-page__item-actions card-actions">
-                    <button
-                        type="button"
-                        className="filters-page__apply-btn"
-                        onClick={() => onViewInLibrary(filter.id)}
-                        aria-label={`View ${filter.name} in Library`}
-                        data-action="view-in-library"
-                        data-target={filter.id}
-                    >
-                        <MagnifyingGlassIcon weight="bold" aria-hidden="true" />
-                        <span>View</span>
-                    </button>
+                    <Tooltip content="Apply to Library" side="top">
+                        <button
+                            type="button"
+                            className="filters-page__apply-btn"
+                            onClick={() => onViewInLibrary(filter.id)}
+                            aria-label={`Apply ${filter.name} to Library`}
+                            data-action="view-in-library"
+                            data-target={filter.id}
+                        >
+                            <MagnifyingGlassIcon weight="bold" aria-hidden="true" />
+                            <span>Apply</span>
+                        </button>
+                    </Tooltip>
 
                     {canEdit && (
                         <Tooltip content="Edit" side="top">
@@ -705,7 +710,7 @@ function FilterRow({
                                     data-target={filter.id}
                                 >
                                     <CopyIcon weight="bold" aria-hidden="true" />
-                                    Duplicate
+                                    Clone
                                 </DropdownMenuItem>
                             )}
                             {filter.query && canSearchProviders && (
@@ -715,7 +720,7 @@ function FilterRow({
                                     data-target={filter.id}
                                 >
                                     <MagnifyingGlassPlusIcon weight="bold" aria-hidden="true" />
-                                    Search providers
+                                    Search for new content
                                 </DropdownMenuItem>
                             )}
                             {canCreateWishlist && filter.criteriaCount > 0 && !filter.wishlistName && (

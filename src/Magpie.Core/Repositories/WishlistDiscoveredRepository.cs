@@ -9,6 +9,7 @@ using Magpie.Data;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
+using Magpie.Models.Filtering;
 using Magpie.Models.Paging;
 
 using Microsoft.EntityFrameworkCore;
@@ -121,6 +122,7 @@ internal sealed class WishlistDiscoveredRepository(
                     ? url
                     : null,
             PublishDate = p.LinkId is null ? null : p.PublishDate,
+            PublishDatePrecision = p.LinkId is null ? null : p.PublishDatePrecision,
             AddedAt = p.AddedAt,
             Status = p.LinkId is null
                 ? default
@@ -214,7 +216,8 @@ internal sealed class WishlistDiscoveredRepository(
     {
         try
         {
-            var projected = BuildEnrichedQuery(wishlistId, query.TitleSearch);
+            var projected = await BuildEnrichedQueryAsync(wishlistId, query.TitleSearch, cancellationToken)
+                .ConfigureAwait(false);
 
             projected = ApplyInLibraryFilter(projected, query.InLibrary);
             projected = ApplyStatusFilter(projected, query.Status);
@@ -256,7 +259,8 @@ internal sealed class WishlistDiscoveredRepository(
     {
         try
         {
-            var projected = BuildEnrichedQuery(wishlistId, titleSearch);
+            var projected = await BuildEnrichedQueryAsync(wishlistId, titleSearch, cancellationToken)
+                .ConfigureAwait(false);
 
             var total = await projected.CountAsync(cancellationToken).ConfigureAwait(false);
             var inLibrary = await projected
@@ -284,7 +288,10 @@ internal sealed class WishlistDiscoveredRepository(
         }
     }
 
-    private IQueryable<EnrichedProjection> BuildEnrichedQuery(Guid wishlistId, string? titleSearch)
+    private async Task<IQueryable<EnrichedProjection>> BuildEnrichedQueryAsync(
+        Guid wishlistId,
+        string? titleSearch,
+        CancellationToken cancellationToken)
     {
         var discovered = context.WishlistDiscovered
             .AsNoTracking()
@@ -306,11 +313,37 @@ internal sealed class WishlistDiscoveredRepository(
             group hi.Id by new { eid.Source, eid.Value } into g
             select new { g.Key.Source, g.Key.Value, HierarchyItemId = (Guid?)g.Min() };
 
+        var linked = await (
+            from s in discovered
+            join res in resolutions
+                on new { Source = (string?)s.ExternalIdSource, Value = s.ExternalId }
+                equals new { res.Source, res.Value }
+            select new { s.Id, s.DiscoveredAt, res.HierarchyItemId })
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        var hidden = (
+            from row in linked
+            group row by row.HierarchyItemId into item
+            from duplicate in item.OrderBy(row => row.DiscoveredAt).ThenBy(row => row.Id).Skip(1)
+            select duplicate.Id).ToList();
+        discovered = discovered.Where(s => !hidden.Contains(s.Id));
+
         var publishByContainer =
             from mc in context.MetadataContributions.AsNoTracking()
             where mc.PublishDate != null
-            group mc.PublishDate by mc.MetadataContainerId into g
-            select new { ContainerId = g.Key, PublishDate = g.Min() };
+            group mc by mc.MetadataContainerId into g
+            select new
+            {
+                ContainerId = g.Key,
+                PublishDate = g.Min(c => c.PublishDate),
+                PublishDatePrecision = g
+                    .OrderBy(c => c.PublishDate)
+                    .ThenBy(c => c.Ordinal)
+                    .ThenBy(c => c.Id)
+                    .Select(c => c.PublishDatePrecision)
+                    .FirstOrDefault(),
+            };
 
         var fulfilledContainers =
             from ci in context.ContentItems.AsNoTracking()
@@ -347,6 +380,7 @@ internal sealed class WishlistDiscoveredRepository(
                 ContainerId = hi == null ? null : hi.MetadataContainerId,
                 AddedAt = hi == null ? null : hi.CreatedAt,
                 PublishDate = hi == null ? null : pub.PublishDate,
+                PublishDatePrecision = hi == null ? null : pub.PublishDatePrecision,
 
                 FulfilledContainerId = ful == null ? null : ful.ContainerId,
             };
@@ -410,6 +444,8 @@ internal sealed class WishlistDiscoveredRepository(
         public Guid? ContainerId { get; init; }
 
         public DateTime? PublishDate { get; init; }
+
+        public TemporalPrecision? PublishDatePrecision { get; init; }
 
         public DateTime? AddedAt { get; init; }
 

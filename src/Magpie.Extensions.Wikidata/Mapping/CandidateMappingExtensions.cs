@@ -92,6 +92,7 @@ internal static class CandidateMappingExtensions
             Title = hit.Label,
             Year = hit.PublishDate?.Value.Year,
             ReleaseDate = PeriodStartDate(hit.PublishDate),
+            ReleaseDatePrecision = hit.PublishDate?.Precision,
             Overview = hit.Description,
             Language = hit.Language,
             ThumbnailUrl = CommonsUri(hit.PosterFilename ?? hit.ImageFilename)
@@ -141,6 +142,9 @@ internal static class CandidateMappingExtensions
             Title = string.IsNullOrWhiteSpace(contribution.Title) ? seed.Title : contribution.Title,
             Year = contribution.PublishDate?.Year ?? seed.Year,
             ReleaseDate = contribution.PublishDate ?? seed.ReleaseDate,
+            ReleaseDatePrecision = contribution.PublishDate is null
+                ? seed.ReleaseDatePrecision
+                : contribution.PublishDatePrecision,
             Overview = string.IsNullOrWhiteSpace(contribution.Overview) ? seed.Overview : contribution.Overview,
             Language = string.IsNullOrWhiteSpace(contribution.Language) ? seed.Language : contribution.Language,
             ThumbnailUrl = thumbnail ?? seed.ThumbnailUrl,

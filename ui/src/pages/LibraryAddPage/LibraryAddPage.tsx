@@ -40,6 +40,7 @@ import { useContentFilters, useCreateContentFilter, type ContentFilterCriteria }
 import { useRootFolders, type ApiRootFolder } from '@/hooks/useRootFolders';
 import { useToggle } from '@/hooks/useToggle';
 import { useCardLayout } from '@/hooks/ui/useCardLayout';
+import { useInstanceName } from '@/hooks/useInstanceName';
 import { setContentFilterSelection } from '@/lib/contentColumnFilters';
 import { candidateSearchErrorMessage, getErrorMessage } from '@/lib/errors';
 import { isAbortError } from '@/lib/api';
@@ -78,6 +79,7 @@ function fromProviderMetadataCandidate(candidate: ProviderMetadataCandidate): Ad
         year: candidate.year != null ? String(candidate.year) : undefined,
         yearValue: candidate.year ?? undefined,
         releaseDate: candidate.releaseDate ?? undefined,
+        releaseDatePrecision: candidate.releaseDatePrecision ?? undefined,
         overview: toPlainTextSummary(candidate.overview) || undefined,
         thumbnailUrl: candidate.thumbnailUrl,
         inLibrary: candidate.inLibrary ?? false,
@@ -98,6 +100,7 @@ function mergeEquivalentCandidates(primary: AddableCandidate, secondary: Addable
     return {
         ...primary,
         releaseDate: primary.releaseDate ?? secondary.releaseDate,
+        releaseDatePrecision: primary.releaseDate ? primary.releaseDatePrecision : secondary.releaseDatePrecision,
         overview: primary.overview || secondary.overview,
         thumbnailUrl: primary.thumbnailUrl || secondary.thumbnailUrl,
         inLibrary: primary.inLibrary || secondary.inLibrary,
@@ -155,6 +158,7 @@ function noResultsDescription(canGoNext: boolean, page: number, hasWarnings: boo
 }
 
 export function LibraryAddPage() {
+    const instanceName = useInstanceName();
     useDocumentTitle('Add content');
     const navigate = useNavigate();
     const openLocalPreview = useOpenLocalContentPreview();
@@ -218,12 +222,17 @@ export function LibraryAddPage() {
             setAddedItemIds((current) => new Map(current).set(candidateKey, contentHierarchyItemId));
             toast({
                 title: 'Added to library',
-                description: `Magpie added "${title}" to the library. Magpie queued a metadata refresh.`,
+                description: `${instanceName} added "${title}" to the library. ${instanceName} queued a metadata refresh.`,
                 variant: 'success',
+                action: {
+                    label: 'View settings',
+                    altText: `View settings for "${title}"`,
+                    to: `/library/${encodeURIComponent(contentHierarchyItemId)}`,
+                },
             });
             setPreviewOpen(false);
         },
-        [toast],
+        [toast, instanceName],
     );
 
     const handleAdd = useCallback(
@@ -421,7 +430,6 @@ export function LibraryAddPage() {
     );
 
     const preload = location.state as LibraryAddPreloadState | null;
-    // Holds the history entry whose preload was applied, so a new preload also applies while this page is open.
     const preloadAppliedRef = useRef<string | null>(null);
     useEffect(() => {
         if (preloadAppliedRef.current === location.key || !preload?.filterQuery) {
@@ -500,14 +508,14 @@ export function LibraryAddPage() {
                 closeSaveFilterDialog();
                 toast({
                     title: 'Filter saved',
-                    description: `Magpie saved "${name}" to filters.`,
+                    description: `${instanceName} saved "${name}" to filters.`,
                     variant: 'success',
                 });
             } catch {
                 setSaveFilterError('Failed to save filter. Please try again.');
             }
         },
-        [closeSaveFilterDialog, createFilterMutation, filterQuery, toast],
+        [closeSaveFilterDialog, createFilterMutation, filterQuery, toast, instanceName],
     );
 
     const activeSearchKind = lastCandidateSearchRef.current?.kind ?? (tab === 'saved' ? 'saved' : 'adhoc');
@@ -572,8 +580,6 @@ export function LibraryAddPage() {
         [addedItemIds, providerCandidateSearch.data, rootLevelKeys],
     );
 
-    const ownedCount = candidates.filter((candidate) => candidate.inLibrary).length;
-
     const warnings = providerCandidateSearch.data?.warnings ?? [];
 
     const hasRunCandidateSearch =
@@ -636,13 +642,12 @@ export function LibraryAddPage() {
     const rowActionContext: RowActionContext = useMemo(
         () => ({
             addingKey,
-            addedKeys,
             foldersLoading: isLoadingFolders,
             foldersForContentType,
             onAdd: handleAdd,
             onPreview: handlePreview,
         }),
-        [addingKey, addedKeys, isLoadingFolders, foldersForContentType, handleAdd, handlePreview],
+        [addingKey, isLoadingFolders, foldersForContentType, handleAdd, handlePreview],
     );
 
     const getRowId = useCallback((candidate: AddableCandidate) => candidate.key, []);
@@ -653,12 +658,33 @@ export function LibraryAddPage() {
 
     const usesCardLayout = useCardLayout();
 
+    const searchActions = (
+        <div className="library-add-page__filter-actions">
+            {providerCandidateSearch.isPending && (
+                <Button variant="secondary" size="sm" onClick={handleCancelCandidateSearch} data-action="cancel-search">
+                    Cancel search
+                </Button>
+            )}
+            <Button
+                variant="primary"
+                size="sm"
+                onClick={tab === 'live' ? handleApplyFilter : handleApplySavedFilter}
+                loading={providerCandidateSearch.isPending}
+                disabled={tab === 'live' ? !hasFilterQuery : !selectedSavedFilterId}
+                data-action={tab === 'live' ? 'apply-filter' : 'apply-saved-filter'}
+            >
+                <SparkleIcon weight="bold" aria-hidden="true" />
+                Search
+            </Button>
+        </div>
+    );
+
     return (
         <div className="library-add-page" data-page="library-add" data-layout={usesCardLayout ? 'card' : 'table'}>
             <PageHeader
                 className="library-add-page__header"
                 title="Add content"
-                description="Search external metadata providers for new content, or use a saved filter."
+                description="Search for new content to add to the library"
                 icon={<BinocularsIcon weight="duotone" aria-hidden="true" data-testid="library-add-page__icon" />}
             />
 
@@ -676,7 +702,7 @@ export function LibraryAddPage() {
             </Tabs>
 
             {tab === 'live' && (
-                <section className="library-add-page__filter" aria-label="Live filter controls">
+                <section aria-label="Live filter controls">
                     <FilterBar
                         value={filterQuery}
                         onChange={handleFilterQueryChange}
@@ -687,82 +713,57 @@ export function LibraryAddPage() {
                         onSave={handleOpenSaveFilter}
                         isSaving={createFilterMutation.isPending}
                         collapsible={false}
-                    />
-                    <div className="library-add-page__filter-actions">
-                        {!hasFilterQuery && (
-                            <p className="library-add-page__filter-hint" data-testid="library-add-page__filter-empty">
-                                Add a filter criterion to search.
-                            </p>
-                        )}
-                        {providerCandidateSearch.isPending && (
-                            <Button
-                                variant="secondary"
-                                size="sm"
-                                onClick={handleCancelCandidateSearch}
-                                data-action="cancel-search"
-                            >
-                                Cancel search
-                            </Button>
-                        )}
-                        <Button
-                            variant="primary"
-                            size="sm"
-                            onClick={handleApplyFilter}
-                            loading={providerCandidateSearch.isPending}
-                            disabled={!hasFilterQuery}
-                            data-action="apply-filter"
-                        >
-                            <SparkleIcon weight="bold" aria-hidden="true" />
-                            Search
-                        </Button>
-                    </div>
+                    >
+                        {searchActions}
+                    </FilterBar>
                 </section>
             )}
 
             {tab === 'saved' && (
-                <section className="library-add-page__filter" aria-label="Saved filter controls">
-                    <div className="library-add-page__field library-add-page__field--saved-filter">
-                        <Label htmlFor="library-add-page__saved-filter">Saved filter</Label>
-                        <Select
-                            value={selectedSavedFilterId || SAVED_FILTER_NONE_VALUE}
-                            onValueChange={handleSavedFilterSelectChange}
-                            disabled={savedFilterOptions.length === 0}
-                        >
-                            <SelectTrigger
-                                id="library-add-page__saved-filter"
-                                placeholder="Pick a saved filter..."
-                                data-field="saved-filter"
+                <section className="library-add-page__saved-panel" aria-label="Saved filter controls">
+                    <div className="library-add-page__saved-picker">
+                        <div className="library-add-page__field library-add-page__field--saved-filter">
+                            <Label htmlFor="library-add-page__saved-filter">Saved filter</Label>
+                            <Select
+                                value={selectedSavedFilterId || SAVED_FILTER_NONE_VALUE}
+                                onValueChange={handleSavedFilterSelectChange}
+                                disabled={savedFilterOptions.length === 0}
                             >
-                                {selectedSavedFilter?.name ?? 'Pick a saved filter...'}
-                            </SelectTrigger>
-                            <SelectContent>
-                                <SelectItem value={SAVED_FILTER_NONE_VALUE}>None</SelectItem>
-                                {savedFilterOptions.map((f) => (
-                                    <SelectItem key={f.id} value={f.id}>
-                                        {f.name}
-                                    </SelectItem>
-                                ))}
-                            </SelectContent>
-                        </Select>
-                    </div>
-                    {selectedSavedFilter && (
-                        <div className="library-add-page__saved-summary">
-                            <code
-                                className="library-add-page__saved-query"
-                                title={selectedSavedFilter.query}
-                                data-testid="library-add-page__saved-query"
-                            >
-                                {selectedSavedFilter.query}
-                            </code>
+                                <SelectTrigger
+                                    id="library-add-page__saved-filter"
+                                    size="sm"
+                                    placeholder="Pick a saved filter..."
+                                    data-field="saved-filter"
+                                >
+                                    {selectedSavedFilter?.name ?? 'Pick a saved filter...'}
+                                </SelectTrigger>
+                                <SelectContent>
+                                    <SelectItem value={SAVED_FILTER_NONE_VALUE}>None</SelectItem>
+                                    {savedFilterOptions.map((f) => (
+                                        <SelectItem key={f.id} value={f.id}>
+                                            {f.name}
+                                        </SelectItem>
+                                    ))}
+                                </SelectContent>
+                            </Select>
+                        </div>
+                        {selectedSavedFilter && (
                             <Button asChild variant="secondary" size="sm">
                                 <Link
                                     to={`/filters?edit=${encodeURIComponent(selectedSavedFilter.id)}`}
                                     data-action="open-filter-editor"
                                 >
                                     <PencilSimpleIcon weight="bold" aria-hidden="true" />
-                                    Edit on Filters page
+                                    Edit filter
                                 </Link>
                             </Button>
+                        )}
+                    </div>
+                    {selectedSavedFilter && (
+                        <div className="library-add-page__saved-query-preview">
+                            <code className="library-add-page__saved-query" data-testid="library-add-page__saved-query">
+                                {selectedSavedFilter.query}
+                            </code>
                         </div>
                     )}
                     {savedFilterOptions.length === 0 && (
@@ -771,29 +772,7 @@ export function LibraryAddPage() {
                             Filters page.
                         </p>
                     )}
-                    <div className="library-add-page__filter-actions">
-                        {providerCandidateSearch.isPending && (
-                            <Button
-                                variant="secondary"
-                                size="sm"
-                                onClick={handleCancelCandidateSearch}
-                                data-action="cancel-search"
-                            >
-                                Cancel search
-                            </Button>
-                        )}
-                        <Button
-                            variant="primary"
-                            size="sm"
-                            onClick={handleApplySavedFilter}
-                            loading={providerCandidateSearch.isPending}
-                            disabled={!selectedSavedFilterId}
-                            data-action="apply-saved-filter"
-                        >
-                            <SparkleIcon weight="bold" aria-hidden="true" />
-                            Search
-                        </Button>
-                    </div>
+                    {searchActions}
                 </section>
             )}
 
@@ -802,11 +781,6 @@ export function LibraryAddPage() {
                     <EmptyState
                         icon={<SparkleIcon weight="duotone" />}
                         title={tab === 'live' ? 'Search for new content' : 'Use a saved filter'}
-                        description={
-                            tab === 'live'
-                                ? 'New content can be found by searching external metadata providers.'
-                                : 'A saved filter can be used to search for content.'
-                        }
                         size="sm"
                         data-testid="library-add-page__empty-initial"
                     />
@@ -825,11 +799,7 @@ export function LibraryAddPage() {
                         icon={<WarningCircleIcon weight="duotone" />}
                         title="Search failed"
                         description={candidateSearchError ?? undefined}
-                        action={
-                            <Button variant="secondary" size="sm" onClick={() => goToPage(page)}>
-                                Retry
-                            </Button>
-                        }
+                        onRetry={() => goToPage(page)}
                         size="sm"
                         data-testid="library-add-page__error"
                     />
@@ -865,18 +835,6 @@ export function LibraryAddPage() {
                         hasResults={candidates.length > 0 || canGoNext}
                         data-testid="library-add-page__warnings"
                     />
-                )}
-
-                {!showLoading && !showError && !showInitialEmpty && ownedCount > 0 && (
-                    <p
-                        className="library-add-page__in-library-notice"
-                        role="status"
-                        data-testid="library-add-page__in-library-notice"
-                    >
-                        {ownedCount} {ownedCount === 1 ? 'match' : 'matches'} on this page{' '}
-                        {ownedCount === 1 ? 'is' : 'are'} already in your library. Open the existing{' '}
-                        {ownedCount === 1 ? 'item' : 'items'} below.
-                    </p>
                 )}
 
                 {!showLoading &&
@@ -917,7 +875,7 @@ export function LibraryAddPage() {
                                     >
                                         <TypeCell candidate={candidate} />
                                         <span className="library-add-page__card-published">
-                                            Published: {formatPublished(candidate.releaseDate)}
+                                            Published: {formatPublished(candidate)}
                                         </span>
                                         <SourceCell candidate={candidate} />
                                     </MobileMediaCard>

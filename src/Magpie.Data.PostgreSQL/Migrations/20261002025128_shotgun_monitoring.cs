@@ -15,14 +15,15 @@ namespace Magpie.Data.PostgreSQL.Migrations
                 name: "TimeoutAt",
                 table: "job_execution");
 
-            migrationBuilder.AlterColumn<int>(
+            migrationBuilder.DropColumn(
+                name: "DefaultMonitoring",
+                table: "system_rootFolder");
+
+            migrationBuilder.AddColumn<int>(
                 name: "DefaultMonitoring",
                 table: "system_rootFolder",
                 type: "integer",
-                nullable: true,
-                oldClrType: typeof(bool),
-                oldType: "boolean",
-                oldNullable: true);
+                nullable: true);
 
             migrationBuilder.AddColumn<bool>(
                 name: "AutoImport",
@@ -106,22 +107,35 @@ namespace Magpie.Data.PostgreSQL.Migrations
                 nullable: false,
                 defaultValue: 0L);
 
-            migrationBuilder.AlterColumn<int>(
+            migrationBuilder.DropColumn(
+                name: "Monitoring",
+                table: "content_hierarchyItem");
+
+            migrationBuilder.AddColumn<int>(
                 name: "Monitoring",
                 table: "content_hierarchyItem",
                 type: "integer",
-                nullable: true,
-                oldClrType: typeof(bool),
-                oldType: "boolean",
-                oldNullable: true);
+                nullable: true);
 
-            migrationBuilder.AlterColumn<int>(
+            migrationBuilder.DropIndex(
+                name: "IX_content_hierarchyItem_EffectiveMonitoring",
+                table: "content_hierarchyItem");
+
+            migrationBuilder.DropColumn(
+                name: "EffectiveMonitoring",
+                table: "content_hierarchyItem");
+
+            migrationBuilder.AddColumn<int>(
                 name: "EffectiveMonitoring",
                 table: "content_hierarchyItem",
                 type: "integer",
                 nullable: false,
-                oldClrType: typeof(bool),
-                oldType: "boolean");
+                defaultValue: 0);
+
+            migrationBuilder.CreateIndex(
+                name: "IX_content_hierarchyItem_EffectiveMonitoring",
+                table: "content_hierarchyItem",
+                column: "EffectiveMonitoring");
 
             migrationBuilder.AddColumn<string>(
                 name: "PreviousTokenHash",
@@ -292,14 +306,15 @@ namespace Magpie.Data.PostgreSQL.Migrations
                 name: "RenewalKeyHash",
                 table: "auth_refreshToken");
 
-            migrationBuilder.AlterColumn<bool>(
+            migrationBuilder.DropColumn(
+                name: "DefaultMonitoring",
+                table: "system_rootFolder");
+
+            migrationBuilder.AddColumn<bool>(
                 name: "DefaultMonitoring",
                 table: "system_rootFolder",
                 type: "boolean",
-                nullable: true,
-                oldClrType: typeof(int),
-                oldType: "integer",
-                oldNullable: true);
+                nullable: true);
 
             migrationBuilder.AddColumn<DateTime>(
                 name: "TimeoutAt",
@@ -307,22 +322,35 @@ namespace Magpie.Data.PostgreSQL.Migrations
                 type: "timestamp with time zone",
                 nullable: true);
 
-            migrationBuilder.AlterColumn<bool>(
+            migrationBuilder.DropColumn(
+                name: "Monitoring",
+                table: "content_hierarchyItem");
+
+            migrationBuilder.AddColumn<bool>(
                 name: "Monitoring",
                 table: "content_hierarchyItem",
                 type: "boolean",
-                nullable: true,
-                oldClrType: typeof(int),
-                oldType: "integer",
-                oldNullable: true);
+                nullable: true);
 
-            migrationBuilder.AlterColumn<bool>(
+            migrationBuilder.DropIndex(
+                name: "IX_content_hierarchyItem_EffectiveMonitoring",
+                table: "content_hierarchyItem");
+
+            migrationBuilder.DropColumn(
+                name: "EffectiveMonitoring",
+                table: "content_hierarchyItem");
+
+            migrationBuilder.AddColumn<bool>(
                 name: "EffectiveMonitoring",
                 table: "content_hierarchyItem",
                 type: "boolean",
                 nullable: false,
-                oldClrType: typeof(int),
-                oldType: "integer");
+                defaultValue: false);
+
+            migrationBuilder.CreateIndex(
+                name: "IX_content_hierarchyItem_EffectiveMonitoring",
+                table: "content_hierarchyItem",
+                column: "EffectiveMonitoring");
         }
     }
 }

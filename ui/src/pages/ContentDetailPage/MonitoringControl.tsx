@@ -1,7 +1,6 @@
 import { useCallback, useState } from 'react';
-import { CrosshairIcon } from '@phosphor-icons/react';
+import { FlagCheckeredIcon } from '@phosphor-icons/react';
 
-import { monitoringStateLabel } from '@/components/content/ContentCardPrimitives';
 import { DeleteConfirmDialog } from '@/components/ui/DeleteConfirmDialog';
 import { MonitoringToggle } from '@/components/ui/MonitoringToggle';
 import { useToast } from '@/components/ui/Toast';
@@ -15,6 +14,7 @@ interface MonitoringControlProps {
     monitoring: MonitoringMode | null;
     effectiveMonitoring: MonitoringMode;
     canEdit?: boolean;
+    hasChildren?: boolean;
 }
 
 const UPDATED_DESCRIPTIONS: Record<string, string> = {
@@ -29,6 +29,7 @@ export function MonitoringControl({
     monitoring,
     effectiveMonitoring,
     canEdit = true,
+    hasChildren = false,
 }: MonitoringControlProps) {
     const updateMutation = useUpdateContent();
     const { toast } = useToast();
@@ -86,7 +87,7 @@ export function MonitoringControl({
             data-shotgun={effectiveMonitoring === 'Shotgun'}
             data-testid="monitoring-control__effective"
         >
-            {monitoringStateLabel(effectiveMonitoring, effectiveMonitoring)}
+            {effectiveMonitoring}
         </span>
     );
 
@@ -112,25 +113,23 @@ export function MonitoringControl({
                 open={confirmShotgun}
                 itemName=""
                 itemType="Shotgun mode"
-                title="Enable Shotgun mode?"
+                title="Use Shotgun?"
                 description={
                     <>
                         <span className="monitoring-control__confirm-paragraph">
-                            Shotgun mode grabs every acceptable release at the same time. This uses more bandwidth and
-                            download slots.
+                            Downloads every good release at once and keeps the first one that finishes. Faster, but uses
+                            more bandwidth.
                         </span>
-                        <span className="monitoring-control__confirm-paragraph">
-                            Magpie keeps the first successful import and cancels the rest, unless they&apos;re a higher
-                            quality.
-                        </span>
-                        <span className="monitoring-control__confirm-paragraph">
-                            Inheriting items will also use Shotgun mode.
-                        </span>
+                        {hasChildren && (
+                            <span className="monitoring-control__confirm-paragraph">
+                                Also applies to everything inside it.
+                            </span>
+                        )}
                     </>
                 }
                 confirmVariant="warning"
-                confirmLabel="Enable Shotgun"
-                confirmIcon={<CrosshairIcon weight="bold" aria-hidden="true" />}
+                confirmLabel="Use Shotgun"
+                confirmIcon={<FlagCheckeredIcon weight="bold" aria-hidden="true" />}
                 onConfirm={() => {
                     setConfirmShotgun(false);
                     update('Shotgun');

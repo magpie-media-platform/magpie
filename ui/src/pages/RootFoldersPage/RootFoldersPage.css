@@ -71,24 +71,12 @@
         align-self: center;
     }
 
-    .root-folders-table .data-table__table {
-        table-layout: fixed;
-    }
-
-    .root-folders-table .data-table__cell[data-column='name'],
-    .root-folders-table .data-table__cell[data-column='path'] {
-        overflow: hidden;
-        text-overflow: ellipsis;
-    }
-
     .root-folders-table__name {
         display: block;
         max-width: 100%;
         font-weight: var(--weight-medium);
         color: var(--text-primary);
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
+        overflow-wrap: break-word;
     }
 
     .root-folders-table__path {
@@ -96,9 +84,7 @@
         max-width: 100%;
         font-family: var(--font-mono);
         color: var(--text-secondary);
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
+        overflow-wrap: anywhere;
     }
 
     .root-folders-table__default-radio {
@@ -136,6 +122,18 @@
 
         .root-folders-table .data-table__cell[data-column='default'] {
             flex: 1 1 0;
+        }
+    }
+
+    @media (min-width: 1024px) {
+        .root-folders-table {
+            container-type: inline-size;
+        }
+
+        .root-folders-table__name {
+            width: max-content;
+            min-width: 100%;
+            max-width: calc(40cqi - 200px);
         }
     }
 

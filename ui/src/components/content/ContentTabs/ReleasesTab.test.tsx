@@ -36,14 +36,12 @@ const releaseRow = (overrides: Partial<ReleaseRow> = {}): ReleaseRow => ({
     protocol: 'torrent',
     publishDate: '2024-01-15T10:00:00Z',
     size: 5_368_709_120,
-    isMatch: true,
-    rejectionReason: null,
     properties: '{"seeders":"42","leechers":"3"}',
     ...overrides,
 });
 
 describe('ReleasesTab', () => {
-    it.each([1024, 390])('shows a persisted capacity reason and clears it after recovery at %i px', (width) => {
+    it.each([1024, 390])('shows a retryable capacity fault and clears it after recovery at %i px', (width) => {
         // Arrange
         vi.stubGlobal(
             'matchMedia',
@@ -64,65 +62,33 @@ describe('ReleasesTab', () => {
                 };
             }),
         );
-        const reason =
-            'Waiting for destination capacity: insufficient free space. Required: 100 bytes. Available: 99 bytes.';
-        const waiting = {
-            id: 'waiting-release',
-            title: 'Waiting film',
+        const faulted: ReleaseRow = {
+            id: 'faulted-release',
+            title: 'Faulted film',
             protocol: 'torrent',
             publishDate: '2026-09-22T12:00:00Z',
-            acquisitionWaitingReason: reason,
+            acquisitionStatus: 'Faulted',
+            failureReason: 'InsufficientDestinationSpace',
         };
 
         // Act
-        const { rerender } = render(<ReleasesTab releases={[waiting]} onGrab={vi.fn()} />);
+        const { rerender } = render(<ReleasesTab releases={[faulted]} onGrab={vi.fn()} />);
 
         // Assert
-        expect(screen.getByText('Waiting for capacity')).toBeInTheDocument();
-        expect(screen.getByText(reason)).toBeVisible();
-        expect(screen.queryByRole('button', { name: 'Grab' })).not.toBeInTheDocument();
-        expect(screen.queryByText('Failed')).not.toBeInTheDocument();
+        expect(screen.getByText('Faulted')).toHaveAttribute('title', 'Insufficient Destination Space');
+        expect(screen.getByRole('button', { name: 'Grab' })).toBeEnabled();
 
         // Act
         rerender(
             <ReleasesTab
-                releases={[{ ...waiting, acquisitionWaitingReason: null, acquisitionStatus: 'Downloading' }]}
+                releases={[{ ...faulted, acquisitionStatus: 'Downloading', failureReason: null }]}
                 onGrab={vi.fn()}
             />,
         );
 
         // Assert
-        expect(screen.queryByText('Waiting for capacity')).not.toBeInTheDocument();
-        expect(screen.queryByText(reason)).not.toBeInTheDocument();
+        expect(screen.queryByText('Faulted')).not.toBeInTheDocument();
         expect(screen.getByText('Downloading')).toBeInTheDocument();
-    });
-
-    it('shows unavailable capacity instead of a previous failed transfer', () => {
-        // Arrange
-        const reason =
-            'Waiting for destination capacity: the capacity check is unavailable. Required: unknown. Available: 99 bytes.';
-
-        // Act
-        render(
-            <ReleasesTab
-                releases={[
-                    {
-                        id: 'waiting-release',
-                        title: 'Waiting film',
-                        protocol: 'torrent',
-                        publishDate: '2026-09-22T12:00:00Z',
-                        acquisitionStatus: 'Failed',
-                        failureReason: 'MissingFiles',
-                        acquisitionWaitingReason: reason,
-                    },
-                ]}
-                onGrab={vi.fn()}
-            />,
-        );
-
-        // Assert
-        expect(screen.getByText(reason)).toBeVisible();
-        expect(screen.queryByText('Failed')).not.toBeInTheDocument();
     });
 
     it('renders the empty state exactly once when no releases are available', () => {
@@ -349,6 +315,68 @@ describe('ReleasesTab', () => {
 
         expect(container.querySelector('[data-acquisition-status]')).toBeNull();
         expect(screen.getAllByText('-').length).toBeGreaterThan(0);
+    });
+
+    it.each([1024, 390])('shows the decision reason for a never-grabbed release at %i px', (width) => {
+        // Arrange
+        vi.stubGlobal(
+            'matchMedia',
+            vi.fn((query: string) => {
+                const minWidth = query.match(/\(min-width:\s*(\d+)px\)/);
+                const maxWidth = query.match(/\(max-width:\s*(\d+)px\)/);
+                return {
+                    matches:
+                        (minWidth === null || width >= Number(minWidth[1])) &&
+                        (maxWidth === null || width <= Number(maxWidth[1])),
+                    media: query,
+                    onchange: null,
+                    addListener: () => {},
+                    removeListener: () => {},
+                    addEventListener: () => {},
+                    removeEventListener: () => {},
+                    dispatchEvent: () => false,
+                };
+            }),
+        );
+
+        // Act
+        render(
+            <ReleasesTab
+                releases={[releaseRow({ acquisitionStatus: null, decisionReason: 'No quality tier matched.' })]}
+                onGrab={vi.fn()}
+            />,
+        );
+
+        // Assert
+        expect(screen.getByText('No quality tier matched.')).toBeInTheDocument();
+    });
+
+    it('shows the download status instead of the decision reason for a grabbed release', () => {
+        // Act
+        render(
+            <ReleasesTab
+                releases={[releaseRow({ acquisitionStatus: 'Failed', decisionReason: 'Grabbed' })]}
+                onGrab={vi.fn()}
+            />,
+        );
+
+        // Assert
+        expect(screen.getByText('Failed')).toBeInTheDocument();
+        expect(screen.queryByText('Grabbed')).not.toBeInTheDocument();
+    });
+
+    it('shows only the Unmatched status for an unmatched release with a decision reason', () => {
+        // Act
+        render(
+            <ReleasesTab
+                releases={[releaseRow({ status: 'Unmatched', decisionReason: 'Eligible but not yet grabbed' })]}
+                onGrab={vi.fn()}
+            />,
+        );
+
+        // Assert
+        expect(screen.getByText('Unmatched')).toBeInTheDocument();
+        expect(screen.queryByText('Eligible but not yet grabbed')).not.toBeInTheDocument();
     });
 
     it('opens release details when the title of a grabbed release is clicked', async () => {

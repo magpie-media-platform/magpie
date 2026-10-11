@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/Button';
 import { useToast } from '@/components/ui/Toast';
 import { useLibraryTypes } from '@/hooks/useLibraryTypes';
 import { useRootFolders } from '@/hooks/useRootFolders';
+import { useInstanceName } from '@/hooks/useInstanceName';
 import { RootFolderForm, type RootFolderFormValues } from '@/components/configuration/RootFolderForm';
 
 import { AddAnotherActions } from './AddAnotherActions';
@@ -15,6 +16,7 @@ interface FirstRootFolderStepProps {
 }
 
 export function FirstRootFolderStep({ onAdvance }: FirstRootFolderStepProps): ReactNode {
+    const instanceName = useInstanceName();
     const { toast } = useToast();
     const { contentTypes } = useLibraryTypes();
     const { createFolder, isCreating, folders } = useRootFolders();
@@ -33,7 +35,7 @@ export function FirstRootFolderStep({ onAdvance }: FirstRootFolderStepProps): Re
                 });
                 toast({
                     title: 'Root folder created',
-                    description: `Magpie created ${values.name}.`,
+                    description: `${instanceName} created ${values.name}.`,
                     variant: 'success',
                 });
                 markAdded();
@@ -46,7 +48,7 @@ export function FirstRootFolderStep({ onAdvance }: FirstRootFolderStepProps): Re
                 throw error;
             }
         },
-        [createFolder, markAdded, toast],
+        [createFolder, markAdded, toast, instanceName],
     );
 
     const configuredRootFolderCountLabel = `${folders.length} root folder${folders.length === 1 ? '' : 's'}`;
@@ -54,8 +56,8 @@ export function FirstRootFolderStep({ onAdvance }: FirstRootFolderStepProps): Re
     return (
         <div className="setup-page__form" data-step="root">
             <p className="setup-page__hint">
-                Root folders tell Magpie where to store imported content. One can be added now, or configured later
-                under Admin {'>'} Root Folders.
+                Root folders tell {instanceName} where to store imported content. One can be added now, or configured
+                later under Admin {'>'} Root Folders.
             </p>
             {folders.length > 0 && (
                 <p className="setup-page__hint" data-state="already-added">

@@ -14,6 +14,7 @@ const bulkAcceptMutateAsync = vi.fn();
 const restoreMutateAsync = vi.fn();
 const rejectMutateAsync = vi.fn();
 let manualMatchProp: ManualMatchTarget | null = null;
+let manualMatchSuppressesToast: boolean | undefined;
 
 vi.mock('@/hooks/useBulkAcceptLibraryImportCandidates', () => ({
     useBulkAcceptLibraryImportCandidates: () => ({ mutateAsync: bulkAcceptMutateAsync, isPending: false }),
@@ -25,8 +26,15 @@ vi.mock('@/hooks/usePendingFileAssociations', () => ({
 }));
 
 vi.mock('./ManualMatchDialog', () => ({
-    ManualMatchDialog: ({ target }: { target: ManualMatchTarget | null }) => {
+    ManualMatchDialog: ({
+        target,
+        suppressSuccessToast,
+    }: {
+        target: ManualMatchTarget | null;
+        suppressSuccessToast?: boolean;
+    }) => {
         manualMatchProp = target;
+        manualMatchSuppressesToast = suppressSuccessToast;
         return target ? <div data-testid="manual-match-dialog-open">{target.kind}</div> : null;
     },
 }));
@@ -120,103 +128,243 @@ describe('CandidateLeafTable', () => {
         vi.restoreAllMocks();
     });
 
-    it('renders a matched row with its candidate, a Detail and Import action, and an enabled checkbox', async () => {
-        render(
-            <CandidateLeafTable
-                items={[buildMatched()]}
-                emptyState={<div />}
-                requestAccept={(action) => void action('Inherit')}
-            />,
-            {
-                wrapper: createTestWrapper(),
-            },
-        );
-
+    it('RowMenu_ListsDetailsPreviewImportAndReject_WhenTheFileIsMatchedAndPending', async () => {
+        // Arrange
+        const user = userEvent.setup();
+        render(<CandidateLeafTable items={[buildMatched()]} emptyState={<div />} requestAccept={vi.fn()} />, {
+            wrapper: createTestWrapper(),
+        });
         const row = rowFor('match-1');
-        expect(row).toHaveTextContent('Bluey');
-        expect(row).toHaveTextContent('tvmaze');
-        expect(within(row).getByRole('button', { name: /^Detail$/ })).toBeInTheDocument();
-        expect(within(row).getByRole('button', { name: /^Import$/ })).toBeInTheDocument();
         const checkbox = within(row).getByRole('checkbox', { name: /select s01e01/i });
+
+        // Act
+        await user.click(within(row).getByRole('button', { name: 'Actions for S01E01.mkv' }));
+
+        // Assert
+        expect(screen.getAllByRole('menuitem').map((item) => item.textContent)).toEqual([
+            'View details',
+            'Preview',
+            'Import',
+            'Reject',
+        ]);
+        expect(row.querySelector('[data-action="file-details"]')).toHaveTextContent('S01E01.mkv');
+        expect(row.querySelector('[data-action="status-details"]')).toHaveTextContent('Pending');
         expect(checkbox).not.toBeDisabled();
     });
 
-    it('exposes the full file path in the file row', () => {
-        render(<CandidateLeafTable items={[buildUnmatched()]} emptyState={null} requestAccept={vi.fn()} />, {
+    it('FileDetails_ShowsTheFilenameMatchAndFullPath_WhenTheFilenameIsChosen', async () => {
+        // Arrange
+        const user = userEvent.setup();
+        render(<CandidateLeafTable items={[buildMatched()]} emptyState={<div />} requestAccept={vi.fn()} />, {
             wrapper: createTestWrapper(),
         });
 
-        expect(screen.getByTitle('/media/tv/Bluey/S01E02.mkv')).toHaveTextContent('/media/tv/Bluey/S01E02.mkv');
+        // Act
+        await user.click(within(rowFor('match-1')).getByRole('button', { name: 'S01E01.mkv' }));
+
+        // Assert
+        const details = screen.getByRole('dialog', { name: 'S01E01.mkv' });
+        expect(details).toHaveAttribute('data-dialog-content');
+        expect(details).toHaveTextContent('Matched content');
+        expect(details).toHaveTextContent('Bluey');
+        expect(details).toHaveTextContent('/media/tv/Bluey/S01E01.mkv');
+        expect(details).toHaveTextContent('1 of 1');
     });
 
-    it('renders an unmatched row as "No match" with only a Match action and a disabled checkbox', () => {
-        render(
-            <CandidateLeafTable
-                items={[buildUnmatched()]}
-                emptyState={<div />}
-                requestAccept={(action) => void action('Inherit')}
-            />,
-            {
-                wrapper: createTestWrapper(),
-            },
-        );
-
-        const row = rowFor('empty-1');
-        expect(within(row).getByTestId('candidate-leaf-no-match')).toHaveTextContent('No match');
-        expect(within(row).getByRole('button', { name: /^Match$/ })).toBeInTheDocument();
-        expect(within(row).queryByRole('button', { name: /^Import$/ })).toBeNull();
-        const checkbox = within(row).getByRole('checkbox', { name: /select s01e02/i });
-        expect(checkbox).toBeDisabled();
-    });
-
-    it('renders a matching-pending row with its retry reason, a Match action and a disabled checkbox', () => {
-        render(
-            <CandidateLeafTable
-                items={[
-                    buildUnmatched({
-                        id: 'pending-1',
-                        status: 'MatchingPending',
-                        notes: 'Matching will retry because the metadata search did not complete: provider-a timed out.',
-                    }),
-                ]}
-                emptyState={<div />}
-                requestAccept={(action) => void action('Inherit')}
-            />,
-            {
-                wrapper: createTestWrapper(),
-            },
-        );
-
-        const row = rowFor('pending-1');
-        const cell = within(row).getByTestId('candidate-leaf-matching-pending');
-        expect(cell).toHaveTextContent('Matching pending');
-        expect(cell).toHaveTextContent('provider-a timed out.');
-        expect(within(row).getByRole('button', { name: /^Match$/ })).toBeEnabled();
-        const checkbox = within(row).getByRole('checkbox', { name: /select s01e02/i });
-        expect(checkbox).toBeDisabled();
-    });
-
-    it('queues a matched row for import via the shared bulk submission hook', async () => {
+    it('FileDetails_ShowsTheFailureReasonWithoutHover_WhenTheFailedStatusIsChosen', async () => {
+        // Arrange
         const user = userEvent.setup();
         render(
             <CandidateLeafTable
-                items={[buildMatched()]}
+                items={[buildMatched({ status: 'Failed', notes: 'Import failed: No file was attached.' })]}
                 emptyState={<div />}
-                requestAccept={(action) => void action('Inherit')}
+                requestAccept={vi.fn()}
             />,
-            {
-                wrapper: createTestWrapper(),
-            },
+            { wrapper: createTestWrapper() },
         );
 
-        await user.click(within(rowFor('match-1')).getByRole('button', { name: /^Import$/ }));
+        // Act
+        await user.click(within(rowFor('match-1')).getByRole('button', { name: 'Failed: S01E01.mkv. View details' }));
 
-        await waitFor(() => {
-            expect(bulkAcceptMutateAsync).toHaveBeenCalledWith({ ids: ['match-1'], monitoringMode: 'Inherit' });
-        });
+        // Assert
+        const details = screen.getByRole('dialog', { name: 'S01E01.mkv' });
+        expect(within(details).getByRole('alert')).toHaveTextContent('Import failed: No file was attached.');
+        expect(within(details).getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+        expect(within(details).getByRole('button', { name: 'Reject' })).toBeInTheDocument();
     });
 
-    it('reports when a single-file import is skipped instead of queued', async () => {
+    it('FileDetails_ShowsTheNextFile_WhenNextFileIsChosen', async () => {
+        // Arrange
+        const user = userEvent.setup();
+        render(
+            <CandidateLeafTable
+                items={[buildMatched(), buildUnmatched({ status: 'Rejected' })]}
+                emptyState={<div />}
+                requestAccept={vi.fn()}
+            />,
+            { wrapper: createTestWrapper() },
+        );
+        await user.click(within(rowFor('match-1')).getByRole('button', { name: 'S01E01.mkv' }));
+
+        // Act
+        await user.click(screen.getByRole('button', { name: 'Next file' }));
+
+        // Assert
+        const details = screen.getByRole('dialog', { name: 'S01E02.mkv' });
+        expect(details).toHaveTextContent('2 of 2');
+        expect(details).toHaveTextContent('Silenced');
+        expect(within(details).getByRole('button', { name: 'Restore' })).toBeInTheDocument();
+        const next = within(details).getByRole('button', { name: 'Next file' });
+        expect(next).toHaveAttribute('aria-disabled', 'true');
+        expect(next).not.toHaveAttribute('disabled');
+        expect(next).toHaveFocus();
+    });
+
+    it('FileDetails_ReturnsFocusToTheFilename_WhenTheDetailsClose', async () => {
+        // Arrange
+        const user = userEvent.setup();
+        render(<CandidateLeafTable items={[buildMatched()]} emptyState={<div />} requestAccept={vi.fn()} />, {
+            wrapper: createTestWrapper(),
+        });
+        const filename = within(rowFor('match-1')).getByRole('button', { name: 'S01E01.mkv' });
+        await user.click(filename);
+
+        // Act
+        await user.keyboard('{Escape}');
+
+        // Assert
+        expect(screen.queryByRole('dialog', { name: 'S01E01.mkv' })).not.toBeInTheDocument();
+        await waitFor(() => expect(filename).toHaveFocus());
+    });
+
+    it('FileDetails_ReturnsFocusToTheFilename_WhenTheDetailsCloseAfterAReject', async () => {
+        // Arrange
+        const user = userEvent.setup();
+        rejectMutateAsync.mockResolvedValue({ count: 1, error: null });
+        render(<CandidateLeafTable items={[buildMatched()]} emptyState={<div />} requestAccept={vi.fn()} />, {
+            wrapper: createTestWrapper(),
+        });
+        const filename = within(rowFor('match-1')).getByRole('button', { name: 'S01E01.mkv' });
+        await user.click(filename);
+        const details = screen.getByRole('dialog', { name: 'S01E01.mkv' });
+        await user.click(within(details).getByRole('button', { name: 'Reject' }));
+        await waitFor(() => expect(within(details).getByRole('button', { name: 'Reject' })).toBeEnabled());
+
+        // Act
+        await user.click(within(details).getByRole('button', { name: 'Close' }));
+
+        // Assert
+        await waitFor(() => expect(filename).toHaveFocus());
+    });
+
+    it('FileDetails_PutsFirstFocusOnAnEnabledControl_WhenTheFirstFileIsSilenced', async () => {
+        // Arrange
+        const user = userEvent.setup();
+        render(
+            <CandidateLeafTable
+                items={[buildUnmatched({ status: 'Rejected' }), buildMatched()]}
+                emptyState={<div />}
+                requestAccept={vi.fn()}
+            />,
+            { wrapper: createTestWrapper() },
+        );
+
+        // Act
+        await user.click(within(rowFor('empty-1')).getByRole('button', { name: 'S01E02.mkv' }));
+
+        // Assert
+        const details = screen.getByRole('dialog', { name: 'S01E02.mkv' });
+        expect(within(details).getByRole('button', { name: 'Previous file' })).toHaveAttribute('aria-disabled', 'true');
+        await waitFor(() => expect(within(details).getByRole('button', { name: 'Next file' })).toHaveFocus());
+    });
+
+    it('FileDetailsReject_ShowsNoToast_WhenTheRejectSucceeds', async () => {
+        // Arrange
+        const user = userEvent.setup();
+        rejectMutateAsync.mockResolvedValue({ count: 1, error: null });
+        render(<CandidateLeafTable items={[buildMatched()]} emptyState={<div />} requestAccept={vi.fn()} />, {
+            wrapper: createTestWrapper(),
+        });
+        await user.click(within(rowFor('match-1')).getByRole('button', { name: 'S01E01.mkv' }));
+        const details = screen.getByRole('dialog', { name: 'S01E01.mkv' });
+
+        // Act
+        await user.click(within(details).getByRole('button', { name: 'Reject' }));
+
+        // Assert
+        await waitFor(() => expect(within(details).getByRole('button', { name: 'Reject' })).toBeEnabled());
+        expect(rejectMutateAsync).toHaveBeenCalledWith({ ids: ['match-1'] });
+        expect(document.querySelector('[data-component="toast"]')).toBeNull();
+        expect(within(details).queryByRole('alert')).toBeNull();
+    });
+
+    it('FileDetailsReject_ShowsTheFailureInTheDetails_WhenTheRejectFails', async () => {
+        // Arrange
+        const user = userEvent.setup();
+        rejectMutateAsync.mockRejectedValue(new Error('Network error'));
+        render(<CandidateLeafTable items={[buildMatched()]} emptyState={<div />} requestAccept={vi.fn()} />, {
+            wrapper: createTestWrapper(),
+        });
+        await user.click(within(rowFor('match-1')).getByRole('button', { name: 'S01E01.mkv' }));
+        const details = screen.getByRole('dialog', { name: 'S01E01.mkv' });
+
+        // Act
+        await user.click(within(details).getByRole('button', { name: 'Reject' }));
+
+        // Assert
+        const failure = await within(details).findByRole('alert');
+        expect(failure).toHaveTextContent('Reject failed');
+        expect(failure).toHaveTextContent('Failed to reject the file. Please try again.');
+        expect(document.querySelector('[data-component="toast"]')).toBeNull();
+    });
+
+    it('FileDetailsReject_PutsFocusOnTheFailure_WhenTheRejectFails', async () => {
+        // Arrange
+        const user = userEvent.setup();
+        rejectMutateAsync.mockRejectedValue(new Error('Network error'));
+        render(<CandidateLeafTable items={[buildMatched()]} emptyState={<div />} requestAccept={vi.fn()} />, {
+            wrapper: createTestWrapper(),
+        });
+        await user.click(within(rowFor('match-1')).getByRole('button', { name: 'S01E01.mkv' }));
+        const details = screen.getByRole('dialog', { name: 'S01E01.mkv' });
+
+        // Act
+        await user.click(within(details).getByRole('button', { name: 'Reject' }));
+
+        // Assert
+        const failure = await within(details).findByRole('alert');
+        expect(failure).toHaveFocus();
+    });
+
+    it('FileDetailsReject_ShowsTheFailureInAToast_WhenTheDetailsCloseBeforeTheRejectFails', async () => {
+        // Arrange
+        const user = userEvent.setup();
+        let failReject: (error: Error) => void = () => {};
+        rejectMutateAsync.mockImplementationOnce(
+            () =>
+                new Promise((_, reject) => {
+                    failReject = reject;
+                }),
+        );
+        render(<CandidateLeafTable items={[buildMatched()]} emptyState={<div />} requestAccept={vi.fn()} />, {
+            wrapper: createTestWrapper(),
+        });
+        const filename = within(rowFor('match-1')).getByRole('button', { name: 'S01E01.mkv' });
+        await user.click(filename);
+        await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Reject' }));
+        await user.keyboard('{Escape}');
+
+        // Act
+        failReject(new Error('Network error'));
+
+        // Assert
+        expect(await screen.findByTestId('toast-title')).toHaveTextContent('Reject failed');
+        await user.click(filename);
+        expect(within(screen.getByRole('dialog', { name: 'S01E01.mkv' })).queryByRole('alert')).toBeNull();
+    });
+
+    it('FileDetailsImport_ShowsTheSkipReasonInTheDetails_WhenTheImportIsSkipped', async () => {
+        // Arrange
         const user = userEvent.setup();
         bulkAcceptMutateAsync.mockResolvedValueOnce({
             queued: [],
@@ -230,15 +378,191 @@ describe('CandidateLeafTable', () => {
             />,
             { wrapper: createTestWrapper() },
         );
+        await user.click(within(rowFor('match-1')).getByRole('button', { name: 'S01E01.mkv' }));
+        const details = screen.getByRole('dialog', { name: 'S01E01.mkv' });
 
-        await user.click(within(rowFor('match-1')).getByRole('button', { name: /^Import$/ }));
+        // Act
+        await user.click(within(details).getByRole('button', { name: 'Import' }));
 
+        // Assert
+        const failure = await within(details).findByRole('alert');
+        expect(failure).toHaveTextContent('Import skipped');
+        expect(failure).toHaveTextContent('The file is already queued.');
+        expect(document.querySelector('[data-component="toast"]')).toBeNull();
+    });
+
+    it('FileDetailsMatch_SuppressesTheMatchToast_WhenChosenInTheDetails', async () => {
+        // Arrange
+        const user = userEvent.setup();
+        render(<CandidateLeafTable items={[buildUnmatched()]} emptyState={<div />} requestAccept={vi.fn()} />, {
+            wrapper: createTestWrapper(),
+        });
+        await user.click(within(rowFor('empty-1')).getByRole('button', { name: 'S01E02.mkv' }));
+        const details = screen.getByRole('dialog', { name: 'S01E02.mkv' });
+
+        // Act
+        await user.click(within(details).getByRole('button', { name: 'Match' }));
+
+        // Assert
+        expect(screen.getByTestId('manual-match-dialog-open')).toHaveTextContent('candidate');
+        expect(manualMatchSuppressesToast).toBe(true);
+    });
+
+    it('FileDetails_ReturnsFocusToTheFilename_WhenTheListChangesWhileTheDetailsAreOpen', async () => {
+        // Arrange
+        const user = userEvent.setup();
+        const { rerender } = render(
+            <CandidateLeafTable
+                items={[buildMatched(), buildUnmatched()]}
+                emptyState={<div />}
+                requestAccept={vi.fn()}
+            />,
+            { wrapper: createTestWrapper() },
+        );
+        const filename = within(rowFor('match-1')).getByRole('button', { name: 'S01E01.mkv' });
+        await user.click(filename);
+        rerender(
+            <CandidateLeafTable
+                items={[buildMatched(), buildUnmatched({ status: 'Rejected' })]}
+                emptyState={<div />}
+                requestAccept={vi.fn()}
+            />,
+        );
+
+        // Act
+        await user.keyboard('{Escape}');
+
+        // Assert
+        await waitFor(() => expect(filename).toHaveFocus());
+    });
+
+    it('RowMenu_OffersMatchButNoImport_WhenTheFileHasNoMatch', async () => {
+        // Arrange
+        const user = userEvent.setup();
+        render(<CandidateLeafTable items={[buildUnmatched()]} emptyState={<div />} requestAccept={vi.fn()} />, {
+            wrapper: createTestWrapper(),
+        });
+        const row = rowFor('empty-1');
+        const checkbox = within(row).getByRole('checkbox', { name: /select s01e02/i });
+
+        // Act
+        await user.click(within(row).getByRole('button', { name: 'Actions for S01E02.mkv' }));
+
+        // Assert
+        expect(screen.getAllByRole('menuitem').map((item) => item.textContent)).toEqual([
+            'View details',
+            'Match',
+            'Reject',
+        ]);
+        expect(within(row).getByTestId('candidate-leaf-no-match')).toHaveTextContent('No match');
+        expect(checkbox).toBeDisabled();
+    });
+
+    it('FileDetails_ShowsTheMatchingRetryReason_WhenMatchingIsPending', async () => {
+        // Arrange
+        const user = userEvent.setup();
+        render(
+            <CandidateLeafTable
+                items={[
+                    buildUnmatched({
+                        id: 'pending-1',
+                        status: 'MatchingPending',
+                        notes: 'Matching will retry because the metadata search did not complete: provider-a timed out.',
+                    }),
+                ]}
+                emptyState={<div />}
+                requestAccept={vi.fn()}
+            />,
+            { wrapper: createTestWrapper() },
+        );
+        const checkbox = within(rowFor('pending-1')).getByRole('checkbox', { name: /select s01e02/i });
+
+        // Act
+        await user.click(
+            within(rowFor('pending-1')).getByRole('button', { name: 'Matching pending: S01E02.mkv. View details' }),
+        );
+
+        // Assert
+        expect(screen.getByRole('dialog', { name: 'S01E02.mkv' })).toHaveTextContent('provider-a timed out.');
+        expect(checkbox).toBeDisabled();
+    });
+
+    it('RowMenuImport_QueuesTheFileThroughTheBulkSubmission_WhenChosen', async () => {
+        // Arrange
+        const user = userEvent.setup();
+        render(
+            <CandidateLeafTable
+                items={[buildMatched()]}
+                emptyState={<div />}
+                requestAccept={(action) => void action('Inherit')}
+            />,
+            { wrapper: createTestWrapper() },
+        );
+        await user.click(within(rowFor('match-1')).getByRole('button', { name: 'Actions for S01E01.mkv' }));
+
+        // Act
+        await user.click(screen.getByRole('menuitem', { name: 'Import' }));
+
+        // Assert
+        await waitFor(() => {
+            expect(bulkAcceptMutateAsync).toHaveBeenCalledWith({ ids: ['match-1'], monitoringMode: 'Inherit' });
+        });
+    });
+
+    it('RowMenuImport_ReportsTheSkipReason_WhenTheImportIsSkipped', async () => {
+        // Arrange
+        const user = userEvent.setup();
+        bulkAcceptMutateAsync.mockResolvedValueOnce({
+            queued: [],
+            skipped: [{ candidateId: 'match-1', reason: 'The file is already queued.' }],
+        });
+        render(
+            <CandidateLeafTable
+                items={[buildMatched()]}
+                emptyState={<div />}
+                requestAccept={(action) => void action('Inherit')}
+            />,
+            { wrapper: createTestWrapper() },
+        );
+        await user.click(within(rowFor('match-1')).getByRole('button', { name: 'Actions for S01E01.mkv' }));
+
+        // Act
+        await user.click(screen.getByRole('menuitem', { name: 'Import' }));
+
+        // Assert
         expect(await screen.findByText('Import skipped')).toBeInTheDocument();
         expect(screen.getByText('The file is already queued.')).toBeInTheDocument();
         expect(screen.queryByText('Import queued')).not.toBeInTheDocument();
     });
 
-    it('shows Retry for a matched failed row and submits it through the accept mutation', async () => {
+    it('ImportSelected_ReportsNothingQueued_WhenTheServerSkipsEveryFile', async () => {
+        // Arrange
+        const user = userEvent.setup();
+        bulkAcceptMutateAsync.mockResolvedValueOnce({
+            queued: [],
+            skipped: [{ candidateId: 'match-1', reason: 'The file is already queued.' }],
+        });
+        render(
+            <CandidateLeafTable
+                items={[buildMatched()]}
+                emptyState={<div />}
+                requestAccept={(action) => void action('Inherit')}
+            />,
+            { wrapper: createTestWrapper() },
+        );
+        await user.click(within(rowFor('match-1')).getByRole('checkbox', { name: /select s01e01/i }));
+
+        // Act
+        await user.click(screen.getByRole('button', { name: 'Import selected' }));
+
+        // Assert
+        expect(await screen.findByText('Nothing queued for import')).toBeInTheDocument();
+        expect(screen.getByText('0 files queued for import, 1 skipped.')).toBeInTheDocument();
+        expect(screen.queryByText('Import queued')).not.toBeInTheDocument();
+    });
+
+    it('RowMenuRetry_QueuesTheFile_WhenTheFileFailed', async () => {
+        // Arrange
         const user = userEvent.setup();
         render(
             <CandidateLeafTable
@@ -248,19 +572,21 @@ describe('CandidateLeafTable', () => {
             />,
             { wrapper: createTestWrapper() },
         );
-
         const row = rowFor('match-1');
-        const retry = within(row).getByRole('button', { name: /^Retry$/ });
-        expect(retry).toHaveAttribute('title', 'provider offline');
-        await user.click(retry);
+        await user.click(within(row).getByRole('button', { name: 'Actions for S01E01.mkv' }));
 
+        // Act
+        await user.click(screen.getByRole('menuitem', { name: 'Retry' }));
+
+        // Assert
         await waitFor(() => {
             expect(bulkAcceptMutateAsync).toHaveBeenCalledWith({ ids: ['match-1'], monitoringMode: 'Inherit' });
         });
         expect(within(row).getByRole('checkbox', { name: /select s01e01/i })).not.toBeDisabled();
     });
 
-    it('requires monitoring before importing and uses the chosen mode', async () => {
+    it('RowMenuImport_WaitsForTheMonitoringChoice_WhenChosen', async () => {
+        // Arrange
         const user = userEvent.setup();
         let pendingAccept: ImportAcceptAction | undefined;
         render(
@@ -273,20 +599,21 @@ describe('CandidateLeafTable', () => {
             />,
             { wrapper: createTestWrapper() },
         );
-
-        await user.click(within(rowFor('match-1')).getByRole('button', { name: /^Import$/ }));
-
-        expect(pendingAccept).toBeDefined();
+        await user.click(within(rowFor('match-1')).getByRole('button', { name: 'Actions for S01E01.mkv' }));
+        await user.click(screen.getByRole('menuitem', { name: 'Import' }));
         expect(bulkAcceptMutateAsync).not.toHaveBeenCalled();
 
+        // Act
         void pendingAccept?.('Inherit');
 
+        // Assert
         await waitFor(() => {
             expect(bulkAcceptMutateAsync).toHaveBeenCalledWith({ ids: ['match-1'], monitoringMode: 'Inherit' });
         });
     });
 
-    it('importing one row leaves another row Import button enabled (concurrent imports are independent)', async () => {
+    it('RowMenuImport_KeepsImportEnabledForTheOtherFile_WhenOneFileIsQueuing', async () => {
+        // Arrange
         const user = userEvent.setup();
         let resolveAccept: (value: { queued: unknown[]; skipped: unknown[] }) => void = () => {};
         bulkAcceptMutateAsync.mockImplementationOnce(
@@ -303,19 +630,26 @@ describe('CandidateLeafTable', () => {
             />,
             { wrapper: createTestWrapper() },
         );
+        await user.click(within(rowFor('match-1')).getByRole('button', { name: 'Actions for S01E01.mkv' }));
 
-        await user.click(within(rowFor('match-1')).getByRole('button', { name: /^Import$/ }));
+        // Act
+        await user.click(screen.getByRole('menuitem', { name: 'Import' }));
 
-        expect(within(rowFor('match-1')).getByRole('button', { name: /^Import$/ })).toBeDisabled();
-        expect(within(rowFor('match-2')).getByRole('button', { name: /^Import$/ })).not.toBeDisabled();
-
+        // Assert
+        await user.click(within(rowFor('match-1')).getByRole('button', { name: 'Actions for S01E01.mkv' }));
+        expect(screen.getByRole('menuitem', { name: 'Import' })).toHaveAttribute('aria-disabled', 'true');
+        await user.keyboard('{Escape}');
+        await user.click(within(rowFor('match-2')).getByRole('button', { name: 'Actions for S01E03.mkv' }));
+        expect(screen.getByRole('menuitem', { name: 'Import' })).not.toHaveAttribute('aria-disabled');
+        await user.keyboard('{Escape}');
         resolveAccept({ queued: [], skipped: [] });
-        await waitFor(() => {
-            expect(within(rowFor('match-1')).getByRole('button', { name: /^Import$/ })).not.toBeDisabled();
-        });
+        expect(await screen.findByText('Import skipped')).toBeInTheDocument();
+        await user.click(within(rowFor('match-1')).getByRole('button', { name: 'Actions for S01E01.mkv' }));
+        expect(screen.getByRole('menuitem', { name: 'Import' })).not.toHaveAttribute('aria-disabled');
     });
 
-    it('bulk-imports the checked matched rows via the bulk-accept mutation', async () => {
+    it('ImportSelected_QueuesOnlyTheSelectedFiles_WhenChosen', async () => {
+        // Arrange
         const user = userEvent.setup();
         render(
             <CandidateLeafTable
@@ -325,15 +659,92 @@ describe('CandidateLeafTable', () => {
             />,
             { wrapper: createTestWrapper() },
         );
-
         await user.click(within(rowFor('match-1')).getByRole('checkbox', { name: /select s01e01/i }));
-        const acceptChecked = await screen.findByRole('button', { name: /import checked/i });
 
-        await user.click(acceptChecked);
+        // Act
+        await user.click(await screen.findByRole('button', { name: 'Import selected' }));
 
+        // Assert
         await waitFor(() => {
             expect(bulkAcceptMutateAsync).toHaveBeenCalledWith({ ids: ['match-1'], monitoringMode: 'Inherit' });
         });
+    });
+
+    it('RejectSelected_RejectsOnlyTheSelectedFiles_WhenTwoOfThreeFilesAreSelected', async () => {
+        // Arrange
+        const user = userEvent.setup();
+        rejectMutateAsync.mockResolvedValue({ count: 2 });
+        render(
+            <CandidateLeafTable
+                items={[
+                    buildMatched(),
+                    buildMatched({ id: 'match-2', filePath: '/media/tv/Bluey/S01E03.mkv' }),
+                    buildMatched({ id: 'match-3', filePath: '/media/tv/Bluey/S01E04.mkv', status: 'Failed' }),
+                ]}
+                emptyState={<div />}
+                requestAccept={vi.fn()}
+            />,
+            { wrapper: createTestWrapper() },
+        );
+        await user.click(within(rowFor('match-1')).getByRole('checkbox', { name: /select s01e01/i }));
+        await user.click(within(rowFor('match-3')).getByRole('checkbox', { name: /select s01e04/i }));
+
+        // Act
+        await user.click(screen.getByRole('button', { name: 'Reject selected' }));
+
+        // Assert
+        expect(rejectMutateAsync).toHaveBeenCalledWith({ ids: ['match-1', 'match-3'] });
+        expect(await screen.findByText('Matches rejected')).toBeInTheDocument();
+        expect(
+            screen.getByText('2 of 2 files rejected. Rescans keep them unmatched until you restore them.'),
+        ).toBeInTheDocument();
+    });
+
+    it.each([
+        ['Reject selected', 'Import selected'],
+        ['Import selected', 'Reject selected'],
+    ])('SelectedActions_DisableTheOtherAction_WhenOneRuns (%s)', async (running, other) => {
+        // Arrange
+        const user = userEvent.setup();
+        rejectMutateAsync.mockReturnValue(new Promise(() => {}));
+        bulkAcceptMutateAsync.mockReturnValue(new Promise(() => {}));
+        render(
+            <CandidateLeafTable
+                items={[buildMatched()]}
+                emptyState={<div />}
+                requestAccept={(action) => void action('Inherit')}
+            />,
+            { wrapper: createTestWrapper() },
+        );
+        await user.click(within(rowFor('match-1')).getByRole('checkbox', { name: /select s01e01/i }));
+
+        // Act
+        await user.click(screen.getByRole('button', { name: running }));
+
+        // Assert
+        expect(screen.getByRole('button', { name: other })).toBeDisabled();
+    });
+
+    it('ScopeAction_HidesWhileFilesAreSelected_WhenAFileIsSelected', async () => {
+        // Arrange
+        const user = userEvent.setup();
+        render(
+            <CandidateLeafTable
+                items={[buildMatched()]}
+                emptyState={<div />}
+                requestAccept={vi.fn()}
+                scopeAction={<button type="button">Retry failed (1)</button>}
+            />,
+            { wrapper: createTestWrapper() },
+        );
+        expect(screen.getByRole('button', { name: 'Retry failed (1)' })).toBeInTheDocument();
+
+        // Act
+        await user.click(within(rowFor('match-1')).getByRole('checkbox', { name: /select s01e01/i }));
+
+        // Assert
+        expect(screen.queryByRole('button', { name: 'Retry failed (1)' })).not.toBeInTheDocument();
+        expect(screen.getByText('1 selected')).toBeInTheDocument();
     });
 
     it('takes only the rows on the page when the header checkbox is ticked, and offers the rest through the banner', async () => {
@@ -357,7 +768,8 @@ describe('CandidateLeafTable', () => {
         expect(screen.getByRole('button', { name: 'Select all 26 across all pages' })).toBeInTheDocument();
     });
 
-    it('drops a checked row from the count and the submission once it is no longer submittable', async () => {
+    it('ImportSelected_LeavesOutASelectedFile_WhenItIsNoLongerSubmittable', async () => {
+        // Arrange
         const user = userEvent.setup();
         const other = buildMatched({ id: 'match-2', filePath: '/media/tv/Bluey/S01E03.mkv' });
         const { rerender } = render(
@@ -382,8 +794,10 @@ describe('CandidateLeafTable', () => {
         );
         expect(screen.getByText('1 selected')).toBeInTheDocument();
 
-        await user.click(screen.getByRole('button', { name: /import checked/i }));
+        // Act
+        await user.click(screen.getByRole('button', { name: 'Import selected' }));
 
+        // Assert
         await waitFor(() => {
             expect(bulkAcceptMutateAsync).toHaveBeenCalledWith({ ids: ['match-2'], monitoringMode: 'Inherit' });
         });
@@ -411,46 +825,66 @@ describe('CandidateLeafTable', () => {
         expect(within(rowFor('match-1')).getByRole('checkbox', { name: /select s01e01/i })).not.toBeChecked();
     });
 
-    it('keeps the Detail button mounted while its preview is open', async () => {
+    it('RowMenuPreview_OpensThePreviewAndKeepsTheTrigger_WhenChosen', async () => {
+        // Arrange
         const user = userEvent.setup();
-        render(
-            <CandidateLeafTable
-                items={[buildMatched()]}
-                emptyState={<div />}
-                requestAccept={(action) => void action('Inherit')}
-            />,
-            {
-                wrapper: createTestWrapper(),
-            },
-        );
+        render(<CandidateLeafTable items={[buildMatched()]} emptyState={<div />} requestAccept={vi.fn()} />, {
+            wrapper: createTestWrapper(),
+        });
+        const trigger = within(rowFor('match-1')).getByRole('button', { name: 'Actions for S01E01.mkv' });
+        await user.click(trigger);
 
-        const detail = within(rowFor('match-1')).getByRole('button', { name: /^Detail$/ });
-        await user.click(detail);
+        // Act
+        await user.click(screen.getByRole('menuitem', { name: 'Preview' }));
 
+        // Assert
         expect(await screen.findByTestId('preview-drawer-open')).toBeInTheDocument();
-        expect(detail).toBeInTheDocument();
+        expect(trigger).toBeInTheDocument();
     });
 
-    it('opens the manual-match dialog targeting the candidate for an unmatched row', async () => {
+    it('RowMenuMatch_OpensTheManualMatchForTheFile_WhenTheFileHasNoMatch', async () => {
+        // Arrange
         const user = userEvent.setup();
-        render(
-            <CandidateLeafTable
-                items={[buildUnmatched()]}
-                emptyState={<div />}
-                requestAccept={(action) => void action('Inherit')}
-            />,
-            {
-                wrapper: createTestWrapper(),
-            },
-        );
+        render(<CandidateLeafTable items={[buildUnmatched()]} emptyState={<div />} requestAccept={vi.fn()} />, {
+            wrapper: createTestWrapper(),
+        });
+        await user.click(within(rowFor('empty-1')).getByRole('button', { name: 'Actions for S01E02.mkv' }));
 
-        await user.click(within(rowFor('empty-1')).getByRole('button', { name: /^Match$/ }));
+        // Act
+        await user.click(screen.getByRole('menuitem', { name: 'Match' }));
 
+        // Assert
         await waitFor(() => {
             expect(screen.getByTestId('manual-match-dialog-open')).toHaveTextContent('candidate');
         });
         expect(manualMatchProp?.kind).toBe('candidate');
         expect(manualMatchProp?.kind === 'candidate' && manualMatchProp.candidate.id).toBe('empty-1');
+        expect(manualMatchSuppressesToast).toBe(false);
+    });
+
+    it('RowMenuMatch_KeepsTheMatchToast_WhenTheFileOfTheDetailsLeavesTheList', async () => {
+        // Arrange
+        const user = userEvent.setup();
+        const { rerender } = render(
+            <CandidateLeafTable
+                items={[buildMatched(), buildUnmatched()]}
+                emptyState={<div />}
+                requestAccept={vi.fn()}
+            />,
+            { wrapper: createTestWrapper() },
+        );
+        await user.click(within(rowFor('match-1')).getByRole('button', { name: 'S01E01.mkv' }));
+        rerender(<CandidateLeafTable items={[buildUnmatched()]} emptyState={<div />} requestAccept={vi.fn()} />);
+        await user.click(within(rowFor('empty-1')).getByRole('button', { name: 'Actions for S01E02.mkv' }));
+
+        // Act
+        await user.click(screen.getByRole('menuitem', { name: 'Match' }));
+
+        // Assert
+        await waitFor(() => {
+            expect(screen.getByTestId('manual-match-dialog-open')).toHaveTextContent('candidate');
+        });
+        expect(manualMatchSuppressesToast).toBe(false);
     });
 
     it('renders the provided empty state when there are no candidates', () => {
@@ -481,10 +915,14 @@ describe('CandidateLeafTable (mobile card collapse)', () => {
         vi.restoreAllMocks();
     });
 
-    it('marks the filename cell as header role, match as field, actions as actions, and select as hidden (no layout-participating checkbox)', () => {
+    it('CardLayout_PutsTheFilenameAndTheFileMenuInTheCardHeader_WhenTheTableCollapses', () => {
+        // Arrange
+        const items = [buildMatched()];
+
+        // Act
         render(
             <CandidateLeafTable
-                items={[buildMatched()]}
+                items={items}
                 emptyState={<div />}
                 requestAccept={(action) => void action('Inherit')}
             />,
@@ -493,10 +931,12 @@ describe('CandidateLeafTable (mobile card collapse)', () => {
             },
         );
 
+        // Assert
         expect(document.querySelector('td[data-column="select"]')).toHaveAttribute('data-mobile-role', 'hidden');
         expect(document.querySelector('td[data-column="filename"]')).toHaveAttribute('data-mobile-role', 'header');
         expect(document.querySelector('td[data-column="match"]')).toHaveAttribute('data-mobile-role', 'field');
-        expect(document.querySelector('td[data-column="actions"]')).toHaveAttribute('data-mobile-role', 'actions');
+        expect(document.querySelector('td[data-column="status"]')).toHaveAttribute('data-mobile-role', 'field');
+        expect(document.querySelector('td[data-column="actions"]')).toHaveAttribute('data-mobile-role', 'header');
     });
 
     it('shows the selection overlay only for a submittable row while selection mode is active', async () => {
@@ -541,7 +981,8 @@ describe('CandidateLeafTable (mobile card collapse)', () => {
         expect(screen.getByRole('checkbox', { name: /select s01e01/i })).not.toBeChecked();
     });
 
-    it('renders a rejected row as silenced with only a Restore action that restores the file', async () => {
+    it('RowMenuRestore_RestoresTheFile_WhenTheFileIsSilenced', async () => {
+        // Arrange
         const user = userEvent.setup();
         restoreMutateAsync.mockResolvedValue({ count: 1 });
         render(
@@ -552,31 +993,38 @@ describe('CandidateLeafTable (mobile card collapse)', () => {
             />,
             { wrapper: createTestWrapper() },
         );
-
         const row = rowFor('rejected-1');
-        expect(within(row).getByTestId('candidate-leaf-silenced')).toHaveTextContent('Silenced');
-        expect(within(row).queryByRole('button', { name: /^Match$/ })).toBeNull();
-        expect(within(row).queryByRole('button', { name: /^Import$/ })).toBeNull();
+        await user.click(within(row).getByRole('button', { name: 'Actions for S01E02.mkv' }));
+        expect(screen.getAllByRole('menuitem').map((item) => item.textContent)).toEqual(['View details', 'Restore']);
+
+        // Act
+        await user.click(screen.getByRole('menuitem', { name: 'Restore' }));
+
+        // Assert
+        expect(within(row).getByRole('button', { name: 'Silenced: S01E02.mkv. View details' })).toBeInTheDocument();
         expect(within(row).getByRole('checkbox', { name: /select s01e02/i })).toBeDisabled();
-
-        await user.click(within(row).getByRole('button', { name: /^Restore$/ }));
-
         expect(restoreMutateAsync).toHaveBeenCalledWith({ ids: ['rejected-1'] });
     });
 
-    it('rejects a pending file from its row', async () => {
+    it('RowMenuReject_RejectsTheFile_WhenTheFileIsPending', async () => {
+        // Arrange
         const user = userEvent.setup();
         rejectMutateAsync.mockResolvedValue({ count: 1, error: null });
         render(<CandidateLeafTable items={[buildMatched()]} emptyState={<div />} requestAccept={vi.fn()} />, {
             wrapper: createTestWrapper(),
         });
+        await user.click(within(rowFor('match-1')).getByRole('button', { name: 'Actions for S01E01.mkv' }));
 
-        await user.click(within(rowFor('match-1')).getByRole('button', { name: /^Reject$/ }));
+        // Act
+        await user.click(screen.getByRole('menuitem', { name: 'Reject' }));
 
+        // Assert
         expect(rejectMutateAsync).toHaveBeenCalledWith({ ids: ['match-1'] });
     });
 
-    it('offers no Reject action on a file that an import owns', () => {
+    it('RowMenu_OffersNoReject_WhenAnImportOwnsTheFile', async () => {
+        // Arrange
+        const user = userEvent.setup();
         render(
             <CandidateLeafTable
                 items={[buildMatched({ status: 'Queued' })]}
@@ -586,10 +1034,19 @@ describe('CandidateLeafTable (mobile card collapse)', () => {
             { wrapper: createTestWrapper() },
         );
 
-        expect(within(rowFor('match-1')).queryByRole('button', { name: /^Reject$/ })).toBeNull();
+        const status = within(rowFor('match-1')).getByRole('button', { name: 'Queued: S01E01.mkv. View details' });
+
+        // Act
+        await user.click(within(rowFor('match-1')).getByRole('button', { name: 'Actions for S01E01.mkv' }));
+
+        // Assert
+        expect(screen.getAllByRole('menuitem').map((item) => item.textContent)).toEqual(['View details', 'Preview']);
+        expect(status).toBeInTheDocument();
     });
 
-    it('offers no Reject action on an invalidated file', () => {
+    it('RowMenu_OffersNoReject_WhenTheFileIsInvalidated', async () => {
+        // Arrange
+        const user = userEvent.setup();
         render(
             <CandidateLeafTable
                 items={[buildUnmatched({ status: 'Invalidated' })]}
@@ -599,18 +1056,26 @@ describe('CandidateLeafTable (mobile card collapse)', () => {
             { wrapper: createTestWrapper() },
         );
 
-        expect(within(rowFor('empty-1')).queryByRole('button', { name: /^Reject$/ })).toBeNull();
+        // Act
+        await user.click(within(rowFor('empty-1')).getByRole('button', { name: 'Actions for S01E02.mkv' }));
+
+        // Assert
+        expect(screen.queryByRole('menuitem', { name: 'Reject' })).toBeNull();
     });
 
-    it('warns instead of confirming when the server rejects no file', async () => {
+    it('RowMenuReject_Warns_WhenTheServerRejectsNoFile', async () => {
+        // Arrange
         const user = userEvent.setup();
         rejectMutateAsync.mockResolvedValue({ count: 0, error: null });
         render(<CandidateLeafTable items={[buildMatched()]} emptyState={<div />} requestAccept={vi.fn()} />, {
             wrapper: createTestWrapper(),
         });
+        await user.click(within(rowFor('match-1')).getByRole('button', { name: 'Actions for S01E01.mkv' }));
 
-        await user.click(within(rowFor('match-1')).getByRole('button', { name: /^Reject$/ }));
+        // Act
+        await user.click(screen.getByRole('menuitem', { name: 'Reject' }));
 
+        // Assert
         expect(await screen.findByText('Match not rejected')).toBeInTheDocument();
         expect(screen.queryByText('Match rejected')).toBeNull();
     });

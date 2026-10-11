@@ -608,6 +608,9 @@ describe('DownloadsPage table columns', () => {
 
         const link = within(getTable()).getByRole('link', { name: 'Breaking Bad' });
         expect(link).toHaveAttribute('href', '/library/chi-1');
+        expect(link.querySelector('[data-component="content-lineage-title"]')).toHaveClass(
+            'content-lineage-title--stacked',
+        );
         expect(within(getTable()).queryByText('Breaking.Bad.S01E01.1080p.BluRay.x264')).not.toBeInTheDocument();
     });
 
@@ -1484,6 +1487,21 @@ describe('DownloadsPage filters and summary', () => {
         const table = getTable();
         expect(within(table).getByRole('button', { name: 'Filter by Client' })).toBeInTheDocument();
         expect(within(table).getByRole('button', { name: 'Filter by Status' })).toBeInTheDocument();
+    });
+
+    it('Layout_ShowsNoToolbarFilterOrSortControls_WhenTableHeadersRender', async () => {
+        // Arrange
+        const queryClient = createTestQueryClient();
+        render(<DownloadsPage />, { wrapper: createTestWrapper(queryClient) });
+
+        // Act
+        await waitFor(() => expect(within(getTable()).getByText('Breaking Bad')).toBeInTheDocument());
+
+        // Assert
+        expect(screen.getAllByRole('button', { name: 'Filter by Client' })).toHaveLength(1);
+        expect(screen.getAllByRole('button', { name: 'Filter by Status' })).toHaveLength(1);
+        expect(screen.queryByRole('button', { name: /^Filters, / })).not.toBeInTheDocument();
+        expect(screen.queryByRole('combobox', { name: 'Sort by field' })).not.toBeInTheDocument();
     });
 
     it('filters by client via the Client header funnel', async () => {

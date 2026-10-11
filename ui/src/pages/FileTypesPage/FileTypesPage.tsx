@@ -243,11 +243,7 @@ function DenyListSection({ denyList, addOpen, openAdd, closeAdd }: DenyListSecti
                 <EmptyState
                     icon={<WarningCircleIcon weight="duotone" />}
                     title="Failed to load blocked file patterns"
-                    action={
-                        <Button variant="secondary" size="sm" onClick={() => denyList.refetch()}>
-                            Retry
-                        </Button>
-                    }
+                    onRetry={denyList.refetch}
                 />
             ) : denyList.entries.length === 0 ? (
                 <EmptyState
@@ -595,11 +591,7 @@ function MimeRegistrySection({ registry, addOpen, openAdd, closeAdd }: MimeRegis
                 <EmptyState
                     icon={<WarningCircleIcon weight="duotone" />}
                     title="Failed to load file type associations"
-                    action={
-                        <Button variant="secondary" size="sm" onClick={() => registry.refetch()}>
-                            Retry
-                        </Button>
-                    }
+                    onRetry={registry.refetch}
                 />
             ) : registry.mappings.length === 0 ? (
                 <EmptyState

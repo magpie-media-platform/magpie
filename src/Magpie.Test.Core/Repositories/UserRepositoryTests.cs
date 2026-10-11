@@ -13,6 +13,7 @@ using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
 using Magpie.Models.Paging;
+using Magpie.Models.Repositories;
 using Magpie.Sdk.Services;
 
 using Microsoft.Data.Sqlite;
@@ -1051,6 +1052,37 @@ public sealed class UserRepositoryTests
 
         // Assert
         Assert.That(result, Is.False);
+    }
+
+    [Test]
+    public async Task RecordFailedLoginAsync_LocksTheUser_WhenTheStoredCounterReachesTheLimit()
+    {
+        // Arrange
+        var user = new User
+        {
+            Username = "ConcurrentFailuresUser",
+            ProviderType = "local",
+            Enabled = true,
+            Role = Role.Viewer,
+            FailedLoginAttempts = 0
+        };
+        var created = await _subject.CreateAsync(user, _adminUserId).ConfigureAwait(false);
+        var lockedUntil = new DateTime(2026, 9, 8, 12, 15, 0, DateTimeKind.Utc);
+
+        // Act
+        var first = await _subject.RecordFailedLoginAsync(created.Id, 3, lockedUntil).ConfigureAwait(false);
+        var second = await _subject.RecordFailedLoginAsync(created.Id, 3, lockedUntil).ConfigureAwait(false);
+        var third = await _subject.RecordFailedLoginAsync(created.Id, 3, lockedUntil).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(first, Is.EqualTo(new FailedLoginResult(1, null)));
+            Assert.That(second, Is.EqualTo(new FailedLoginResult(2, null)));
+            Assert.That(
+                third,
+                Is.EqualTo(new FailedLoginResult(3, new DateTime(2026, 9, 8, 12, 15, 0, DateTimeKind.Utc))));
+        }
     }
 
     [Test]

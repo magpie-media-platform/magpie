@@ -88,7 +88,7 @@ public interface IDownloadRepository :
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Lists the downloads of releases.
+    /// Lists the downloads of releases that still apply to a grab.
     /// </summary>
     /// <param name="releases">The releases whose downloads to list</param>
     /// <param name="cancellationToken">The token that cancels the operation</param>

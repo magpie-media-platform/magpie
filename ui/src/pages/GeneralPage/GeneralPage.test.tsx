@@ -272,6 +272,22 @@ describe('GeneralPage save', () => {
         });
     });
 
+    it('names the saved instance in the success toast', async () => {
+        const user = userEvent.setup();
+        render(<GeneralPage />, { wrapper: createWrapper() });
+
+        await waitFor(() => {
+            expect(screen.getByLabelText('Instance Name')).toHaveValue('My Magpie');
+        });
+
+        const input = screen.getByLabelText('Instance Name');
+        await user.clear(input);
+        await user.type(input, 'Updated Name');
+        await user.click(document.querySelector('[data-action="save-settings"]') as HTMLButtonElement);
+
+        expect(await screen.findByText('Updated Name updated the general settings.')).toBeInTheDocument();
+    });
+
     it('shows error toast when save fails', async () => {
         mockApiPatch.mockRejectedValue(new Error('Server error'));
         const user = userEvent.setup();

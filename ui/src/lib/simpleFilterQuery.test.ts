@@ -172,6 +172,42 @@ describe('simpleFilterQuery', () => {
         it('returns null for an unsupported clause', () => {
             expect(parseQuery('rating >= 8', 'content')).toBeNull();
         });
+
+        it('keeps a title prefix condition so that the simple controls can edit the other fields', () => {
+            // Arrange
+            const query = 'tag has "Action" and title startswith "B"';
+
+            // Act
+            const parsed = parseQuery(query, 'content');
+
+            // Assert
+            expect(parsed).toMatchObject({ tag: 'Action', titlePrefix: 'B' });
+            expect(buildQuery({ ...parsed!, fulfillment: 'Missing' }, 'content')).toBe(
+                'fulfillment = Missing and title startswith "B" and tag has "Action"',
+            );
+        });
+
+        it.each(['title startswith ""', 'title startswith "B" and title startswith "C"'])(
+            'keeps an unusable title prefix condition in advanced mode: %s',
+            (query) => {
+                // Act
+                const parsed = parseQuery(query, 'content');
+
+                // Assert
+                expect(parsed).toBeNull();
+            },
+        );
+
+        it('keeps a title prefix condition in advanced mode for a subject query', () => {
+            // Arrange
+            const query = 'title startswith "B"';
+
+            // Act
+            const parsed = parseQuery(query, 'subject');
+
+            // Assert
+            expect(parsed).toBeNull();
+        });
     });
 
     describe('isSimpleQuery', () => {
@@ -205,6 +241,19 @@ describe('simpleFilterQuery', () => {
 
         it('rejects unsupported queries', () => {
             expect(isSimpleQuery('contentType = "movie" or contentType = "show"', 'content')).toBe(false);
+        });
+
+        it('keeps a title prefix condition in advanced mode unless the host allows it', () => {
+            // Arrange
+            const query = 'tag has "Action" and title startswith "B"';
+
+            // Act
+            const byDefault = isSimpleQuery(query, 'content');
+            const withPrefixAllowed = isSimpleQuery(query, 'content', { allowTitlePrefix: true });
+
+            // Assert
+            expect(byDefault).toBe(false);
+            expect(withPrefixAllowed).toBe(true);
         });
     });
 });

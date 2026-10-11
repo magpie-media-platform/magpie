@@ -36,6 +36,7 @@ internal sealed class JobExecutionConfiguration : IEntityTypeConfiguration<JobEx
         builder.HasIndex(e => new { e.Status, e.CreatedAt, e.Id }).IsDescending(false, true, false);
         builder.HasIndex(e => new { e.JobType, e.Status, e.CreatedAt, e.Id })
             .IsDescending(false, false, true, false);
+        builder.HasIndex(e => new { e.CompletedAt, e.Id, e.CreatedByUserId });
         builder.HasIndex(e => e.StartedAt);
         builder.HasIndex(e => e.LastHeartbeat);
         builder.HasIndex(e => e.NotBeforeAt);

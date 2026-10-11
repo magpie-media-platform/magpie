@@ -406,7 +406,7 @@ test.describe.serial('Journey 12: follow a person through the library', () => {
                 ).toBe(false);
                 await api.delete(`/api/content/${ids.movie}`);
 
-                const execution = await runImmediateJob(api, 'PruneOrphanedSubjects');
+                const execution = await runImmediateJob(api, 'SubjectMaintenance');
                 expect(execution.status, execution.statusMessage ?? undefined).toBe('Completed');
                 expect((await api.get<Subject>(`/api/subjects/${protectedSubject.subject.id}`)).id).toBe(
                     protectedSubject.subject.id,

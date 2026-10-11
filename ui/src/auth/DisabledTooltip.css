@@ -1,0 +1,10 @@
+@layer components {
+    .disabled-tooltip {
+        display: inline-block;
+        cursor: not-allowed;
+
+        & > :disabled {
+            pointer-events: none;
+        }
+    }
+}

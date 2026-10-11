@@ -58,7 +58,6 @@ function PlayablePoster({ mimeType, directUrl, youTubeId, posterUrl, label }: Om
         setPlaying(false);
         setFailed(true);
     }, []);
-    // iOS starts a video only from play() inside the click, so the video mounts and starts before the click returns.
     const handlePlay = useCallback(() => flushSync(() => setPlaying(true)), []);
 
     return (

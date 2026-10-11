@@ -1,3 +1,4 @@
+import { FlagCheckeredIcon } from '@phosphor-icons/react';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
@@ -130,18 +131,50 @@ describe('MonitoringControl', () => {
         await user.click(screen.getByTestId('monitoring-control__option-shotgun'));
 
         const dialog = await screen.findByRole('dialog');
-        expect(within(dialog).getByText('Enable Shotgun mode?')).toBeInTheDocument();
-        expect(dialog).toHaveTextContent(
-            'Shotgun mode grabs every acceptable release at the same time. This uses more bandwidth and download slots.',
-        );
-        expect(dialog).toHaveTextContent(
-            "Magpie keeps the first successful import and cancels the rest, unless they're a higher quality.",
-        );
-        expect(dialog).toHaveTextContent('Inheriting items will also use Shotgun mode.');
+        expect(within(dialog).getByText('Use Shotgun?')).toBeInTheDocument();
+        expect(
+            within(dialog).getByText(
+                'Downloads every good release at once and keeps the first one that finishes. Faster, but uses more bandwidth.',
+            ),
+        ).toBeInTheDocument();
+        expect(within(dialog).queryByText('Also applies to everything inside it.')).not.toBeInTheDocument();
+        expect(within(dialog).getByRole('button', { name: 'Use Shotgun' })).toBeInTheDocument();
         await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
 
         await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
         expect(mockMutate).not.toHaveBeenCalled();
+    });
+
+    it('ShotgunConfirmation_SaysItAppliesInside_WhenTheItemHasChildren', async () => {
+        // Arrange
+        const user = userEvent.setup();
+        render(
+            <TooltipProvider>
+                <MonitoringControl contentId="c-1" monitoring="Monitored" effectiveMonitoring="Monitored" hasChildren />
+            </TooltipProvider>,
+        );
+
+        // Act
+        await user.click(screen.getByTestId('monitoring-control__option-shotgun'));
+
+        // Assert
+        const dialog = await screen.findByRole('dialog');
+        expect(within(dialog).getByText('Also applies to everything inside it.')).toBeInTheDocument();
+    });
+
+    it('shows the flag icon on the Shotgun confirmation action', async () => {
+        // Arrange
+        const user = userEvent.setup();
+        const reference = render(<FlagCheckeredIcon weight="bold" aria-hidden="true" />).container.querySelector('svg');
+        renderControl('Monitored', 'Monitored');
+
+        // Act
+        await user.click(screen.getByTestId('monitoring-control__option-shotgun'));
+
+        // Assert
+        expect((await screen.findByRole('button', { name: 'Use Shotgun' })).querySelector('svg')?.outerHTML).toBe(
+            reference?.outerHTML,
+        );
     });
 
     it('patches Shotgun monitoring when Shotgun is confirmed', async () => {
@@ -149,7 +182,7 @@ describe('MonitoringControl', () => {
         renderControl(null, 'Unmonitored');
 
         await user.click(screen.getByTestId('monitoring-control__option-shotgun'));
-        await user.click(await screen.findByRole('button', { name: /Enable Shotgun/ }));
+        await user.click(await screen.findByRole('button', { name: 'Use Shotgun' }));
 
         expect(mockMutate).toHaveBeenCalledWith({ id: 'c-1', monitoring: 'Shotgun' }, expect.anything());
     });

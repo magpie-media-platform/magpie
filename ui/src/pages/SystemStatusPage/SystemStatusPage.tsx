@@ -8,7 +8,7 @@ import { PageHeader } from '@/components/ui/PageHeader';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { Slot } from '@/components/ui/Slot';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
-import { useSystemStatus } from '@/hooks/useSystemStatus';
+import { useDiskSpace, useSystemStatus } from '@/hooks/useSystemStatus';
 import { formatUptime } from '@/lib/formatTime';
 
 import { DiagnosticsSection } from './DiagnosticsSection';
@@ -47,6 +47,7 @@ export function SystemStatusPage() {
     useDocumentTitle('System Status');
     const navigate = useNavigate();
     const statusData = useSystemStatus();
+    const { error: diskSpaceError, refetch: refetchDiskSpace } = useDiskSpace();
 
     const handleFolderClick = useCallback(
         (folder: DiskSpaceInfo) => {
@@ -135,8 +136,9 @@ export function SystemStatusPage() {
                             heading="Root Folders"
                             icon={<HardDrivesIcon weight="duotone" />}
                             folders={statusData.diskSpace}
-                            totals={statusData.diskSpaceTotals}
                             loading={statusData.isLoading}
+                            error={diskSpaceError}
+                            onRetry={() => void refetchDiskSpace()}
                             onFolderClick={handleFolderClick}
                             onViewAllClick={handleViewAllFolders}
                             headingLevel={3}

@@ -398,6 +398,7 @@ internal sealed class ExtensionRepository(
     public async Task RegisterLoadedExtensionsAsync(
         IReadOnlyList<Extension> discovered,
         IReadOnlyList<IExtension> loaded,
+        IReadOnlyDictionary<Guid, string> packageVersions,
         CancellationToken cancellationToken)
     {
         try
@@ -420,7 +421,7 @@ internal sealed class ExtensionRepository(
                 }
 
                 extension.Name = match.Name;
-                extension.Version = match.Version.ToString();
+                extension.Version = packageVersions.GetValueOrDefault(extension.Id) ?? match.Version.ToString();
                 extension.TargetABI = match.TargetABI;
             }
 

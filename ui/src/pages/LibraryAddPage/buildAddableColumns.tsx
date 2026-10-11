@@ -15,7 +15,9 @@ import {
 } from '@/components/ui/DropdownMenu';
 import { useLibraryTypes } from '@/hooks/useLibraryTypes';
 import { type ApiRootFolder } from '@/hooks/useRootFolders';
+import { formatPublishDate } from '@/lib/dateFormatting';
 import { resolveContentTypeLabel } from '@/lib/contentTypeDisplay';
+import type { TemporalPrecision } from '@/types/contentMetadata';
 
 export interface AddableCandidate {
     key: string;
@@ -28,6 +30,7 @@ export interface AddableCandidate {
     year?: string;
     yearValue?: number;
     releaseDate?: string;
+    releaseDatePrecision?: TemporalPrecision;
     overview?: string | null;
     thumbnailUrl?: string | null;
     inLibrary: boolean;
@@ -36,7 +39,6 @@ export interface AddableCandidate {
 
 export interface RowActionContext {
     addingKey: string | null;
-    addedKeys: Set<string>;
     foldersLoading: boolean;
     foldersForContentType: (contentType: string) => ApiRootFolder[];
     onAdd: (candidate: AddableCandidate, rootFolderId: string) => void;
@@ -49,9 +51,23 @@ interface RowActionsProps {
 }
 
 export function RowActions({ candidate, ctx }: RowActionsProps) {
-    const inLibrary = candidate.inLibrary;
-    if (inLibrary) {
-        return null;
+    if (candidate.inLibrary) {
+        return (
+            <div className="library-add-page__row-actions">
+                <div className="library-add-page__result-buttons">
+                    <Button
+                        variant="primary"
+                        size="sm"
+                        disabled
+                        data-action="in-library"
+                        data-result-key={candidate.key}
+                    >
+                        <CheckIcon weight="bold" aria-hidden="true" />
+                        In Library
+                    </Button>
+                </div>
+            </div>
+        );
     }
 
     const availableFolders = ctx.foldersForContentType(candidate.contentType);
@@ -60,18 +76,12 @@ export function RowActions({ candidate, ctx }: RowActionsProps) {
 
     const isAdding = ctx.addingKey === candidate.key;
     const isAnyAdding = ctx.addingKey !== null;
-    const isAdded = ctx.addedKeys.has(candidate.key);
 
     const addBlockedReason =
         !hasFolders && !ctx.foldersLoading ? 'Configure a root folder for this content type before adding.' : null;
-    const addDisabled = isAnyAdding || isAdded || !hasFolders || ctx.foldersLoading;
+    const addDisabled = isAnyAdding || !hasFolders || ctx.foldersLoading;
 
-    const addLabel = isAdded ? (
-        <>
-            <CheckIcon weight="bold" aria-hidden="true" />
-            Added
-        </>
-    ) : (
+    const addLabel = (
         <>
             <PlusIcon weight="bold" aria-hidden="true" />
             Add
@@ -82,7 +92,7 @@ export function RowActions({ candidate, ctx }: RowActionsProps) {
     return (
         <div className="library-add-page__row-actions">
             <div className="library-add-page__result-buttons">
-                {multipleFolders && !isAdded ? (
+                {multipleFolders ? (
                     <DropdownMenu>
                         <DropdownMenuTrigger asChild>
                             <Button
@@ -198,39 +208,17 @@ export function TypeCell({ candidate }: { candidate: AddableCandidate }) {
     );
 }
 
-const PUBLISHED_DATE_FORMAT = new Intl.DateTimeFormat(undefined, {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-    timeZone: 'UTC',
-});
-
-export function formatPublished(releaseDate: string | undefined): string {
-    if (!releaseDate) {
-        return '--';
-    }
-    const parsed = new Date(releaseDate);
-    return Number.isNaN(parsed.getTime()) ? '--' : PUBLISHED_DATE_FORMAT.format(parsed);
+export function formatPublished({ releaseDate, releaseDatePrecision }: AddableCandidate): string {
+    return formatPublishDate(releaseDate, '--', releaseDatePrecision);
 }
 
 function PublishedCell({ candidate }: { candidate: AddableCandidate }) {
-    return <span className="library-add-page__published">{formatPublished(candidate.releaseDate)}</span>;
+    return <span className="library-add-page__published">{formatPublished(candidate)}</span>;
 }
 
 export function SourceCell({ candidate }: { candidate: AddableCandidate }) {
     return (
         <div className="library-add-page__source-cell">
-            {candidate.inLibrary && (
-                <Badge
-                    size="sm"
-                    variant="success"
-                    badgeStyle="outline"
-                    data-testid="library-add-page__in-library-badge"
-                >
-                    <CheckIcon weight="bold" aria-hidden="true" />
-                    In library
-                </Badge>
-            )}
             <Badge size="sm" variant="info" badgeStyle="outline">
                 {candidate.providerType}
             </Badge>

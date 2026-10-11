@@ -928,9 +928,9 @@ public sealed class LibraryImportServiceTests
         var transactionManager = new Mock<ITransactionManager>();
         transactionManager
             .Setup(manager => manager.ExecuteWithTransactionAsync(
-                It.IsAny<Func<CancellationToken, Task<(Guid, MediaFile?)>>>(), It.IsAny<CancellationToken>()))
-            .Returns((Func<CancellationToken, Task<(Guid, MediaFile?)>> operation, CancellationToken token) =>
-                operation(token));
+                It.IsAny<Func<CancellationToken, Task<Guid>>>(),
+                It.IsAny<CancellationToken>()))
+            .Returns((Func<CancellationToken, Task<Guid>> operation, CancellationToken token) => operation(token));
         var subject = new LibraryImportService(
             candidateRepository.Object,
             contentService.Object,
@@ -1441,9 +1441,9 @@ public sealed class LibraryImportServiceTests
         var transactionManager = new Mock<ITransactionManager>();
         transactionManager
             .Setup(manager => manager.ExecuteWithTransactionAsync(
-                It.IsAny<Func<CancellationToken, Task<(Guid, MediaFile?)>>>(), It.IsAny<CancellationToken>()))
-            .Returns((Func<CancellationToken, Task<(Guid, MediaFile?)>> operation, CancellationToken token) =>
-                operation(token));
+                It.IsAny<Func<CancellationToken, Task<Guid>>>(),
+                It.IsAny<CancellationToken>()))
+            .Returns((Func<CancellationToken, Task<Guid>> operation, CancellationToken token) => operation(token));
 
         var fileSystem = new Mock<IFileSystem>();
         fileSystem.Setup(system => system.GetFullPath(It.IsAny<string>())).Returns<string>(path => path);
@@ -1711,8 +1711,9 @@ public sealed class LibraryImportServiceTests
         var transactionManager = new Mock<ITransactionManager>();
         transactionManager
             .Setup(manager => manager.ExecuteWithTransactionAsync(
-                It.IsAny<Func<CancellationToken, Task<(Guid, MediaFile?)>>>(), It.IsAny<CancellationToken>()))
-            .Returns(async (Func<CancellationToken, Task<(Guid, MediaFile?)>> operation, CancellationToken token) =>
+                It.IsAny<Func<CancellationToken, Task<Guid>>>(),
+                It.IsAny<CancellationToken>()))
+            .Returns(async (Func<CancellationToken, Task<Guid>> operation, CancellationToken token) =>
             {
                 events.Add("transaction-begin");
                 var result = await operation(token).ConfigureAwait(false);
@@ -1876,9 +1877,9 @@ public sealed class LibraryImportServiceTests
         var transactionManager = new Mock<ITransactionManager>();
         transactionManager
             .Setup(manager => manager.ExecuteWithTransactionAsync(
-                It.IsAny<Func<CancellationToken, Task<(Guid, MediaFile?)>>>(), It.IsAny<CancellationToken>()))
-            .Returns((Func<CancellationToken, Task<(Guid, MediaFile?)>> operation, CancellationToken token) =>
-                operation(token));
+                It.IsAny<Func<CancellationToken, Task<Guid>>>(),
+                It.IsAny<CancellationToken>()))
+            .Returns((Func<CancellationToken, Task<Guid>> operation, CancellationToken token) => operation(token));
         var fileSystem = new Mock<IFileSystem>();
         fileSystem.Setup(system => system.GetFullPath(It.IsAny<string>())).Returns<string>(path => path);
         var subject = new LibraryImportService(
@@ -1918,12 +1919,11 @@ public sealed class LibraryImportServiceTests
         }
     }
 
+    [TestCase(2, 1)]
     [TestCase(1, 2)]
-    [TestCase(1, 1)]
-    [TestCase(1, null)]
-    [TestCase(null, 1)]
-    public async Task ImportCandidateAsync_KeepsTheExistingCopy_WhenTheImportedCopyHasNoBetterQualityRank(
-        int? existingRank, int? importedRank)
+    public async Task ImportCandidateAsync_AttachesTheFileAndKeepsTheSameNameCopy_WhenTheQualityRanksDiffer(
+        int existingRank,
+        int importedRank)
     {
         // Arrange
         var movieId = Guid.NewGuid();
@@ -2007,187 +2007,12 @@ public sealed class LibraryImportServiceTests
             ]
         });
         var contentFileService = new Mock<IContentFileService>();
-        var releaseEvaluationService = new Mock<IReleaseEvaluationService>();
-        releaseEvaluationService
-            .Setup(service => service.ScoreFileForContentAsync(existing, movieId, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new ReleaseAssessment
-            {
-                MatchResult = ReleaseMatchResult.Confident,
-                MatchedRankOrdinal = existingRank
-            });
-        releaseEvaluationService
-            .Setup(service => service.ScoreFileForContentAsync(
-                It.Is<MediaFile>(file => file.FilePath == "/media/movies/Arrival/Arrival.mp4" && file.FileSize == 900),
-                movieId,
-                It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new ReleaseAssessment
-            {
-                MatchResult = ReleaseMatchResult.Confident,
-                MatchedRankOrdinal = importedRank
-            });
-        var transactionManager = new Mock<ITransactionManager>();
-        transactionManager
-            .Setup(manager => manager.ExecuteWithTransactionAsync(
-                It.IsAny<Func<CancellationToken, Task<(Guid, MediaFile?)>>>(), It.IsAny<CancellationToken>()))
-            .Returns((Func<CancellationToken, Task<(Guid, MediaFile?)>> operation, CancellationToken token) =>
-                operation(token));
-        var fileSystem = new Mock<IFileSystem>();
-        fileSystem.Setup(system => system.GetFullPath(It.IsAny<string>())).Returns<string>(path => path);
-        fileSystem
-            .Setup(system => system.LookupMimeTypeAsync(
-                "/media/movies/Arrival/Arrival.mp4",
-                It.IsAny<CancellationToken>()))
-            .ReturnsAsync("video/mp4");
-        fileSystem.Setup(system => system.ResolveFileKind("video/mp4")).Returns(FileKind.Video);
-        fileSystem.Setup(system => system.GetFileSize("/media/movies/Arrival/Arrival.mp4")).Returns(900);
-        fileSystem
-            .Setup(system => system.MatchesAnyFileType(
-                It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<IReadOnlyList<string>?>()))
-            .Returns(true);
-        fileSystem.Setup(system => system.PathsEqual(It.IsAny<string>(), It.IsAny<string>()))
-            .Returns((string left, string right) => string.Equals(left, right, StringComparison.Ordinal));
-        var subject = new LibraryImportService(
-            candidateRepository.Object,
-            contentService.Object,
-            contentFileService.Object,
-            contentTypeRegistry.Object,
-            hierarchyItems.Object,
-            fileSystem.Object,
-            transactionManager.Object,
-            Mock.Of<IAuditRecordRepository>(),
-            Mock.Of<IJobManager>(),
-            Mock.Of<IEventBus>(),
-            releaseEvaluationService.Object,
-            [],
-            TimeProvider.System,
-            Mock.Of<IRootFolderRepository>(),
-            NullLogger<LibraryImportService>.Instance);
-
-        // Act
-        var result = await subject.ImportCandidateAsync(
-            candidate.Id,
-            0,
-            LibraryImportMonitoringMode.Inherit,
-            null,
-            null).ConfigureAwait(false);
-
-        // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(result.Status, Is.EqualTo(LibraryImportCompletionStatus.Skipped));
-            Assert.That(
-                result.Message,
-                Is.EqualTo("The item keeps another copy of the file, so no file was attached."));
-            hierarchyItems.Verify(
-                repository => repository.LockAsync(movieId, It.IsAny<CancellationToken>()),
-                Times.Once);
-            candidateRepository.Verify(repository => repository.TryResetImportAsync(
-                candidate.Id,
-                "Arrival.mp4 does not have a better quality rank than Arrival.mkv, the copy that stays, so it was " +
-                "not attached.",
-                null,
-                It.IsAny<CancellationToken>()), Times.Once);
-            candidateRepository.Verify(repository => repository.MarkImportFailedAsync(
-                It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<Guid?>(), It.IsAny<CancellationToken>()), Times.Never);
-            candidateRepository.Verify(repository => repository.DeleteAsync(
-                candidate.Id, It.IsAny<Guid?>(), It.IsAny<CancellationToken>()), Times.Never);
-            contentFileService.Verify(service => service.AttachImportedAsync(
-                It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<Guid?>(), It.IsAny<CancellationToken>()), Times.Never);
-            contentService.Verify(service => service.UnlinkFileAsync(
-                It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<Guid?>(), It.IsAny<CancellationToken>()), Times.Never);
-        }
-    }
-
-    [TestCase("Arrival.mkv", 1)]
-    [TestCase("Arrival (2016).mkv", 0)]
-    public async Task ImportCandidateAsync_UnlinksOnlyASameNameCopy_WhenTheImportedCopyHasABetterQualityRank(
-        string existingFileName, int expectedUnlinks)
-    {
-        // Arrange
-        var movieId = Guid.NewGuid();
-        var existing = new MediaFile
-        {
-            Id = Guid.NewGuid(),
-            FileKind = "Video",
-            MimeType = "video/x-matroska",
-            FilePath = $"/media/movies/Arrival/{existingFileName}"
-        };
-        var movie = new ContentHierarchyItem
-        {
-            Id = movieId,
-            MetadataContainerId = Guid.NewGuid(),
-            ContentType = "movie",
-            Level = "movie",
-            Name = "Arrival",
-            Slug = "provider-b-329865",
-            ContentItem = new ContentItem { MediaFiles = { existing } }
-        };
-        var candidate = new LibraryImportCandidate
-        {
-            Id = Guid.NewGuid(),
-            RootFolderId = Guid.NewGuid(),
-            ScanRunId = Guid.NewGuid(),
-            FilePath = "/media/movies/Arrival/Arrival.mp4",
-            ContentType = "movie",
-            Status = LibraryImportCandidateStatus.Importing,
-            Matches =
-            [
-                new LibraryImportMatch
-                {
-                    Confidence = 1,
-                    ProviderType = "provider-b",
-                    ExternalIdKey = "provider-b",
-                    ExternalId = "329865",
-                    Title = "Arrival",
-                    LevelSlug = "movie"
-                }
-            ]
-        };
-        var candidateRepository = new Mock<ILibraryImportCandidateRepository> { CallBase = true };
-        candidateRepository.Setup(repository => repository.GetByIdAsync(candidate.Id, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(candidate);
-        var contentService = new Mock<IContentService>();
-        contentService
-            .Setup(service => service.HydrateWithDescendantsFromExternalIdAsync(
-                "provider-b", "provider-b", "329865", "movie", "movie", candidate.RootFolderId, null, null,
-                null, null, null,
-                It.IsAny<CancellationToken>()))
-            .ReturnsAsync((movie, (IReadOnlyCollection<Guid>)[]));
-        var hierarchyItems = new Mock<IContentHierarchyItemRepository> { CallBase = true };
-        hierarchyItems
-            .Setup(repository => repository.QueryAsync(
-                It.IsAny<ContentHierarchyItemCriteria>(),
-                It.IsAny<PagingParameter>(),
-                null,
-                It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new PagedList<ContentHierarchyItem>());
-        hierarchyItems.Setup(repository => repository.GetByIdAsync(movieId, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(movie);
-        hierarchyItems.Setup(repository => repository.GetLineageAsync(movieId, It.IsAny<CancellationToken>()))
-            .ReturnsAsync([movie]);
-        var contentTypeRegistry = new Mock<IContentTypeRegistry>();
-        contentTypeRegistry.Setup(registry => registry.GetChildLevels("movie", "movie")).Returns([]);
-        contentTypeRegistry.Setup(registry => registry.GetDefinitionFor("movie")).Returns(new ContentTypeDefinition
-        {
-            Slug = "movie",
-            DisplayName = "Movie",
-            LevelDefinitions =
-            [
-                new ContentHierarchyLevelDefinition
-                {
-                    Slug = "movie",
-                    ParentSlug = null,
-                    DisplayName = "Movie",
-                    CustomMetadataFields = [],
-                    AcceptedFileTypes = ["video/*"],
-                    AcceptedSidecarTypes = [".srt"]
-                }
-            ]
-        });
-        var contentFileService = new Mock<IContentFileService>();
         contentFileService
             .Setup(service => service.AttachImportedAsync(
-                movieId, candidate.FilePath, null, It.IsAny<CancellationToken>()))
+                movieId,
+                candidate.FilePath,
+                null,
+                It.IsAny<CancellationToken>()))
             .ReturnsAsync(new AttachContentFileResult
             {
                 Result = new ContentFileAttachmentResult
@@ -2206,19 +2031,27 @@ public sealed class LibraryImportServiceTests
         var releaseEvaluationService = new Mock<IReleaseEvaluationService>();
         releaseEvaluationService
             .Setup(service => service.ScoreFileForContentAsync(existing, movieId, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new ReleaseAssessment { MatchResult = ReleaseMatchResult.Confident, MatchedRankOrdinal = 2 });
+            .ReturnsAsync(new ReleaseAssessment
+            {
+                MatchResult = ReleaseMatchResult.Confident,
+                MatchedRankOrdinal = existingRank
+            });
         releaseEvaluationService
             .Setup(service => service.ScoreFileForContentAsync(
                 It.Is<MediaFile>(file => file.FilePath == "/media/movies/Arrival/Arrival.mp4"),
                 movieId,
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new ReleaseAssessment { MatchResult = ReleaseMatchResult.Confident, MatchedRankOrdinal = 1 });
+            .ReturnsAsync(new ReleaseAssessment
+            {
+                MatchResult = ReleaseMatchResult.Confident,
+                MatchedRankOrdinal = importedRank
+            });
         var transactionManager = new Mock<ITransactionManager>();
         transactionManager
             .Setup(manager => manager.ExecuteWithTransactionAsync(
-                It.IsAny<Func<CancellationToken, Task<(Guid, MediaFile?)>>>(), It.IsAny<CancellationToken>()))
-            .Returns((Func<CancellationToken, Task<(Guid, MediaFile?)>> operation, CancellationToken token) =>
-                operation(token));
+                It.IsAny<Func<CancellationToken, Task<Guid>>>(),
+                It.IsAny<CancellationToken>()))
+            .Returns((Func<CancellationToken, Task<Guid>> operation, CancellationToken token) => operation(token));
         var fileSystem = new Mock<IFileSystem>();
         fileSystem.Setup(system => system.GetFullPath(It.IsAny<string>())).Returns<string>(path => path);
         fileSystem
@@ -2262,10 +2095,203 @@ public sealed class LibraryImportServiceTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(result.Status, Is.EqualTo(LibraryImportCompletionStatus.Completed));
+            contentFileService.Verify(
+                service => service.AttachImportedAsync(
+                    movieId,
+                    "/media/movies/Arrival/Arrival.mp4",
+                    null,
+                    It.IsAny<CancellationToken>()),
+                Times.Once);
+            contentService.Verify(service => service.UnlinkFileAsync(
+                It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<Guid?>(), It.IsAny<CancellationToken>()), Times.Never);
+            candidateRepository.Verify(
+                repository => repository.DeleteAsync(candidate.Id, null, It.IsAny<CancellationToken>()),
+                Times.Once);
+        }
+    }
+
+    [TestCase(2, 1)]
+    [TestCase(1, 2)]
+    public async Task AssociateCandidateAsync_AttachesTheFileAndKeepsTheSameNameCopy_WhenTheQualityRanksDiffer(
+        int existingRank,
+        int associatedRank)
+    {
+        // Arrange
+        var movieId = Guid.NewGuid();
+        var rootFolderId = Guid.NewGuid();
+        var existing = new MediaFile
+        {
+            Id = Guid.NewGuid(),
+            FileKind = "Video",
+            MimeType = "video/x-matroska",
+            FilePath = "/media/movies/Arrival/Arrival.mkv"
+        };
+        var movie = new ContentHierarchyItem
+        {
+            Id = movieId,
+            MetadataContainerId = Guid.NewGuid(),
+            ContentType = "movie",
+            Level = "movie",
+            Name = "Arrival",
+            Slug = "provider-b-329865",
+            EffectiveRootFolderId = rootFolderId,
+            ContentItem = new ContentItem { MediaFiles = { existing } }
+        };
+        var candidate = new LibraryImportCandidate
+        {
+            Id = Guid.NewGuid(),
+            RootFolderId = rootFolderId,
+            ScanRunId = Guid.NewGuid(),
+            FilePath = "/media/movies/Arrival/Arrival.mp4",
+            ContentType = "movie",
+            Status = LibraryImportCandidateStatus.Importing,
+            Matches =
+            [
+                new LibraryImportMatch
+                {
+                    Confidence = 1,
+                    ProviderType = "provider-b",
+                    ExternalIdKey = "provider-b",
+                    ExternalId = "329865",
+                    Title = "Arrival",
+                    LevelSlug = "movie"
+                }
+            ]
+        };
+        var candidateRepository = new Mock<ILibraryImportCandidateRepository> { CallBase = true };
+        candidateRepository.Setup(repository => repository.GetByIdAsync(candidate.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(candidate);
+        var contentService = new Mock<IContentService>();
+        var hierarchyItems = new Mock<IContentHierarchyItemRepository> { CallBase = true };
+        hierarchyItems
+            .Setup(repository => repository.FindByExternalIdentitiesAsync(
+                It.IsAny<IReadOnlyCollection<(string, string, string, string)>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Dictionary<(string, string, string, string), Guid>
+            {
+                [("movie", "movie", "provider-b", "329865")] = movieId
+            });
+        hierarchyItems
+            .Setup(repository => repository.QueryAsync(
+                It.IsAny<ContentHierarchyItemCriteria>(),
+                It.IsAny<PagingParameter>(),
+                null,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<ContentHierarchyItem>());
+        hierarchyItems.Setup(repository => repository.GetByIdAsync(movieId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(movie);
+        hierarchyItems.Setup(repository => repository.GetLineageAsync(movieId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync([movie]);
+        var contentTypeRegistry = new Mock<IContentTypeRegistry>();
+        contentTypeRegistry.Setup(registry => registry.GetRootLevelSlug("movie", "movie")).Returns("movie");
+        contentTypeRegistry.Setup(registry => registry.GetChildLevels("movie", "movie")).Returns([]);
+        contentTypeRegistry.Setup(registry => registry.GetDefinitionFor("movie")).Returns(new ContentTypeDefinition
+        {
+            Slug = "movie",
+            DisplayName = "Movie",
+            LevelDefinitions =
+            [
+                new ContentHierarchyLevelDefinition
+                {
+                    Slug = "movie",
+                    ParentSlug = null,
+                    DisplayName = "Movie",
+                    CustomMetadataFields = [],
+                    AcceptedFileTypes = ["video/*"],
+                    AcceptedSidecarTypes = [".srt"]
+                }
+            ]
+        });
+        var contentFileService = new Mock<IContentFileService>();
+        contentFileService
+            .Setup(service => service.AttachImportedAsync(
+                movieId, candidate.FilePath, null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new AttachContentFileResult
+            {
+                Result = new ContentFileAttachmentResult
+                {
+                    MediaFile = new MediaFile
+                    {
+                        Id = Guid.NewGuid(),
+                        ContentItemId = Guid.NewGuid(),
+                        FileKind = "Video",
+                        FilePath = candidate.FilePath
+                    },
+                    IsPrimary = true
+                },
+                FulfillmentChanged = false
+            });
+        var releaseEvaluationService = new Mock<IReleaseEvaluationService>();
+        releaseEvaluationService
+            .Setup(service => service.ScoreFileForContentAsync(existing, movieId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ReleaseAssessment
+            {
+                MatchResult = ReleaseMatchResult.Confident,
+                MatchedRankOrdinal = existingRank
+            });
+        releaseEvaluationService
+            .Setup(service => service.ScoreFileForContentAsync(
+                It.Is<MediaFile>(file => file.FilePath == "/media/movies/Arrival/Arrival.mp4"),
+                movieId,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ReleaseAssessment
+            {
+                MatchResult = ReleaseMatchResult.Confident,
+                MatchedRankOrdinal = associatedRank
+            });
+        var transactionManager = new Mock<ITransactionManager>();
+        transactionManager
+            .Setup(manager => manager.ExecuteWithTransactionAsync(
+                It.IsAny<Func<CancellationToken, Task<Guid>>>(),
+                It.IsAny<CancellationToken>()))
+            .Returns((Func<CancellationToken, Task<Guid>> operation, CancellationToken token) => operation(token));
+        var fileSystem = new Mock<IFileSystem>();
+        fileSystem.Setup(system => system.GetFullPath(It.IsAny<string>())).Returns<string>(path => path);
+        fileSystem
+            .Setup(system => system.LookupMimeTypeAsync(
+                "/media/movies/Arrival/Arrival.mp4",
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync("video/mp4");
+        fileSystem.Setup(system => system.ResolveFileKind("video/mp4")).Returns(FileKind.Video);
+        fileSystem
+            .Setup(system => system.MatchesAnyFileType(
+                It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<IReadOnlyList<string>?>()))
+            .Returns(true);
+        fileSystem.Setup(system => system.PathsEqual(It.IsAny<string>(), It.IsAny<string>()))
+            .Returns((string left, string right) => string.Equals(left, right, StringComparison.Ordinal));
+        var subject = new LibraryImportService(
+            candidateRepository.Object,
+            contentService.Object,
+            contentFileService.Object,
+            contentTypeRegistry.Object,
+            hierarchyItems.Object,
+            fileSystem.Object,
+            transactionManager.Object,
+            Mock.Of<IAuditRecordRepository>(),
+            Mock.Of<IJobManager>(),
+            Mock.Of<IEventBus>(),
+            releaseEvaluationService.Object,
+            [],
+            TimeProvider.System,
+            Mock.Of<IRootFolderRepository>(),
+            NullLogger<LibraryImportService>.Instance);
+
+        // Act
+        var result = await subject.AssociateCandidateAsync(candidate.Id, null, null).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.Status, Is.EqualTo(LibraryImportCompletionStatus.Completed));
             contentFileService.Verify(service => service.AttachImportedAsync(
                 movieId, "/media/movies/Arrival/Arrival.mp4", null, It.IsAny<CancellationToken>()), Times.Once);
-            contentService.Verify(service => service.UnlinkFileAsync(
-                movieId, existing.Id, null, It.IsAny<CancellationToken>()), Times.Exactly(expectedUnlinks));
+            contentService.Verify(
+                service => service.UnlinkFileAsync(
+                    It.IsAny<Guid>(),
+                    It.IsAny<Guid>(),
+                    It.IsAny<Guid?>(),
+                    It.IsAny<CancellationToken>()),
+                Times.Never);
             candidateRepository.Verify(repository => repository.DeleteAsync(
                 candidate.Id, null, It.IsAny<CancellationToken>()), Times.Once);
         }
@@ -2360,9 +2386,9 @@ public sealed class LibraryImportServiceTests
         var transactionManager = new Mock<ITransactionManager>();
         transactionManager
             .Setup(manager => manager.ExecuteWithTransactionAsync(
-                It.IsAny<Func<CancellationToken, Task<(Guid, MediaFile?)>>>(), It.IsAny<CancellationToken>()))
-            .Returns((Func<CancellationToken, Task<(Guid, MediaFile?)>> operation, CancellationToken token) =>
-                operation(token));
+                It.IsAny<Func<CancellationToken, Task<Guid>>>(),
+                It.IsAny<CancellationToken>()))
+            .Returns((Func<CancellationToken, Task<Guid>> operation, CancellationToken token) => operation(token));
         var fileSystem = new Mock<IFileSystem>();
         fileSystem.Setup(system => system.GetFullPath(It.IsAny<string>())).Returns<string>(path => path);
         var subject = new LibraryImportService(
@@ -2544,9 +2570,9 @@ public sealed class LibraryImportServiceTests
         var importTransactionManager = new Mock<ITransactionManager>();
         importTransactionManager
             .Setup(manager => manager.ExecuteWithTransactionAsync(
-                It.IsAny<Func<CancellationToken, Task<(Guid, MediaFile?)>>>(), It.IsAny<CancellationToken>()))
-            .Returns((Func<CancellationToken, Task<(Guid, MediaFile?)>> operation, CancellationToken token) =>
-                operation(token));
+                It.IsAny<Func<CancellationToken, Task<Guid>>>(),
+                It.IsAny<CancellationToken>()))
+            .Returns((Func<CancellationToken, Task<Guid>> operation, CancellationToken token) => operation(token));
         var fileSystem = new Mock<IFileSystem>();
         fileSystem.Setup(system => system.GetFullPath(It.IsAny<string>())).Returns<string>(path => path);
         var subject = new LibraryImportService(
@@ -2777,9 +2803,9 @@ public sealed class LibraryImportServiceTests
         var transactionManager = new Mock<ITransactionManager>();
         transactionManager
             .Setup(manager => manager.ExecuteWithTransactionAsync(
-                It.IsAny<Func<CancellationToken, Task<(Guid, MediaFile?)>>>(), It.IsAny<CancellationToken>()))
-            .Returns((Func<CancellationToken, Task<(Guid, MediaFile?)>> operation, CancellationToken token) =>
-                operation(token));
+                It.IsAny<Func<CancellationToken, Task<Guid>>>(),
+                It.IsAny<CancellationToken>()))
+            .Returns((Func<CancellationToken, Task<Guid>> operation, CancellationToken token) => operation(token));
 
         var fileSystem = new Mock<IFileSystem>();
         fileSystem.Setup(system => system.GetFullPath(It.IsAny<string>())).Returns<string>(path => path);
@@ -3004,9 +3030,9 @@ public sealed class LibraryImportServiceTests
         var transactionManager = new Mock<ITransactionManager>();
         transactionManager
             .Setup(manager => manager.ExecuteWithTransactionAsync(
-                It.IsAny<Func<CancellationToken, Task<(Guid, MediaFile?)>>>(), It.IsAny<CancellationToken>()))
-            .Returns((Func<CancellationToken, Task<(Guid, MediaFile?)>> operation, CancellationToken token) =>
-                operation(token));
+                It.IsAny<Func<CancellationToken, Task<Guid>>>(),
+                It.IsAny<CancellationToken>()))
+            .Returns((Func<CancellationToken, Task<Guid>> operation, CancellationToken token) => operation(token));
 
         var fileSystem = new Mock<IFileSystem>();
         fileSystem.Setup(system => system.GetFullPath(It.IsAny<string>())).Returns<string>(path => path);
@@ -3232,9 +3258,9 @@ public sealed class LibraryImportServiceTests
         var transactionManager = new Mock<ITransactionManager>();
         transactionManager
             .Setup(manager => manager.ExecuteWithTransactionAsync(
-                It.IsAny<Func<CancellationToken, Task<(Guid, MediaFile?)>>>(), It.IsAny<CancellationToken>()))
-            .Returns((Func<CancellationToken, Task<(Guid, MediaFile?)>> operation, CancellationToken token) =>
-                operation(token));
+                It.IsAny<Func<CancellationToken, Task<Guid>>>(),
+                It.IsAny<CancellationToken>()))
+            .Returns((Func<CancellationToken, Task<Guid>> operation, CancellationToken token) => operation(token));
 
         var fileSystem = new Mock<IFileSystem>();
         fileSystem.Setup(system => system.GetFullPath(It.IsAny<string>())).Returns<string>(path => path);
@@ -3507,9 +3533,9 @@ public sealed class LibraryImportServiceTests
         var transactionManager = new Mock<ITransactionManager>();
         transactionManager
             .Setup(manager => manager.ExecuteWithTransactionAsync(
-                It.IsAny<Func<CancellationToken, Task<(Guid, MediaFile?)>>>(), It.IsAny<CancellationToken>()))
-            .Returns((Func<CancellationToken, Task<(Guid, MediaFile?)>> operation, CancellationToken token) =>
-                operation(token));
+                It.IsAny<Func<CancellationToken, Task<Guid>>>(),
+                It.IsAny<CancellationToken>()))
+            .Returns((Func<CancellationToken, Task<Guid>> operation, CancellationToken token) => operation(token));
 
         var fileSystem = new Mock<IFileSystem>();
         fileSystem.Setup(system => system.GetFullPath(It.IsAny<string>())).Returns<string>(path => path);
@@ -4653,11 +4679,10 @@ public sealed class LibraryImportServiceTests
         var transactionManager = new Mock<ITransactionManager>();
         transactionManager
             .Setup(manager => manager.ExecuteWithTransactionAsync(
-                It.IsAny<Func<CancellationToken, Task<(Guid, MediaFile?)>>>(), It.IsAny<CancellationToken>()))
-            .Returns((Func<CancellationToken, Task<(Guid, MediaFile?)>> operation, CancellationToken token) =>
-                operation(token));
+                It.IsAny<Func<CancellationToken, Task<Guid>>>(),
+                It.IsAny<CancellationToken>()))
+            .Returns((Func<CancellationToken, Task<Guid>> operation, CancellationToken token) => operation(token));
 
-        // A strict file system fails the association on any file copy, move, rename, or delete.
         var fileSystem = new Mock<IFileSystem>(MockBehavior.Strict);
         fileSystem.Setup(system => system.GetFullPath(It.IsAny<string>())).Returns<string>(path => path);
         fileSystem.Setup(system => system.PathsEqual(It.IsAny<string>(), It.IsAny<string>()))

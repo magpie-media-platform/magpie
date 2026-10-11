@@ -1,5 +1,6 @@
 import { Navigate, useLocation } from 'react-router-dom';
 
+import { RouteErrorState } from '@/router/RouteErrorState';
 import { RouteLoadingState } from '@/router/RouteLoadingState';
 
 import { useAuth } from './useAuth';
@@ -36,9 +37,13 @@ export type RoleGuardProps = {
 
 export function RoleGuard(props: RoleGuardProps) {
     const { children, forbiddenPath = '/forbidden' } = props;
-    const { hasRole, getRequiredRole, isLoading } = useAuth();
+    const { hasRole, getRequiredRole, isLoading, permissionsFailed, retryPermissions } = useAuth();
     const location = useLocation();
     const minRole = 'permission' in props ? getRequiredRole(props.permission) : props.minRole;
+
+    if (minRole === undefined && permissionsFailed) {
+        return <RouteErrorState onRetry={retryPermissions} />;
+    }
 
     if (isLoading || minRole === undefined) {
         return <RouteLoadingState />;

@@ -6,6 +6,7 @@ import { Logo } from '@/components/ui/Logo';
 import { Button } from '@/components/ui/Button';
 import { useAuth } from '@/auth';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
+import { useInstanceName } from '@/hooks/useInstanceName';
 import { useSetupStatus } from '@/hooks/useSetup';
 import { settingsQueryKeys, type ApiSettingsGroup } from '@/hooks/useSettings';
 import { apiGet } from '@/lib/api';
@@ -14,6 +15,7 @@ import { RouteLoadingState } from '@/router/RouteLoadingState';
 import { AdminClaimStep } from './AdminClaimStep';
 import { CompletionStep } from './CompletionStep';
 import { DbProviderStep } from './DbProviderStep';
+import { ExtensionsStep } from './ExtensionsStep';
 import { FirstDownloadClientStep } from './FirstDownloadClientStep';
 import { FirstIndexerStep } from './FirstIndexerStep';
 import { FirstMediaServerStep } from './FirstMediaServerStep';
@@ -40,7 +42,8 @@ function getStepAvailability(groups: ApiSettingsGroup[]): SetupStepAvailability 
 }
 
 export function SetupPage(): ReactNode {
-    useDocumentTitle('Set Up Magpie');
+    useDocumentTitle('Set Up');
+    const instanceName = useInstanceName();
 
     const { isAuthenticated, isLoading: isAuthLoading } = useAuth();
     const location = useLocation();
@@ -73,7 +76,7 @@ export function SetupPage(): ReactNode {
             }
 
             const availability =
-                resolvedStepId === 'admin'
+                resolvedStepId === 'extensions'
                     ? getStepAvailability(await queryClient.fetchQuery(groupsQueryOptions))
                     : stepAvailability;
             const next = nextStepAfter(resolvedStepId, availability);
@@ -101,7 +104,7 @@ export function SetupPage(): ReactNode {
         return <Navigate to={isAuthenticated ? '/' : '/login'} replace />;
     }
 
-    const stepSubtitle = resolvedStepId ? SETUP_STEPS[resolvedStepId] : null;
+    const stepSubtitle = resolvedStepId ? SETUP_STEPS[resolvedStepId](instanceName) : null;
     const currentState = statusQuery.isError ? 'error' : (resolvedStepId ?? 'loading');
 
     return (
@@ -109,8 +112,10 @@ export function SetupPage(): ReactNode {
             <div className="setup-page__card">
                 <div className="setup-page__brand">
                     <Logo size={48} variant="solid" />
-                    <h1 className="setup-page__title">Welcome to Magpie</h1>
-                    <p className="setup-page__subtitle">{stepSubtitle ?? 'Configure Magpie for your environment.'}</p>
+                    <h1 className="setup-page__title">Welcome to {instanceName}</h1>
+                    <p className="setup-page__subtitle">
+                        {stepSubtitle ?? `Configure ${instanceName} for your environment.`}
+                    </p>
                 </div>
 
                 {statusQuery.isError ? (
@@ -133,6 +138,8 @@ export function SetupPage(): ReactNode {
                     <DbProviderStep onAdvance={handleAdvance} />
                 ) : resolvedStepId === 'admin' ? (
                     <AdminClaimStep onAdvance={handleAdvance} />
+                ) : resolvedStepId === 'extensions' ? (
+                    <ExtensionsStep onAdvance={handleAdvance} />
                 ) : resolvedStepId === 'metadata' ? (
                     <MetadataProviderStep onAdvance={handleAdvance} />
                 ) : resolvedStepId === 'indexer' ? (

@@ -639,7 +639,7 @@ public sealed class CardigannSessionManagerTests
             .ConfigureAwait(false);
 
         // Act
-        _sessions.InvalidateSession(SessionKey);
+        _sessions.InvalidateSession(SessionKey, 0);
         using var response = await _sessions.SendAsync(
             SessionKey,
             BaseUri,
@@ -653,6 +653,82 @@ public sealed class CardigannSessionManagerTests
 
         // Assert
         Assert.That(searchCookie, Is.Empty);
+    }
+
+    [Test]
+    public async Task InvalidateSession_KeepsTheRenewedLogin_WhenTheInvalidatedGenerationWasAlreadyReplaced()
+    {
+        // Arrange
+        var loginPosts = 0;
+        var searchCookie = "unset";
+        _http.When(HttpMethod.Get, "https://tracker.test/login.php").Respond("text/html", LoginPage);
+        _http.When(HttpMethod.Post, "https://tracker.test/takelogin.php").Respond(_ =>
+        {
+            loginPosts++;
+            var response = new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("ok") };
+            response.Headers.TryAddWithoutValidation("Set-Cookie", $"sid=SESSION{loginPosts}; Path=/");
+            return response;
+        });
+        _http.When(HttpMethod.Get, "https://tracker.test/").Respond("text/html", LogoutPage);
+        _http.When(HttpMethod.Get, "https://tracker.test/search").Respond(request =>
+        {
+            searchCookie = request.Headers.TryGetValues("Cookie", out var values)
+                ? string.Join("; ", values)
+                : string.Empty;
+            return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("<html></html>") };
+        });
+        await _sessions.EnsureLoggedInAsync(
+            SessionKey,
+            _login,
+            BaseUri,
+            Variables,
+            cookieValue: null,
+            "magpie-test",
+            forceRefresh: false,
+            default)
+            .ConfigureAwait(false);
+        var generation = _sessions.GetSessionGeneration(SessionKey);
+
+        // Act
+        _sessions.InvalidateSession(SessionKey, generation);
+        await _sessions.EnsureLoggedInAsync(
+            SessionKey,
+            _login,
+            BaseUri,
+            Variables,
+            cookieValue: null,
+            "magpie-test",
+            forceRefresh: false,
+            default)
+            .ConfigureAwait(false);
+        _sessions.InvalidateSession(SessionKey, generation);
+        await _sessions.EnsureLoggedInAsync(
+            SessionKey,
+            _login,
+            BaseUri,
+            Variables,
+            cookieValue: null,
+            "magpie-test",
+            forceRefresh: false,
+            default)
+            .ConfigureAwait(false);
+        using var response = await _sessions.SendAsync(
+            SessionKey,
+            BaseUri,
+            HttpMethod.Get,
+            new Uri("https://tracker.test/search"),
+            null,
+            "magpie-test",
+            captureCookies: true,
+            default)
+            .ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(loginPosts, Is.EqualTo(2));
+            Assert.That(searchCookie, Is.EqualTo("sid=SESSION2"));
+        }
     }
 
     [Test]
@@ -1474,7 +1550,7 @@ public sealed class CardigannSessionManagerTests
             default)
             .ConfigureAwait(false);
         var solvedBody = await refused.Content.ReadAsStringAsync(default).ConfigureAwait(false);
-        _sessions.InvalidateSession(SessionKey);
+        _sessions.InvalidateSession(SessionKey, 0);
         accepted = "cf_clearance=TOKEN";
         using var recovered = await _sessions.SendAsync(
             SessionKey,

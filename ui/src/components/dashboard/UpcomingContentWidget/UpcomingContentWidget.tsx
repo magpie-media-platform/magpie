@@ -1,15 +1,16 @@
 import { forwardRef, memo, type HTMLAttributes, type ReactNode, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { ArrowCounterClockwiseIcon, WarningCircleIcon } from '@phosphor-icons/react';
 
-import { Alert } from '@/components/ui/Alert';
-import { Button } from '@/components/ui/Button';
+import { LoadErrorAlert } from '@/components/ui/LoadErrorAlert';
 import { CdnPhosphorIcon } from '@/components/ui/CdnPhosphorIcon';
 import { ContentFulfillmentBadge, ContentMonitoringIndicator } from '@/components/content/ContentCardPrimitives';
 import { ContentLineageTitle } from '@/components/content/ContentLineageTitle';
 import { useLibraryTypes, useTypeIconName } from '@/hooks/useLibraryTypes';
 import { resolveContentTypeLabel } from '@/lib/contentTypeDisplay';
+import { parseCalendarDate, parseCalendarDateParts } from '@/lib/dateParsing';
+import { formatTimeOfDay } from '@/lib/formatTime';
 import type { FulfillmentStatus, MonitoringMode } from '@/types';
+import type { TemporalPrecision } from '@/types/contentMetadata';
 
 import './UpcomingContentWidget.css';
 
@@ -28,6 +29,8 @@ export interface UpcomingContentItem {
 
     date: string;
 
+    datePrecision?: TemporalPrecision;
+
     posterUrl?: string;
 
     contentType?: string;
@@ -37,8 +40,6 @@ export interface UpcomingContentItem {
     levelLabel?: string;
 
     fulfillment: FulfillmentStatus;
-
-    monitoring?: MonitoringMode | null;
 
     effectiveMonitoring?: MonitoringMode;
 }
@@ -64,7 +65,7 @@ export interface UpcomingContentWidgetProps extends HTMLAttributes<HTMLDivElemen
 }
 
 function formatRelativeDate(dateStr: string): string {
-    const date = new Date(dateStr);
+    const date = parseCalendarDate(dateStr);
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
@@ -88,14 +89,6 @@ function formatRelativeDate(dateStr: string): string {
             day: 'numeric',
         });
     }
-}
-
-function formatTime(dateStr: string): string {
-    const date = new Date(dateStr);
-    return date.toLocaleTimeString(undefined, {
-        hour: 'numeric',
-        minute: '2-digit',
-    });
 }
 
 interface ContentItemProps {
@@ -145,12 +138,13 @@ const ContentItem = ({ item, url }: ContentItemProps) => {
                     <span className="upcoming-content-widget__item-kind" data-content-type={item.contentType}>
                         {kindLabel}
                     </span>
-                    <span className="upcoming-content-widget__item-time">{formatTime(item.date)}</span>
+                    {parseCalendarDateParts(item.date) === null && (
+                        <span className="upcoming-content-widget__item-time">{formatTimeOfDay(item.date)}</span>
+                    )}
                 </div>
                 <div className="upcoming-content-widget__item-statuses">
                     {item.effectiveMonitoring !== undefined && (
                         <ContentMonitoringIndicator
-                            monitoring={item.monitoring === undefined ? item.effectiveMonitoring : item.monitoring}
                             effectiveMonitoring={item.effectiveMonitoring}
                             className="upcoming-content-widget__item-monitoring"
                             activeClassName="upcoming-content-widget__item-monitoring--active"
@@ -158,6 +152,8 @@ const ContentItem = ({ item, url }: ContentItemProps) => {
                     )}
                     <ContentFulfillmentBadge
                         fulfillment={item.fulfillment}
+                        publishDate={item.date}
+                        publishDatePrecision={item.datePrecision}
                         className="upcoming-content-widget__item-fulfillment"
                     />
                 </div>
@@ -233,7 +229,7 @@ const UpcomingContentWidgetBase = forwardRef<HTMLDivElement, UpcomingContentWidg
         const hasMore = items.length > maxItems;
 
         const todayCount = items.filter((item) => {
-            const date = new Date(item.date);
+            const date = parseCalendarDate(item.date);
             const today = new Date();
             return date.toDateString() === today.toDateString();
         }).length;
@@ -260,14 +256,7 @@ const UpcomingContentWidgetBase = forwardRef<HTMLDivElement, UpcomingContentWidg
                             <SkeletonItem />
                         </>
                     ) : error ? (
-                        <Alert variant="error" icon={<WarningCircleIcon weight="duotone" />} title="Failed to load">
-                            {onRetry && (
-                                <Button variant="ghost" size="sm" onClick={onRetry}>
-                                    <ArrowCounterClockwiseIcon weight="bold" aria-hidden="true" />
-                                    Try again
-                                </Button>
-                            )}
-                        </Alert>
+                        <LoadErrorAlert onRetry={onRetry} />
                     ) : displayedItems.length > 0 ? (
                         displayedItems.map((item) => <ContentItem key={item.id} item={item} url={getItemUrl?.(item)} />)
                     ) : (

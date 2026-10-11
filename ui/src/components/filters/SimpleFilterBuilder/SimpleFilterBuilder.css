@@ -60,27 +60,31 @@
 
     .simple-filter-builder__year > .input-container,
     .simple-filter-builder__subject--year-ratio > .input-container {
-        flex: 1 1 var(--simple-filter-leading-width);
+        flex: 999 1 var(--simple-filter-leading-width);
         min-width: var(--simple-filter-leading-width);
     }
 
     .simple-filter-builder__subject--year-ratio > .select-trigger {
-        flex: 0 0 var(--simple-filter-trailing-width);
+        flex: 1 0 var(--simple-filter-trailing-width);
         min-width: 0;
     }
 
     .simple-filter-builder__year-ops {
         display: inline-flex;
-        flex: 0 0 auto;
-        min-width: var(--simple-filter-trailing-width);
+        flex: 1 0 var(--simple-filter-trailing-width);
         align-items: stretch;
+        min-height: 32px;
         border: 1px solid var(--border-default);
         border-radius: var(--radius-md);
         overflow: hidden;
+
+        @media (pointer: coarse) {
+            min-height: var(--touch-target-min);
+        }
     }
 
     .simple-filter-builder__year-op {
-        flex: 0 0 auto;
+        flex: 1 1 auto;
         display: inline-flex;
         align-items: center;
         justify-content: center;

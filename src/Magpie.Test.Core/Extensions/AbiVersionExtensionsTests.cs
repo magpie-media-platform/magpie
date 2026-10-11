@@ -55,4 +55,38 @@ public sealed class AbiVersionExtensionsTests
         // Assert
         Assert.That(compatible, Is.False);
     }
+
+    [TestCase("1.5.0", "1.5.0.0")]
+    [TestCase("[1.0.0, 2.0.0)", "1.0.0.0")]
+    [TestCase("[1.4.2]", "1.4.2.0")]
+    [TestCase("[2.0.0-beta.1,)", "2.0.0.0")]
+    [TestCase("(1.0.0, 2.0.0)", "1.0.0.1")]
+    public void ReadBuiltAgainst_ReturnsTheLowestAcceptedVersion_WhenTheRangeHasAMinimum(
+        string sdkRange,
+        string expected)
+    {
+        // Arrange
+        var expectedVersion = new Version(expected);
+
+        // Act
+        var builtAgainst = AbiVersionExtensions.ReadBuiltAgainst(sdkRange);
+
+        // Assert
+        Assert.That(builtAgainst, Is.EqualTo(expectedVersion));
+    }
+
+    [TestCase("(, 2.0.0)")]
+    [TestCase("[, 2.0.0)")]
+    [TestCase("not-a-version")]
+    [TestCase("")]
+    [TestCase(null)]
+    public void ReadBuiltAgainst_ReturnsNull_WhenTheRangeHasNoMinimum(string? sdkRange)
+    {
+        // Arrange
+        // Act
+        var builtAgainst = AbiVersionExtensions.ReadBuiltAgainst(sdkRange);
+
+        // Assert
+        Assert.That(builtAgainst, Is.Null);
+    }
 }

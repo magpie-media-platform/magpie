@@ -665,7 +665,7 @@ internal sealed class LibraryImportService(
 
         var match = candidate.Matches[matchIndex];
 
-        (Guid HierarchyItemId, Guid ContentItemId, MediaFile? Kept)? completion;
+        (Guid HierarchyItemId, Guid ContentItemId)? completion;
         try
         {
             completion = await CompleteImportAsync(
@@ -739,19 +739,6 @@ internal sealed class LibraryImportService(
             }
 
             return Failed(reason);
-        }
-
-        if (result.Kept is { } kept)
-        {
-            await libraryImportCandidateRepository
-                .TryResetImportAsync(
-                    candidate.Id,
-                    $"{Path.GetFileName(candidate.FilePath)} does not have a better quality rank than " +
-                    $"{Path.GetFileName(kept.FilePath)}, the copy that stays, so it was not attached.",
-                    actingUserId,
-                    cancellationToken)
-                .ConfigureAwait(false);
-            return Skipped("The item keeps another copy of the file, so no file was attached.");
         }
 
         await libraryImportCandidateRepository
@@ -1853,7 +1840,7 @@ internal sealed class LibraryImportService(
     private LibraryImportCompletionResult Failed(string message) =>
         new() { Status = LibraryImportCompletionStatus.Failed, Message = message };
 
-    private async Task<(Guid HierarchyItemId, Guid ContentItemId, MediaFile? Kept)?> CompleteImportAsync(
+    private async Task<(Guid HierarchyItemId, Guid ContentItemId)?> CompleteImportAsync(
         LibraryImportCandidate candidate,
         LibraryImportMatch match,
         LibraryImportMonitoringMode monitoringMode,
@@ -1930,7 +1917,7 @@ internal sealed class LibraryImportService(
         return hydrated.Value.Root;
     }
 
-    private async Task<(Guid HierarchyItemId, Guid ContentItemId, MediaFile? Kept)?> AttachRoutedFileAsync(
+    private async Task<(Guid HierarchyItemId, Guid ContentItemId)?> AttachRoutedFileAsync(
         LibraryImportCandidate candidate,
         LibraryImportMatch match,
         FileRouteResult routed,
@@ -1959,7 +1946,7 @@ internal sealed class LibraryImportService(
             : await ResolveDiscoveredPathAsync(hierarchyItemId, candidate.FilePath, cancellationToken)
                 .ConfigureAwait(false);
 
-        var (contentItemId, kept) = await transactionManager.ExecuteWithTransactionAsync(
+        var contentItemId = await transactionManager.ExecuteWithTransactionAsync(
             async ct =>
             {
                 var lineage = await contentHierarchyItemRepository.GetLineageAsync(hierarchyItemId, ct)
@@ -1967,12 +1954,6 @@ internal sealed class LibraryImportService(
                 if (lineage.Count > 0)
                 {
                     await contentHierarchyItemRepository.LockAsync(lineage[^1].Id, ct).ConfigureAwait(false);
-                }
-
-                if (await KeepBestCopyAsync(hierarchyItemId, candidate.FilePath, actingUserId, ct)
-                    .ConfigureAwait(false) is { } copy)
-                {
-                    return (copy.ContentItemId, copy);
                 }
 
                 var now = timeProvider.GetUtcNow().UtcDateTime;
@@ -2084,71 +2065,11 @@ internal sealed class LibraryImportService(
                         CorrelationId = correlationId
                     },
                     ct).ConfigureAwait(false);
-                return (attached.ContentItemId, (MediaFile?)null);
+                return attached.ContentItemId;
             },
         cancellationToken).ConfigureAwait(false);
 
-        return (hierarchyItemId, contentItemId, kept);
-    }
-
-    private async Task<MediaFile?> KeepBestCopyAsync(
-        Guid contentHierarchyItemId,
-        string filePath,
-        Guid? actingUserId,
-        CancellationToken cancellationToken)
-    {
-        var item = await contentHierarchyItemRepository.GetByIdAsync(contentHierarchyItemId, cancellationToken)
-            .ConfigureAwait(false);
-        if (item is null || LevelOf(item) is not { } level)
-        {
-            return null;
-        }
-
-        var fullPath = fileSystem.GetFullPath(filePath);
-        var copies = (item.ContentItem?.MediaFiles ?? [])
-            .Where(file => !fileSystem.PathsEqual(file.FilePath, fullPath) &&
-                FileSystem.IsPrimaryFile(fileSystem, level, file) &&
-                fileSystem.PathsEqual(Path.ChangeExtension(file.FilePath, null), Path.ChangeExtension(fullPath, null)))
-            .ToList();
-        if (copies.Count == 0)
-        {
-            return null;
-        }
-
-        var mimeType = await fileSystem.LookupMimeTypeAsync(fullPath, cancellationToken).ConfigureAwait(false);
-        var imported = new MediaFile
-        {
-            FileKind = fileSystem.ResolveFileKind(mimeType).ToString(),
-            MimeType = mimeType,
-            FilePath = fullPath,
-            FileSize = fileSystem.GetFileSize(fullPath)
-        };
-        if (!FileSystem.IsPrimaryFile(fileSystem, level, imported))
-        {
-            return null;
-        }
-
-        var rank = (await releaseEvaluationService
-            .ScoreFileForContentAsync(imported, contentHierarchyItemId, cancellationToken)
-            .ConfigureAwait(false))?.MatchedRankOrdinal;
-        foreach (var copy in copies)
-        {
-            var copyRank = (await releaseEvaluationService
-                .ScoreFileForContentAsync(copy, contentHierarchyItemId, cancellationToken)
-                .ConfigureAwait(false))?.MatchedRankOrdinal;
-            if (!(rank < copyRank))
-            {
-                return copy;
-            }
-        }
-
-        foreach (var copy in copies)
-        {
-            await contentService.UnlinkFileAsync(contentHierarchyItemId, copy.Id, actingUserId, cancellationToken)
-                .ConfigureAwait(false);
-        }
-
-        return null;
+        return (hierarchyItemId, contentItemId);
     }
 
     private async Task ApplyImportMonitoringAsync(

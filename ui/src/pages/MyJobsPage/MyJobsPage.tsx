@@ -1,6 +1,12 @@
 import { useMemo, useCallback, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { ClockCountdownIcon, ClockCounterClockwiseIcon, CalendarBlankIcon, LightningIcon } from '@phosphor-icons/react';
+import {
+    ClockCountdownIcon,
+    ClockCounterClockwiseIcon,
+    CalendarBlankIcon,
+    LightningIcon,
+    WarningCircleIcon,
+} from '@phosphor-icons/react';
 
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/Tabs';
 import { Button } from '@/components/ui/Button';
@@ -145,6 +151,7 @@ export function MyJobsPage() {
         jobs: userJobs,
         pagination,
         isLoading: isLoadingJobs,
+        error: jobsError,
         runJob,
         refetch: refetchJobs,
     } = useJobs(executionQueryParams);
@@ -182,7 +189,6 @@ export function MyJobsPage() {
             ),
         [eventSpecs],
     );
-    // Editing resolves an owned trigger's template from the full catalog; creating offers only eligible templates.
     const allScheduleTemplateOptions = useMemo(
         () =>
             specsToTemplateOptions(manualSpecs).filter((option) =>
@@ -370,6 +376,12 @@ export function MyJobsPage() {
                                 <Skeleton className="my-jobs-page__skeleton" />
                                 <Skeleton className="my-jobs-page__skeleton" />
                             </div>
+                        ) : !isSingleJob && jobsError && userJobs.length === 0 ? (
+                            <EmptyState
+                                icon={<WarningCircleIcon weight="duotone" />}
+                                title="Failed to load job history"
+                                onRetry={refetchJobs}
+                            />
                         ) : displayedUserJobs.length === 0 ? (
                             <EmptyState
                                 icon={<ClockCounterClockwiseIcon weight="duotone" />}
@@ -421,17 +433,24 @@ export function MyJobsPage() {
                         )}
 
                         <div className="my-jobs-page__list" role="list" aria-label="Schedule triggers">
-                            {totalSchedules === 0 && (
-                                <EmptyState
-                                    icon={<CalendarBlankIcon weight="duotone" />}
-                                    title="No schedule triggers"
-                                    description={
-                                        canManageTriggers
-                                            ? 'Create a schedule to run a job automatically on your behalf.'
-                                            : 'Schedule triggers run a job automatically on your behalf.'
-                                    }
-                                />
-                            )}
+                            {totalSchedules === 0 &&
+                                (schedCrud.error ? (
+                                    <EmptyState
+                                        icon={<WarningCircleIcon weight="duotone" />}
+                                        title="Failed to load schedule triggers"
+                                        onRetry={schedCrud.refetch}
+                                    />
+                                ) : (
+                                    <EmptyState
+                                        icon={<CalendarBlankIcon weight="duotone" />}
+                                        title="No schedule triggers"
+                                        description={
+                                            canManageTriggers
+                                                ? 'Create a schedule to run a job automatically on your behalf.'
+                                                : 'Schedule triggers run a job automatically on your behalf.'
+                                        }
+                                    />
+                                ))}
                             <ScheduleTriggersTab
                                 crud={schedCrud}
                                 templates={
@@ -461,13 +480,20 @@ export function MyJobsPage() {
                         )}
 
                         <div className="my-jobs-page__list" role="list" aria-label="Event triggers">
-                            {totalEvents === 0 && (
-                                <EmptyState
-                                    icon={<LightningIcon weight="duotone" />}
-                                    title="No event triggers"
-                                    description="Create an event trigger to run a job when events occur."
-                                />
-                            )}
+                            {totalEvents === 0 &&
+                                (eventCrud.error ? (
+                                    <EmptyState
+                                        icon={<WarningCircleIcon weight="duotone" />}
+                                        title="Failed to load event triggers"
+                                        onRetry={eventCrud.refetch}
+                                    />
+                                ) : (
+                                    <EmptyState
+                                        icon={<LightningIcon weight="duotone" />}
+                                        title="No event triggers"
+                                        description="Create an event trigger to run a job when events occur."
+                                    />
+                                ))}
                             <EventTriggersTab
                                 crud={eventCrud}
                                 templates={eventCrud.formInitialValues ? allEventTemplateOptions : eventTemplateOptions}

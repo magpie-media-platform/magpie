@@ -1,10 +1,12 @@
 import { useState, useEffect, useCallback, useMemo, useRef, type ReactNode } from 'react';
-import { FloppyDiskIcon, FlaskIcon, XIcon } from '@phosphor-icons/react';
+import { FloppyDiskIcon, FlaskIcon, WarningCircleIcon, XIcon } from '@phosphor-icons/react';
 
 import { Button } from '@/components/ui/Button';
+import { EmptyState } from '@/components/ui/EmptyState';
 import { Input } from '@/components/ui/Input';
 import { Label } from '@/components/ui/Label';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription, SheetFooter } from '@/components/ui/Sheet';
+import { Skeleton } from '@/components/ui/Skeleton';
 import { IntegrationSettingsForm } from '@/components/integrations/IntegrationSettingsForm/IntegrationSettingsForm';
 import {
     omitUnchangedSecretSettings,
@@ -247,7 +249,29 @@ export function ConfigureInstanceDialog({
                             />
                         </div>
 
-                        {schema.length > 0 ? (
+                        {schemaQuery.isPending ? (
+                            <div className="indexer-feed-form__field">
+                                <Skeleton />
+                                <Skeleton />
+                                <Skeleton />
+                            </div>
+                        ) : schemaQuery.isLoadingError ? (
+                            <EmptyState
+                                icon={<WarningCircleIcon weight="duotone" />}
+                                title="Failed to load settings"
+                                action={
+                                    <Button
+                                        type="button"
+                                        variant="secondary"
+                                        size="sm"
+                                        onClick={() => void schemaQuery.refetch()}
+                                    >
+                                        Retry
+                                    </Button>
+                                }
+                                size="sm"
+                            />
+                        ) : schema.length > 0 ? (
                             <div className="indexer-feed-form__field">
                                 <IntegrationSettingsForm
                                     schema={schema}
@@ -285,7 +309,7 @@ export function ConfigureInstanceDialog({
                             type="submit"
                             variant="primary"
                             loading={submitting}
-                            disabled={busy}
+                            disabled={busy || !schemaQuery.data}
                             data-action="add-instance"
                         >
                             <FloppyDiskIcon weight="bold" aria-hidden="true" />

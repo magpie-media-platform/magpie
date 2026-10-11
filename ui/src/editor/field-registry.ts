@@ -174,6 +174,15 @@ export const contentFieldRegistry: FieldRegistry = {
                 { name: 'fileSize', type: 'long' },
             ],
         },
+        {
+            name: 'subtree',
+            aliases: [],
+            primaryField: 'monitoring',
+            itemFields: [
+                { name: 'monitoring', type: 'enum' },
+                { name: 'fulfillment', type: 'enum' },
+            ],
+        },
     ],
 };
 

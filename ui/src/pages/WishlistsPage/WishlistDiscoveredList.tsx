@@ -24,7 +24,7 @@ import {
     type WishlistDiscoveredStatusFilter,
     type WishlistDiscoveredSort,
 } from '@/hooks/useWishlistDiscovered';
-import { formatShortDate } from '@/lib/dateFormatting';
+import { formatPublishDate, formatShortDate } from '@/lib/dateFormatting';
 
 import './WishlistDiscoveredList.css';
 
@@ -211,7 +211,9 @@ export function WishlistDiscoveredList({
                 sortDescFirst: true,
                 size: 104,
                 cell: ({ row }) =>
-                    row.original.linkId !== null ? formatShortDate(row.original.publishDate, 'Unknown') : '-',
+                    row.original.linkId !== null
+                        ? formatPublishDate(row.original.publishDate, 'Unknown', row.original.publishDatePrecision)
+                        : '-',
             },
             {
                 id: 'status',
@@ -328,11 +330,7 @@ export function WishlistDiscoveredList({
                 <EmptyState
                     icon={<WarningIcon weight="duotone" />}
                     title="Failed to load discovered items"
-                    action={
-                        <Button variant="secondary" size="sm" onClick={() => void refetch()}>
-                            Retry
-                        </Button>
-                    }
+                    onRetry={refetch}
                     data-component="wishlist-discovered-error"
                 />
             ) : (
@@ -476,7 +474,7 @@ function DiscoveredMobileCard({ row }: { row: WishlistDiscoveredRow }) {
             {inLibrary && (
                 <>
                     <span>Added {formatShortDate(row.addedAt)}</span>
-                    <span>Published {formatShortDate(row.publishDate, 'Unknown')}</span>
+                    <span>Published {formatPublishDate(row.publishDate, 'Unknown', row.publishDatePrecision)}</span>
                 </>
             )}
             <DiscoveredStatus row={row} />

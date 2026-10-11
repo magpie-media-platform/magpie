@@ -28,6 +28,7 @@ import {
 import { useBulkRun } from '@/hooks/useBulkRun';
 import { useBulkSelection } from '@/hooks/useBulkSelection';
 import { useUrlTableState } from '@/hooks/useUrlTableState';
+import { useInstanceName } from '@/hooks/useInstanceName';
 import { getErrorMessage } from '@/lib/errors';
 import { formatRelativeTime } from '@/lib/formatTime';
 import { mapStatusParam } from '@/lib/urlParams';
@@ -63,6 +64,7 @@ const enabledOptions: FacetOption[] = [
 ];
 
 export function ConfiguredManagement({ onGoToCatalog }: ConfiguredManagementProps) {
+    const instanceName = useInstanceName();
     const { indexers, isLoadingIndexers } = useIndexers();
     const { rows, isLoading: isLoadingConnections } = useAllIndexerConnections(indexers);
     const { updateConnection, deleteConnection, testConnection } = useIndexerConnectionMutations();
@@ -242,7 +244,7 @@ export function ConfiguredManagement({ onGoToCatalog }: ConfiguredManagementProp
             await deleteConnection(deleting.indexer.id, deleting.connection.id);
             toast({
                 title: 'Instance deleted',
-                description: `Magpie removed "${deleting.connection.name}".`,
+                description: `${instanceName} removed "${deleting.connection.name}".`,
                 variant: 'success',
             });
         } catch (error) {
@@ -255,7 +257,7 @@ export function ConfiguredManagement({ onGoToCatalog }: ConfiguredManagementProp
             setIsDeleting(false);
             setDeleting(null);
         }
-    }, [deleting, deleteConnection, toast]);
+    }, [deleting, deleteConnection, toast, instanceName]);
 
     const columns = useMemo<ColumnDef<ConfiguredConnectionRow>[]>(
         () => [

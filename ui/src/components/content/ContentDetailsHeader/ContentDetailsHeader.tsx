@@ -1,4 +1,12 @@
-import { forwardRef, type ComponentPropsWithoutRef, type CSSProperties } from 'react';
+import {
+    forwardRef,
+    useId,
+    useLayoutEffect,
+    useRef,
+    useState,
+    type ComponentPropsWithoutRef,
+    type CSSProperties,
+} from 'react';
 import { Link } from 'react-router-dom';
 import { CaretLeftIcon } from '@phosphor-icons/react';
 
@@ -11,15 +19,19 @@ import { AcquisitionBadge } from '@/components/ui/AcquisitionBadge';
 import { Badge } from '@/components/ui/Badge';
 import { CdnPhosphorIcon } from '@/components/ui/CdnPhosphorIcon';
 import { AwardsPanel } from '@/components/ui/AwardsPanel';
+import { CollapsibleChipList } from '@/components/ui/CollapsibleChipList';
 import type { AwardGroup } from '@/lib/materializedMetadataDisplay';
 import type { TemporalPrecision } from '@/types/contentMetadata';
 import { PreviewPlayer, type PreviewClip } from '@/components/ui/PreviewPlayer';
 import { useLibraryTypes, useTypeIconName } from '@/hooks/useLibraryTypes';
 import { isUnrecognizedContentLevel, resolveContentTypeLabel } from '@/lib/contentTypeDisplay';
+import { toPlainTextSummary } from '@/lib/plainTextSummary';
 import type { AcquisitionStatus, MonitoringMode } from '@/types';
 import type { FulfillmentStatus } from '@/components/ui/ContentList';
 
 import './ContentDetailsHeader.css';
+
+const INITIAL_RATINGS_VISIBLE = 4;
 
 export interface ParentContentRef {
     id: string;
@@ -42,8 +54,6 @@ export interface ContentDetailItem {
 
     contentType?: string;
 
-    monitoring: MonitoringMode | null;
-
     effectiveMonitoring: MonitoringMode;
 
     fulfillment: FulfillmentStatus;
@@ -60,6 +70,14 @@ export interface ContentDetailItem {
     overview?: string;
 }
 
+interface ContentRating {
+    id: string;
+
+    body: string;
+
+    rating: string;
+}
+
 export interface ContentDetailsHeaderProps extends Omit<ComponentPropsWithoutRef<'header'>, 'children' | 'content'> {
     content: ContentDetailItem;
 
@@ -67,11 +85,67 @@ export interface ContentDetailsHeaderProps extends Omit<ComponentPropsWithoutRef
 
     heroPreview?: PreviewClip;
 
-    contentRatings?: { id: string; body: string; rating: string }[];
+    contentRatings?: ContentRating[];
 
     awards?: AwardGroup[];
 
     actions?: React.ReactNode;
+}
+
+function sortRatingsLocaleFirst(ratings: ContentRating[]): ContentRating[] {
+    const region = new Intl.Locale(navigator.language).maximize().region;
+    const isLocal = (rating: ContentRating) => rating.body.toUpperCase() === region;
+
+    return [...ratings].sort((a, b) => Number(isLocal(b)) - Number(isLocal(a)));
+}
+
+function ExpandableOverview({ text }: { text: string }) {
+    const overviewRef = useRef<HTMLParagraphElement>(null);
+    const overviewId = useId();
+    const [expanded, setExpanded] = useState(false);
+    const [clamped, setClamped] = useState(false);
+
+    useLayoutEffect(() => {
+        const overview = overviewRef.current;
+        if (!overview || expanded) {
+            return;
+        }
+
+        const measure = () => setClamped(overview.scrollHeight > overview.clientHeight);
+        measure();
+        const observer = new ResizeObserver(measure);
+        observer.observe(overview);
+        return () => observer.disconnect();
+    }, [text, expanded]);
+
+    return (
+        <>
+            <p
+                ref={overviewRef}
+                id={overviewId}
+                className={[
+                    'content-details-header__overview',
+                    expanded && 'content-details-header__overview--expanded',
+                ]
+                    .filter(Boolean)
+                    .join(' ')}
+            >
+                {text}
+            </p>
+            {clamped && (
+                <button
+                    type="button"
+                    className="collapsible-chip-list__toggle content-details-header__overview-toggle"
+                    aria-controls={overviewId}
+                    aria-expanded={expanded}
+                    data-action="toggle-collapsible"
+                    onClick={() => setExpanded((value) => !value)}
+                >
+                    {expanded ? 'Show less' : 'Show more'}
+                </button>
+            )}
+        </>
+    );
 }
 
 export const ContentDetailsHeader = forwardRef<HTMLElement, ContentDetailsHeaderProps>(
@@ -92,6 +166,7 @@ export const ContentDetailsHeader = forwardRef<HTMLElement, ContentDetailsHeader
             { level: content.level, contentType: content.contentType },
             contentTypes,
         );
+        const overview = toPlainTextSummary(content.overview);
         return (
             <header
                 ref={ref}
@@ -161,7 +236,6 @@ export const ContentDetailsHeader = forwardRef<HTMLElement, ContentDetailsHeader
                         </Badge>
 
                         <ContentMonitoringIndicator
-                            monitoring={content.monitoring}
                             effectiveMonitoring={content.effectiveMonitoring}
                             className="content-details-header__monitoring"
                             activeClassName="content-details-header__monitoring--active"
@@ -171,20 +245,31 @@ export const ContentDetailsHeader = forwardRef<HTMLElement, ContentDetailsHeader
                         <ContentFulfillmentBadge
                             fulfillment={content.fulfillment}
                             importPending={content.importPending}
+                            publishDate={content.publishDate}
+                            publishDatePrecision={content.publishDatePrecision}
                             size="md"
                         />
 
                         {content.acquisitionStatus && <AcquisitionBadge status={content.acquisitionStatus} />}
 
-                        {contentRatings?.map((rating) => (
-                            <span key={rating.id} className="content-details-header__rating">
-                                <span className="content-details-header__rating-body">{rating.body}</span>
-                                {rating.rating}
-                            </span>
-                        ))}
+                        <CollapsibleChipList
+                            aria-label="Content ratings"
+                            className="content-details-header__ratings"
+                            listClassName="content-details-header__ratings-list"
+                            initialVisible={INITIAL_RATINGS_VISIBLE}
+                            items={sortRatingsLocaleFirst(contentRatings ?? []).map((rating) => ({
+                                key: rating.id,
+                                node: (
+                                    <span className="content-details-header__rating">
+                                        <span className="content-details-header__rating-body">{rating.body}</span>
+                                        {rating.rating}
+                                    </span>
+                                ),
+                            }))}
+                        />
                     </div>
 
-                    {content.overview && <p className="content-details-header__overview">{content.overview}</p>}
+                    {overview && <ExpandableOverview key={content.id} text={overview} />}
 
                     <AwardsPanel groups={awards ?? []} data-component="content-awards-panel" />
 

@@ -15,6 +15,7 @@ import { MobileListToolbar } from '@/components/ui/MobileListToolbar';
 import { sortTableRows } from '@/lib/sortTableRows';
 import type { FulfillmentStatus } from '@/components/ui/ContentList';
 import type { AcquisitionStatus, MonitoringMode } from '@/types';
+import type { TemporalPrecision } from '@/types/contentMetadata';
 import { useCardLayout } from '@/hooks/ui/useCardLayout';
 
 import { formatDate } from '@/lib/dateFormatting';
@@ -31,8 +32,6 @@ export interface ChildItem {
 
     posterUrl?: string;
 
-    monitoring: MonitoringMode | null;
-
     effectiveMonitoring: MonitoringMode;
 
     fulfillment: FulfillmentStatus;
@@ -44,6 +43,8 @@ export interface ChildItem {
     number?: number;
 
     date?: string;
+
+    datePrecision?: TemporalPrecision;
 
     fileCount?: number;
     primaryMediaSize?: number;
@@ -90,7 +91,6 @@ function TitleCell({ title, subtitle, number }: { title: string; subtitle?: stri
 function MonitoringCell({ child }: { child: ChildItem }) {
     return (
         <ContentMonitoringIndicator
-            monitoring={child.monitoring}
             effectiveMonitoring={child.effectiveMonitoring}
             className="children-tab__monitoring"
             activeClassName="children-tab__monitoring--active"
@@ -99,19 +99,18 @@ function MonitoringCell({ child }: { child: ChildItem }) {
     );
 }
 
-function StatusCell({
-    fulfillment,
-    importPending,
-    acquisitionStatus,
-}: {
-    fulfillment: FulfillmentStatus;
-    importPending?: boolean;
-    acquisitionStatus?: AcquisitionStatus;
-}) {
-    if (acquisitionStatus) {
-        return <AcquisitionBadge status={acquisitionStatus} />;
+function StatusCell({ child }: { child: ChildItem }) {
+    if (child.acquisitionStatus) {
+        return <AcquisitionBadge status={child.acquisitionStatus} />;
     }
-    return <ContentFulfillmentBadge fulfillment={fulfillment} importPending={importPending} />;
+    return (
+        <ContentFulfillmentBadge
+            fulfillment={child.fulfillment}
+            importPending={child.importPending}
+            publishDate={child.date}
+            publishDatePrecision={child.datePrecision}
+        />
+    );
 }
 
 export const ChildrenTab = forwardRef<HTMLDivElement, ChildrenTabProps>(
@@ -152,14 +151,15 @@ export const ChildrenTab = forwardRef<HTMLDivElement, ChildrenTabProps>(
                     header: '',
                     enableSorting: false,
                     size: 50,
-                    cell: ({ row }) => (
-                        <ContentPoster
-                            posterUrl={row.original.posterUrl}
-                            title={row.original.title}
-                            className="children-tab__poster"
-                            placeholderClassName="children-tab__poster--placeholder"
-                        />
-                    ),
+                    cell: ({ row }) =>
+                        row.original.posterUrl && (
+                            <ContentPoster
+                                posterUrl={row.original.posterUrl}
+                                title={row.original.title}
+                                className="children-tab__poster"
+                                placeholderClassName="children-tab__poster--placeholder"
+                            />
+                        ),
                 },
                 {
                     id: 'title',
@@ -184,7 +184,6 @@ export const ChildrenTab = forwardRef<HTMLDivElement, ChildrenTabProps>(
                 },
                 {
                     id: 'monitoring',
-                    accessorKey: 'monitoring',
                     header: '',
                     enableSorting: false,
                     size: 50,
@@ -221,14 +220,8 @@ export const ChildrenTab = forwardRef<HTMLDivElement, ChildrenTabProps>(
                     id: 'fulfillment',
                     accessorKey: 'fulfillment',
                     header: 'Status',
-                    size: 110,
-                    cell: ({ row }) => (
-                        <StatusCell
-                            fulfillment={row.original.fulfillment}
-                            importPending={row.original.importPending}
-                            acquisitionStatus={row.original.acquisitionStatus}
-                        />
-                    ),
+                    size: 120,
+                    cell: ({ row }) => <StatusCell child={row.original} />,
                 },
                 {
                     id: 'action',
@@ -240,6 +233,8 @@ export const ChildrenTab = forwardRef<HTMLDivElement, ChildrenTabProps>(
             ],
             [dateColumnHeader],
         );
+        const hasArtwork = childItems.some((child) => child.posterUrl);
+        const columnVisibility = useMemo(() => ({ poster: hasArtwork }), [hasArtwork]);
 
         const handleRowClick = useCallback(
             (row: ChildItem) => {
@@ -302,12 +297,20 @@ export const ChildrenTab = forwardRef<HTMLDivElement, ChildrenTabProps>(
                             className="children-tab__mobile-card"
                             data-child-id={child.id}
                         >
-                            <ContentPoster
-                                posterUrl={child.posterUrl}
-                                title={child.title}
-                                className="children-tab__poster"
-                                placeholderClassName="children-tab__poster--placeholder"
-                            />
+                            {child.posterUrl && (
+                                <ContentPoster
+                                    posterUrl={child.posterUrl}
+                                    title={child.title}
+                                    className="children-tab__poster"
+                                    placeholderClassName="children-tab__poster--placeholder"
+                                />
+                            )}
+                            {!child.posterUrl && hasArtwork && (
+                                <span
+                                    aria-hidden="true"
+                                    className="children-tab__poster children-tab__poster--spacer"
+                                />
+                            )}
                             <div className="children-tab__mobile-info">
                                 <TitleCell title={child.title} subtitle={child.subtitle} number={child.number} />
                                 {child.date && (
@@ -320,11 +323,7 @@ export const ChildrenTab = forwardRef<HTMLDivElement, ChildrenTabProps>(
                                 <span className="children-tab__mobile-date">
                                     Fulfilled: {child.fulfilledAt ? formatDate(child.fulfilledAt) : '—'}
                                 </span>
-                                <StatusCell
-                                    fulfillment={child.fulfillment}
-                                    importPending={child.importPending}
-                                    acquisitionStatus={child.acquisitionStatus}
-                                />
+                                <StatusCell child={child} />
                             </div>
                             <div className="children-tab__mobile-status">
                                 <MonitoringCell child={child} />
@@ -371,6 +370,7 @@ export const ChildrenTab = forwardRef<HTMLDivElement, ChildrenTabProps>(
                 ) : (
                     <DataTable<ChildItem>
                         columns={columns}
+                        columnVisibility={columnVisibility}
                         data={orderedItems}
                         onRowClick={handleRowClick}
                         loading={loading}

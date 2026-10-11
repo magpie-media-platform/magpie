@@ -13,6 +13,10 @@
         background-color: var(--bg-tertiary);
     }
 
+    .subject-list__image[data-artwork='uncropped'] {
+        object-fit: contain;
+    }
+
     .subject-list__image--placeholder {
         display: flex;
         align-items: center;

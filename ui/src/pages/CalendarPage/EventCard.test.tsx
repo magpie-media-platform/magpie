@@ -24,7 +24,6 @@ function makeEvent(overrides: Partial<CalendarEvent> = {}): CalendarEvent {
         contentType: 'tv',
         level: 'episode',
         fulfillment: 'missing',
-        monitoring: 'Monitored',
         effectiveMonitoring: 'Monitored',
         ...overrides,
     };
@@ -33,11 +32,14 @@ function makeEvent(overrides: Partial<CalendarEvent> = {}): CalendarEvent {
 describe('EventCard', () => {
     afterEach(() => {
         vi.unstubAllEnvs();
+        vi.restoreAllMocks();
     });
 
     it('renders the event title', () => {
         render(<EventCard event={makeEvent()} onClick={vi.fn()} />, { wrapper: TooltipProvider });
-        expect(screen.getByText('Shogun', { selector: '.content-lineage-title__segment--leaf' })).toBeInTheDocument();
+        const title = screen.getByText('Shogun', { selector: '.content-lineage-title__segment--leaf' });
+        expect(title).toBeInTheDocument();
+        expect(title.closest('[data-component="content-lineage-title"]')).toHaveClass('content-lineage-title--stacked');
     });
 
     it('renders the subtitle when present', () => {
@@ -106,20 +108,15 @@ describe('EventCard', () => {
         expect(screen.getByText(label)).toBeInTheDocument();
     });
 
-    it('shows inherited monitoring in compact mode', () => {
+    it('shows monitoring in compact mode', () => {
         // Arrange
         // Act
-        render(
-            <EventCard
-                event={makeEvent({ monitoring: null, effectiveMonitoring: 'Unmonitored' })}
-                onClick={vi.fn()}
-                compact
-            />,
-            { wrapper: TooltipProvider },
-        );
+        render(<EventCard event={makeEvent({ effectiveMonitoring: 'Unmonitored' })} onClick={vi.fn()} compact />, {
+            wrapper: TooltipProvider,
+        });
 
         // Assert
-        expect(screen.getByLabelText('Unmonitored (inherited)')).toBeInTheDocument();
+        expect(screen.getByLabelText('Unmonitored')).toBeInTheDocument();
     });
 
     it('shows fulfillment badge in non-compact mode', () => {
@@ -127,38 +124,17 @@ describe('EventCard', () => {
         expect(screen.getByText('Missing')).toBeInTheDocument();
     });
 
-    it('shows explicit unmonitored and fulfillment states separately', () => {
+    it('shows unmonitored and fulfillment states separately', () => {
         // Arrange
         // Act
-        render(
-            <EventCard
-                event={makeEvent({ monitoring: 'Unmonitored', effectiveMonitoring: 'Unmonitored' })}
-                onClick={vi.fn()}
-            />,
-            {
-                wrapper: TooltipProvider,
-            },
-        );
+        render(<EventCard event={makeEvent({ effectiveMonitoring: 'Unmonitored' })} onClick={vi.fn()} />, {
+            wrapper: TooltipProvider,
+        });
 
         // Assert
         expect(screen.getByText('Missing')).toBeInTheDocument();
         expect(screen.getByLabelText('Unmonitored')).toBeInTheDocument();
         expect(screen.queryByText('Unmonitored')).not.toBeInTheDocument();
-    });
-
-    it('shows inherited unmonitored and fulfillment states separately', () => {
-        // Arrange
-        // Act
-        render(
-            <EventCard event={makeEvent({ monitoring: null, effectiveMonitoring: 'Unmonitored' })} onClick={vi.fn()} />,
-            {
-                wrapper: TooltipProvider,
-            },
-        );
-
-        // Assert
-        expect(screen.getByText('Missing')).toBeInTheDocument();
-        expect(screen.getByLabelText('Unmonitored (inherited)')).toBeInTheDocument();
     });
 
     it('shows date when showDate is true', () => {
@@ -174,6 +150,20 @@ describe('EventCard', () => {
 
         expect(screen.getByTestId('calendar-page__event-date')).toHaveTextContent('Mon, Jul 20');
         expect(document.querySelector('.calendar-page__event-time')).not.toBeInTheDocument();
+    });
+
+    it('FulfillmentBadge_ShowsMissing_WhenAnInstantDateIsPastAndTheLocalDateIsNot', () => {
+        // Arrange
+        vi.stubEnv('TZ', 'America/Los_Angeles');
+        vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-10-07T18:00:00-07:00'));
+        const event = makeEvent({ date: '2026-10-08T00:00:00Z', datePrecision: 'Instant' });
+
+        // Act
+        render(<EventCard event={event} onClick={vi.fn()} />, { wrapper: TooltipProvider });
+
+        // Assert
+        expect(screen.getByText('Missing')).toBeInTheDocument();
+        expect(screen.queryByText('Upcoming')).not.toBeInTheDocument();
     });
 
     it('does not show date by default', () => {

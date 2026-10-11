@@ -11,7 +11,8 @@ export interface ToastOptions {
     action?: {
         label: string;
         altText: string;
-        onClick: () => void;
+        onClick?: () => void;
+        to?: string;
     };
     duration?: number;
 }

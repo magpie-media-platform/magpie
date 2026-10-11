@@ -3,6 +3,8 @@ import * as DialogPrimitive from '@radix-ui/react-dialog';
 import { XIcon } from '@phosphor-icons/react';
 
 import { OverlayBodyGuard } from '../OverlayBodyGuard';
+import { DismissToastsOnOpen } from './DismissToastsOnOpen';
+import { ignoreToastInteraction } from './ignoreToastInteraction';
 import { yieldEscapeToOpenCombobox } from './yieldEscapeToOpenCombobox';
 
 import './Dialog.css';
@@ -62,6 +64,7 @@ const DialogContent = forwardRef<ComponentRef<typeof DialogPrimitive.Content>, D
             size = 'default',
             'aria-describedby': ariaDescribedBy,
             onEscapeKeyDown,
+            onInteractOutside,
             ...props
         },
         ref,
@@ -83,9 +86,17 @@ const DialogContent = forwardRef<ComponentRef<typeof DialogPrimitive.Content>, D
                         onEscapeKeyDown?.(event);
                         yieldEscapeToOpenCombobox(event);
                     }}
+                    onInteractOutside={(event) => {
+                        onInteractOutside?.(event);
+                        ignoreToastInteraction(event);
+                        if (event.target instanceof Element && event.target.closest('[data-overlay-content]')) {
+                            event.preventDefault();
+                        }
+                    }}
                     {...props}
                 >
                     <OverlayBodyGuard />
+                    <DismissToastsOnOpen />
                     {children}
                     {!hideCloseButton && (
                         <DialogPrimitive.Close className="overlay-close" aria-label="Close">

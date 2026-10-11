@@ -5,6 +5,7 @@ import { MemoryRouter } from 'react-router-dom';
 
 import { Role } from '@/auth';
 import { AuthTestProvider as AuthProvider } from '@/test/AuthTestProvider';
+import { ToastContext } from '@/hooks/ui/useToast';
 
 import { CommandPalette } from './CommandPalette';
 
@@ -307,5 +308,63 @@ describe('CommandPalette', () => {
         });
 
         expect(screen.getByText('Dashboard')).toBeInTheDocument();
+    });
+
+    it('CommandPalette_DismissesTheToastsOnScreen_WhenItOpens', async () => {
+        // Arrange
+        const dismissAll = vi.fn();
+        render(
+            <MemoryRouter>
+                <AuthProvider skipSessionInit>
+                    <ToastContext
+                        value={{
+                            toasts: [{ id: 'toast-1', title: 'Saved' }],
+                            toast: vi.fn(),
+                            dismiss: vi.fn(),
+                            dismissAll,
+                        }}
+                    >
+                        <CommandPalette />
+                    </ToastContext>
+                </AuthProvider>
+            </MemoryRouter>,
+        );
+
+        // Act
+        await userEvent.keyboard('{Control>}k{/Control}');
+
+        // Assert
+        await waitFor(() => {
+            expect(screen.getByRole('dialog')).toBeInTheDocument();
+        });
+        expect(dismissAll).toHaveBeenCalledTimes(1);
+    });
+
+    it.each([
+        ['toast-viewport', 'View'],
+        ['toast', 'Undo'],
+        ['toast-tray', 'Clear all'],
+    ])('CommandPalette_StaysOpen_WhenAToastControlIsPressed (%s)', async (className, label) => {
+        // Arrange
+        render(
+            <MemoryRouter>
+                <AuthProvider skipSessionInit>
+                    <CommandPalette />
+                </AuthProvider>
+                <div className={className} style={{ pointerEvents: 'auto' }}>
+                    <button type="button">{label}</button>
+                </div>
+            </MemoryRouter>,
+        );
+        await userEvent.keyboard('{Control>}k{/Control}');
+        await waitFor(() => {
+            expect(screen.getByRole('dialog')).toBeInTheDocument();
+        });
+
+        // Act
+        await userEvent.click(screen.getByRole('button', { name: label, hidden: true }));
+
+        // Assert
+        expect(screen.getByRole('dialog')).toBeInTheDocument();
     });
 });

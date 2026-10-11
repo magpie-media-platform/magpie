@@ -67,7 +67,6 @@ internal sealed class IntegrationHealthCheckJob(
     private const int DefaultStaleAfterMinutes = 60;
     private const int DefaultTimeoutSeconds = 10;
 
-    // CancelAfter and WaitAsync accept at most uint.MaxValue - 1 milliseconds.
     private const uint MaximumTimeoutSeconds = (uint.MaxValue - 1) / 1000;
 
     private static bool ShouldProbe(DateTime? lastChecked, DateTime staleCutoff)

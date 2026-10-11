@@ -1,12 +1,11 @@
 import { forwardRef, memo, type HTMLAttributes, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
-import { ArrowCounterClockwiseIcon, WarningCircleIcon } from '@phosphor-icons/react';
 
-import { Alert } from '@/components/ui/Alert';
-import { Button } from '@/components/ui/Button';
+import { LoadErrorAlert } from '@/components/ui/LoadErrorAlert';
 import { ContentLineageTitle } from '@/components/content/ContentLineageTitle';
 import { ContentMonitoringIndicator } from '@/components/content/ContentCardPrimitives';
 import { getFulfillmentBadge } from '@/types/content';
+import type { TemporalPrecision } from '@/types/contentMetadata';
 import type { FulfillmentStatus, MonitoringMode } from '@/types';
 
 import { StatusRow as SharedStatusRow } from '../StatusRow';
@@ -32,8 +31,8 @@ export interface RecentContentItem {
 
     addedAt: string;
     fulfillment: FulfillmentStatus;
-
-    monitoring?: MonitoringMode | null;
+    publishDate?: string;
+    publishDatePrecision?: TemporalPrecision;
 
     effectiveMonitoring?: MonitoringMode;
 }
@@ -80,7 +79,10 @@ interface ContentItemProps {
 
 const ContentItem = ({ item, url }: ContentItemProps) => {
     const isClickable = url !== undefined;
-    const { variant, label: statusLabel } = getFulfillmentBadge(item.fulfillment);
+    const { variant, label: statusLabel } = getFulfillmentBadge(item.fulfillment, {
+        publishDate: item.publishDate,
+        publishDatePrecision: item.publishDatePrecision,
+    });
 
     const content = (
         <>
@@ -92,7 +94,6 @@ const ContentItem = ({ item, url }: ContentItemProps) => {
             <span className="content-stats-widget__item-meta">
                 {item.effectiveMonitoring !== undefined && (
                     <ContentMonitoringIndicator
-                        monitoring={item.monitoring === undefined ? item.effectiveMonitoring : item.monitoring}
                         effectiveMonitoring={item.effectiveMonitoring}
                         className="content-stats-widget__item-monitoring"
                         activeClassName="content-stats-widget__item-monitoring--active"
@@ -185,14 +186,7 @@ const ContentStatsWidgetBase = forwardRef<HTMLDivElement, ContentStatsWidgetProp
                             <SharedStatusRow loading />
                         </>
                     ) : error ? (
-                        <Alert variant="error" icon={<WarningCircleIcon weight="duotone" />} title="Failed to load">
-                            {onRetry && (
-                                <Button variant="ghost" size="sm" onClick={onRetry}>
-                                    <ArrowCounterClockwiseIcon weight="bold" aria-hidden="true" />
-                                    Try again
-                                </Button>
-                            )}
-                        </Alert>
+                        <LoadErrorAlert onRetry={onRetry} />
                     ) : (
                         <>
                             <StatusRow status="fulfilled" count={counts.fulfilled} url={getStatusUrl?.('fulfilled')} />

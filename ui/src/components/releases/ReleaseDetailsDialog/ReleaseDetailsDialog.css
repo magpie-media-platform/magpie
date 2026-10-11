@@ -4,4 +4,11 @@
         flex-direction: column;
         gap: var(--space-lg);
     }
+
+    .release-details-dialog .details-panel--dialog .details-panel__value {
+        white-space: normal;
+        overflow: visible;
+        text-overflow: clip;
+        overflow-wrap: anywhere;
+    }
 }

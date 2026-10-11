@@ -1,8 +1,10 @@
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 
 import type { ChangeEvent } from 'react';
+
+import { isSimpleQuery } from '@/lib/simpleFilterQuery';
 
 import { FilterBar } from './FilterBar';
 
@@ -50,10 +52,10 @@ vi.mock('../SimpleFilterBuilder', () => ({
 }));
 
 vi.mock('@/lib/simpleFilterQuery', () => ({
-    isSimpleQuery: (query: string) => {
+    isSimpleQuery: vi.fn((query: string) => {
         if (!query.trim()) return true;
         return !query.includes(' or ') && !query.includes('>=') && !query.includes('<=');
-    },
+    }),
 }));
 
 function createMatchMediaController(initialWidth: number) {
@@ -280,6 +282,28 @@ describe('FilterBar', () => {
             expect(switchToSimple).toHaveAttribute('title', 'This query cannot be edited in simple mode');
         });
 
+        it('does not allow a title prefix in simple mode by default', () => {
+            // Arrange
+            const query = 'title startswith "B"';
+
+            // Act
+            render(<FilterBar value={query} onChange={mockOnChange} />);
+
+            // Assert
+            expect(isSimpleQuery).toHaveBeenLastCalledWith(query, 'content', { allowTitlePrefix: false });
+        });
+
+        it('allows a title prefix in simple mode when the host allows it', () => {
+            // Arrange
+            const query = 'title startswith "B"';
+
+            // Act
+            render(<FilterBar value={query} onChange={mockOnChange} allowTitlePrefix />);
+
+            // Assert
+            expect(isSimpleQuery).toHaveBeenLastCalledWith(query, 'content', { allowTitlePrefix: true });
+        });
+
         it('renders advanced mode when the query cannot be represented in simple mode', () => {
             render(<FilterBar value='genre = "Action" or year >= 2020' onChange={mockOnChange} defaultExpanded />);
 
@@ -473,6 +497,24 @@ describe('FilterBar', () => {
 
             const filterBar = document.querySelector('[data-component="filter-bar"]');
             expect(filterBar).toHaveAttribute('data-expanded', 'true');
+        });
+    });
+
+    describe('children', () => {
+        it('Children_RenderInFilterOptionsRegion_WhenPanelIsExpanded', () => {
+            // Arrange & Act
+            render(
+                <FilterBar value="" onChange={mockOnChange} collapsible={false}>
+                    <button type="button">Search</button>
+                </FilterBar>,
+            );
+
+            // Assert
+            expect(
+                within(screen.getByRole('region', { name: 'Filter options' })).getByRole('button', {
+                    name: 'Search',
+                }),
+            ).toBeInTheDocument();
         });
     });
 });

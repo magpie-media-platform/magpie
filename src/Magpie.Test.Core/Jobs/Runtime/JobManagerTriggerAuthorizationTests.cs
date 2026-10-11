@@ -67,8 +67,12 @@ public sealed class JobManagerTriggerAuthorizationTests
             yield return new TestCaseData("Flagged", JobScope.User, Role.Viewer, literal, RoleRefusal);
             yield return new TestCaseData("Administrative", JobScope.Administrative, Role.Manager, literal,
                 RoleRefusal);
-            yield return new TestCaseData("Builtin", JobScope.User, Role.Admin, literal,
-                "Only Magpie can create, change, or delete built-in triggers.");
+            yield return new TestCaseData(
+                "Builtin",
+                JobScope.User,
+                Role.Admin,
+                literal,
+                "Built-in triggers cannot be created, changed, or deleted.");
             yield return new TestCaseData("Flagged", JobScope.User, Role.Requester,
                 new Dictionary<string, string>(), TargetRefusal);
             yield return new TestCaseData("Flagged", JobScope.User, Role.Requester,

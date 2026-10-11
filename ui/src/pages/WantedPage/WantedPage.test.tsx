@@ -79,6 +79,21 @@ const movie: ApiContentHierarchyItem = {
     },
 };
 
+const upcomingMovie: ApiContentHierarchyItem = {
+    ...movie,
+    id: 'movie-2',
+    name: 'Upcoming Movie',
+    metadataContainer: {
+        id: 'mc-movie-2',
+        contributions: [{ ordinal: 0, publishDate: '2099-01-01T00:00:00Z' }],
+    },
+    contentItem: {
+        ...movie.contentItem!,
+        id: 'ci-movie-2',
+        contentHierarchyItemId: 'movie-2',
+    },
+};
+
 const season: ApiContentHierarchyItem = {
     ...show,
     id: 'season-1',
@@ -117,6 +132,17 @@ const episodeTwo: ApiContentHierarchyItem = {
         id: 'ci-episode-2',
         contentHierarchyItemId: 'episode-2',
     },
+};
+
+const unmonitoredShow: ApiContentHierarchyItem = {
+    ...show,
+    monitoring: 'Unmonitored',
+    effectiveMonitoring: 'Unmonitored',
+};
+
+const unmonitoredSeason: ApiContentHierarchyItem = {
+    ...season,
+    effectiveMonitoring: 'Unmonitored',
 };
 
 const contentTypes = [
@@ -213,7 +239,20 @@ describe('WantedPage', () => {
 
     afterEach(() => {
         vi.unstubAllGlobals();
+        vi.unstubAllEnvs();
         vi.restoreAllMocks();
+    });
+
+    it('PageHeader_ShowsMissingOrIncompleteSubtitle_WhenPageRenders', async () => {
+        // Arrange
+        setContentResponse(() => [movie]);
+
+        // Act
+        render(<WantedPage />, { wrapper: ({ children }) => testWrapper({ children }) });
+
+        // Assert
+        expect(await screen.findByText('Monitored content that is missing or incomplete.')).toBeInTheDocument();
+        expect(screen.queryByText(/same MQL query/)).not.toBeInTheDocument();
     });
 
     it('drills into a container but opens a leaf in library detail', async () => {
@@ -250,6 +289,33 @@ describe('WantedPage', () => {
         expect(await screen.findByText('2 missing descendants')).toBeInTheDocument();
     });
 
+    it('counts a monitored missing episode below an unmonitored show and season', async () => {
+        setContentResponse((parentId) => {
+            if (parentId === 'show-1') {
+                return [unmonitoredSeason];
+            }
+            if (parentId === 'season-1') {
+                return [episodeOne];
+            }
+            return [unmonitoredShow];
+        });
+
+        render(<WantedPage />, { wrapper: ({ children }) => testWrapper({ children }) });
+
+        expect(await screen.findByText('1 missing descendant')).toBeInTheDocument();
+    });
+
+    it('lists an unmonitored season that holds a monitored missing episode', async () => {
+        setContentResponse((parentId) => (parentId === 'show-1' ? [unmonitoredSeason] : [episodeOne]));
+
+        render(<WantedPage />, {
+            wrapper: ({ children }) => testWrapper({ children, initialUrl: '/wanted?parentId=show-1' }),
+        });
+
+        expect((await screen.findAllByRole('link', { name: 'Season 1' })).length).toBeGreaterThan(0);
+        expect(screen.queryByText('No wanted content under this item')).not.toBeInTheDocument();
+    });
+
     it('explains that a container has no child items and offers no descendant search', async () => {
         setContentResponse((parentId) => (parentId === null ? [show] : []));
 
@@ -257,7 +323,7 @@ describe('WantedPage', () => {
 
         expect(await screen.findByText('No child items yet')).toBeInTheDocument();
         expect(
-            screen.queryByRole('button', { name: 'Search now for descendants of The Show' }),
+            screen.queryByRole('button', { name: 'Search releases for descendants of The Show' }),
         ).not.toBeInTheDocument();
     });
 
@@ -341,7 +407,7 @@ describe('WantedPage', () => {
 
         await user.click(await screen.findByRole('checkbox', { name: 'Select The Show' }));
         expect(document.querySelector('[data-component="bulk-actions-toolbar"]')).toHaveTextContent('1 selected');
-        await user.click(document.querySelector('[data-action="bulk-search-now"]') as HTMLButtonElement);
+        await user.click(document.querySelector('[data-action="bulk-search-releases"]') as HTMLButtonElement);
 
         await waitFor(() => {
             expect(mockMutateAsync).toHaveBeenCalledTimes(2);
@@ -363,12 +429,12 @@ describe('WantedPage', () => {
         await user.click(await screen.findByRole('checkbox', { name: 'Select The Show' }));
 
         // Act
-        await user.click(screen.getByRole('button', { name: 'Search Now' }));
+        await user.click(screen.getByRole('button', { name: 'Search releases' }));
 
         // Assert
         expect(await screen.findByText('Searches partially queued')).toBeInTheDocument();
         expect(screen.getByRole('checkbox', { name: 'Select The Show' })).toBeChecked();
-        await user.click(screen.getByRole('button', { name: 'Search Now' }));
+        await user.click(screen.getByRole('button', { name: 'Search releases' }));
         await waitFor(() => expect(screen.getByRole('checkbox', { name: 'Select The Show' })).not.toBeChecked());
         expect(mockMutateAsync).toHaveBeenCalledWith({ id: 'episode-2', mode: 'Queue' });
     });
@@ -447,7 +513,7 @@ describe('WantedPage', () => {
         await user.click(await screen.findByRole('button', { name: 'Select' }));
         await user.click(screen.getByRole('button', { name: 'Select Missing Movie' }));
         expect(screen.getByText('1 selected')).toBeInTheDocument();
-        expect(screen.getByRole('button', { name: 'Search Now' })).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Search releases' })).toBeInTheDocument();
     });
 
     it('hides desktop selection controls from read-only viewers', async () => {
@@ -571,14 +637,54 @@ describe('WantedPage', () => {
         expect(document.querySelector('.wanted-page__mobile-row')).toHaveAttribute('data-content-id', 'movie-1');
     });
 
-    it('keeps mobile Search Now outside navigation controls', async () => {
+    it.each([1024, 390])('labels a missing item with a future publish date as Upcoming at %ipx', async (width) => {
+        // Arrange
+        setContentResponse(() => [upcomingMovie, movie]);
+        vi.stubGlobal('matchMedia', createMatchMedia(width));
+
+        // Act
+        render(<WantedPage />, { wrapper: ({ children }) => testWrapper({ children }) });
+
+        // Assert
+        expect(await screen.findByText('Upcoming')).toBeInTheDocument();
+        expect(screen.getAllByText('Missing')).toHaveLength(1);
+        expect(screen.getByRole('button', { name: 'Search releases for Upcoming Movie' })).toBeInTheDocument();
+    });
+
+    it.each([
+        ['Day', 'Upcoming'],
+        ['Instant', 'Missing'],
+    ] as const)('labels a %s publish date of tomorrow in the local time zone as %s', async (precision, label) => {
+        // Arrange
+        vi.stubEnv('TZ', 'America/Los_Angeles');
+        vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-10-07T18:00:00-07:00'));
+        setContentResponse(() => [
+            {
+                ...movie,
+                metadataContainer: {
+                    id: 'mc-movie',
+                    contributions: [
+                        { ordinal: 0, publishDate: '2026-10-08T00:00:00Z', publishDatePrecision: precision },
+                    ],
+                },
+            },
+        ]);
+
+        // Act
+        render(<WantedPage />, { wrapper: ({ children }) => testWrapper({ children }) });
+
+        // Assert
+        expect(await screen.findByText(label)).toBeInTheDocument();
+    });
+
+    it('keeps mobile Search releases outside navigation controls', async () => {
         setContentResponse(() => [movie]);
         vi.stubGlobal('matchMedia', createMatchMedia(390));
         const user = userEvent.setup();
 
         render(<WantedPage />, { wrapper: ({ children }) => testWrapper({ children }) });
 
-        const searchButton = await screen.findByRole('button', { name: 'Search now for Missing Movie' });
+        const searchButton = await screen.findByRole('button', { name: 'Search releases for Missing Movie' });
         expect(searchButton.closest('a, [role="link"]')).toBeNull();
         expect(document.querySelector('.wanted-page__mobile-row')).not.toHaveAttribute('role', 'link');
 
@@ -604,7 +710,7 @@ describe('WantedPage', () => {
         render(<WantedPage />, { wrapper: ({ children }) => testWrapper({ children }) });
 
         await user.click(await screen.findByRole('checkbox', { name: 'Select The Show' }));
-        await user.click(document.querySelector('[data-action="bulk-search-now"]') as HTMLButtonElement);
+        await user.click(document.querySelector('[data-action="bulk-search-releases"]') as HTMLButtonElement);
 
         expect(await screen.findByText('Searches queued')).toBeInTheDocument();
         expect(await screen.findByText('2 leaf searches queued.')).toBeInTheDocument();

@@ -12,6 +12,7 @@ collection mediaFile fileKind:string filePath:string fileSize:long mimeType:stri
 collection mediaFiles fileKind:string filePath:string fileSize:long mimeType:string
 collection relationship externalId:string externalIdSource:string kind:string name:string qualifier:string relatedMetadataContainerId:guid subject:string type:string
 collection relationships externalId:string externalIdSource:string kind:string name:string qualifier:string relatedMetadataContainerId:guid subject:string type:string
+collection subtree fulfillment:enum monitoring:enum
 collection tag name:string
 collection tags name:string
 scalar activeAcquisitionStatus enum Cancelled|Downloaded|Downloading|Failed|Faulted|Grabbed|Imported|Importing|Paused|Queued|Stalled

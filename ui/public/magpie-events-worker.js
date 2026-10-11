@@ -1,4 +1,3 @@
-// Keep this URL, worker name, and version 1 messages compatible across deployments.
 const ports = new Map();
 const retiredSessions = new Set();
 let scope;

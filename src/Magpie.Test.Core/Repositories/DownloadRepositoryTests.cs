@@ -3373,6 +3373,69 @@ public sealed class DownloadRepositoryTests
         Assert.That(downloads.Select(d => d.Id), Is.EqualTo([rejected.Id]));
     }
 
+    [TestCaseSource(nameof(PayloadRejectionSources))]
+    public async Task ListByReleaseAsync_LeavesOutThePayloadRejection_WhenALaterSourceRecordsItsConnection(
+        Guid? sourceConnectionId,
+        DateTime sourceCreatedAt,
+        int expectedCount)
+    {
+        // Arrange
+        _context.Indexers.Add(new Indexer
+        {
+            Id = Guid.Parse("b4f1a7c2-3d5e-4f60-8a9b-0c1d2e3f4a5b"),
+            ProviderType = "mock-indexer",
+            Name = "Indexer",
+            CreatedAt = new DateTime(2026, 8, 1, 0, 0, 0, DateTimeKind.Utc)
+        });
+        _context.IndexerConnections.Add(new IndexerConnection
+        {
+            Id = Guid.Parse("5d0c7e2a-1b3f-4a6d-9e8c-2f4b6a8d0c1e"),
+            IndexerId = Guid.Parse("b4f1a7c2-3d5e-4f60-8a9b-0c1d2e3f4a5b"),
+            Name = "Alice",
+            Enabled = true,
+            CreatedAt = new DateTime(2026, 8, 1, 0, 0, 0, DateTimeKind.Utc)
+        });
+        var release = new Release
+        {
+            Protocol = "torrent",
+            Title = "Vault.2024.1080p",
+            PublishDate = new DateTime(2026, 8, 1, 0, 0, 0, DateTimeKind.Utc),
+            CreatedAt = new DateTime(2026, 8, 1, 0, 0, 0, DateTimeKind.Utc)
+        };
+        release.Sources.Add(new ReleaseSource
+        {
+            Key = "observation",
+            IndexerId = Guid.Parse("b4f1a7c2-3d5e-4f60-8a9b-0c1d2e3f4a5b"),
+            IndexerConnectionId = sourceConnectionId,
+            Protocol = "torrent",
+            ExternalId = "101",
+            Title = "Vault.2024.1080p",
+            CreatedAt = sourceCreatedAt,
+            ObservedAt = sourceCreatedAt
+        });
+        var rejected = new Download
+        {
+            Release = release,
+            DownloadClientId = _downloadClientId,
+            ExternalId = string.Empty,
+            Title = "Vault.2024.1080p",
+            Status = DownloadStatus.Failed,
+            FailureReason = DownloadFailureReason.ClientRejected,
+            FailedAt = new DateTime(2026, 9, 1, 0, 0, 0, DateTimeKind.Utc),
+            CreatedAt = new DateTime(2026, 9, 1, 0, 0, 0, DateTimeKind.Utc)
+        };
+        _context.Releases.Add(release);
+        _context.Downloads.Add(rejected);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.ChangeTracker.Clear();
+
+        // Act
+        var downloads = await _subject.ListByReleaseAsync([release]).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(downloads, Has.Count.EqualTo(expectedCount));
+    }
+
     [Test]
     public async Task ListByReleaseAsync_ReturnsTheDownloadsOfAnotherRelease_WhenItHasTheSameIndexerAndExternalId()
     {
@@ -3736,8 +3799,8 @@ public sealed class DownloadRepositoryTests
     public async Task DeleteClearedFailedDownloadsAsync_AnchorsOnCreatedAt_WhenFailedAtIsNull()
     {
         // Arrange
-        var now = DateTime.UtcNow;
-        var agedTime = new FakeTimeProvider(DateTimeOffset.UtcNow.AddDays(-31));
+        var now = new DateTime(2026, 9, 8, 12, 0, 0, DateTimeKind.Utc);
+        var agedTime = new FakeTimeProvider(new DateTimeOffset(now.AddDays(-31)));
         var agedRepository = new DownloadRepository(
             _context,
             new AuditRecordRepository(
@@ -4957,5 +5020,21 @@ public sealed class DownloadRepositoryTests
             Assert.That(await _context.Downloads.AsNoTracking().Select(d => d.Status).SingleAsync()
                 .ConfigureAwait(false), Is.EqualTo(DownloadStatus.Cancelled));
         }
+    }
+
+    private static IEnumerable<TestCaseData> PayloadRejectionSources()
+    {
+        yield return new TestCaseData(
+            Guid.Parse("5d0c7e2a-1b3f-4a6d-9e8c-2f4b6a8d0c1e"),
+            new DateTime(2026, 9, 2, 0, 0, 0, DateTimeKind.Utc),
+            0).SetArgDisplayNames("connection source after the rejection");
+        yield return new TestCaseData(
+            Guid.Parse("5d0c7e2a-1b3f-4a6d-9e8c-2f4b6a8d0c1e"),
+            new DateTime(2026, 8, 31, 0, 0, 0, DateTimeKind.Utc),
+            1).SetArgDisplayNames("connection source before the rejection");
+        yield return new TestCaseData(
+            null,
+            new DateTime(2026, 9, 2, 0, 0, 0, DateTimeKind.Utc),
+            1).SetArgDisplayNames("source without a connection after the rejection");
     }
 }

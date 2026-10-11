@@ -526,16 +526,20 @@ internal sealed class MusicBrainzClient(
 
             try
             {
+                using var timeout = timeProvider.CreateCancellationTokenSource(client.Timeout);
+                using var reading = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeout.Token);
                 if (maximumBytes is { } limit)
                 {
-                    await response.Content.LoadIntoBufferAsync(limit).ConfigureAwait(false);
+                    await response.Content.LoadIntoBufferAsync(limit)
+                        .WaitAsync(Timeout.InfiniteTimeSpan, timeProvider, reading.Token)
+                        .ConfigureAwait(false);
                 }
 
                 using var stream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false);
                 var value = await JsonSerializer.DeserializeAsync<T>(
                     stream,
                     JsonOptions,
-                    cancellationToken).ConfigureAwait(false);
+                    reading.Token).ConfigureAwait(false);
                 return value is null
                     ? new FetchResult<T> { Outcome = FetchOutcome.Malformed }
                     : new FetchResult<T>
@@ -544,6 +548,11 @@ internal sealed class MusicBrainzClient(
                         Value = value,
                         StatusCode = (int)response.StatusCode
                     };
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                logger.LogWarning("MusicBrainz timed out at {Endpoint} ({Key})", endpoint, diagnosticKey);
+                return new FetchResult<T> { Outcome = FetchOutcome.Timeout };
             }
             catch (HttpRequestException) when (maximumBytes is not null)
             {

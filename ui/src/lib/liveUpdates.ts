@@ -94,7 +94,6 @@ export function connectLiveUpdates(userId: string, receive: (event: LiveEvent) =
         setStatus({ state: connectedBefore ? 'reconnecting' : 'connecting' });
         lastReply = Date.now();
         try {
-            // A stable URL and name let old and new bundles join the same worker after deployment.
             const url = new URL(`${import.meta.env.BASE_URL}magpie-events-worker.js`, window.location.origin);
             const connection = new SharedWorker(url, { name: `magpie-events-v1:${scope}` });
             worker = connection;

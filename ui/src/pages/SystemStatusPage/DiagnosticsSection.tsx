@@ -15,6 +15,7 @@ import {
     type DiagnosticFinding,
     type DiagnosticFindingSeverity,
 } from '@/hooks/useDiagnosticFindings';
+import { useInstanceName } from '@/hooks/useInstanceName';
 import { formatDateTime } from '@/lib/dateFormatting';
 import { formatRelativeTime } from '@/lib/formatTime';
 
@@ -96,6 +97,7 @@ function severityIcon(severity: DiagnosticFindingSeverity) {
 }
 
 export function DiagnosticsSection(): ReactNode {
+    const instanceName = useInstanceName();
     const { hasRole } = useAuth();
     const { toast } = useToast();
     const { findings, lastScannedAt, isLoading, runScan, isScanning, applyRepair, isRepairing } =
@@ -244,7 +246,7 @@ export function DiagnosticsSection(): ReactNode {
                 title="Apply repair?"
                 description={
                     pendingRepair
-                        ? `Apply the repair for "${pendingRepair.title}"? Magpie will attempt to resolve this issue.`
+                        ? `Apply the repair for "${pendingRepair.title}"? ${instanceName} will attempt to resolve this issue.`
                         : ''
                 }
                 isDeleting={isRepairing}

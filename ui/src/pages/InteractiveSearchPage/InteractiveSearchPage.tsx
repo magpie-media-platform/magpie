@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react';
+import { Fragment, useCallback, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import {
     ArrowLeftIcon,
@@ -31,6 +31,7 @@ import {
     useInteractiveSearch,
     type InteractiveSearchCandidate,
 } from '@/hooks/useInteractiveSearch';
+import { useInstanceName } from '@/hooks/useInstanceName';
 import type { ApiError } from '@/lib/api';
 import { formatDate } from '@/lib/dateFormatting';
 import { getErrorMessage, isConflictError } from '@/lib/errors';
@@ -38,7 +39,6 @@ import { formatFileSize } from '@/lib/formatSize';
 
 import './InteractiveSearchPage.css';
 
-// The API sets these problem-details types on grab conflicts. The detail text can change.
 const NO_DOWNLOAD_CLIENT_PROBLEM_TYPE = 'urn:magpie:problem:no-download-client';
 const ACQUISITION_IN_PROGRESS_PROBLEM_TYPE = 'urn:magpie:problem:acquisition-in-progress';
 
@@ -54,6 +54,7 @@ function MatchCell({ candidate }: { candidate: InteractiveSearchCandidate }) {
 }
 
 export function InteractiveSearchPage() {
+    const instanceName = useInstanceName();
     useDocumentTitle('Interactive Search');
     const usesCardLayout = useCardLayout();
     const { contentHierarchyItemId } = useParams<{ contentHierarchyItemId: string }>();
@@ -80,7 +81,7 @@ export function InteractiveSearchPage() {
             }
 
             grabMutation.mutate(
-                { contentHierarchyItemId, release: candidate.release },
+                { contentHierarchyItemId, releaseId: candidate.release.id },
                 {
                     onSuccess: () => {
                         markGrabSucceeded(candidate.release.id);
@@ -150,12 +151,16 @@ export function InteractiveSearchPage() {
                     <button
                         type="button"
                         className="interactive-search__title"
-                        title={row.original.release.title}
                         onClick={() => setDetailsCandidate(row.original)}
                         data-action="release-details"
                         data-release-id={row.original.release.id}
                     >
-                        {row.original.release.title}
+                        {row.original.release.title.split(/(?<=\.)(?!\d+(?:[.-]|$))/).map((segment, index) => (
+                            <Fragment key={index}>
+                                {index > 0 && <wbr />}
+                                {segment}
+                            </Fragment>
+                        ))}
                     </button>
                 ),
             },
@@ -195,7 +200,6 @@ export function InteractiveSearchPage() {
                         Identity: 3,
                     })[row.matchResult],
                 header: 'Match',
-                size: 120,
                 cell: ({ row }) => <MatchCell candidate={row.original} />,
             },
             {
@@ -203,7 +207,6 @@ export function InteractiveSearchPage() {
                 accessorFn: (row) => row.acquisitionStatus ?? '',
                 header: 'Status',
                 meta: { mobileRole: 'header' },
-                size: 110,
                 cell: ({ row }) => {
                     const status = row.original.acquisitionStatus;
                     return status ? (
@@ -338,11 +341,7 @@ export function InteractiveSearchPage() {
                         icon={<WarningCircleIcon weight="thin" aria-hidden="true" />}
                         title="Search failed"
                         description={getErrorMessage(error, 'Failed to search indexers for this item.')}
-                        action={
-                            <Button variant="secondary" size="sm" onClick={() => refetch()}>
-                                Retry
-                            </Button>
-                        }
+                        onRetry={refetch}
                         size="sm"
                     />
                 ) : candidates.length === 0 && configuredIndexerCount === 0 ? (
@@ -351,8 +350,8 @@ export function InteractiveSearchPage() {
                         title="No indexers configured"
                         description={
                             hasRole(Role.Admin)
-                                ? 'Magpie has no indexer connection to search. Add one, then search again.'
-                                : 'Magpie has no indexer connection to search. Ask an administrator to add one.'
+                                ? `${instanceName} has no indexer connection to search. Add one, then search again.`
+                                : `${instanceName} has no indexer connection to search. Ask an administrator to add one.`
                         }
                         action={
                             hasRole(Role.Admin) ? (
@@ -394,7 +393,9 @@ export function InteractiveSearchPage() {
                 itemType="release"
                 itemName={pendingGrab?.release.title ?? ''}
                 description={
-                    pendingGrab ? `Magpie classified this release as ${pendingGrab.matchResult}. Grab it anyway?` : ''
+                    pendingGrab
+                        ? `${instanceName} classified this release as ${pendingGrab.matchResult}. Grab it anyway?`
+                        : ''
                 }
                 confirmVariant="warning"
                 confirmLabel="Grab anyway"

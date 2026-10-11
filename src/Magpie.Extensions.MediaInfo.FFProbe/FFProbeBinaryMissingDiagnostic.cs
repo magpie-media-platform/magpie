@@ -7,10 +7,11 @@ using System.Threading.Tasks;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
 using Magpie.Sdk.Diagnostics;
+using Magpie.Sdk.Services;
 
 namespace Magpie.Extensions.MediaInfo.FFProbe;
 
-internal sealed class FFProbeBinaryMissingDiagnostic : IDiagnosticCheck
+internal sealed class FFProbeBinaryMissingDiagnostic(ISettingsService settingsService) : IDiagnosticCheck
 {
     private static readonly string[] CandidateNames = ["ffprobe", "ffprobe.exe"];
     public const string Id = "ffprobe.config.binary-missing";
@@ -36,7 +37,7 @@ internal sealed class FFProbeBinaryMissingDiagnostic : IDiagnosticCheck
         return directories;
     }
 
-    public Task<IReadOnlyList<DiagnosticFinding>> RunAsync(
+    public async Task<IReadOnlyList<DiagnosticFinding>> RunAsync(
         DiagnosticContext context,
         CancellationToken cancellationToken = default)
     {
@@ -44,10 +45,12 @@ internal sealed class FFProbeBinaryMissingDiagnostic : IDiagnosticCheck
 
         if (BinaryIsResolvable())
         {
-            return Task.FromResult<IReadOnlyList<DiagnosticFinding>>([]);
+            return [];
         }
 
-        return Task.FromResult<IReadOnlyList<DiagnosticFinding>>(
+        var instanceName = await settingsService.GetInstanceNameAsync(cancellationToken).ConfigureAwait(false);
+
+        return
         [
             new DiagnosticFinding
             {
@@ -55,10 +58,10 @@ internal sealed class FFProbeBinaryMissingDiagnostic : IDiagnosticCheck
                 Severity = DiagnosticFindingSeverity.Warning,
                 Title = "FFprobe binary not found",
                 Detail =
-                    "Magpie cannot find ffprobe in its base directory, the current directory or PATH, so it " +
-                    "cannot read media information from imported files.",
+                    $"{instanceName} cannot find ffprobe in its base directory, the current directory or PATH, " +
+                    "so it cannot read media information from imported files.",
             },
-        ]);
+        ];
     }
 
     private bool BinaryIsResolvable()

@@ -77,7 +77,7 @@ RUN dotnet build-server shutdown
 FROM mcr.microsoft.com/dotnet/aspnet:${DOTNET_RUNTIME_VERSION} AS host
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ffmpeg curl ca-certificates jq \
+    && apt-get install -y --no-install-recommends ffmpeg curl ca-certificates jq postgresql-client \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

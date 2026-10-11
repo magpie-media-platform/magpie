@@ -1,6 +1,6 @@
 import { act, render, screen, within, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { afterEach, describe, expect, it, vi, beforeEach } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
 import type { ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -89,7 +89,6 @@ vi.mock('@/lib/api', () => ({
     apiGet: vi.fn().mockImplementation(defaultApiGet),
     apiPost: vi.fn().mockImplementation(defaultApiPost),
     apiDelete: vi.fn().mockImplementation(defaultApiDelete),
-    apiFetchResponse: vi.fn(),
     isApiError: vi.fn(() => false),
 }));
 
@@ -125,6 +124,8 @@ function createWrapper() {
     };
 }
 
+const originalTimeZone = process.env.TZ;
+
 beforeEach(() => {
     vi.clearAllMocks();
     mockApiBackups = createMockBackups();
@@ -133,15 +134,174 @@ beforeEach(() => {
     vi.mocked(apiDelete).mockImplementation(defaultApiDelete);
 });
 
+afterEach(() => {
+    if (originalTimeZone === undefined) {
+        delete process.env.TZ;
+    } else {
+        process.env.TZ = originalTimeZone;
+    }
+});
+
 describe('BackupsPage', () => {
-    it('shows scheduled optimization status without a disabled action', async () => {
+    it('shows Last Optimized as Never when no optimization ran', async () => {
         // Arrange
         // Act
         render(<BackupsPage />, { wrapper: createWrapper() });
         // Assert
-        expect(await screen.findByText('Scheduled Optimization')).toBeInTheDocument();
+        expect(await screen.findByText('Last Optimized')).toBeInTheDocument();
         expect(screen.getByTestId('backups-page__last-optimized')).toHaveTextContent('Never');
-        expect(screen.queryByRole('button', { name: 'Scheduled maintenance' })).not.toBeInTheDocument();
+        expect(screen.queryByText('Scheduled Optimization')).not.toBeInTheDocument();
+    });
+
+    it('LastOptimized_ShowsTheUtcTime_WhenTheLocalTimeZoneIsNotUtc', async () => {
+        // Arrange
+        process.env.TZ = 'America/Los_Angeles';
+        vi.mocked(apiGet).mockImplementation((url: string) =>
+            url === '/database'
+                ? Promise.resolve({
+                      provider: 'SQLite',
+                      backupRestoreSupported: true,
+                      optimizeSupported: true,
+                      lastOptimizedAt: '2026-10-06T23:05:00Z',
+                  })
+                : defaultApiGet(url),
+        );
+        // Act
+        render(<BackupsPage />, { wrapper: createWrapper() });
+        // Assert
+        expect(await screen.findByText('Oct 6, 2026, 11:05 PM')).toBeInTheDocument();
+    });
+
+    it('BackupRow_ShowsTheUtcDate_WhenTheLocalTimeZoneIsNotUtc', async () => {
+        // Arrange
+        process.env.TZ = 'America/Los_Angeles';
+        vi.mocked(apiGet).mockImplementation((url: string) =>
+            url === '/database/backups'
+                ? Promise.resolve([
+                      {
+                          id: '20261007_002600',
+                          name: 'Manual 20261007_002600',
+                          createdAt: '2026-10-07T00:26:00Z',
+                          sizeBytes: 15728640,
+                      },
+                  ])
+                : defaultApiGet(url),
+        );
+        // Act
+        render(<BackupsPage />, { wrapper: createWrapper() });
+        // Assert
+        const date = await screen.findByTestId('backups-page__item-date');
+        expect(date).toHaveTextContent('Oct 7, 2026');
+        expect(date).toHaveAttribute('title', 'Oct 7, 2026, 12:26 AM');
+    });
+
+    it.each(['Restore from Manual 20261007_002600', 'Delete Manual 20261007_002600'])(
+        'BackupDialog_ShowsTheUtcCreatedTime_WhenTheLocalTimeZoneIsNotUtc (%s)',
+        async (button) => {
+            // Arrange
+            process.env.TZ = 'America/Los_Angeles';
+            const user = userEvent.setup();
+            vi.mocked(apiGet).mockImplementation((url: string) =>
+                url === '/database/backups'
+                    ? Promise.resolve([
+                          {
+                              id: '20261007_002600',
+                              name: 'Manual 20261007_002600',
+                              createdAt: '2026-10-07T00:26:00Z',
+                              sizeBytes: 15728640,
+                          },
+                      ])
+                    : defaultApiGet(url),
+            );
+            render(<BackupsPage />, { wrapper: createWrapper() });
+            // Act
+            await user.click(await screen.findByRole('button', { name: button }));
+            // Assert
+            expect(await screen.findByRole('dialog')).toHaveTextContent('Oct 7, 2026, 12:26 AM');
+        },
+    );
+
+    it('shows no download action on backup rows', async () => {
+        // Arrange
+        // Act
+        render(<BackupsPage />, { wrapper: createWrapper() });
+        // Assert
+        expect(await screen.findByRole('button', { name: 'Restore from backup-1' })).toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: /download/i })).not.toBeInTheDocument();
+    });
+
+    it('RestoreAndDelete_AreDisabledWithTheReason_WhenTheLoginCannotRestoreOrDelete', async () => {
+        // Arrange
+        vi.mocked(apiGet).mockImplementation((url: string) =>
+            url === '/database'
+                ? Promise.resolve({
+                      provider: 'MSSQL',
+                      backupRestoreSupported: true,
+                      optimizeSupported: true,
+                      restoreDeniedReason: 'Restore needs the database owner, dbcreator or sysadmin role on SQL Server',
+                      deleteDeniedReason: 'Delete needs the sysadmin role on SQL Server',
+                  })
+                : defaultApiGet(url),
+        );
+        // Act
+        render(<BackupsPage />, { wrapper: createWrapper() });
+        // Assert
+        const restoreButton = await screen.findByRole('button', { name: 'Restore from backup-1' });
+        const deleteButton = screen.getByRole('button', { name: 'Delete backup-1' });
+        expect(restoreButton).toBeDisabled();
+        expect(restoreButton.parentElement).toHaveAccessibleDescription(
+            'Restore needs the database owner, dbcreator or sysadmin role on SQL Server',
+        );
+        expect(deleteButton).toBeDisabled();
+        expect(deleteButton.parentElement).toHaveAccessibleDescription('Delete needs the sysadmin role on SQL Server');
+        expect(screen.getAllByRole('button', { name: 'Create Backup' })[0]).toBeEnabled();
+    });
+
+    it('CreateBackup_IsDisabledWithTheReason_WhenTheProcessCannotCreateABackup', async () => {
+        // Arrange
+        vi.mocked(apiGet).mockImplementation((url: string) =>
+            url === '/database'
+                ? Promise.resolve({
+                      provider: 'SQLite',
+                      backupRestoreSupported: true,
+                      optimizeSupported: true,
+                      backupDeniedReason: 'Create needs write access to the backup directory',
+                  })
+                : defaultApiGet(url),
+        );
+        // Act
+        render(<BackupsPage />, { wrapper: createWrapper() });
+        // Assert
+        expect(await screen.findByRole('button', { name: 'Restore from backup-1' })).toBeEnabled();
+        const createButton = screen.getAllByRole('button', { name: 'Create Backup' })[0];
+        expect(createButton).toBeDisabled();
+        expect(createButton.parentElement).toHaveAccessibleDescription(
+            'Create needs write access to the backup directory',
+        );
+    });
+
+    it('EmptyState_ShowsTheCreateReason_WhenTheProcessCannotCreateABackup', async () => {
+        // Arrange
+        vi.mocked(apiGet).mockImplementation((url: string) =>
+            Promise.resolve(
+                url === '/database'
+                    ? {
+                          provider: 'SQLite',
+                          backupRestoreSupported: true,
+                          optimizeSupported: true,
+                          backupDeniedReason: 'Create needs write access to the backup directory',
+                      }
+                    : [],
+            ),
+        );
+        // Act
+        render(<BackupsPage />, { wrapper: createWrapper() });
+        // Assert
+        expect(await screen.findByText('No backups available')).toBeInTheDocument();
+        expect(screen.getByRole('list', { name: 'Backups' })).toHaveTextContent(
+            'Create needs write access to the backup directory',
+        );
+        expect(screen.queryByText('Create a backup to protect your data')).not.toBeInTheDocument();
     });
 
     it('renders with correct data-page attribute', async () => {
@@ -691,6 +851,75 @@ describe('BackupsPage accessibility', () => {
 
             expect(within(dialog).getByText('Restore Backup')).toBeInTheDocument();
         });
+    });
+});
+
+describe('BackupsPage layout', () => {
+    it('Header_IsInThePageContent_WhenBackupsAreUnavailable', async () => {
+        // Arrange
+        vi.mocked(apiGet).mockImplementation((url: string) => {
+            if (url === '/database') {
+                return Promise.resolve({
+                    provider: 'SqlServer',
+                    backupRestoreSupported: false,
+                    optimizeSupported: false,
+                    unsupportedReason: 'Database backup and restore are not implemented for SqlServer deployments.',
+                });
+            }
+            return Promise.resolve([]);
+        });
+
+        // Act
+        render(<BackupsPage />, { wrapper: createWrapper() });
+
+        // Assert
+        await screen.findByText('Database backups unavailable');
+        expect(
+            screen.getByRole('heading', { name: 'Database' }).closest('.backups-page__pull-to-refresh'),
+        ).not.toBeNull();
+    });
+
+    it('PullToRefresh_IsDisabled_WhenBackupsAreUnavailable', async () => {
+        // Arrange
+        vi.mocked(apiGet).mockImplementation((url: string) => {
+            if (url === '/database') {
+                return Promise.resolve({
+                    provider: 'SqlServer',
+                    backupRestoreSupported: false,
+                    optimizeSupported: false,
+                    unsupportedReason: 'Database backup and restore are not implemented for SqlServer deployments.',
+                });
+            }
+            return Promise.resolve([]);
+        });
+
+        // Act
+        render(<BackupsPage />, { wrapper: createWrapper() });
+
+        // Assert
+        await screen.findByText('Database backups unavailable');
+        expect(
+            screen.getByRole('heading', { name: 'Database' }).closest('.backups-page__pull-to-refresh'),
+        ).toHaveAttribute('data-disabled', 'true');
+    });
+
+    it('Header_IsInThePageContent_WhenTheBackupsFailToLoad', async () => {
+        // Arrange
+        vi.mocked(apiGet).mockImplementation((url: string) => {
+            if (url === '/database/backups') {
+                return Promise.reject(new Error('Network error'));
+            }
+            return Promise.resolve([]);
+        });
+
+        // Act
+        render(<BackupsPage />, { wrapper: createWrapper() });
+
+        // Assert
+        await screen.findByText('Failed to load backups');
+        expect(
+            screen.getByRole('heading', { name: 'Database' }).closest('.backups-page__pull-to-refresh'),
+        ).not.toBeNull();
     });
 });
 

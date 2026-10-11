@@ -1,3 +1,4 @@
+import { FlagCheckeredIcon } from '@phosphor-icons/react';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
@@ -61,6 +62,42 @@ describe('MonitoringToggle', () => {
         expect(onChange).toHaveBeenCalledWith('Unmonitored');
     });
 
+    it.each([false, true])('shows the flag icon on the Shotgun option when filter is %s', (filter) => {
+        // Arrange
+        const reference = render(<FlagCheckeredIcon weight="bold" aria-hidden="true" />).container.querySelector('svg');
+
+        // Act
+        render(
+            <TooltipProvider>
+                <MonitoringToggle<MonitoringMode | boolean | null>
+                    value={null}
+                    onChange={vi.fn()}
+                    shotgun
+                    filter={filter}
+                />
+            </TooltipProvider>,
+        );
+
+        // Assert
+        expect(screen.getByRole('radio', { name: /^Shotgun:/ }).querySelector('svg')?.outerHTML).toBe(
+            reference?.outerHTML,
+        );
+    });
+
+    it('ShotgunOption_ExplainsShotgunOnHover_WhenShotgunIsOffered', () => {
+        // Act
+        render(
+            <TooltipProvider>
+                <MonitoringToggle<MonitoringMode | null> value={null} onChange={vi.fn()} shotgun />
+            </TooltipProvider>,
+        );
+
+        // Assert
+        expect(
+            screen.getByRole('radio', { name: 'Shotgun: Grab everything at once, keep the first to finish' }),
+        ).toBeInTheDocument();
+    });
+
     it('offers Unmonitored, Monitored and Shotgun without Inherit when inherit is off', () => {
         render(
             <TooltipProvider>
@@ -71,6 +108,53 @@ describe('MonitoringToggle', () => {
         const options = screen.getAllByRole('radio');
 
         expect(options.map((option) => option.textContent)).toEqual(['Unmonitored', 'Monitored', 'Shotgun']);
+    });
+
+    it.each([
+        ['the default choices', {}, []],
+        ['Inherit and the Shotgun choices', { shotgun: true }, [['Inherit'], ['Unmonitored', 'Monitored', 'Shotgun']]],
+        ['the Shotgun choices without Inherit', { shotgun: true, inherit: false }, []],
+        [
+            'the Shotgun filter choices',
+            { filter: true, shotgun: true },
+            [
+                ['Monitored', 'Unmonitored'],
+                ['Shotgun', 'Any'],
+            ],
+        ],
+    ])('groups %s so that a wrapped row never holds a lone choice', (_name, props, expected) => {
+        // Arrange
+        // Act
+        const { container } = render(
+            <TooltipProvider>
+                <MonitoringToggle<MonitoringMode | boolean | null> value={null} onChange={vi.fn()} {...props} />
+            </TooltipProvider>,
+        );
+
+        // Assert
+        const groups = Array.from(container.querySelectorAll('.monitoring-toggle__group')).map((group) =>
+            Array.from(group.querySelectorAll('[role="radio"]')).map((option) => option.textContent),
+        );
+        expect(groups).toEqual(expected);
+    });
+
+    it('moves from Inherit to Unmonitored across the groups with ArrowRight', async () => {
+        // Arrange
+        const user = userEvent.setup();
+        const onChange = vi.fn();
+        render(
+            <TooltipProvider>
+                <MonitoringToggle<MonitoringMode | null> value={null} onChange={onChange} shotgun />
+            </TooltipProvider>,
+        );
+        await user.tab();
+
+        // Act
+        await user.keyboard('{ArrowRight}');
+
+        // Assert
+        expect(onChange).toHaveBeenCalledWith('Unmonitored');
+        expect(screen.getByRole('radio', { name: /^Unmonitored:/ })).toHaveFocus();
     });
 
     it('takes its name from the labelling element when aria-labelledby is set', () => {

@@ -6,13 +6,15 @@ using System.Threading.Tasks;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
 using Magpie.Sdk.Diagnostics;
+using Magpie.Sdk.Services;
 
 using Microsoft.Extensions.Logging;
 
 namespace Magpie.Extensions.Jellyfin;
 
 internal sealed class JellyfinLibraryMappingDiagnostic(
-    ILogger<JellyfinLibraryMappingDiagnostic> logger) : IDiagnosticCheck
+    ILogger<JellyfinLibraryMappingDiagnostic> logger,
+    ISettingsService settingsService) : IDiagnosticCheck
 {
     public const string Id = "jellyfin.config.library-path-mismatch";
 
@@ -22,10 +24,12 @@ internal sealed class JellyfinLibraryMappingDiagnostic(
 
     private static string Normalize(string path) => path.Trim().TrimEnd('/', '\\');
 
-    public Task<IReadOnlyList<DiagnosticFinding>> RunAsync(
+    public async Task<IReadOnlyList<DiagnosticFinding>> RunAsync(
         DiagnosticContext context,
         CancellationToken cancellationToken = default)
     {
+        var instanceName = await settingsService.GetInstanceNameAsync(cancellationToken).ConfigureAwait(false);
+
         var knownPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var root in context.RootFolders)
         {
@@ -61,13 +65,13 @@ internal sealed class JellyfinLibraryMappingDiagnostic(
                     Title = $"Jellyfin server {server.Name} maps a library to an unknown root folder",
                     Detail =
                         $"The Jellyfin library mapping points to {mappedPath}, which is not a configured " +
-                        "Magpie root folder. Library refreshes and links will apply to the entire server.",
+                        $"{instanceName} root folder. Library refreshes and links will apply to the entire server.",
                     AffectedEntity = $"MediaServer:{server.Id}",
                 });
             }
         }
 
-        return Task.FromResult<IReadOnlyList<DiagnosticFinding>>(findings);
+        return findings;
     }
 
     private List<string> ReadMappedRootFolderPaths(MediaServer server)

@@ -2,6 +2,7 @@ using System;
 using System.Threading;
 using System.Threading.Tasks;
 
+using Magpie.Abstractions;
 using Magpie.Abstractions.Database;
 using Magpie.Abstractions.Repositories;
 using Magpie.Core;
@@ -94,6 +95,85 @@ public sealed class DatabaseManagementServiceTests
             Assert.That(deleted, Is.False);
             eventBus.Verify(
                 bus => bus.PublishAsync(It.IsAny<MagpieEvent>(), It.IsAny<CancellationToken>()),
+                Times.Never);
+        }
+    }
+
+    [Test]
+    public async Task GetInfo_ReportsDeniedReasons_WhenProviderDeniesRestoreAndDelete()
+    {
+        // Arrange
+        var provider = new Mock<IDatabaseManagementProvider>();
+        provider.Setup(candidate => candidate.Provider).Returns("MSSQL");
+        var recoverable = provider.As<IRecoverableDatabaseManagementProvider>();
+        recoverable
+            .Setup(candidate => candidate.GetBackupDeniedReasonAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync((string?)null);
+        recoverable
+            .Setup(candidate => candidate.GetRestoreDeniedReasonAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync("Restore needs the database owner, dbcreator or sysadmin role on SQL Server");
+        recoverable
+            .Setup(candidate => candidate.GetDeleteDeniedReasonAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync("Delete needs the sysadmin role on SQL Server");
+        var subject = new DatabaseManagementService(
+            provider.Object,
+            Mock.Of<IMagpieSystem>(),
+            Mock.Of<IAuditRecordRepository>(),
+            Mock.Of<IEventBus>(),
+            TimeProvider.System);
+
+        // Act
+        var info = await subject.GetInfo().ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(info.BackupRestoreSupported, Is.True);
+            Assert.That(info.BackupDeniedReason, Is.Null);
+            Assert.That(
+                info.RestoreDeniedReason,
+                Is.EqualTo("Restore needs the database owner, dbcreator or sysadmin role on SQL Server"));
+            Assert.That(info.DeleteDeniedReason, Is.EqualTo("Delete needs the sysadmin role on SQL Server"));
+        }
+    }
+
+    [Test]
+    public void RestoreBackupAsync_ThrowsWithoutStaging_WhenRestartIsNotSupported()
+    {
+        // Arrange
+        var provider = new Mock<IDatabaseManagementProvider>();
+        var recoverable = provider.As<IRecoverableDatabaseManagementProvider>();
+        var system = new Mock<IMagpieSystem>();
+        system
+            .Setup(candidate => candidate.GetInfo())
+            .Returns(new SystemInfo
+            {
+                Version = "1.0.0",
+                Runtime = "runtime",
+                OperatingSystem = "os",
+                Architecture = "x64",
+                SystemRoot = "root",
+                NodeId = "node-1",
+                StartedAt = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+                RestartSupported = false
+            });
+        var subject = new DatabaseManagementService(
+            provider.Object,
+            system.Object,
+            Mock.Of<IAuditRecordRepository>(),
+            Mock.Of<IEventBus>(),
+            TimeProvider.System);
+
+        // Act
+        var exception = Assert.ThrowsAsync<MagpieShutdownException>(
+            () => subject.RestoreBackupAsync("backup-1", Guid.NewGuid()));
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(exception.Message, Is.EqualTo("The host is not supervised."));
+            recoverable.Verify(
+                candidate => candidate.StageRestoreAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()),
                 Times.Never);
         }
     }

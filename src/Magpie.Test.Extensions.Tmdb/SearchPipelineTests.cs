@@ -123,7 +123,7 @@ public class SearchPipelineTests
         httpClient.BaseAddress = new Uri(TmdbClient.DefaultBaseUrl, UriKind.Absolute);
         var httpClientFactory = new Mock<IHttpClientFactory>();
         httpClientFactory.Setup(factory => factory.CreateClient(TmdbClient.HttpClientName)).Returns(httpClient);
-        var client = new TmdbClient(httpClientFactory.Object, NullLogger<TmdbClient>.Instance);
+        var client = new TmdbClient(httpClientFactory.Object, TimeProvider.System, NullLogger<TmdbClient>.Instance);
         var settingsResolver = new Mock<ISettingsResolver>();
         settingsResolver
             .Setup(resolver => resolver.AcquireContextAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))

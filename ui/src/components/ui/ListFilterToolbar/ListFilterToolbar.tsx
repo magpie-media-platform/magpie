@@ -1,9 +1,14 @@
-import { useId, useLayoutEffect, useMemo, useRef, useState, type SyntheticEvent } from 'react';
+import { Fragment, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type SyntheticEvent } from 'react';
 import { FunnelIcon, XIcon } from '@phosphor-icons/react';
 import type { SortingState } from '@tanstack/react-table';
 
 import { Button } from '@/components/ui/Button';
-import { ColumnHeaderFilter, type FacetOption } from '@/components/ui/ColumnHeaderFilter';
+import {
+    BETWEEN_DATES_PRESET,
+    ColumnHeaderFilter,
+    type DateRangeValue,
+    type FacetOption,
+} from '@/components/ui/ColumnHeaderFilter';
 import {
     Dialog,
     DialogBody,
@@ -20,17 +25,19 @@ import {
     type MobileListSortOption,
 } from '@/components/ui/MobileListToolbar';
 import { MultiSelectColumnFilter } from '@/components/ui/MultiSelectColumnFilter';
+import { useCardLayout } from '@/hooks/ui/useCardLayout';
 
 import './ListFilterToolbar.css';
 
-export type ListFilterValue = string | string[] | { min: string; max: string };
+export type ListFilterValue = string | string[] | { min: string; max: string } | DateRangeValue;
 export type ListFilterValues = Record<string, ListFilterValue>;
 
 export type ListFilterField =
     | { id: string; label: string; kind: 'facet'; value: string; options: FacetOption[] }
     | { id: string; label: string; kind: 'multi'; value: string[]; options: FacetOption[] }
     | { id: string; label: string; kind: 'text'; value: string }
-    | { id: string; label: string; kind: 'numberRange'; value: { min: string; max: string }; unit?: string };
+    | { id: string; label: string; kind: 'numberRange'; value: { min: string; max: string }; unit?: string }
+    | { id: string; label: string; kind: 'dateRange'; value: DateRangeValue; presets: FacetOption[] };
 
 export interface ListFilterToolbarProps {
     fields: ListFilterField[];
@@ -40,17 +47,21 @@ export interface ListFilterToolbarProps {
     onSortingChange: (sorting: SortingState) => void;
     selection?: MobileListSelectionControl;
     className?: string;
+    dialogClearAll?: boolean;
+    pillMultiSelect?: boolean;
 }
 
 function isActive(value: ListFilterValue): boolean {
     if (typeof value === 'string') return value !== '';
     if (Array.isArray(value)) return value.length > 0;
+    if ('preset' in value) return value.preset !== '' || value.from !== '' || value.to !== '';
     return value.min !== '' || value.max !== '';
 }
 
 function emptyValue(field: ListFilterField): ListFilterValue {
     if (field.kind === 'multi') return [];
     if (field.kind === 'numberRange') return { min: '', max: '' };
+    if (field.kind === 'dateRange') return { preset: '', from: '', to: '' };
     return '';
 }
 
@@ -62,8 +73,11 @@ export function ListFilterToolbar({
     onSortingChange,
     selection,
     className,
+    dialogClearAll = false,
+    pillMultiSelect = false,
 }: ListFilterToolbarProps) {
     const formId = useId();
+    const usesCardLayout = useCardLayout();
     const toolbarRef = useRef<HTMLDivElement>(null);
     const [inline, setInline] = useState(false);
     const [open, setOpen] = useState(false);
@@ -73,6 +87,10 @@ export function ListFilterToolbar({
     );
     const [draft, setDraft] = useState<ListFilterValues>({});
     const activeCount = fields.filter((field) => isActive(field.value)).length;
+
+    useEffect(() => {
+        if (!usesCardLayout) setOpen(false);
+    }, [usesCardLayout]);
 
     useLayoutEffect(() => {
         const toolbar = toolbarRef.current;
@@ -109,47 +127,60 @@ export function ListFilterToolbar({
         <div className="list-filter-toolbar__controls">
             {inline && (
                 <div className="list-filter-toolbar__inline" role="group" aria-label="List filters">
-                    {fields.map((field) =>
-                        field.kind === 'multi' ? (
-                            <MultiSelectColumnFilter
-                                key={field.id}
-                                label={field.label}
-                                options={field.options}
-                                value={field.value}
-                                onChange={(value) => commitField(field.id, value)}
-                            />
-                        ) : field.kind === 'facet' ? (
-                            <ColumnHeaderFilter
-                                key={field.id}
-                                type="facet"
-                                label={field.label}
-                                active={isActive(field.value)}
-                                options={field.options}
-                                value={field.value}
-                                onChange={(value) => commitField(field.id, value)}
-                            />
-                        ) : field.kind === 'text' ? (
-                            <ColumnHeaderFilter
-                                key={field.id}
-                                type="text"
-                                label={field.label}
-                                active={isActive(field.value)}
-                                value={field.value}
-                                onChange={(value) => commitField(field.id, value)}
-                            />
-                        ) : (
-                            <ColumnHeaderFilter
-                                key={field.id}
-                                type="numberRange"
-                                label={field.label}
-                                active={isActive(field.value)}
-                                min={field.value.min}
-                                max={field.value.max}
-                                unit={field.unit}
-                                onChange={(value) => commitField(field.id, value)}
-                            />
-                        ),
-                    )}
+                    {fields.map((field) => (
+                        <Fragment key={field.id}>
+                            {field.kind === 'multi' && (
+                                <MultiSelectColumnFilter
+                                    label={field.label}
+                                    options={field.options}
+                                    value={field.value}
+                                    onChange={(value) => commitField(field.id, value)}
+                                />
+                            )}
+                            {field.kind === 'facet' && (
+                                <ColumnHeaderFilter
+                                    type="facet"
+                                    label={field.label}
+                                    active={isActive(field.value)}
+                                    options={field.options}
+                                    value={field.value}
+                                    onChange={(value) => commitField(field.id, value)}
+                                />
+                            )}
+                            {field.kind === 'text' && (
+                                <ColumnHeaderFilter
+                                    type="text"
+                                    label={field.label}
+                                    active={isActive(field.value)}
+                                    value={field.value}
+                                    onChange={(value) => commitField(field.id, value)}
+                                />
+                            )}
+                            {field.kind === 'numberRange' && (
+                                <ColumnHeaderFilter
+                                    type="numberRange"
+                                    label={field.label}
+                                    active={isActive(field.value)}
+                                    min={field.value.min}
+                                    max={field.value.max}
+                                    unit={field.unit}
+                                    onChange={(value) => commitField(field.id, value)}
+                                />
+                            )}
+                            {field.kind === 'dateRange' && (
+                                <ColumnHeaderFilter
+                                    type="dateRange"
+                                    label={field.label}
+                                    active={isActive(field.value)}
+                                    preset={field.value.preset}
+                                    presets={field.presets}
+                                    from={field.value.from}
+                                    to={field.value.to}
+                                    onChange={(value) => commitField(field.id, value)}
+                                />
+                            )}
+                        </Fragment>
+                    ))}
                 </div>
             )}
             {!inline && (
@@ -162,7 +193,10 @@ export function ListFilterToolbar({
                             aria-label={`Filters, ${activeCount} active`}
                         >
                             <FunnelIcon weight="bold" aria-hidden="true" />
-                            Filters{activeCount > 0 ? ` (${activeCount})` : ''}
+                            <span>
+                                <span className="list-filter-toolbar__compact-label">Filters</span>
+                                {activeCount > 0 ? ` (${activeCount})` : ''}
+                            </span>
                         </Button>
                     </DialogTrigger>
                     <DialogContent aria-describedby={undefined}>
@@ -173,6 +207,7 @@ export function ListFilterToolbar({
                             <DialogBody>
                                 {fields.map((field) => {
                                     const value = draft[field.id] ?? field.value;
+                                    const range = field.kind === 'dateRange' ? (value as DateRangeValue) : null;
                                     return (
                                         <div key={field.id} className="list-filter-toolbar__field">
                                             <label
@@ -209,7 +244,19 @@ export function ListFilterToolbar({
                                                     }
                                                 />
                                             )}
-                                            {field.kind === 'multi' && (
+                                            {field.kind === 'multi' && pillMultiSelect && (
+                                                <MultiSelectColumnFilter
+                                                    label={field.label}
+                                                    hideLabel
+                                                    trigger="field"
+                                                    options={field.options}
+                                                    value={value as string[]}
+                                                    onChange={(selected) =>
+                                                        setDraft({ ...draft, [field.id]: selected })
+                                                    }
+                                                />
+                                            )}
+                                            {field.kind === 'multi' && !pillMultiSelect && (
                                                 <div
                                                     className="list-filter-toolbar__choices"
                                                     role="group"
@@ -241,6 +288,66 @@ export function ListFilterToolbar({
                                                         );
                                                     })}
                                                 </div>
+                                            )}
+                                            {field.kind === 'dateRange' && range && (
+                                                <>
+                                                    <select
+                                                        id={`${formId}-${field.id}`}
+                                                        className="list-filter-toolbar__select"
+                                                        value={range.preset}
+                                                        onChange={(event) =>
+                                                            setDraft({
+                                                                ...draft,
+                                                                [field.id]: {
+                                                                    preset: event.target.value,
+                                                                    from: '',
+                                                                    to: '',
+                                                                },
+                                                            })
+                                                        }
+                                                    >
+                                                        <option value="">All</option>
+                                                        {[...field.presets, BETWEEN_DATES_PRESET].map((option) => (
+                                                            <option key={option.value} value={option.value}>
+                                                                {option.label}
+                                                            </option>
+                                                        ))}
+                                                    </select>
+                                                    {range.preset === BETWEEN_DATES_PRESET.value && (
+                                                        <>
+                                                            <Input
+                                                                size="sm"
+                                                                type="date"
+                                                                aria-label={`${field.label} from`}
+                                                                value={range.from}
+                                                                onChange={(event) =>
+                                                                    setDraft({
+                                                                        ...draft,
+                                                                        [field.id]: {
+                                                                            ...range,
+                                                                            from: event.target.value,
+                                                                        },
+                                                                    })
+                                                                }
+                                                            />
+                                                            <Input
+                                                                size="sm"
+                                                                type="date"
+                                                                aria-label={`${field.label} to`}
+                                                                value={range.to}
+                                                                onChange={(event) =>
+                                                                    setDraft({
+                                                                        ...draft,
+                                                                        [field.id]: {
+                                                                            ...range,
+                                                                            to: event.target.value,
+                                                                        },
+                                                                    })
+                                                                }
+                                                            />
+                                                        </>
+                                                    )}
+                                                </>
                                             )}
                                             {field.kind === 'numberRange' && (
                                                 <div className="list-filter-toolbar__range">
@@ -286,9 +393,22 @@ export function ListFilterToolbar({
                                 })}
                             </DialogBody>
                             <DialogFooter>
-                                <Button variant="ghost" size="sm" onClick={() => setOpen(false)}>
-                                    Cancel
-                                </Button>
+                                {dialogClearAll ? (
+                                    <Button
+                                        variant="ghost"
+                                        size="sm"
+                                        onClick={() => {
+                                            clearAll();
+                                            setOpen(false);
+                                        }}
+                                    >
+                                        Clear all
+                                    </Button>
+                                ) : (
+                                    <Button variant="ghost" size="sm" onClick={() => setOpen(false)}>
+                                        Cancel
+                                    </Button>
+                                )}
                                 <Button variant="primary" size="sm" type="submit">
                                     Apply
                                 </Button>
@@ -306,13 +426,15 @@ export function ListFilterToolbar({
             className={['list-filter-toolbar', className].filter(Boolean).join(' ')}
             data-component="list-filter-toolbar"
         >
-            <MobileListToolbar
-                sorting={sorting}
-                sortOptions={sortOptions}
-                onSortingChange={onSortingChange}
-                filterActions={controls}
-                selection={selection}
-            />
+            {usesCardLayout && (
+                <MobileListToolbar
+                    sorting={sorting}
+                    sortOptions={sortOptions}
+                    onSortingChange={onSortingChange}
+                    filterActions={controls}
+                    selection={selection}
+                />
+            )}
             {activeCount > 0 && (
                 <div className="list-filter-toolbar__active" aria-label="Active filters">
                     {fields
@@ -342,6 +464,34 @@ export function ListFilterToolbar({
                                               key: `${field.id}-max`,
                                               label: `${field.label} ≤ ${field.value.max}${field.unit ?? ''}`,
                                               remove: () => commitField(field.id, { ...field.value, max: '' }),
+                                          }
+                                        : null,
+                                ].filter(Boolean) as { key: string; label: string; remove: () => void }[];
+                            }
+                            if (field.kind === 'dateRange') {
+                                const { preset, from, to } = field.value;
+                                if (preset !== '' && preset !== BETWEEN_DATES_PRESET.value) {
+                                    return [
+                                        {
+                                            key: field.id,
+                                            label: `${field.label}: ${field.presets.find((option) => option.value === preset)?.label ?? preset}`,
+                                            remove: () => commitField(field.id, emptyValue(field)),
+                                        },
+                                    ];
+                                }
+                                return [
+                                    from
+                                        ? {
+                                              key: `${field.id}-from`,
+                                              label: `${field.label} from ${from}`,
+                                              remove: () => commitField(field.id, { ...field.value, from: '' }),
+                                          }
+                                        : null,
+                                    to
+                                        ? {
+                                              key: `${field.id}-to`,
+                                              label: `${field.label} to ${to}`,
+                                              remove: () => commitField(field.id, { ...field.value, to: '' }),
                                           }
                                         : null,
                                 ].filter(Boolean) as { key: string; label: string; remove: () => void }[];

@@ -177,14 +177,14 @@ public interface IDownloadService
     /// <param name="release">The release to grab</param>
     /// <param name="source">The download client that receives the release</param>
     /// <param name="settings">The resolved settings of the download client</param>
-    /// <param name="contentType">The slug of the content type for the download, or <see langword="null"/></param>
+    /// <param name="context">The context of the release grab, or <see langword="null"/> for an empty context</param>
     /// <param name="interactive">Whether the grab is interactive</param>
     /// <param name="cancellationToken">The token that cancels the operation</param>
     Task<GrabResult> GrabAsync(
         Release release,
         DownloadClient source,
         IReadOnlyDictionary<string, string> settings,
-        string? contentType = null,
+        ReleaseGrabContext? context = null,
         bool interactive = false,
         CancellationToken cancellationToken = default);
 

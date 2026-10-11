@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Net;
+using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -1071,6 +1073,7 @@ public sealed class IndexerServiceTests
         private static readonly Guid ConnectionBId = new("44444444-4444-4444-4444-444444444444");
         private static readonly Guid DisabledConnectionId = new("55555555-5555-5555-5555-555555555555");
         private static readonly Guid ContentHierarchyItemId = new("66666666-6666-6666-6666-666666666666");
+        private static readonly Guid StoredReleaseId = new("77777777-7777-7777-7777-777777777777");
 
         private Mock<IIndexerRepository> _indexers = null!;
         private Mock<IIndexerConnectionRepository> _indexerConnections = null!;
@@ -1200,6 +1203,11 @@ public sealed class IndexerServiceTests
                 .ReturnsAsync([]);
 
             var transactions = new Mock<ITransactionManager>();
+            transactions
+                .Setup(manager => manager.ExecuteWithTransactionAsync(
+                    It.IsAny<Func<CancellationToken, Task>>(),
+                    It.IsAny<CancellationToken>()))
+                .Returns((Func<CancellationToken, Task> operation, CancellationToken token) => operation(token));
             transactions
                 .Setup(manager => manager.ExecuteWithTransactionAsync(
                     It.IsAny<Func<CancellationToken, Task<Guid?>>>(),
@@ -1595,6 +1603,76 @@ public sealed class IndexerServiceTests
         }
 
         [Test]
+        public async Task SearchAsync_ReturnsTheStoredReleaseId_WhenACandidateIsAlreadyStored()
+        {
+            // Arrange
+            _integrationA
+                .Setup(integration => integration.SearchAsync(
+                    It.IsAny<ReleaseSearchRequest>(),
+                    It.IsAny<IReadOnlyDictionary<string, string>>(),
+                    It.IsAny<CancellationToken>()))
+                .ReturnsAsync([new Release { Protocol = "torrent", Title = "The.Salt.Roads.2019.1080p" }]);
+            _releases
+                .Setup(repository => repository.UpdateAsync(
+                    It.IsAny<Release>(),
+                    It.IsAny<Guid?>(),
+                    It.IsAny<CancellationToken>()))
+                .ReturnsAsync((Release release, Guid? _, CancellationToken _) =>
+                {
+                    release.Id = StoredReleaseId;
+                    return true;
+                });
+            var request = new IndexerSearchRequest
+            {
+                ConnectionIds = [ConnectionAId],
+                Query = new ReleaseSearchRequest { Title = "the salt roads" },
+            };
+
+            // Act
+            var response = await _subject.SearchAsync(request).ConfigureAwait(false);
+
+            // Assert
+            Assert.That(response!.Candidates.Select(candidate => candidate.Release.Id), Is.EqualTo([StoredReleaseId]));
+        }
+
+        [Test]
+        public async Task SearchAsync_MarksTheStoredReleaseObserved_WhenACandidateIsAlreadyStored()
+        {
+            // Arrange
+            _integrationA
+                .Setup(integration => integration.SearchAsync(
+                    It.IsAny<ReleaseSearchRequest>(),
+                    It.IsAny<IReadOnlyDictionary<string, string>>(),
+                    It.IsAny<CancellationToken>()))
+                .ReturnsAsync([new Release { Protocol = "torrent", Title = "The.Salt.Roads.2019.1080p" }]);
+            _releases
+                .Setup(repository => repository.UpdateAsync(
+                    It.IsAny<Release>(),
+                    It.IsAny<Guid?>(),
+                    It.IsAny<CancellationToken>()))
+                .ReturnsAsync((Release release, Guid? _, CancellationToken _) =>
+                {
+                    release.Id = StoredReleaseId;
+                    return true;
+                });
+            var request = new IndexerSearchRequest
+            {
+                ConnectionIds = [ConnectionAId],
+                Query = new ReleaseSearchRequest { Title = "the salt roads" },
+            };
+
+            // Act
+            await _subject.SearchAsync(request).ConfigureAwait(false);
+
+            // Assert
+            _releases.Verify(
+                repository => repository.MarkObservedAsync(
+                    It.Is<IReadOnlyCollection<Guid>>(ids => ids.SequenceEqual(new[] { StoredReleaseId })),
+                    It.IsAny<CancellationToken>()),
+                Times.Once);
+        }
+
+        [Test]
         public async Task SearchAsync_ReturnsDistinctKeys_WhenUsenetIndexersReportTheSamePost()
         {
             // Arrange
@@ -1699,50 +1777,75 @@ public sealed class IndexerServiceTests
         public async Task MatchAsync_ReturnsNull_WhenTheContentItemDoesNotExist()
         {
             // Arrange
-            var release = new Release { Protocol = "torrent", Title = "The.Salt.Roads.2019.1080p" };
+            _releases
+                .Setup(repository => repository.GetByIdAsync(StoredReleaseId, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new Release
+                {
+                    Id = StoredReleaseId,
+                    Protocol = "torrent",
+                    Title = "The.Salt.Roads.2019.1080p",
+                });
 
             // Act
-            var releaseId = await _subject.MatchAsync(Guid.NewGuid(), release, null).ConfigureAwait(false);
+            var releaseId = await _subject.MatchAsync(Guid.NewGuid(), StoredReleaseId, null).ConfigureAwait(false);
 
             // Assert
             Assert.That(releaseId, Is.Null);
         }
 
         [Test]
-        public void MatchAsync_ThrowsArgumentException_WhenTitleIsEmpty()
+        public async Task MatchAsync_ReturnsNull_WhenTheReleaseIsNotStored()
         {
-            // Arrange
-            var release = new Release { Protocol = "torrent", Title = "" };
-
             // Act
-            AsyncTestDelegate act = async () => await _subject.MatchAsync(ContentHierarchyItemId, release, null)
+            var releaseId = await _subject.MatchAsync(ContentHierarchyItemId, StoredReleaseId, null)
                 .ConfigureAwait(false);
 
             // Assert
-            Assert.ThrowsAsync<ArgumentException>(act);
+            Assert.That(releaseId, Is.Null);
         }
 
         [Test]
-        public async Task MatchAsync_CreatesTheReleaseAndTheScopeRow_WhenTheReleaseIsNew()
+        public async Task MatchAsync_AddsTheScopeRowAndWritesNoRelease_WhenTheReleaseIsStored()
         {
             // Arrange
-            var release = new Release { Protocol = "torrent", Title = "The.Salt.Roads.2019.1080p" };
+            _releases
+                .Setup(repository => repository.GetByIdAsync(StoredReleaseId, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new Release
+                {
+                    Id = StoredReleaseId,
+                    Protocol = "torrent",
+                    Title = "The.Salt.Roads.2019.1080p",
+                });
 
             // Act
-            var releaseId = await _subject.MatchAsync(ContentHierarchyItemId, release, null).ConfigureAwait(false);
+            var releaseId = await _subject.MatchAsync(ContentHierarchyItemId, StoredReleaseId, null)
+                .ConfigureAwait(false);
 
             // Assert
-            Assert.That(releaseId, Is.Not.Null.And.Not.EqualTo(Guid.Empty));
-            _releases.Verify(
-                repository => repository.CreateAsync(release, null, It.IsAny<CancellationToken>()),
-                Times.Once);
-            _releaseScopes.Verify(
-                repository => repository.CreateAsync(
-                    It.Is<ReleaseScope>(scope =>
-                        scope.ReleaseId == release.Id && scope.ContentHierarchyItemId == ContentHierarchyItemId),
-                    null,
-                    It.IsAny<CancellationToken>()),
-                Times.Once);
+            using (Assert.EnterMultipleScope())
+            {
+                Assert.That(releaseId, Is.EqualTo(StoredReleaseId));
+                _releaseScopes.Verify(
+                    repository => repository.CreateAsync(
+                        It.Is<ReleaseScope>(scope =>
+                            scope.ReleaseId == StoredReleaseId &&
+                            scope.ContentHierarchyItemId == ContentHierarchyItemId),
+                        null,
+                        It.IsAny<CancellationToken>()),
+                    Times.Once);
+                _releases.Verify(
+                    repository => repository.UpdateAsync(
+                        It.IsAny<Release>(),
+                        It.IsAny<Guid?>(),
+                        It.IsAny<CancellationToken>()),
+                    Times.Never);
+                _releases.Verify(
+                    repository => repository.CreateAsync(
+                        It.IsAny<Release>(),
+                        It.IsAny<Guid?>(),
+                        It.IsAny<CancellationToken>()),
+                    Times.Never);
+            }
         }
 
         [Test]
@@ -1750,7 +1853,14 @@ public sealed class IndexerServiceTests
         {
             // Arrange
             var scopeId = Guid.NewGuid();
-            var release = new Release { Protocol = "torrent", Title = "The.Salt.Roads.2019.1080p" };
+            _releases
+                .Setup(repository => repository.GetByIdAsync(StoredReleaseId, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new Release
+                {
+                    Id = StoredReleaseId,
+                    Protocol = "torrent",
+                    Title = "The.Salt.Roads.2019.1080p",
+                });
             _releaseScopes
                 .Setup(repository => repository.QueryAsync(
                     It.IsAny<ReleaseScopeQuery>(),
@@ -1771,7 +1881,7 @@ public sealed class IndexerServiceTests
                 });
 
             // Act
-            await _subject.MatchAsync(ContentHierarchyItemId, release, null).ConfigureAwait(false);
+            await _subject.MatchAsync(ContentHierarchyItemId, StoredReleaseId, null).ConfigureAwait(false);
 
             // Assert
             _releaseScopes.Verify(
@@ -1783,33 +1893,122 @@ public sealed class IndexerServiceTests
         }
 
         [Test]
-        public async Task MatchAsync_DoesNotCreateTheRelease_WhenTheReleaseAlreadyExists()
+        public async Task FetchPayloadAsync_FetchesThePayloadWithTheConnectionSettings_WhenTheConnectionExists()
         {
             // Arrange
-            var existingReleaseId = Guid.NewGuid();
-            _releases
-                .Setup(repository => repository.UpdateAsync(
-                    It.IsAny<Release>(),
-                    It.IsAny<Guid?>(),
-                    It.IsAny<CancellationToken>()))
-                .ReturnsAsync((Release model, Guid? _, CancellationToken _) =>
+            using var payload = new HttpResponseMessage(HttpStatusCode.OK);
+            _indexerConnections
+                .Setup(repository => repository.GetByIdAsync(ConnectionAId, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new IndexerConnection
                 {
-                    model.Id = existingReleaseId;
-                    return true;
+                    Id = ConnectionAId,
+                    IndexerId = IndexerAId,
+                    Name = "Connection A",
+                    Enabled = true,
+                    Settings = new Dictionary<string, string> { ["username"] = "account-a" },
                 });
-            var release = new Release { Protocol = "torrent", Title = "The.Salt.Roads.2019.1080p" };
+            _indexers
+                .Setup(repository => repository.GetByIdAsync(IndexerAId, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new Indexer { Id = IndexerAId, ProviderType = "indexer-a", Name = "Indexer A" });
+            _integrationA
+                .Setup(integration => integration.FetchPayloadAsync(
+                    new Uri("https://tracker.test/download.php?id=7"),
+                    It.Is<IReadOnlyDictionary<string, string>>(settings => settings["username"] == "account-a"),
+                    It.IsAny<CancellationToken>()))
+                .ReturnsAsync(payload);
 
             // Act
-            var releaseId = await _subject.MatchAsync(ContentHierarchyItemId, release, null).ConfigureAwait(false);
+            var response = await _subject
+                .FetchPayloadAsync(ConnectionAId, new Uri("https://tracker.test/download.php?id=7"))
+                .ConfigureAwait(false);
 
             // Assert
-            Assert.That(releaseId, Is.EqualTo(existingReleaseId));
-            _releases.Verify(
-                repository => repository.CreateAsync(
-                    It.IsAny<Release>(),
-                    It.IsAny<Guid?>(),
-                    It.IsAny<CancellationToken>()),
-                Times.Never);
+            Assert.That(response, Is.SameAs(payload));
+        }
+
+        [Test]
+        public async Task FetchPayloadAsync_ReturnsNull_WhenTheConnectionNoLongerExists()
+        {
+            // Act
+            var response = await _subject
+                .FetchPayloadAsync(ConnectionAId, new Uri("https://tracker.test/download.php?id=7"))
+                .ConfigureAwait(false);
+
+            // Assert
+            Assert.That(response, Is.Null);
+        }
+
+        [Test]
+        public async Task FetchPayloadAsync_ReturnsNull_WhenTheConnectionIsDisabled()
+        {
+            // Arrange
+            _indexerConnections
+                .Setup(repository => repository.GetByIdAsync(DisabledConnectionId, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new IndexerConnection
+                {
+                    Id = DisabledConnectionId,
+                    IndexerId = IndexerAId,
+                    Name = "Connection C",
+                    Enabled = false,
+                });
+            _indexers
+                .Setup(repository => repository.GetByIdAsync(IndexerAId, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new Indexer { Id = IndexerAId, ProviderType = "indexer-a", Name = "Indexer A" });
+
+            // Act
+            var response = await _subject
+                .FetchPayloadAsync(DisabledConnectionId, new Uri("https://tracker.test/download.php?id=7"))
+                .ConfigureAwait(false);
+
+            // Assert
+            using (Assert.EnterMultipleScope())
+            {
+                Assert.That(response, Is.Null);
+                _integrationA.Verify(
+                    integration => integration.FetchPayloadAsync(
+                        It.IsAny<Uri>(),
+                        It.IsAny<IReadOnlyDictionary<string, string>>(),
+                        It.IsAny<CancellationToken>()),
+                    Times.Never);
+            }
+        }
+
+        [Test]
+        public void FetchPayloadAsync_RejectsTheReleasePayload_WhenTheIndexerFailsToFetchIt()
+        {
+            // Arrange
+            _indexerConnections
+                .Setup(repository => repository.GetByIdAsync(ConnectionAId, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new IndexerConnection
+                {
+                    Id = ConnectionAId,
+                    IndexerId = IndexerAId,
+                    Name = "A",
+                    Enabled = true,
+                });
+            _indexers
+                .Setup(repository => repository.GetByIdAsync(IndexerAId, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new Indexer { Id = IndexerAId, ProviderType = "indexer-a", Name = "Indexer A" });
+            _integrationA
+                .Setup(integration => integration.FetchPayloadAsync(
+                    It.IsAny<Uri>(),
+                    It.IsAny<IReadOnlyDictionary<string, string>>(),
+                    It.IsAny<CancellationToken>()))
+                .ThrowsAsync(new InvalidOperationException("Cardigann tracker login failed."));
+
+            // Act
+            var exception = Assert.CatchAsync<ReleasePayloadRejectedException>(async () => await _subject
+                .FetchPayloadAsync(ConnectionAId, new Uri("https://tracker.test/download.php?id=7"))
+                .ConfigureAwait(false));
+
+            // Assert
+            using (Assert.EnterMultipleScope())
+            {
+                Assert.That(
+                    exception!.Message,
+                    Is.EqualTo("The indexer failed to fetch the release payload: Cardigann tracker login failed."));
+                Assert.That(exception.Transient, Is.True);
+            }
         }
     }
 }

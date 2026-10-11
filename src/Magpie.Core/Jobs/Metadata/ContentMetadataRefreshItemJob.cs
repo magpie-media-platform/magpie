@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Security.Cryptography;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -345,6 +347,21 @@ internal sealed class ContentMetadataRefreshItemJob(
             .Select(id => (id.Source!.NormalizeExternalIdentifierName(), id.Value.NormalizeExternalIdentifierValue()))
             .Distinct()
             .ToArray();
+
+    private static Guid NewSubjectId(SubjectRelationshipDefinition definition)
+    {
+        var providerType = definition.InitialSubjectContribution?.ProviderType?.NormalizeExternalIdentifierName();
+        var providerId = string.IsNullOrEmpty(providerType)
+            ? null
+            : GetExternalIds(definition).FirstOrDefault(id => id.Source == providerType).Value;
+        if (providerId is null)
+        {
+            return Guid.NewGuid();
+        }
+
+        var identity = $"{definition.SubjectKind}\n{providerType}\n{providerId}";
+        return new Guid(SHA256.HashData(Encoding.UTF8.GetBytes(identity)).AsSpan(0, 16));
+    }
 
     private static bool HasExternalIdConflict(
         IReadOnlyList<(string Source, string Value)> incomingIds,
@@ -1237,15 +1254,20 @@ internal sealed class ContentMetadataRefreshItemJob(
         Guid? correlationId,
         CancellationToken cancellationToken)
     {
-        var subject = await subjectRepository.CreateAsync(
-            new Subject
-            {
-                Id = Guid.NewGuid(),
-                Kind = definition.SubjectKind,
-                MetadataContainer = new() { Id = Guid.NewGuid() }
-            },
-            userId,
-            cancellationToken).ConfigureAwait(false);
+        var containerId = Guid.NewGuid();
+        var subject = new Subject
+        {
+            Id = NewSubjectId(definition),
+            Kind = definition.SubjectKind,
+            MetadataContainerId = containerId,
+            MetadataContainer = new() { Id = containerId }
+        };
+        if (!await subjectRepository.TryCreateAsync(subject, userId, cancellationToken).ConfigureAwait(false))
+        {
+            var existing = await subjectRepository.ListIdentityDetailsAsync([subject.Id], cancellationToken)
+                .ConfigureAwait(false);
+            return existing.FirstOrDefault()?.MetadataContainerId;
+        }
 
         if (definition.InitialSubjectContribution is not null)
         {

@@ -69,13 +69,6 @@
         width: 8rem;
     }
 
-    .monitoring-default-panel__toggle {
-        display: inline-flex;
-        align-items: center;
-        gap: var(--space-sm);
-        min-width: 200px;
-    }
-
     .monitoring-default-panel__spinner {
         animation: spin 1s linear infinite;
     }

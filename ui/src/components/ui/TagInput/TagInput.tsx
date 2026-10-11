@@ -5,6 +5,7 @@ import {
     useMemo,
     useRef,
     useState,
+    type CSSProperties,
     type KeyboardEvent,
     type ReactNode,
 } from 'react';
@@ -19,6 +20,7 @@ interface AnchorRect {
     top: number;
     left: number;
     width: number;
+    room: number;
 }
 
 export interface TagInputProps {
@@ -190,7 +192,12 @@ export function TagInput({
                 return;
             }
             const rect = box.getBoundingClientRect();
-            setAnchorRect({ top: rect.bottom, left: rect.left, width: rect.width });
+            setAnchorRect({
+                top: rect.bottom,
+                left: rect.left,
+                width: rect.width,
+                room: window.innerHeight - rect.bottom,
+            });
         };
         measure();
         window.addEventListener('scroll', measure, true);
@@ -266,12 +273,18 @@ export function TagInput({
                             id={listboxId}
                             role="listbox"
                             onPointerDown={(e) => e.stopPropagation()}
-                            style={{
-                                position: 'fixed',
-                                top: anchorRect.top,
-                                left: anchorRect.left,
-                                width: anchorRect.width,
-                            }}
+                            onWheel={(e) => e.stopPropagation()}
+                            onTouchMove={(e) => e.stopPropagation()}
+                            style={
+                                {
+                                    position: 'fixed',
+                                    top: anchorRect.top,
+                                    left: anchorRect.left,
+                                    width: anchorRect.width,
+                                    pointerEvents: 'auto',
+                                    '--tag-input-listbox-room': `${anchorRect.room}px`,
+                                } as CSSProperties
+                            }
                         >
                             {options.map((option, index) => (
                                 <li

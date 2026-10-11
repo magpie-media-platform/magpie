@@ -62,6 +62,7 @@ internal sealed class ContentFactProvider : IContentFactProvider
         }
 
         var showTitle = showMetadata?.Title ?? show?.Name;
+        var seasonMetadata = season is null ? null : target.Metadata.GetValueOrDefault(season.Id);
         var rows = new List<(
             string? LeftValue,
             string? LeftSource,
@@ -79,7 +80,8 @@ internal sealed class ContentFactProvider : IContentFactProvider
                 rows.Add((showTitle, null, null, episodeTitle, null, null));
             }
 
-            if (season?.Ordinal is { } seasonNumber && episode.Ordinal is { } episodeNumber)
+            if (seasonMetadata?.SequenceNumber is { } seasonNumber &&
+                episodeMetadata?.SequenceNumber is { } episodeNumber)
             {
                 var code = string.Format(CultureInfo.InvariantCulture, "S{0:D2}E{1:D2}", seasonNumber, episodeNumber);
                 var seasonText = seasonNumber.ToString(CultureInfo.InvariantCulture);
@@ -116,35 +118,37 @@ internal sealed class ContentFactProvider : IContentFactProvider
                 }
             }
         }
-        else if (season is not null && season.Ordinal is { } seasonNumber)
+        else if (season is not null)
         {
-            var seasonText = seasonNumber.ToString(CultureInfo.InvariantCulture);
-            var seasonLabel = "Season " + seasonText;
-            if (showTitle is not null)
+            if (seasonMetadata?.SequenceNumber is { } seasonNumber)
             {
-                rows.Add((showTitle, null, null, seasonLabel, seasonText, null));
-            }
-
-            if (show is not null)
-            {
-                foreach (var externalId in showMetadata?.ExternalIds ?? [])
+                var seasonText = seasonNumber.ToString(CultureInfo.InvariantCulture);
+                var seasonLabel = "Season " + seasonText;
+                if (showTitle is not null)
                 {
-                    if (!string.IsNullOrWhiteSpace(externalId.Source) && !string.IsNullOrWhiteSpace(externalId.Value))
+                    rows.Add((showTitle, null, null, seasonLabel, seasonText, null));
+                }
+
+                if (show is not null)
+                {
+                    foreach (var externalId in showMetadata?.ExternalIds ?? [])
                     {
-                        rows.Add((
-                            null,
-                            externalId.Source.Trim(),
-                            externalId.Value.Trim(),
-                            seasonLabel,
-                            seasonText,
-                            null));
+                        if (!string.IsNullOrWhiteSpace(externalId.Source) &&
+                            !string.IsNullOrWhiteSpace(externalId.Value))
+                        {
+                            rows.Add((
+                                null,
+                                externalId.Source.Trim(),
+                                externalId.Value.Trim(),
+                                seasonLabel,
+                                seasonText,
+                                null));
+                        }
                     }
                 }
             }
 
-            foreach (var externalId in target.Metadata.TryGetValue(season.Id, out var seasonMetadata)
-                ? seasonMetadata.ExternalIds ?? []
-                : [])
+            foreach (var externalId in seasonMetadata?.ExternalIds ?? [])
             {
                 if (!string.IsNullOrWhiteSpace(externalId.Source) && !string.IsNullOrWhiteSpace(externalId.Value))
                 {

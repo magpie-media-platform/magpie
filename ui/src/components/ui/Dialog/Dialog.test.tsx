@@ -13,6 +13,7 @@ import {
     DialogDescription,
     DialogClose,
 } from './Dialog';
+import { ToastContext } from '@/hooks/ui/useToast';
 
 describe('Dialog', () => {
     it('renders trigger element', () => {
@@ -128,6 +129,128 @@ describe('Dialog', () => {
         await waitFor(() => {
             expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
         });
+    });
+
+    it('DialogContent_StaysOpen_WhenAControlInAnotherOverlayIsPressed', async () => {
+        // Arrange
+        const user = userEvent.setup();
+        const handleOpenChange = vi.fn();
+        render(
+            <>
+                <Dialog open onOpenChange={handleOpenChange}>
+                    <DialogContent>
+                        <DialogTitle>Title</DialogTitle>
+                    </DialogContent>
+                </Dialog>
+                <div data-overlay-content style={{ pointerEvents: 'auto' }}>
+                    <button type="button">Accept</button>
+                </div>
+            </>,
+        );
+        await waitFor(() => {
+            expect(screen.getByRole('dialog')).toBeInTheDocument();
+        });
+
+        // Act
+        await user.click(screen.getByRole('button', { name: 'Accept', hidden: true }));
+
+        // Assert
+        expect(handleOpenChange).not.toHaveBeenCalled();
+        expect(screen.getByRole('dialog')).toBeInTheDocument();
+    });
+
+    it('DialogContent_DismissesTheToastsOnScreen_WhenItOpens', () => {
+        // Arrange
+        const dismissAll = vi.fn();
+        const { rerender } = render(
+            <ToastContext
+                value={{ toasts: [{ id: 'toast-1', title: 'Saved' }], toast: vi.fn(), dismiss: vi.fn(), dismissAll }}
+            >
+                <Dialog open={false}>
+                    <DialogContent>
+                        <DialogTitle>Title</DialogTitle>
+                    </DialogContent>
+                </Dialog>
+            </ToastContext>,
+        );
+
+        // Act
+        rerender(
+            <ToastContext
+                value={{ toasts: [{ id: 'toast-1', title: 'Saved' }], toast: vi.fn(), dismiss: vi.fn(), dismissAll }}
+            >
+                <Dialog open>
+                    <DialogContent>
+                        <DialogTitle>Title</DialogTitle>
+                    </DialogContent>
+                </Dialog>
+            </ToastContext>,
+        );
+
+        // Assert
+        expect(dismissAll).toHaveBeenCalledTimes(1);
+    });
+
+    it('DialogContent_KeepsAToast_WhenTheToastShowsWhileItIsOpen', () => {
+        // Arrange
+        const dismissAll = vi.fn();
+        const { rerender } = render(
+            <ToastContext value={{ toasts: [], toast: vi.fn(), dismiss: vi.fn(), dismissAll }}>
+                <Dialog open>
+                    <DialogContent>
+                        <DialogTitle>Title</DialogTitle>
+                    </DialogContent>
+                </Dialog>
+            </ToastContext>,
+        );
+
+        // Act
+        rerender(
+            <ToastContext
+                value={{ toasts: [{ id: 'toast-1', title: 'Saved' }], toast: vi.fn(), dismiss: vi.fn(), dismissAll }}
+            >
+                <Dialog open>
+                    <DialogContent>
+                        <DialogTitle>Title</DialogTitle>
+                    </DialogContent>
+                </Dialog>
+            </ToastContext>,
+        );
+
+        // Assert
+        expect(dismissAll).toHaveBeenCalledTimes(1);
+    });
+
+    it.each([
+        ['toast-viewport', 'View'],
+        ['toast', 'Undo'],
+        ['toast-tray', 'Clear all'],
+    ])('DialogContent_StaysOpen_WhenAToastControlIsPressed (%s)', async (className, label) => {
+        // Arrange
+        const user = userEvent.setup();
+        const handleOpenChange = vi.fn();
+        render(
+            <>
+                <Dialog open onOpenChange={handleOpenChange}>
+                    <DialogContent>
+                        <DialogTitle>Title</DialogTitle>
+                    </DialogContent>
+                </Dialog>
+                <div className={className} style={{ pointerEvents: 'auto' }}>
+                    <button type="button">{label}</button>
+                </div>
+            </>,
+        );
+        await waitFor(() => {
+            expect(screen.getByRole('dialog')).toBeInTheDocument();
+        });
+
+        // Act
+        await user.click(screen.getByRole('button', { name: label, hidden: true }));
+
+        // Assert
+        expect(handleOpenChange).not.toHaveBeenCalled();
+        expect(screen.getByRole('dialog')).toBeInTheDocument();
     });
 
     it('closes dialog when Escape key is pressed', async () => {

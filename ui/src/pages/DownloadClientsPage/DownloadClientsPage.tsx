@@ -32,6 +32,7 @@ import {
     useTestDownloadClientSettings,
     type IntegrationSettingsTestRequest,
 } from '@/hooks/useTestConnection';
+import { useInstanceName } from '@/hooks/useInstanceName';
 import { isAbortError } from '@/lib/api';
 import { getErrorMessage } from '@/lib/errors';
 import { formatRelativeTime } from '@/lib/formatTime';
@@ -105,6 +106,7 @@ const enabledOptions: FacetOption[] = [
 ];
 
 export function DownloadClientsPage() {
+    const instanceName = useInstanceName();
     useDocumentTitle('Download Clients');
 
     const { sorting, filters, page, setSorting, setFilters, setPage } = useUrlTableState({
@@ -602,11 +604,7 @@ export function DownloadClientsPage() {
         <EmptyState
             icon={<WarningCircleIcon weight="duotone" />}
             title="Failed to load download clients"
-            action={
-                <Button variant="secondary" size="sm" onClick={() => refetch()}>
-                    Retry
-                </Button>
-            }
+            onRetry={refetch}
         />
     );
 
@@ -616,7 +614,7 @@ export function DownloadClientsPage() {
                 <PageHeader
                     className="download-clients-page__header"
                     title="Download Clients"
-                    description="Download clients Magpie uses to send releases."
+                    description={`Download clients ${instanceName} uses to send releases.`}
                     icon={
                         <HardDrivesIcon weight="duotone" aria-hidden="true" data-testid="download-clients-page__icon" />
                     }

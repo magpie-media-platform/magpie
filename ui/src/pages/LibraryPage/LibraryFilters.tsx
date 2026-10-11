@@ -26,6 +26,7 @@ interface LibraryFiltersProps {
     lockContentLevel: string | undefined;
     referencedSavedFilter: SavedFilterReference | null;
     isAppliedFilterDirty: boolean;
+    allowTitlePrefix: boolean;
 }
 
 export function LibraryFilters({
@@ -47,6 +48,7 @@ export function LibraryFilters({
     lockContentLevel,
     referencedSavedFilter,
     isAppliedFilterDirty,
+    allowTitlePrefix,
 }: LibraryFiltersProps) {
     return (
         <section className="library-page__controls" aria-label="Filters and sorting">
@@ -84,6 +86,7 @@ export function LibraryFilters({
                     defaultContentType={defaultContentType}
                     restrictContentType={restrictContentType}
                     lockContentLevel={lockContentLevel}
+                    allowTitlePrefix={allowTitlePrefix}
                 />
 
                 {referencedSavedFilter && (

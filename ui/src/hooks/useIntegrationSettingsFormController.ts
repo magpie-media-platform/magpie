@@ -10,7 +10,7 @@ import {
 } from 'react';
 import type { UseQueryResult } from '@tanstack/react-query';
 
-import { deepEqual, foldDefaultsIntoBaseline, useFormDirty } from '@/hooks/useFormDirty';
+import { foldDefaultsIntoBaseline, useFormDirty } from '@/hooks/useFormDirty';
 import { omitUnchangedSecretSettings, type IntegrationSettingDefinition } from '@/hooks/useProviderSchema';
 import { useUnsavedChangesGuard } from '@/hooks/useUnsavedChangesGuard';
 import {
@@ -125,11 +125,7 @@ export function useIntegrationSettingsFormController<TValues extends Integration
     const cleanSettingsRef = useRef<Record<string, string>>(initialCleanSettings);
     const submitInFlightRef = useRef(false);
     const seededProviderRef = useRef<string | null>(null);
-    const resetKeyRef = useRef<TValues | null | undefined | typeof closedForm>(closedForm);
-    const valuesRef = useRef(values);
-    const settingsRef = useRef(settings);
-    valuesRef.current = values;
-    settingsRef.current = settings;
+    const resetKeyRef = useRef<string | null | typeof closedForm>(closedForm);
 
     const schemaQuery = useSchema(values.provider || null);
     const schema = useMemo(() => schemaQuery.data ?? [], [schemaQuery.data]);
@@ -139,20 +135,11 @@ export function useIntegrationSettingsFormController<TValues extends Integration
             resetKeyRef.current = closedForm;
             return;
         }
-        const reopened = resetKeyRef.current === closedForm;
-        if (!reopened && resetKeyRef.current === initialValues) {
+        const entityId = initialValues?.id ?? null;
+        if (resetKeyRef.current === entityId) {
             return;
         }
-        resetKeyRef.current = initialValues;
-        if (!reopened) {
-            const currentDirty = !deepEqual(
-                getDirtySnapshot(valuesRef.current, settingsRef.current),
-                getDirtySnapshot(cleanValuesRef.current, cleanSettingsRef.current),
-            );
-            if (currentDirty && cleanValuesRef.current.id === initialValues?.id) {
-                return;
-            }
-        }
+        resetKeyRef.current = entityId;
         const baseValues = initialValues ?? emptyValues;
         const cleanSettings = toStringSettings(baseValues.settings);
         const cleanValues = withStringSettings(baseValues, cleanSettings);
@@ -166,7 +153,7 @@ export function useIntegrationSettingsFormController<TValues extends Integration
         setShowUnsavedDialog(false);
         seededProviderRef.current = null;
         onReset?.();
-    }, [emptyValues, getDirtySnapshot, initialValues, onReset, open]);
+    }, [emptyValues, initialValues, onReset, open]);
 
     const isDirty = useFormDirty(
         getDirtySnapshot(values, settings),

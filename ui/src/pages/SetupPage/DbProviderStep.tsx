@@ -6,6 +6,7 @@ import { Input } from '@/components/ui/Input';
 import { Label } from '@/components/ui/Label';
 import { getErrorMessage } from '@/lib/errors';
 import { useConfigureSetupDatabase, useSetupDatabaseStatus } from '@/hooks/useSetup';
+import { useInstanceName } from '@/hooks/useInstanceName';
 
 interface DbProviderStepProps {
     onAdvance: () => void;
@@ -41,6 +42,7 @@ const PROVIDER_OPTIONS: readonly ProviderOption[] = [
 ] as const;
 
 export function DbProviderStep({ onAdvance }: DbProviderStepProps): ReactNode {
+    const instanceName = useInstanceName();
     const statusQuery = useSetupDatabaseStatus();
     const configure = useConfigureSetupDatabase();
 
@@ -114,8 +116,8 @@ export function DbProviderStep({ onAdvance }: DbProviderStepProps): ReactNode {
         return (
             <div className="setup-page__form" data-step="db" data-substep="restart-required">
                 <p className="setup-page__subtitle">
-                    Saved the {selectedProvider.label} configuration to <code>config/appsettings.json</code>. Restart
-                    Magpie so the new database provider takes effect, then return to this page.
+                    Saved the {selectedProvider.label} configuration to <code>config/appsettings.json</code>. Restart{' '}
+                    {instanceName} so the new database provider takes effect, then return to this page.
                 </p>
                 <Button
                     type="button"
@@ -126,7 +128,7 @@ export function DbProviderStep({ onAdvance }: DbProviderStepProps): ReactNode {
                     className="setup-page__submit"
                     data-action="recheck-db"
                 >
-                    <ArrowClockwiseIcon weight="bold" aria-hidden="true" />I have restarted Magpie
+                    <ArrowClockwiseIcon weight="bold" aria-hidden="true" />I have restarted {instanceName}
                 </Button>
             </div>
         );

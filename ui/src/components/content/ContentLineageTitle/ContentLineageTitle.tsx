@@ -139,6 +139,7 @@ interface LineageNodeProps {
     isLeaf: boolean;
     onPathChange: (state: PathState) => void;
     qualifiedName: ContentLineageQualifiedName;
+    stacked?: boolean;
     visitedIds: readonly string[];
 }
 
@@ -146,7 +147,7 @@ type ParentState =
     | { status: 'none' | 'loading' | 'missing' | 'failed' }
     | { status: 'resolved'; qualifiedName: ContentLineageQualifiedName };
 
-function LineageNode({ qualifiedName, fallback, isLeaf, onPathChange, visitedIds }: LineageNodeProps) {
+function LineageNode({ qualifiedName, fallback, isLeaf, onPathChange, stacked, visitedIds }: LineageNodeProps) {
     const context = useContext(ContentLineageContext);
     const title = (context?.resolveTitle(qualifiedName.title, fallback) ?? qualifiedName.title.trim()) || 'Content';
     const parentId = qualifiedName.parentId ?? null;
@@ -182,42 +183,45 @@ function LineageNode({ qualifiedName, fallback, isLeaf, onPathChange, visitedIds
     }, [onPathChange, parent.status, parentPath, title]);
 
     const nextVisitedIds = parent.status === 'resolved' ? [...visitedIds, parent.qualifiedName.id] : visitedIds;
-
-    return (
-        <span className="content-lineage-title__node">
-            {parent.status === 'loading' && (
-                <>
-                    <span
-                        aria-hidden="true"
-                        className="content-lineage-title__placeholder"
-                        data-testid="content-lineage-placeholder"
-                    />
-                    <span aria-hidden="true" className="content-lineage-title__separator">
-                        &gt;
-                    </span>
-                </>
-            )}
-            {parent.status === 'resolved' && (
-                <>
-                    <LineageNode
-                        qualifiedName={parent.qualifiedName}
-                        isLeaf={false}
-                        onPathChange={handleParentPathChange}
-                        visitedIds={nextVisitedIds}
-                    />
-                    <span aria-hidden="true" className="content-lineage-title__separator">
-                        &gt;
-                    </span>
-                </>
-            )}
+    const ancestors =
+        parent.status === 'loading' ? (
             <span
-                className={
-                    `content-lineage-title__segment ` +
-                    `content-lineage-title__segment--${isLeaf ? 'leaf' : 'ancestor'}`
-                }
-            >
-                {title}
-            </span>
+                aria-hidden="true"
+                className="content-lineage-title__placeholder"
+                data-testid="content-lineage-placeholder"
+            />
+        ) : parent.status === 'resolved' ? (
+            <LineageNode
+                qualifiedName={parent.qualifiedName}
+                isLeaf={false}
+                onPathChange={handleParentPathChange}
+                visitedIds={nextVisitedIds}
+            />
+        ) : null;
+    const segment = (
+        <span
+            className={
+                `content-lineage-title__segment ` + `content-lineage-title__segment--${isLeaf ? 'leaf' : 'ancestor'}`
+            }
+        >
+            {title}
+        </span>
+    );
+
+    return isLeaf && stacked ? (
+        <span className="content-lineage-title__node">
+            {segment}
+            {ancestors && <span className="content-lineage-title__ancestors">{ancestors}</span>}
+        </span>
+    ) : (
+        <span className="content-lineage-title__node">
+            {ancestors}
+            {ancestors && (
+                <span aria-hidden="true" className="content-lineage-title__separator">
+                    &gt;
+                </span>
+            )}
+            {segment}
         </span>
     );
 }
@@ -226,12 +230,14 @@ interface ContentLineageTitleProps extends Omit<ComponentPropsWithoutRef<'span'>
     fallback?: ContentLineageTitleFallback;
     qualify?: boolean;
     qualifiedName: ContentLineageQualifiedName;
+    stacked?: boolean;
 }
 
 export function ContentLineageTitle({
     qualifiedName,
     fallback,
     qualify = true,
+    stacked = false,
     className,
     ...props
 }: ContentLineageTitleProps) {
@@ -241,7 +247,9 @@ export function ContentLineageTitle({
     const handlePathChange = useCallback((state: PathState) => {
         setPathState((current) => (current.loading === state.loading && current.path === state.path ? current : state));
     }, []);
-    const classes = ['content-lineage-title', className].filter(Boolean).join(' ');
+    const classes = ['content-lineage-title', stacked && 'content-lineage-title--stacked', className]
+        .filter(Boolean)
+        .join(' ');
 
     useEffect(() => {
         if (!qualify || !context || !qualifiedName.parentId) {
@@ -265,6 +273,7 @@ export function ContentLineageTitle({
                         fallback={fallback}
                         isLeaf
                         onPathChange={handlePathChange}
+                        stacked={stacked}
                         visitedIds={[qualifiedName.id]}
                     />
                 ) : (

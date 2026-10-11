@@ -20,6 +20,7 @@ import { parseMagpieQl, formatMagpieQlCriteria } from '@/lib/magpieQl';
 import { getErrorMessage } from '@/lib/errors';
 import type { ContentFilterCriteria } from '@/hooks/useFilters';
 import type { ProviderMetadataCandidate } from '@/hooks/useProviderMetadataCandidateSearch';
+import { useInstanceName } from '@/hooks/useInstanceName';
 
 import { getQueryContentType, setQueryContentType } from './wishlistFormUtils';
 
@@ -33,7 +34,7 @@ import { MonitoringToggle } from '@/components/ui/MonitoringToggle';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { Switch } from '@/components/ui/Switch';
 import { Select, SelectTrigger, SelectContent, SelectItem } from '@/components/ui/Select';
-import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription, SheetFooter } from '@/components/ui/Sheet';
+import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetFooter } from '@/components/ui/Sheet';
 import { TagInput } from '@/components/ui/TagInput';
 import { Tooltip } from '@/components/ui/Tooltip';
 import { UnsavedChangesDialog } from '@/components/ui/UnsavedChangesDialog';
@@ -151,6 +152,7 @@ export function WishlistForm({
     isOwner = true,
     canEdit = true,
 }: WishlistFormProps): ReactNode {
+    const instanceName = useInstanceName();
     const isEditing = !!initialValues?.id;
 
     const [values, setValues] = useState<WishlistFormValues>(initialValues ?? emptyValues);
@@ -542,13 +544,6 @@ export function WishlistForm({
                             </Tooltip>
                         )}
                     </SheetTitle>
-                    <SheetDescription>
-                        {isEditing
-                            ? readOnly
-                                ? 'View wishlist configuration.'
-                                : 'Update the wishlist configuration.'
-                            : 'A wishlist is a saved filter Magpie uses to automatically monitor for matching content.'}
-                    </SheetDescription>
                 </SheetHeader>
 
                 <form onSubmit={handleSubmit} className="wishlist-form">
@@ -822,8 +817,8 @@ export function WishlistForm({
                                 data-field="monitoring"
                             />
                             <p className="wishlist-form__help">
-                                Matching content is added to the library either way. This sets whether Magpie monitors
-                                it for releases.
+                                Matching content is added to the library either way. This sets whether {instanceName}{' '}
+                                monitors it for releases.
                             </p>
                         </fieldset>
 

@@ -108,7 +108,9 @@ export function WishlistDetailPage() {
     });
 
     const { rootFolderOptions, tagOptions } = useFormOptions();
-    const { tags: entityTags } = useTags(wishlistId ? { entityId: wishlistId } : undefined);
+    const { tags: entityTags, isLoading: isLoadingEntityTags } = useTags(
+        wishlistId ? { entityId: wishlistId } : undefined,
+    );
 
     const wishlist = useMemo(() => (apiWishlist ? mapApiWishlistToDisplayItem(apiWishlist) : null), [apiWishlist]);
 
@@ -259,11 +261,7 @@ export function WishlistDetailPage() {
                     icon={<WarningCircleIcon weight="duotone" />}
                     title="Failed to load wishlist"
                     description={getErrorMessage(error)}
-                    action={
-                        <Button variant="secondary" size="sm" onClick={() => refetch()}>
-                            Retry
-                        </Button>
-                    }
+                    onRetry={refetch}
                 />
             </div>
         );
@@ -470,7 +468,7 @@ export function WishlistDetailPage() {
             <QuickActionsButton actions={wishlistActions} title="Wishlist Actions" />
 
             <WishlistForm
-                open={formOpen}
+                open={formOpen && !isLoadingEntityTags}
                 onOpenChange={(open) => {
                     if (!open) closeForm();
                 }}

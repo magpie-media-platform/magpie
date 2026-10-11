@@ -20,6 +20,12 @@ internal sealed class SqlServerModelCustomizer(ModelCustomizerDependencies depen
             builder.Property(e => e.Payload).IsRequired();
             builder.HasIndex(e => e.PublishedAt);
         });
+        var hierarchyItems = modelBuilder.Entity<ContentHierarchyItem>();
+        hierarchyItems.HasIndex(e => e.ParentId).IncludeProperties(e => e.EffectiveMonitoring);
+        hierarchyItems.HasIndex(e => e.Id).IncludeProperties(e => new { e.EffectiveMonitoring, e.ParentId });
+        modelBuilder.Entity<ContentItem>()
+            .HasIndex(e => e.ContentHierarchyItemId)
+            .IncludeProperties(e => e.Fulfillment);
         var mediaFiles = modelBuilder.Entity<MediaFile>();
         mediaFiles.Property(e => e.FilePath)
             .HasColumnType("nvarchar(max)")

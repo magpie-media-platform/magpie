@@ -17,6 +17,7 @@ services:
       Search__CoalescingWindow: "00:00:01"
       TZ: UTC
     init: true
+    stop_grace_period: 35s
     depends_on:
       package-feed:
         condition: service_healthy
@@ -59,7 +60,6 @@ services:
     environment:
       MAGPIE_BASE_URL: http://magpie:8080
       MAGPIE_SKIP_BOOT: "true"
-      # The CLI runs against the host over HTTP so that this container never opens the writable SQLite file.
       MAGPIE_CLI_URL: http://magpie:8080
       MAGPIE_CLI_APPHOST: /app/Magpie.App
       Magpie__Database__Provider: "${MAGPIE_DATABASE_PROVIDER:-sqlite}"

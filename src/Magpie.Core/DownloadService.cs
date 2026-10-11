@@ -130,7 +130,7 @@ internal sealed class DownloadService(
         Release release,
         DownloadClient source,
         IReadOnlyDictionary<string, string> settings,
-        string? contentType = null,
+        ReleaseGrabContext? context = null,
         bool interactive = false,
         CancellationToken cancellationToken = default)
     {
@@ -181,11 +181,7 @@ internal sealed class DownloadService(
         try
         {
             downloadInfo = await integration
-                .DownloadReleaseAsync(
-                    release,
-                    new ReleaseGrabContext { ContentType = contentType },
-                    settings,
-                    cancellationToken)
+                .DownloadReleaseAsync(release, context ?? new(), settings, cancellationToken)
                 .ConfigureAwait(false);
         }
         catch (ReleasePayloadRejectedException ex)

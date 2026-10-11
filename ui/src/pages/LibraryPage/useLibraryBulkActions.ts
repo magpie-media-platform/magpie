@@ -4,7 +4,13 @@ import { useQueryClient } from '@tanstack/react-query';
 import { type BulkTagItem, type BulkTagAssignmentResult } from '@/components/ui/BulkTagAssignment';
 import { type BulkValuePickerOption } from '@/components/ui/BulkValuePicker';
 import { useToast } from '@/components/ui/Toast';
-import { useContentTags, contentQueryKeys, useBulkPatchContent, useBulkDeleteContent } from '@/hooks/useContent';
+import {
+    useContentTags,
+    contentQueryKeys,
+    useBulkPatchContent,
+    useBulkDeleteContent,
+    useBulkDeletePreview,
+} from '@/hooks/useContent';
 import { type BulkSelection } from '@/hooks/useBulkSelection';
 import { useRootFolders } from '@/hooks/useRootFolders';
 import { useQualityTierLists } from '@/hooks/useQualityTierLists';
@@ -54,6 +60,11 @@ export function useLibraryBulkActions({ selection, bulkFilter }: UseLibraryBulkA
     const bulkTagsMutation = useBulkPatchContent();
     const bulkSetMonitoringMutation = useBulkPatchContent();
     const bulkDeleteMutation = useBulkDeleteContent();
+    const bulkDeleteTarget =
+        bulkDeleteConfirmOpen && bulkDeleteFiles ? resolveBulkTarget(selection, bulkFilter) : undefined;
+    const bulkDeletePreview = useBulkDeletePreview(
+        bulkDeleteTarget?.kind === 'target' ? { ...bulkDeleteTarget.target, deleteFromLibrary: true } : undefined,
+    );
     const bulkRootFolderMutation = useBulkPatchContent();
     const bulkQualityTierListMutation = useBulkPatchContent();
 
@@ -361,6 +372,7 @@ export function useLibraryBulkActions({ selection, bulkFilter }: UseLibraryBulkA
         bulkDeleteConfirmOpen,
         bulkDeleteFiles,
         setBulkDeleteFiles,
+        bulkDeletePreview,
         closeBulkDeleteConfirm,
         isApplyingTags: bulkTagsMutation.isPending,
         isSettingMonitoring: bulkSetMonitoringMutation.isPending,

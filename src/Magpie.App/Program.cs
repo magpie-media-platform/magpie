@@ -40,4 +40,9 @@ rootCommand.AddApiProxyCommands(async cancellationToken =>
 
 var parserConfiguration = new ParserConfiguration { ResponseFileTokenReplacer = null };
 
-return await rootCommand.Parse(args, parserConfiguration).InvokeAsync().ConfigureAwait(false);
+var parseResult = rootCommand.Parse(args, parserConfiguration);
+var invocationConfiguration = parseResult.CommandResult.Command is SentinelCommand
+    ? new InvocationConfiguration { ProcessTerminationTimeout = null }
+    : null;
+
+return await parseResult.InvokeAsync(invocationConfiguration).ConfigureAwait(false);

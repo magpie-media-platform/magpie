@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
@@ -36,6 +36,7 @@ beforeEach(() => {
 
 afterEach(() => {
     vi.unstubAllGlobals();
+    vi.restoreAllMocks();
     if (originalTimeZone === undefined) {
         delete process.env.TZ;
     } else {
@@ -238,7 +239,6 @@ describe('ChildrenTab', () => {
             id: 'child-1',
             title: 'Season 1',
             number: 1,
-            monitoring: 'Monitored',
             effectiveMonitoring: 'Monitored',
             fulfillment: 'fulfilled',
             date: '2020-01-01',
@@ -247,7 +247,6 @@ describe('ChildrenTab', () => {
             id: 'child-2',
             title: 'Season 2',
             number: 2,
-            monitoring: 'Monitored',
             effectiveMonitoring: 'Monitored',
             fulfillment: 'upgradable',
             date: '2021-01-01',
@@ -256,7 +255,6 @@ describe('ChildrenTab', () => {
             id: 'child-3',
             title: 'Season 3',
             number: 3,
-            monitoring: 'Unmonitored',
             effectiveMonitoring: 'Unmonitored',
             fulfillment: 'missing',
             date: '2022-01-01',
@@ -277,6 +275,43 @@ describe('ChildrenTab', () => {
             expect(screen.getAllByText('Season 3').length).toBeGreaterThan(0);
         });
 
+        it('ChildrenTab_OmitsPosterColumn_WhenNoChildHasArtwork', () => {
+            // Arrange
+            // Act
+            render(
+                <TooltipProvider>
+                    <MemoryRouter>
+                        <ChildrenTab items={mockChildren} parentId="content-1" />
+                    </MemoryRouter>
+                </TooltipProvider>,
+            );
+
+            // Assert
+            expect(document.querySelector('[data-column="poster"]')).not.toBeInTheDocument();
+            expect(document.querySelector('.children-tab__poster')).not.toBeInTheDocument();
+            expect(screen.getByRole('columnheader', { name: 'Title' })).toBeInTheDocument();
+        });
+
+        it('ChildrenTab_ShowsPosterOnlyForChildrenWithArtwork_WhenSomeChildrenHaveArtwork', () => {
+            // Arrange
+            const children = [{ ...mockChildren[0], posterUrl: '/season-1.jpg' }, mockChildren[1]];
+
+            // Act
+            render(
+                <TooltipProvider>
+                    <MemoryRouter>
+                        <ChildrenTab items={children} parentId="content-1" />
+                    </MemoryRouter>
+                </TooltipProvider>,
+            );
+
+            // Assert
+            expect(screen.getAllByAltText('Season 1 artwork')).toHaveLength(1);
+            expect(document.querySelectorAll('.children-tab__poster')).toHaveLength(1);
+            expect(document.querySelector('.children-tab__poster--placeholder')).not.toBeInTheDocument();
+            expect(document.querySelectorAll('td[data-column="poster"]')).toHaveLength(2);
+        });
+
         it('keeps a long unbroken child title contained with the full title available', () => {
             const longTitle = `Child${'UnbrokenTitleSegment'.repeat(8)}`;
             render(
@@ -289,7 +324,6 @@ describe('ChildrenTab', () => {
                                     title: longTitle,
                                     subtitle: `Subtitle${'UnbrokenSubtitleSegment'.repeat(6)}`,
                                     number: 1,
-                                    monitoring: 'Monitored',
                                     effectiveMonitoring: 'Monitored',
                                     fulfillment: 'missing',
                                 },
@@ -375,7 +409,6 @@ describe('ChildrenTab', () => {
                     id: 'c1',
                     title: 'Season 1',
                     number: 1,
-                    monitoring: 'Monitored',
                     effectiveMonitoring: 'Monitored',
                     fulfillment: 'missing',
                     acquisitionStatus: 'downloading',
@@ -391,6 +424,63 @@ describe('ChildrenTab', () => {
             expect(document.querySelector('[data-acquisition-status="downloading"]')).toBeInTheDocument();
             expect(screen.getAllByText('Downloading').length).toBeGreaterThan(0);
             expect(screen.queryByText('Missing')).not.toBeInTheDocument();
+        });
+
+        it('StatusCell_ShowsUpcoming_WhenAMissingChildHasAFutureDate', () => {
+            // Arrange
+            const items: ChildItem[] = [
+                {
+                    id: 'c1',
+                    title: 'Season 9',
+                    number: 9,
+                    effectiveMonitoring: 'Monitored',
+                    fulfillment: 'missing',
+                    date: '2099-01-01',
+                },
+            ];
+
+            // Act
+            render(
+                <TooltipProvider>
+                    <MemoryRouter>
+                        <ChildrenTab items={items} parentId="content-1" />
+                    </MemoryRouter>
+                </TooltipProvider>,
+            );
+
+            // Assert
+            expect(screen.getAllByText('Upcoming').length).toBeGreaterThan(0);
+            expect(screen.queryByText('Missing')).not.toBeInTheDocument();
+        });
+
+        it('StatusCell_ShowsMissing_WhenAnInstantChildDateIsPastAndTheLocalDateIsNot', () => {
+            // Arrange
+            process.env.TZ = 'America/Los_Angeles';
+            vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-10-07T18:00:00-07:00'));
+            const items: ChildItem[] = [
+                {
+                    id: 'c1',
+                    title: 'Episode 1',
+                    number: 1,
+                    effectiveMonitoring: 'Monitored',
+                    fulfillment: 'missing',
+                    date: '2026-10-08T00:00:00Z',
+                    datePrecision: 'Instant',
+                },
+            ];
+
+            // Act
+            render(
+                <TooltipProvider>
+                    <MemoryRouter>
+                        <ChildrenTab items={items} parentId="content-1" />
+                    </MemoryRouter>
+                </TooltipProvider>,
+            );
+
+            // Assert
+            expect(screen.getAllByText('Missing').length).toBeGreaterThan(0);
+            expect(screen.queryByText('Upcoming')).not.toBeInTheDocument();
         });
 
         it('labels monitoring cells with explanatory wording', () => {
@@ -466,14 +556,12 @@ describe('ChildrenTab', () => {
                     id: 'child-two',
                     title: 'Beta',
                     number: 2,
-                    monitoring: 'Monitored',
                     effectiveMonitoring: 'Monitored',
                     fulfillment: 'missing',
                 },
                 {
                     id: 'child-none',
                     title: 'Extra',
-                    monitoring: 'Monitored',
                     effectiveMonitoring: 'Monitored',
                     fulfillment: 'missing',
                 },
@@ -481,7 +569,6 @@ describe('ChildrenTab', () => {
                     id: 'child-one',
                     title: 'Alpha',
                     number: 1,
-                    monitoring: 'Monitored',
                     effectiveMonitoring: 'Monitored',
                     fulfillment: 'missing',
                 },
@@ -507,7 +594,6 @@ describe('ChildrenTab', () => {
                     id: 'child-one',
                     title: 'Zulu',
                     number: 1,
-                    monitoring: 'Monitored',
                     effectiveMonitoring: 'Monitored',
                     fulfillment: 'missing',
                 },
@@ -515,7 +601,6 @@ describe('ChildrenTab', () => {
                     id: 'child-two',
                     title: 'Alpha',
                     number: 2,
-                    monitoring: 'Monitored',
                     effectiveMonitoring: 'Monitored',
                     fulfillment: 'missing',
                 },
@@ -562,14 +647,12 @@ describe('ChildrenTab', () => {
                     id: 'child-two',
                     title: 'Beta',
                     number: 2,
-                    monitoring: 'Monitored',
                     effectiveMonitoring: 'Monitored',
                     fulfillment: 'missing',
                 },
                 {
                     id: 'child-none',
                     title: 'Extra',
-                    monitoring: 'Monitored',
                     effectiveMonitoring: 'Monitored',
                     fulfillment: 'missing',
                 },
@@ -577,7 +660,6 @@ describe('ChildrenTab', () => {
                     id: 'child-one',
                     title: 'Alpha',
                     number: 1,
-                    monitoring: 'Monitored',
                     effectiveMonitoring: 'Monitored',
                     fulfillment: 'missing',
                 },
@@ -621,7 +703,6 @@ describe('ChildrenTab', () => {
                 {
                     id: 'child-zulu',
                     title: 'Zulu',
-                    monitoring: 'Monitored',
                     effectiveMonitoring: 'Monitored',
                     fulfillment: 'upgradable',
                     date: '2024-02-01',
@@ -629,7 +710,6 @@ describe('ChildrenTab', () => {
                 {
                     id: 'child-alpha',
                     title: 'Alpha',
-                    monitoring: 'Monitored',
                     effectiveMonitoring: 'Monitored',
                     fulfillment: 'missing',
                     date: '2024-03-01',
@@ -637,7 +717,6 @@ describe('ChildrenTab', () => {
                 {
                     id: 'child-beta',
                     title: 'Beta',
-                    monitoring: 'Monitored',
                     effectiveMonitoring: 'Monitored',
                     fulfillment: 'fulfilled',
                     date: '2024-01-01',
@@ -714,57 +793,12 @@ describe('ChildrenTab', () => {
     });
 
     describe('effective monitoring', () => {
-        it('shows a child with inherited effective monitoring as monitored', () => {
+        it('shows a child with Monitored effective monitoring as monitored', () => {
             const items: ChildItem[] = [
                 {
                     id: 'c1',
                     title: 'Season 1',
                     number: 1,
-                    monitoring: null,
-                    effectiveMonitoring: 'Monitored',
-                    fulfillment: 'missing',
-                },
-            ];
-            render(
-                <TooltipProvider>
-                    <MemoryRouter>
-                        <ChildrenTab items={items} parentId="content-1" />
-                    </MemoryRouter>
-                </TooltipProvider>,
-            );
-            expect(screen.getAllByLabelText('Monitored (inherited)').length).toBeGreaterThan(0);
-            expect(document.querySelectorAll('.children-tab__monitoring--active').length).toBeGreaterThan(0);
-        });
-
-        it('shows a child with explicit disabled monitoring as unmonitored', () => {
-            const items: ChildItem[] = [
-                {
-                    id: 'c1',
-                    title: 'Season 1',
-                    number: 1,
-                    monitoring: 'Unmonitored',
-                    effectiveMonitoring: 'Unmonitored',
-                    fulfillment: 'missing',
-                },
-            ];
-            render(
-                <TooltipProvider>
-                    <MemoryRouter>
-                        <ChildrenTab items={items} parentId="content-1" />
-                    </MemoryRouter>
-                </TooltipProvider>,
-            );
-            expect(screen.getAllByLabelText('Unmonitored').length).toBeGreaterThan(0);
-            expect(document.querySelectorAll('.children-tab__monitoring--inherited').length).toBe(0);
-        });
-
-        it('shows a child with explicit enabled monitoring as monitored', () => {
-            const items: ChildItem[] = [
-                {
-                    id: 'c1',
-                    title: 'Season 1',
-                    number: 1,
-                    monitoring: 'Monitored',
                     effectiveMonitoring: 'Monitored',
                     fulfillment: 'missing',
                 },
@@ -777,16 +811,15 @@ describe('ChildrenTab', () => {
                 </TooltipProvider>,
             );
             expect(screen.getAllByLabelText('Monitored').length).toBeGreaterThan(0);
-            expect(document.querySelectorAll('.children-tab__monitoring--inherited').length).toBe(0);
+            expect(document.querySelectorAll('.children-tab__monitoring--active').length).toBeGreaterThan(0);
         });
 
-        it('shows inherited disabled monitoring as unmonitored', () => {
+        it('shows a child with Unmonitored effective monitoring as unmonitored', () => {
             const items: ChildItem[] = [
                 {
                     id: 'c1',
                     title: 'Season 1',
                     number: 1,
-                    monitoring: null,
                     effectiveMonitoring: 'Unmonitored',
                     fulfillment: 'missing',
                 },
@@ -798,7 +831,7 @@ describe('ChildrenTab', () => {
                     </MemoryRouter>
                 </TooltipProvider>,
             );
-            expect(screen.getAllByLabelText('Unmonitored (inherited)').length).toBeGreaterThan(0);
+            expect(screen.getAllByLabelText('Unmonitored').length).toBeGreaterThan(0);
         });
 
         it('uses the stored effective value without loading a parent state', () => {
@@ -807,7 +840,6 @@ describe('ChildrenTab', () => {
                     id: 'c1',
                     title: 'Season 1',
                     number: 1,
-                    monitoring: null,
                     effectiveMonitoring: 'Monitored',
                     fulfillment: 'missing',
                 },
@@ -819,7 +851,7 @@ describe('ChildrenTab', () => {
                     </MemoryRouter>
                 </TooltipProvider>,
             );
-            expect(screen.getAllByLabelText(/^Monitored \(inherited\)/).length).toBeGreaterThan(0);
+            expect(screen.getAllByLabelText(/^Monitored$/).length).toBeGreaterThan(0);
         });
     });
 
@@ -861,28 +893,28 @@ describe('FilesTab', () => {
         render(
             <FilesTab
                 files={[{ id: 'file', fileName: 'sample.mkv', relativePath: 'sample.mkv', size: 1024 }]}
-                onDeleteFile={onDelete}
-                onUnlinkFile={onUnlink}
+                onDeleteFiles={onDelete}
+                onUnlinkFiles={onUnlink}
             />,
         );
 
         // Act
-        const unlink = screen.getByRole('button', { name: 'Unlink sample.mkv' });
-        unlink.focus();
+        const trigger = screen.getByRole('button', { name: 'Actions for sample.mkv' });
+        trigger.focus();
+        await user.keyboard('{Enter}');
         await user.keyboard('{Enter}');
 
         // Assert
-        expect(onUnlink).toHaveBeenCalledWith({
-            id: 'file',
-            fileName: 'sample.mkv',
-            relativePath: 'sample.mkv',
-            size: 1024,
-        });
-        expect(unlink.closest('.files-tab__panel')).not.toHaveAttribute('role', 'button');
-        screen.getByRole('button', { name: 'Delete sample.mkv' }).focus();
-        await user.keyboard('{Enter}');
-        expect(onDelete).toHaveBeenCalledTimes(1);
-        expect(onUnlink).toHaveBeenCalledTimes(1);
+        expect(onUnlink).toHaveBeenCalledWith([
+            {
+                id: 'file',
+                fileName: 'sample.mkv',
+                relativePath: 'sample.mkv',
+                size: 1024,
+            },
+        ]);
+        expect(trigger.closest('.files-tab__panel')).not.toHaveAttribute('role', 'button');
+        expect(onDelete).not.toHaveBeenCalled();
     });
     const mockFiles: MediaFile[] = [
         {
@@ -969,15 +1001,14 @@ describe('FilesTab', () => {
                             size: 2048,
                         },
                     ]}
-                    onDeleteFile={vi.fn()}
-                    onUnlinkFile={vi.fn()}
+                    onDeleteFiles={vi.fn()}
+                    onUnlinkFiles={vi.fn()}
                 />,
             );
 
             expect(screen.getByText(spacedName)).toHaveClass('files-tab__file-name');
             expect(screen.getByText(unbrokenName)).toHaveClass('files-tab__file-name');
-            expect(screen.getByRole('button', { name: `Unlink ${unbrokenName}` })).toBeInTheDocument();
-            expect(screen.getByRole('button', { name: `Delete ${unbrokenName}` })).toBeInTheDocument();
+            expect(screen.getByRole('button', { name: `Actions for ${unbrokenName}` })).toBeInTheDocument();
         });
 
         it('renders the shared empty state with icon and message when no files', () => {
@@ -995,14 +1026,15 @@ describe('FilesTab', () => {
             expect(screen.getByTestId('files-tab-header')).toHaveTextContent(/1 file(?!s)/);
         });
 
-        it('keeps the import and rename actions in the files header', () => {
+        it('FilesTab_ShowsImportAndSelectFilesInTheHeader_WhenBothArePermitted', () => {
+            // Arrange & Act
             render(<FilesTab files={mockFiles} onImportFile={vi.fn()} onRenameFiles={vi.fn()} />);
 
+            // Assert
             const header = screen.getByTestId('files-tab-header');
             expect(within(header).getByRole('button', { name: 'Import file' })).toBeInTheDocument();
-            expect(
-                within(header).getByRole('button', { name: 'Apply rename mask to selected files' }),
-            ).toBeInTheDocument();
+            expect(within(header).getByRole('button', { name: 'Select files', pressed: false })).toBeInTheDocument();
+            expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
         });
 
         it('renders the import action in the empty state', () => {
@@ -1037,79 +1069,316 @@ describe('FilesTab', () => {
     });
 
     describe('file actions', () => {
-        it('does not render a delete action when onDeleteFile is omitted', () => {
+        it('FilesTab_OffersNoFileMenu_WhenNoFileActionIsPermitted', () => {
+            // Arrange & Act
             render(<FilesTab files={mockFiles} />);
-            expect(screen.queryByLabelText('Delete Episode.01.mkv')).not.toBeInTheDocument();
+
+            // Assert
+            expect(screen.queryByRole('button', { name: 'Actions for Episode.01.mkv' })).not.toBeInTheDocument();
         });
 
-        it('renders a delete action per file when onDeleteFile is provided', () => {
-            render(<FilesTab files={mockFiles} onDeleteFile={vi.fn()} />);
-            expect(screen.getAllByLabelText('Delete Episode.01.mkv').length).toBeGreaterThan(0);
-            expect(screen.getAllByLabelText('Delete Episode.02.mkv').length).toBeGreaterThan(0);
+        it('FilesTab_ListsEveryFileActionInOneMenuWithDeleteSetApart_WhenAllArePermitted', async () => {
+            // Arrange
+            const user = userEvent.setup();
+            render(
+                <FilesTab
+                    files={mockFiles}
+                    onReassignFile={vi.fn()}
+                    onRenameFiles={vi.fn()}
+                    onUnlinkFiles={vi.fn()}
+                    onDeleteFiles={vi.fn()}
+                />,
+            );
+
+            // Act
+            await user.click(screen.getByRole('button', { name: 'Actions for Episode.01.mkv' }));
+
+            // Assert
+            expect(screen.getAllByRole('menuitem').map((item) => item.textContent)).toEqual([
+                'Correct episode association',
+                'Rename using mask…',
+                'Unlink',
+                'Delete from disk',
+            ]);
+            expect(screen.getByRole('separator')).toBeInTheDocument();
         });
 
-        it('renders a distinct unlink action per file when onUnlinkFile is provided', () => {
-            render(<FilesTab files={mockFiles} onUnlinkFile={vi.fn()} />);
-            expect(screen.getAllByLabelText('Unlink Episode.01.mkv').length).toBeGreaterThan(0);
-            expect(screen.getAllByLabelText('Unlink Episode.02.mkv').length).toBeGreaterThan(0);
+        it('FilesTab_PassesTheFileToEachAction_WhenItsMenuItemIsChosen', async () => {
+            // Arrange
+            const user = userEvent.setup();
+            const onRenameFiles = vi.fn();
+            const onUnlinkFiles = vi.fn();
+            const onDeleteFiles = vi.fn();
+            render(
+                <FilesTab
+                    files={mockFiles}
+                    onRenameFiles={onRenameFiles}
+                    onUnlinkFiles={onUnlinkFiles}
+                    onDeleteFiles={onDeleteFiles}
+                />,
+            );
+            const trigger = screen.getByRole('button', { name: 'Actions for Episode.02.mkv' });
+
+            // Act
+            await user.click(trigger);
+            await user.click(screen.getByRole('menuitem', { name: 'Rename using mask…' }));
+            await user.click(trigger);
+            await user.click(screen.getByRole('menuitem', { name: 'Unlink' }));
+            await user.click(trigger);
+            await user.click(screen.getByRole('menuitem', { name: 'Delete from disk' }));
+
+            // Assert
+            expect(onRenameFiles).toHaveBeenCalledWith(['file-2']);
+            expect(onUnlinkFiles).toHaveBeenCalledWith([expect.objectContaining({ id: 'file-2' })]);
+            expect(onDeleteFiles).toHaveBeenCalledWith([expect.objectContaining({ id: 'file-2' })]);
         });
 
-        it('invokes onDeleteFile with the file when its action is clicked', () => {
-            const onDeleteFile = vi.fn();
-            render(<FilesTab files={mockFiles} onDeleteFile={onDeleteFile} />);
-            fireEvent.click(screen.getAllByLabelText('Delete Episode.01.mkv')[0]);
-            expect(onDeleteFile).toHaveBeenCalledWith(expect.objectContaining({ id: 'file-1' }));
-        });
-
-        it('invokes the delete action once', () => {
-            const onDeleteFile = vi.fn();
-            render(<FilesTab files={mockFiles} onDeleteFile={onDeleteFile} />);
-            fireEvent.click(screen.getAllByLabelText('Delete Episode.01.mkv')[0]);
-            expect(onDeleteFile).toHaveBeenCalledTimes(1);
-        });
-
-        it('passes the selected file to the unlink action', () => {
-            const onUnlinkFile = vi.fn();
-            render(<FilesTab files={mockFiles} onUnlinkFile={onUnlinkFile} />);
-            fireEvent.click(screen.getAllByLabelText('Unlink Episode.01.mkv')[0]);
-            expect(onUnlinkFile).toHaveBeenCalledWith(expect.objectContaining({ id: 'file-1' }));
-        });
-
-        it('offers no rename for a file that another item owns', () => {
+        it('FilesTab_OffersNoRename_WhenAnotherItemOwnsTheFile', async () => {
+            // Arrange
+            const user = userEvent.setup();
             render(
                 <FilesTab
                     files={sharedFiles}
-                    onRenameFile={vi.fn()}
                     onRenameFiles={vi.fn()}
-                    onUnlinkFile={vi.fn()}
-                    onDeleteFile={vi.fn()}
+                    onUnlinkFiles={vi.fn()}
+                    onDeleteFiles={vi.fn()}
                 />,
             );
-            const [owned, covering] = document.querySelectorAll<HTMLElement>('.files-tab__panel');
-            expect(within(owned).getByRole('button', { name: 'Apply rename mask' })).toBeInTheDocument();
+
+            // Act
+            await user.click(screen.getByRole('button', { name: 'Actions for Show.S01E04-E05.mkv' }));
+
+            // Assert
+            expect(screen.getAllByRole('menuitem').map((item) => item.textContent)).toEqual([
+                'Unlink',
+                'Delete from disk',
+            ]);
+        });
+    });
+
+    describe('toolbar', () => {
+        it('FilesTab_GroupsTheContentActionsAfterTheSummary_WhenTheyArePermitted', () => {
+            // Arrange & Act
+            render(
+                <FilesTab
+                    files={mockFiles}
+                    onRenameFiles={vi.fn()}
+                    onRenameAllFiles={vi.fn()}
+                    onScanFiles={vi.fn()}
+                    onImportFile={vi.fn()}
+                />,
+            );
+
+            // Assert
+            const header = screen.getByTestId('files-tab-header');
+            const contentActions = header.querySelector<HTMLElement>('.files-tab__content-actions')!;
+            expect(header.firstElementChild).toHaveTextContent('2 files · 3 GB');
+            expect(within(header).getByRole('button', { name: 'Select files' })).toBeInTheDocument();
             expect(
-                within(owned).getByRole('checkbox', { name: 'Select Show.S01E01-E03.mkv for rename' }),
+                within(contentActions)
+                    .getAllByRole('button')
+                    .map((button) => button.textContent),
+            ).toEqual(['Rename all files…', 'Scan for files', 'Import file']);
+        });
+
+        it('FilesTab_ShowsTheRenameAllLabel_WhenOneIsGiven', () => {
+            // Arrange & Act
+            render(
+                <FilesTab
+                    files={mockFiles}
+                    onRenameAllFiles={vi.fn()}
+                    renameAllLabel="Rename all files, including child items…"
+                />,
+            );
+
+            // Assert
+            expect(
+                screen.getByRole('button', { name: 'Rename all files, including child items…' }),
             ).toBeInTheDocument();
-            expect(within(covering).queryByRole('button', { name: 'Apply rename mask' })).not.toBeInTheDocument();
-            expect(within(covering).queryByRole('checkbox')).not.toBeInTheDocument();
-            expect(within(covering).getByRole('button', { name: 'Unlink Show.S01E04-E05.mkv' })).toBeInTheDocument();
-            expect(within(covering).getByRole('button', { name: 'Delete Show.S01E04-E05.mkv' })).toBeInTheDocument();
         });
 
-        it('shows a busy state on the file being deleted', () => {
-            render(
-                <FilesTab files={mockFiles} onDeleteFile={vi.fn()} onUnlinkFile={vi.fn()} deletingFileId="file-1" />,
-            );
-            expect(screen.getAllByLabelText('Delete Episode.01.mkv')[0]).toBeDisabled();
-            expect(screen.getAllByLabelText('Unlink Episode.01.mkv')[0]).toBeDisabled();
+        it('FilesTab_StartsTheScan_WhenScanForFilesIsPressed', async () => {
+            // Arrange
+            const user = userEvent.setup();
+            const onScanFiles = vi.fn();
+            render(<FilesTab files={[]} onScanFiles={onScanFiles} />);
+
+            // Act
+            await user.click(screen.getByRole('button', { name: 'Scan for files' }));
+
+            // Assert
+            expect(onScanFiles).toHaveBeenCalledTimes(1);
         });
 
-        it('disables both actions while the file is being unlinked', () => {
+        it('FilesTab_DisablesScanForFiles_WhileTheScanStarts', () => {
+            // Arrange & Act
+            render(<FilesTab files={mockFiles} onScanFiles={vi.fn()} scanning />);
+
+            // Assert
+            expect(screen.getByRole('button', { name: 'Scan for files' })).toBeDisabled();
+        });
+
+        it('FilesTab_ShowsTheReviewSectionBetweenTheToolbarAndTheFiles_WhenGivenOne', () => {
+            // Arrange & Act
             render(
-                <FilesTab files={mockFiles} onDeleteFile={vi.fn()} onUnlinkFile={vi.fn()} unlinkingFileId="file-1" />,
+                <FilesTab files={mockFiles}>
+                    <section aria-label="Review" />
+                </FilesTab>,
             );
-            expect(screen.getAllByLabelText('Delete Episode.01.mkv')[0]).toBeDisabled();
-            expect(screen.getAllByLabelText('Unlink Episode.01.mkv')[0]).toBeDisabled();
+
+            // Assert
+            const review = screen.getByRole('region', { name: 'Review' });
+            expect(review.previousElementSibling).toBe(screen.getByTestId('files-tab-header'));
+            expect(review.nextElementSibling).toHaveClass('files-tab__panels');
+        });
+    });
+
+    describe('selection', () => {
+        it('FilesTab_ShowsCheckboxesAndEmptySelectionActions_WhenSelectFilesIsPressed', async () => {
+            // Arrange
+            const user = userEvent.setup();
+            render(
+                <FilesTab files={mockFiles} onRenameFiles={vi.fn()} onUnlinkFiles={vi.fn()} onDeleteFiles={vi.fn()} />,
+            );
+
+            // Act
+            await user.click(screen.getByRole('button', { name: 'Select files', pressed: false }));
+
+            // Assert
+            const bar = screen.getByRole('region', { name: 'File selection actions' });
+            expect(screen.getByRole('button', { name: 'Select files', pressed: true })).toBeInTheDocument();
+            expect(screen.getByRole('checkbox', { name: 'Select Episode.01.mkv' })).not.toBeChecked();
+            expect(screen.getByRole('checkbox', { name: 'Select Episode.02.mkv' })).not.toBeChecked();
+            expect(bar).toHaveTextContent('0 selected');
+            expect(within(bar).getByRole('button', { name: 'Clear selection' })).toBeDisabled();
+            expect(within(bar).getByRole('button', { name: 'Select all', pressed: false })).toBeInTheDocument();
+            expect(within(bar).getByRole('button', { name: 'Rename using mask…' })).toBeDisabled();
+            expect(within(bar).getByRole('button', { name: 'Unlink' })).toBeDisabled();
+            expect(within(bar).getByRole('button', { name: 'Delete from disk' })).toBeDisabled();
+        });
+
+        it('FilesTab_PassesOnlyTheSelectedFilesToEachAction_WhenOneFileIsSelected', async () => {
+            // Arrange
+            const user = userEvent.setup();
+            const onRenameFiles = vi.fn();
+            const onUnlinkFiles = vi.fn();
+            const onDeleteFiles = vi.fn();
+            render(
+                <FilesTab
+                    files={mockFiles}
+                    onRenameFiles={onRenameFiles}
+                    onUnlinkFiles={onUnlinkFiles}
+                    onDeleteFiles={onDeleteFiles}
+                />,
+            );
+            await user.click(screen.getByRole('button', { name: 'Select files' }));
+            await user.click(screen.getByRole('checkbox', { name: 'Select Episode.02.mkv' }));
+            const bar = screen.getByRole('region', { name: 'File selection actions' });
+
+            // Act
+            await user.click(within(bar).getByRole('button', { name: 'Rename using mask…' }));
+            await user.click(within(bar).getByRole('button', { name: 'Unlink' }));
+            await user.click(within(bar).getByRole('button', { name: 'Delete from disk' }));
+
+            // Assert
+            expect(bar).toHaveTextContent('1 selected');
+            expect(onRenameFiles).toHaveBeenCalledWith(['file-2']);
+            expect(onUnlinkFiles).toHaveBeenCalledWith(
+                [expect.objectContaining({ id: 'file-2' })],
+                expect.objectContaining({ selectedIds: ['file-2'] }),
+            );
+            expect(onDeleteFiles).toHaveBeenCalledWith(
+                [expect.objectContaining({ id: 'file-2' })],
+                expect.objectContaining({ selectedIds: ['file-2'] }),
+            );
+        });
+
+        it('FilesTab_SelectsEveryFile_WhenSelectAllIsPressed', async () => {
+            // Arrange
+            const user = userEvent.setup();
+            render(<FilesTab files={mockFiles} onUnlinkFiles={vi.fn()} />);
+            await user.click(screen.getByRole('button', { name: 'Select files' }));
+            const bar = screen.getByRole('region', { name: 'File selection actions' });
+
+            // Act
+            await user.click(within(bar).getByRole('button', { name: 'Select all' }));
+
+            // Assert
+            expect(bar).toHaveTextContent('2 selected');
+            expect(within(bar).getByRole('button', { name: 'Select all', pressed: true })).toBeInTheDocument();
+            expect(screen.getByRole('checkbox', { name: 'Select Episode.01.mkv' })).toBeChecked();
+            expect(screen.getByRole('checkbox', { name: 'Select Episode.02.mkv' })).toBeChecked();
+        });
+
+        it('FilesTab_RenamesOnlyTheFilesThisItemOwns_WhenTheSelectionIncludesASharedFile', async () => {
+            // Arrange
+            const user = userEvent.setup();
+            const onRenameFiles = vi.fn();
+            render(<FilesTab files={sharedFiles} onRenameFiles={onRenameFiles} onDeleteFiles={vi.fn()} />);
+            await user.click(screen.getByRole('button', { name: 'Select files' }));
+            const bar = screen.getByRole('region', { name: 'File selection actions' });
+            await user.click(within(bar).getByRole('button', { name: 'Select all' }));
+
+            // Act
+            await user.click(within(bar).getByRole('button', { name: 'Rename using mask…' }));
+
+            // Assert
+            expect(onRenameFiles).toHaveBeenCalledWith(['owned']);
+        });
+
+        it('FilesTab_DisablesRename_WhenOnlyASharedFileIsSelected', async () => {
+            // Arrange
+            const user = userEvent.setup();
+            render(<FilesTab files={sharedFiles} onRenameFiles={vi.fn()} onDeleteFiles={vi.fn()} />);
+            await user.click(screen.getByRole('button', { name: 'Select files' }));
+
+            // Act
+            await user.click(screen.getByRole('checkbox', { name: 'Select Show.S01E04-E05.mkv' }));
+
+            // Assert
+            const bar = screen.getByRole('region', { name: 'File selection actions' });
+            expect(within(bar).getByRole('button', { name: 'Rename using mask…' })).toBeDisabled();
+            expect(within(bar).getByRole('button', { name: 'Delete from disk' })).toBeEnabled();
+        });
+
+        it('FilesTab_ClearsTheSelectionAndHidesTheCheckboxes_WhenSelectionModeIsLeft', async () => {
+            // Arrange
+            const user = userEvent.setup();
+            render(<FilesTab files={mockFiles} onUnlinkFiles={vi.fn()} />);
+            await user.click(screen.getByRole('button', { name: 'Select files' }));
+            await user.click(screen.getByRole('checkbox', { name: 'Select Episode.01.mkv' }));
+
+            // Act
+            await user.click(screen.getByRole('button', { name: 'Select files', pressed: true }));
+            await user.click(screen.getByRole('button', { name: 'Select files', pressed: false }));
+
+            // Assert
+            expect(screen.getByRole('region', { name: 'File selection actions' })).toHaveTextContent('0 selected');
+            expect(screen.getByRole('checkbox', { name: 'Select Episode.01.mkv' })).not.toBeChecked();
+        });
+
+        it('FilesTab_KeepsTheRemainingFilesSelected_WhenASelectedFileLeavesTheList', async () => {
+            // Arrange
+            const user = userEvent.setup();
+            const { rerender } = render(<FilesTab files={mockFiles} onUnlinkFiles={vi.fn()} />);
+            await user.click(screen.getByRole('button', { name: 'Select files' }));
+            await user.click(screen.getByRole('checkbox', { name: 'Select Episode.01.mkv' }));
+            await user.click(screen.getByRole('checkbox', { name: 'Select Episode.02.mkv' }));
+
+            // Act
+            rerender(<FilesTab files={[mockFiles[1]]} onUnlinkFiles={vi.fn()} />);
+
+            // Assert
+            expect(screen.getByRole('region', { name: 'File selection actions' })).toHaveTextContent('1 selected');
+            expect(screen.getByRole('checkbox', { name: 'Select Episode.02.mkv' })).toBeChecked();
+        });
+
+        it('FilesTab_OffersNoSelection_WhenNoBulkActionIsPermitted', () => {
+            // Arrange & Act
+            render(<FilesTab files={mockFiles} onReassignFile={vi.fn()} />);
+
+            // Assert
+            expect(screen.queryByRole('button', { name: 'Select files' })).not.toBeInTheDocument();
         });
     });
 

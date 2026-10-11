@@ -44,6 +44,7 @@ const ContentTypesPage = lazy(() => import('@/pages/ContentTypesPage/ContentType
 const QualityTiersPage = lazy(() => import('@/pages/QualityTiersPage/QualityTiersPage'));
 const TierListDetailPage = lazy(() => import('@/pages/QualityTiersPage/TierListDetailPage'));
 const JobsPage = lazy(() => import('@/pages/JobsPage/JobsPage'));
+const ActivityLogPage = lazy(() => import('@/pages/ActivityLogPage/ActivityLogPage'));
 const ExtensionsPage = lazy(() => import('@/pages/ExtensionsPage/ExtensionsPage'));
 const ExtensionDetailPage = lazy(() => import('@/pages/ExtensionsPage/ExtensionDetailPage'));
 const BackupsPage = lazy(() => import('@/pages/BackupsPage/BackupsPage'));
@@ -144,6 +145,10 @@ export const routes: RouteObject[] = [
                     {
                         path: 'jobs',
                         element: <JobsPage />,
+                    },
+                    {
+                        path: 'activity',
+                        element: <ActivityLogPage />,
                     },
                     {
                         path: 'extensions',

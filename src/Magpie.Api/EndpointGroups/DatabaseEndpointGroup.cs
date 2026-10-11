@@ -37,12 +37,6 @@ internal sealed class DatabaseEndpointGroup : IApiEndpointGroup
             .ProducesProblem(StatusCodes.Status404NotFound)
             .RequireAdmin();
 
-        builder.MapGet("backups/{id}/download", DownloadBackupAsync)
-            .WithName(nameof(DownloadBackupAsync))
-            .Produces(StatusCodes.Status200OK, contentType: "application/octet-stream")
-            .ProducesProblem(StatusCodes.Status404NotFound)
-            .RequireAdmin();
-
         builder.MapPost("backups/{id}/restore", RestoreBackupAsync)
             .WithName(nameof(RestoreBackupAsync))
             .Produces(StatusCodes.Status202Accepted)
@@ -81,20 +75,6 @@ internal sealed class DatabaseEndpointGroup : IApiEndpointGroup
             .ConfigureAwait(false);
 
         return deleted ? Results.NoContent() : Results.NotFound();
-    }
-
-    [MagpieCommand("download", "GET", "backups/{id}/download", "Download a database backup file")]
-    [MagpieBlobCommandResult]
-    internal async Task<IResult> DownloadBackupAsync(
-        [FromServices] IDatabaseManagementService databaseManagementService,
-        string id,
-        CancellationToken cancellationToken)
-    {
-        var stream = await databaseManagementService.OpenBackupAsync(id, cancellationToken).ConfigureAwait(false);
-
-        return stream is null
-            ? Results.NotFound()
-            : Results.File(stream, "application/octet-stream", $"magpie-backup-{id}.db");
     }
 
     internal async Task<IResult> RestoreBackupAsync(

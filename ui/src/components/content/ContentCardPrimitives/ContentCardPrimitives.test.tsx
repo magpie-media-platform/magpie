@@ -2,12 +2,7 @@ import { act, fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
-import {
-    ContentFulfillmentBadge,
-    ContentMonitoringIndicator,
-    ContentPoster,
-    monitoringStateLabel,
-} from './ContentCardPrimitives';
+import { ContentFulfillmentBadge, ContentMonitoringIndicator, ContentPoster } from './ContentCardPrimitives';
 import { TooltipProvider } from '@/components/ui/Tooltip';
 
 describe('ContentPoster', () => {
@@ -39,6 +34,59 @@ describe('ContentPoster', () => {
         );
         expect(screen.getByRole('img', { name: 'Sample artwork' })).toHaveAttribute('src', '/replacement.jpg');
         expect(container.querySelector('.placeholder')).not.toBeInTheDocument();
+    });
+
+    it.each([
+        [300, 100, 'uncropped'],
+        [100, 100, 'uncropped'],
+        [250, 300, 'uncropped'],
+        [240, 300, null],
+        [200, 300, null],
+        [0, 0, null],
+    ])('marks %ix%i artwork as %s once it loads', (width, height, expected) => {
+        // Arrange
+        render(
+            <ContentPoster posterUrl="/art.png" title="Sample" className="poster" placeholderClassName="placeholder" />,
+        );
+        const image = screen.getByRole('img', { name: 'Sample artwork' });
+        Object.defineProperty(image, 'naturalWidth', { value: width });
+        Object.defineProperty(image, 'naturalHeight', { value: height });
+
+        // Act
+        fireEvent.load(image);
+
+        // Assert
+        expect(image.getAttribute('data-artwork')).toBe(expected);
+    });
+
+    it('measures a replacement URL again instead of keeping the earlier artwork shape', () => {
+        // Arrange
+        const { rerender } = render(
+            <ContentPoster
+                posterUrl="/logo.png"
+                title="Sample"
+                className="poster"
+                placeholderClassName="placeholder"
+            />,
+        );
+        const logo = screen.getByRole('img', { name: 'Sample artwork' });
+        Object.defineProperty(logo, 'naturalWidth', { value: 300 });
+        Object.defineProperty(logo, 'naturalHeight', { value: 100 });
+        fireEvent.load(logo);
+        expect(logo).toHaveAttribute('data-artwork', 'uncropped');
+
+        // Act
+        rerender(
+            <ContentPoster
+                posterUrl="/poster.png"
+                title="Sample"
+                className="poster"
+                placeholderClassName="placeholder"
+            />,
+        );
+
+        // Assert
+        expect(screen.getByRole('img', { name: 'Sample artwork' })).not.toHaveAttribute('data-artwork');
     });
 
     it('keeps the site placeholder when no URL was supplied and shows the failure glyph only on error', () => {
@@ -78,89 +126,66 @@ describe('ContentPoster', () => {
 });
 
 describe('ContentMonitoringIndicator', () => {
-    it('shows inherited monitoring as distinct text when a text label is requested', () => {
-        // Arrange
-        // Act
-        render(
-            <ContentMonitoringIndicator
-                monitoring={null}
-                effectiveMonitoring="Unmonitored"
-                className="monitoring"
-                labelClassName="monitoring-label"
-            />,
-            { wrapper: TooltipProvider },
-        );
+    it.each(['Monitored', 'Unmonitored', 'Shotgun'] as const)(
+        'shows the %s state as text when a text label is requested',
+        (effective) => {
+            // Arrange
+            // Act
+            render(
+                <ContentMonitoringIndicator
+                    effectiveMonitoring={effective}
+                    className="monitoring"
+                    labelClassName="monitoring-label"
+                />,
+                { wrapper: TooltipProvider },
+            );
 
-        // Assert
-        expect(screen.getByText('Unmonitored (inherited)')).toBeInTheDocument();
-        expect(screen.getByLabelText('Unmonitored (inherited)')).toBeInTheDocument();
-    });
-});
-
-describe('monitoringStateLabel', () => {
-    it.each([
-        ['Monitored', 'Monitored', 'Monitored'],
-        [null, 'Monitored', 'Monitored (inherited)'],
-        ['Unmonitored', 'Unmonitored', 'Unmonitored'],
-        [null, 'Unmonitored', 'Unmonitored (inherited)'],
-        ['Shotgun', 'Shotgun', 'Shotgun'],
-        [null, 'Shotgun', 'Shotgun (inherited)'],
-    ] as const)('names monitoring %s, effective %s as %s', (monitoring, effective, expected) => {
-        // Arrange
-        // Act
-        const label = monitoringStateLabel(monitoring, effective);
-
-        // Assert
-        expect(label).toBe(expected);
-    });
+            // Assert
+            expect(screen.getByText(effective)).toBeInTheDocument();
+            expect(screen.getByLabelText(effective)).toBeInTheDocument();
+        },
+    );
 });
 
 describe('ContentMonitoringIndicator icon', () => {
-    it('shows only an icon whose accessible name is the full state', () => {
+    it('shows only an icon whose accessible name is the monitoring state', () => {
         // Arrange
         // Act
-        render(<ContentMonitoringIndicator monitoring={null} effectiveMonitoring="Shotgun" className="monitoring" />, {
+        render(<ContentMonitoringIndicator effectiveMonitoring="Shotgun" className="monitoring" />, {
             wrapper: TooltipProvider,
         });
 
         // Assert
-        const icon = screen.getByRole('img', { name: 'Shotgun (inherited)' });
+        const icon = screen.getByRole('img', { name: 'Shotgun' });
         expect(icon).toHaveAttribute('data-shotgun', 'true');
         expect(icon).not.toHaveTextContent('Shotgun');
     });
 
-    it('shows the full state in a tooltip on hover', async () => {
+    it('shows the monitoring state in a tooltip on hover', async () => {
         // Arrange
         const user = userEvent.setup();
-        render(
-            <ContentMonitoringIndicator
-                monitoring="Unmonitored"
-                effectiveMonitoring="Unmonitored"
-                className="monitoring"
-            />,
-            {
-                wrapper: TooltipProvider,
-            },
-        );
+        render(<ContentMonitoringIndicator effectiveMonitoring="Unmonitored" className="monitoring" />, {
+            wrapper: TooltipProvider,
+        });
 
         // Act
         await user.hover(screen.getByRole('img', { name: 'Unmonitored' }));
 
         // Assert
-        expect(await screen.findByRole('tooltip')).toHaveTextContent('Unmonitored');
+        expect(await screen.findByRole('tooltip')).toHaveTextContent(/^Unmonitored$/);
     });
 
-    it('shows the full state in a tooltip on a touch long press without a click reaching the card', () => {
+    it('shows the monitoring state in a tooltip on a touch long press without a click reaching the card', () => {
         // Arrange
         vi.useFakeTimers();
         const onCardClick = vi.fn();
         render(
             <a href="#card" onClick={onCardClick}>
-                <ContentMonitoringIndicator monitoring={null} effectiveMonitoring="Monitored" className="monitoring" />
+                <ContentMonitoringIndicator effectiveMonitoring="Monitored" className="monitoring" />
             </a>,
             { wrapper: TooltipProvider },
         );
-        const icon = screen.getByRole('img', { name: 'Monitored (inherited)' });
+        const icon = screen.getByRole('img', { name: 'Monitored' });
 
         // Act
         fireEvent.pointerDown(icon, { pointerType: 'touch', clientX: 5, clientY: 5 });
@@ -172,7 +197,7 @@ describe('ContentMonitoringIndicator icon', () => {
         vi.useRealTimers();
 
         // Assert
-        expect(screen.getByRole('tooltip')).toHaveTextContent('Monitored (inherited)');
+        expect(screen.getByRole('tooltip')).toHaveTextContent(/^Monitored$/);
         expect(onCardClick).not.toHaveBeenCalled();
     });
 });
@@ -188,6 +213,20 @@ describe('ContentFulfillmentBadge', () => {
         // Arrange
         // Act
         render(<ContentFulfillmentBadge fulfillment={fulfillment} />, { wrapper: TooltipProvider });
+
+        // Assert
+        expect(screen.getByText(label)).toBeInTheDocument();
+    });
+
+    it.each([
+        ['Upcoming', 'AFuturePublishDate', '2099-01-01'],
+        ['Missing', 'APastPublishDate', '2000-01-01'],
+        ['Missing', 'NoPublishDate', undefined],
+    ] as const)('ContentFulfillmentBadge_Shows%s_WhenAMissingItemHas%s', (label, _condition, publishDate) => {
+        // Act
+        render(<ContentFulfillmentBadge fulfillment="missing" publishDate={publishDate} />, {
+            wrapper: TooltipProvider,
+        });
 
         // Assert
         expect(screen.getByText(label)).toBeInTheDocument();

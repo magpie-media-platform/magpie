@@ -249,7 +249,7 @@ describe('InteractiveSearchPage', () => {
 
         render(<InteractiveSearchPage />, { wrapper: TestWrapper });
 
-        await user.click(await screen.findByRole('button', { name: 'The.Movie.2024.1080p.BluRay' }));
+        await user.click(await screen.findByText('The.Movie.2024.1080p.BluRay'));
 
         const dialog = await screen.findByTestId('release-details-dialog');
         expect(within(dialog).getByText('seeders')).toBeInTheDocument();
@@ -267,6 +267,20 @@ describe('InteractiveSearchPage', () => {
         await screen.findByText('The.Movie.2024.1080p.BluRay');
         expect(document.querySelector('[data-page="interactive-search"]')).toHaveAttribute('data-layout', 'card');
         expect(document.querySelector(".interactive-search__table [data-column='action']")).toBeInTheDocument();
+    });
+
+    it('Table_LeavesTheMatchAndStatusWidthsToTheirContent_WhenTheLayoutIsTable', async () => {
+        // Arrange
+        installMatchMedia(1100);
+        vi.mocked(apiPost).mockResolvedValue([candidate({ acquisitionStatus: 'Downloading' })]);
+
+        // Act
+        render(<InteractiveSearchPage />, { wrapper: TestWrapper });
+
+        // Assert
+        await screen.findByText('The.Movie.2024.1080p.BluRay');
+        expect(document.querySelector<HTMLElement>("th[data-column='match']")?.style.width).toBe('');
+        expect(document.querySelector<HTMLElement>("th[data-column='status']")?.style.width).toBe('');
     });
 
     it('Status_SitsInTheCardHeader_WhenTheLayoutIsCard', async () => {
@@ -297,7 +311,7 @@ describe('InteractiveSearchPage', () => {
         expect(document.querySelector("[data-column='status'][data-mobile-role]")).toBeEmptyDOMElement();
     });
 
-    it('exposes a long release title as a tooltip while rendering it in the title cell', async () => {
+    it('renders a long release title in the title cell', async () => {
         const longTitle = 'A'.repeat(240);
         const baseCandidate = candidate();
         vi.mocked(apiPost).mockResolvedValue([
@@ -314,9 +328,26 @@ describe('InteractiveSearchPage', () => {
 
         const title = await screen.findByText(longTitle);
         expect(title).toHaveClass('interactive-search__title');
-        expect(title).toHaveAttribute('title', longTitle);
         expect(title.closest("[data-column='title']")).toContainElement(title);
         expect(document.querySelector(".interactive-search__table [data-column='action']")).toBeInTheDocument();
+    });
+
+    it.each([
+        { title: 'The.Movie.2024.1080p.BluRay', breaks: 3 },
+        { title: 'Oppenheimer.2023.2160p.UHD', breaks: 2 },
+        { title: 'Movie.AAC2.0.H.264-GROUP', breaks: 2 },
+        { title: 'Movie.TrueHD.Atmos.7.1-GROUP', breaks: 2 },
+    ])('Title_OffersBreaksOnlyBetweenTokens_WhenTheReleaseNameIs $title', async ({ title, breaks }) => {
+        // Arrange
+        const baseCandidate = candidate();
+        vi.mocked(apiPost).mockResolvedValue([{ ...baseCandidate, release: { ...baseCandidate.release, title } }]);
+
+        // Act
+        render(<InteractiveSearchPage />, { wrapper: TestWrapper });
+
+        // Assert
+        const titleButton = await screen.findByText(title);
+        expect(titleButton.querySelectorAll('wbr')).toHaveLength(breaks);
     });
 
     it('shows an empty state when no candidates are returned', async () => {
@@ -350,7 +381,7 @@ describe('InteractiveSearchPage', () => {
 
     it('shows an in-progress affordance while the indexer search runs', async () => {
         vi.mocked(apiPost).mockImplementation((path: string) => {
-            if (path.endsWith('/grab')) {
+            if (path.includes('/grab/')) {
                 return Promise.resolve('execution-1');
             }
             return new Promise(() => {});
@@ -367,7 +398,7 @@ describe('InteractiveSearchPage', () => {
     it('clears the searching spinner as soon as the response resolves, not on a timer', async () => {
         let resolveSearch: (value: InteractiveSearchCandidate[]) => void = () => {};
         vi.mocked(apiPost).mockImplementation((path: string) => {
-            if (path.endsWith('/grab')) {
+            if (path.includes('/grab/')) {
                 return Promise.resolve('execution-1');
             }
             return new Promise<InteractiveSearchCandidate[]>((resolve) => {
@@ -494,7 +525,7 @@ describe('InteractiveSearchPage', () => {
     );
     it('grabs a matched candidate via the grab endpoint', async () => {
         vi.mocked(apiPost).mockImplementation(async (path: string) => {
-            if (path.endsWith('/grab')) {
+            if (path.includes('/grab/')) {
                 return 'execution-1';
             }
             return [candidate()];
@@ -509,10 +540,7 @@ describe('InteractiveSearchPage', () => {
         await userEvent.click(screen.getByRole('button', { name: /grab/i }));
 
         await waitFor(() => {
-            expect(vi.mocked(apiPost)).toHaveBeenCalledWith(
-                `/interactive-search/${ITEM_ID}/grab`,
-                expect.objectContaining({ id: 'rel-1' }),
-            );
+            expect(vi.mocked(apiPost)).toHaveBeenCalledWith(`/interactive-search/${ITEM_ID}/grab/rel-1`);
         });
         expect(await screen.findByText('Release grabbed')).toBeInTheDocument();
         expect(screen.getByText('Queued')).toBeInTheDocument();
@@ -520,7 +548,7 @@ describe('InteractiveSearchPage', () => {
 
     it('submits one grab request for rapid repeated activation and leaves other releases actionable', async () => {
         vi.mocked(apiPost).mockImplementation((path: string) => {
-            if (path.endsWith('/grab')) {
+            if (path.includes('/grab/')) {
                 return new Promise(() => {});
             }
             return Promise.resolve([
@@ -549,7 +577,7 @@ describe('InteractiveSearchPage', () => {
         });
 
         await waitFor(() => {
-            const grabCalls = vi.mocked(apiPost).mock.calls.filter(([path]) => path.endsWith('/grab'));
+            const grabCalls = vi.mocked(apiPost).mock.calls.filter(([path]) => path.includes('/grab/'));
             expect(grabCalls).toHaveLength(1);
         });
         const pendingReleaseButton = screen
@@ -568,7 +596,7 @@ describe('InteractiveSearchPage', () => {
     it('shows the app confirm dialog for a loose candidate and grabs on confirm', async () => {
         const confirmSpy = vi.spyOn(window, 'confirm');
         vi.mocked(apiPost).mockImplementation(async (path: string) => {
-            if (path.endsWith('/grab')) {
+            if (path.includes('/grab/')) {
                 return 'execution-1';
             }
             return [candidate({ matchResult: 'Indeterminate' })];
@@ -585,15 +613,12 @@ describe('InteractiveSearchPage', () => {
         expect(confirmSpy).not.toHaveBeenCalled();
         const dialog = await screen.findByRole('dialog');
         expect(within(dialog).getByText(/Magpie classified this release as Indeterminate/i)).toBeInTheDocument();
-        expect(vi.mocked(apiPost)).not.toHaveBeenCalledWith(`/interactive-search/${ITEM_ID}/grab`, expect.anything());
+        expect(vi.mocked(apiPost)).not.toHaveBeenCalledWith(`/interactive-search/${ITEM_ID}/grab/rel-1`);
 
         await userEvent.click(within(dialog).getByRole('button', { name: /grab anyway/i }));
 
         await waitFor(() => {
-            expect(vi.mocked(apiPost)).toHaveBeenCalledWith(
-                `/interactive-search/${ITEM_ID}/grab`,
-                expect.objectContaining({ id: 'rel-1' }),
-            );
+            expect(vi.mocked(apiPost)).toHaveBeenCalledWith(`/interactive-search/${ITEM_ID}/grab/rel-1`);
         });
         confirmSpy.mockRestore();
     });
@@ -601,7 +626,7 @@ describe('InteractiveSearchPage', () => {
     it('aborts a loose grab when the confirm dialog is cancelled', async () => {
         const confirmSpy = vi.spyOn(window, 'confirm');
         vi.mocked(apiPost).mockImplementation(async (path: string) => {
-            if (path.endsWith('/grab')) {
+            if (path.includes('/grab/')) {
                 return 'execution-1';
             }
             return [candidate({ matchResult: 'NoMatch' })];
@@ -619,7 +644,7 @@ describe('InteractiveSearchPage', () => {
         await userEvent.click(within(dialog).getByRole('button', { name: /cancel/i }));
 
         expect(confirmSpy).not.toHaveBeenCalled();
-        expect(vi.mocked(apiPost)).not.toHaveBeenCalledWith(`/interactive-search/${ITEM_ID}/grab`, expect.anything());
+        expect(vi.mocked(apiPost)).not.toHaveBeenCalledWith(`/interactive-search/${ITEM_ID}/grab/rel-1`);
         confirmSpy.mockRestore();
     });
 });

@@ -15,6 +15,7 @@ import {
     SheetPortal,
 } from './Sheet';
 import { Dialog, DialogContent, DialogTitle } from '../Dialog';
+import { ToastContext } from '@/hooks/ui/useToast';
 
 describe('Sheet', () => {
     it('renders trigger element', () => {
@@ -266,6 +267,100 @@ describe('Sheet', () => {
 
         expect(handleOpenChange).not.toHaveBeenCalledWith(false);
         expect(screen.getByText('Sheet Title')).toBeInTheDocument();
+    });
+
+    it('SheetContent_DismissesTheToastsOnScreen_WhenItOpens', () => {
+        // Arrange
+        const dismissAll = vi.fn();
+        const { rerender } = render(
+            <ToastContext
+                value={{ toasts: [{ id: 'toast-1', title: 'Saved' }], toast: vi.fn(), dismiss: vi.fn(), dismissAll }}
+            >
+                <Sheet open={false}>
+                    <SheetContent>
+                        <SheetTitle>Title</SheetTitle>
+                    </SheetContent>
+                </Sheet>
+            </ToastContext>,
+        );
+
+        // Act
+        rerender(
+            <ToastContext
+                value={{ toasts: [{ id: 'toast-1', title: 'Saved' }], toast: vi.fn(), dismiss: vi.fn(), dismissAll }}
+            >
+                <Sheet open>
+                    <SheetContent>
+                        <SheetTitle>Title</SheetTitle>
+                    </SheetContent>
+                </Sheet>
+            </ToastContext>,
+        );
+
+        // Assert
+        expect(dismissAll).toHaveBeenCalledTimes(1);
+    });
+
+    it('SheetContent_KeepsAToast_WhenTheToastShowsWhileItIsOpen', () => {
+        // Arrange
+        const dismissAll = vi.fn();
+        const { rerender } = render(
+            <ToastContext value={{ toasts: [], toast: vi.fn(), dismiss: vi.fn(), dismissAll }}>
+                <Sheet open>
+                    <SheetContent>
+                        <SheetTitle>Title</SheetTitle>
+                    </SheetContent>
+                </Sheet>
+            </ToastContext>,
+        );
+
+        // Act
+        rerender(
+            <ToastContext
+                value={{ toasts: [{ id: 'toast-1', title: 'Saved' }], toast: vi.fn(), dismiss: vi.fn(), dismissAll }}
+            >
+                <Sheet open>
+                    <SheetContent>
+                        <SheetTitle>Title</SheetTitle>
+                    </SheetContent>
+                </Sheet>
+            </ToastContext>,
+        );
+
+        // Assert
+        expect(dismissAll).toHaveBeenCalledTimes(1);
+    });
+
+    it.each([
+        ['toast-viewport', 'View'],
+        ['toast', 'Undo'],
+        ['toast-tray', 'Clear all'],
+    ])('SheetContent_StaysOpen_WhenAToastControlIsPressed (%s)', async (className, label) => {
+        // Arrange
+        const user = userEvent.setup();
+        const handleOpenChange = vi.fn();
+        render(
+            <>
+                <Sheet open onOpenChange={handleOpenChange}>
+                    <SheetContent>
+                        <SheetTitle>Sheet Title</SheetTitle>
+                    </SheetContent>
+                </Sheet>
+                <div className={className} style={{ pointerEvents: 'auto' }}>
+                    <button type="button">{label}</button>
+                </div>
+            </>,
+        );
+        await waitFor(() => {
+            expect(screen.getByRole('dialog')).toBeInTheDocument();
+        });
+
+        // Act
+        await user.click(screen.getByRole('button', { name: label, hidden: true }));
+
+        // Assert
+        expect(handleOpenChange).not.toHaveBeenCalled();
+        expect(screen.getByRole('dialog')).toBeInTheDocument();
     });
 
     it('supports controlled open state', async () => {

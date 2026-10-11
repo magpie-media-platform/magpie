@@ -738,4 +738,32 @@ public sealed class DefaultJobRuntimeTests
             Assert.That(retry.NotBeforeAt, Is.Not.Null);
         }
     }
+
+    [Test]
+    public async Task ExecuteAsync_RunsHandlerOnce_WhenTheClaimedExecutionIsDispatchedTwice()
+    {
+        // Arrange
+        _executions
+            .Setup(repository => repository.GetByIdAsync(_execution.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(_execution with { Status = JobExecutionStatus.Running, NodeId = NodeId });
+        _handler
+            .Setup(handler => handler.ExecuteAsync(It.IsAny<JobContext>(), It.IsAny<CancellationToken>()))
+            .Returns(async (JobContext _, CancellationToken cancellationToken) =>
+            {
+                _handlerEntered.TrySetResult();
+                await _handlerRelease.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+            });
+        var first = _subject.ExecuteAsync(_execution.Id);
+        await _handlerEntered.Task.WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+
+        // Act
+        var second = _subject.ExecuteAsync(_execution.Id);
+        _handlerRelease.TrySetResult();
+        await Task.WhenAll(first, second).WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+
+        // Assert
+        _handler.Verify(
+            handler => handler.ExecuteAsync(It.IsAny<JobContext>(), It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
 }

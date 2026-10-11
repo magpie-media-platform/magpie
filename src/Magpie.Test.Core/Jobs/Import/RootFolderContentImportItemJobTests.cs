@@ -233,7 +233,11 @@ public sealed class RootFolderContentImportItemJobTests
                 It.IsAny<Guid>(), It.IsNotNull<Guid?>(), It.IsAny<Guid?>(), It.IsAny<CancellationToken>()),
                 Times.Never);
             _candidateRepository.Verify(repository => repository.TryUpdateTargetAsync(
-                CandidateId, null, UserId, CancellationToken.None), Times.Once);
+                CandidateId,
+                null,
+                UserId,
+                CancellationToken.None),
+                Times.Once);
         }
     }
 
@@ -286,7 +290,7 @@ public sealed class RootFolderContentImportItemJobTests
     }
 
     [Test]
-    public async Task ExecuteAsync_ClearsTheWaitedItemAfterTheImport_WhenTheResumedImportKeepsAnotherCopy()
+    public async Task ExecuteAsync_ClearsTheWaitedItemAfterTheImport_WhenTheResumedImportIsSkipped()
     {
         // Arrange
         var candidateRepository = new Mock<ILibraryImportCandidateRepository>(MockBehavior.Strict);
@@ -303,7 +307,7 @@ public sealed class RootFolderContentImportItemJobTests
             .ReturnsAsync(new LibraryImportCompletionResult
             {
                 Status = LibraryImportCompletionStatus.Skipped,
-                Message = "The item keeps another copy of the file, so no file was attached."
+                Message = "Library import candidate no longer exists; treating as already completed."
             });
         candidateRepository
             .InSequence(sequence)
@@ -461,15 +465,20 @@ public sealed class RootFolderContentImportItemJobTests
             Guid.NewGuid(), null, null, UserId, JobExecutionMode.Queue,
             new Dictionary<string, string> { ["candidateId"] = CandidateId.ToString("D") }, null, null);
 
-        // Act and Assert
-        Assert.That(async () => await _subject.ExecuteAsync(context).ConfigureAwait(false),
-            Throws.TypeOf<OperationCanceledException>());
-        _candidateRepository.Verify(repository => repository.TryResetImportAsync(
-            CandidateId, null, UserId, CancellationToken.None), Times.Once);
-        _candidateRepository.Verify(repository => repository.MarkImportFailedAsync(
-            It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<Guid?>(), It.IsAny<CancellationToken>()), Times.Never);
-        _candidateRepository.Verify(repository => repository.TryUpdateTargetAsync(
-            It.IsAny<Guid>(), It.IsAny<Guid?>(), It.IsAny<Guid?>(), It.IsAny<CancellationToken>()), Times.Never);
+        // Act
+        var exception = Assert.CatchAsync(() => _subject.ExecuteAsync(context));
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(exception, Is.TypeOf<OperationCanceledException>());
+            _candidateRepository.Verify(repository => repository.TryResetImportAsync(
+                CandidateId, null, UserId, CancellationToken.None), Times.Once);
+            _candidateRepository.Verify(repository => repository.MarkImportFailedAsync(
+                It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<Guid?>(), It.IsAny<CancellationToken>()), Times.Never);
+            _candidateRepository.Verify(repository => repository.TryUpdateTargetAsync(
+                It.IsAny<Guid>(), It.IsAny<Guid?>(), It.IsAny<Guid?>(), It.IsAny<CancellationToken>()), Times.Never);
+        }
     }
 
     [Test]
@@ -512,11 +521,20 @@ public sealed class RootFolderContentImportItemJobTests
                 ["monitoringMode"] = "invalid"
             }, null, null);
 
-        // Act and Assert
-        Assert.That(async () => await _subject.ExecuteAsync(context).ConfigureAwait(false),
-            Throws.TypeOf<ArgumentException>());
-        _candidateRepository.Verify(repository => repository.MarkImportFailedAsync(
-            CandidateId, "A valid monitoring mode is required.", UserId, CancellationToken.None), Times.Once);
+        // Act
+        var exception = Assert.CatchAsync(() => _subject.ExecuteAsync(context));
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(exception, Is.TypeOf<ArgumentException>());
+            _candidateRepository.Verify(repository => repository.MarkImportFailedAsync(
+                CandidateId,
+                "A valid monitoring mode is required.",
+                UserId,
+                CancellationToken.None),
+                Times.Once);
+        }
     }
 
     [Test]
@@ -532,11 +550,20 @@ public sealed class RootFolderContentImportItemJobTests
             Guid.NewGuid(), null, null, UserId, JobExecutionMode.Queue,
             new Dictionary<string, string> { ["candidateId"] = CandidateId.ToString("D") }, null, null);
 
-        // Act and Assert
-        Assert.That(async () => await _subject.ExecuteAsync(context).ConfigureAwait(false),
-            Throws.TypeOf<InvalidOperationException>());
-        _candidateRepository.Verify(repository => repository.MarkImportFailedAsync(
-            CandidateId, "outer failure -> inner failure", UserId, CancellationToken.None), Times.Once);
+        // Act
+        var exception = Assert.CatchAsync(() => _subject.ExecuteAsync(context));
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(exception, Is.TypeOf<InvalidOperationException>());
+            _candidateRepository.Verify(repository => repository.MarkImportFailedAsync(
+                CandidateId,
+                "outer failure -> inner failure",
+                UserId,
+                CancellationToken.None),
+                Times.Once);
+        }
     }
 
     [Test]
@@ -658,14 +685,15 @@ public sealed class RootFolderContentImportItemJobTests
             Event: null,
             CorrelationId: null);
 
-        // Act and Assert
-        Assert.That(
-            async () => await _subject.ExecuteAsync(context).ConfigureAwait(false),
-            Throws.TypeOf<MagpieException>());
+        // Act
+        var exception = Assert.CatchAsync(() => _subject.ExecuteAsync(context));
+
+        // Assert
+        Assert.That(exception, Is.TypeOf<MagpieException>());
     }
 
     [Test]
-    public void ExecuteAsync_DoesNotThrow_WhenCandidateSkipped()
+    public async Task ExecuteAsync_DoesNotThrow_WhenCandidateSkipped()
     {
         // Arrange
         _importService
@@ -696,8 +724,19 @@ public sealed class RootFolderContentImportItemJobTests
             Event: null,
             CorrelationId: null);
 
-        // Act and Assert
-        Assert.DoesNotThrowAsync(async () => await _subject.ExecuteAsync(context).ConfigureAwait(false));
+        // Act
+        await _subject.ExecuteAsync(context).ConfigureAwait(false);
+
+        // Assert
+        _importService.Verify(
+            s => s.ImportCandidateAsync(
+                CandidateId,
+                0,
+                LibraryImportMonitoringMode.Inherit,
+                UserId,
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
     }
 
     [Test]
@@ -714,10 +753,11 @@ public sealed class RootFolderContentImportItemJobTests
             Event: null,
             CorrelationId: null);
 
-        // Act and Assert
-        Assert.That(
-            async () => await _subject.ExecuteAsync(context).ConfigureAwait(false),
-            Throws.TypeOf<ArgumentException>());
+        // Act
+        var exception = Assert.CatchAsync(() => _subject.ExecuteAsync(context));
+
+        // Assert
+        Assert.That(exception, Is.TypeOf<ArgumentException>());
     }
 
     [Test]

@@ -1,6 +1,13 @@
-import { skipToken, useInfiniteQuery, useQuery } from '@tanstack/react-query';
+import {
+    keepPreviousData,
+    skipToken,
+    useInfiniteQuery,
+    useMutation,
+    useQuery,
+    useQueryClient,
+} from '@tanstack/react-query';
 
-import { apiGet, buildUrl } from '@/lib/api';
+import { apiGet, apiPost, buildUrl } from '@/lib/api';
 import { useInvalidateQueriesOnEvents } from '@/hooks/useInvalidateQueriesOnEvents';
 import { queryErrorOrNull } from '@/lib/utils';
 import type { PagedList } from '@/types/paging';
@@ -23,6 +30,7 @@ export interface MagpieActivityEntry {
     detail?: string | null;
     entityId?: string | null;
     entityType?: string | null;
+    entityName?: string | null;
     userId?: string | null;
     jobExecutionId?: string | null;
 }
@@ -49,11 +57,34 @@ interface MagpieActivityQueryParams {
     pageSize?: number;
 }
 
+export interface AuditHistoryParams {
+    sinceMs?: number;
+    from?: string;
+    to?: string;
+    category?: string[];
+    userId?: string;
+    hasUser?: boolean;
+    search?: string;
+    status?: string;
+    sortDirection: 'Ascending' | 'Descending';
+    pageNumber: number;
+    pageSize: number;
+}
+
+export interface AuditHistoryPurgeCounts {
+    auditRecords: number;
+    jobExecutions: number;
+}
+
 const AUDIT_PAGE_SIZE = 100;
 
 const magpieActivityQueryKeys = {
+    all: ['magpie-activity'] as const,
+    log: (params: AuditHistoryParams) => ['magpie-activity', 'log', params] as const,
     forContent: (contentId: string, params?: MagpieActivityQueryParams) =>
         ['magpie-activity', 'content', contentId, params ?? {}] as const,
+    forCorrelation: (correlationId: string, params?: MagpieActivityQueryParams) =>
+        ['magpie-activity', 'correlation', correlationId, params ?? {}] as const,
     forExecutionTree: (executionId: string) => ['magpie-activity', 'execution-tree', executionId] as const,
     forExecutionAudits: (executionId: string) => ['magpie-activity', 'execution-audits', executionId] as const,
 };
@@ -114,6 +145,18 @@ async function fetchContentMagpieActivity(
     return apiGet<PagedList<MagpieActivityEntry>>(url).then(toMagpieActivityResponse);
 }
 
+async function fetchCorrelatedMagpieActivity(
+    correlationId: string,
+    params: MagpieActivityQueryParams,
+): Promise<MagpieActivityResponse> {
+    const url = buildUrl('/audit-history', {
+        correlationId,
+        pageNumber: params.pageNumber,
+        pageSize: params.pageSize,
+    });
+    return apiGet<PagedList<MagpieActivityEntry>>(url).then(toMagpieActivityResponse);
+}
+
 function toMagpieActivityEntry(node: JobExecutionTreeNode): MagpieActivityEntry {
     return {
         id: node.id,
@@ -121,7 +164,7 @@ function toMagpieActivityEntry(node: JobExecutionTreeNode): MagpieActivityEntry 
         timestamp: node.completedAt ?? node.startedAt ?? node.createdAt,
         correlationId: node.correlationId,
         label: node.jobType,
-        category: 'Job',
+        category: 'Jobs',
         status: node.status,
         detail: null,
     };
@@ -184,6 +227,23 @@ export function useContentMagpieActivity(contentId: string | null | undefined, p
         isLoading: query.isLoading,
         error: queryErrorOrNull(query),
         refetch: query.refetch,
+    };
+}
+
+export function useCorrelatedMagpieActivity(
+    correlationId: string | null | undefined,
+    params: MagpieActivityQueryParams = {},
+) {
+    const query = useQuery({
+        queryKey: magpieActivityQueryKeys.forCorrelation(correlationId ?? '', params),
+        queryFn: () => fetchCorrelatedMagpieActivity(correlationId!, params),
+        enabled: !!correlationId,
+    });
+
+    return {
+        activity: query.data ?? null,
+        isLoading: query.isLoading,
+        error: queryErrorOrNull(query),
     };
 }
 
@@ -273,4 +333,45 @@ export function useJobExecutionTreeActivity(executionId: string | null | undefin
         error: queryErrorOrNull(query),
         refetch: query.refetch,
     };
+}
+
+async function fetchAuditHistory({ sinceMs, from, ...params }: AuditHistoryParams) {
+    const url = buildUrl('/audit-history', {
+        ...params,
+        from: sinceMs === undefined ? from : new Date(Date.now() - sinceMs).toISOString(),
+    });
+    return apiGet<PagedList<MagpieActivityEntry>>(url);
+}
+
+export function useAuditHistory(params: AuditHistoryParams) {
+    const query = useQuery({
+        queryKey: magpieActivityQueryKeys.log(params),
+        queryFn: () => fetchAuditHistory(params),
+        placeholderData: keepPreviousData,
+    });
+
+    useInvalidateQueriesOnEvents(ACTIVITY_APPEND_EVENTS, [magpieActivityQueryKeys.log(params)], {
+        debounceMs: 200,
+        exact: true,
+        maxWaitMs: 800,
+    });
+
+    return {
+        page: query.data ?? null,
+        isLoading: query.isLoading,
+        isFetching: query.isFetching,
+        error: queryErrorOrNull(query),
+        refetch: query.refetch,
+    };
+}
+
+export function usePurgeAuditHistory() {
+    const queryClient = useQueryClient();
+    const mutation = useMutation({
+        mutationFn: (olderThanDays: number) =>
+            apiPost<AuditHistoryPurgeCounts>(buildUrl('/audit-history/purge', { olderThanDays })),
+        onSuccess: () => queryClient.invalidateQueries({ queryKey: magpieActivityQueryKeys.all }),
+    });
+
+    return { purge: mutation.mutateAsync, isPurging: mutation.isPending, error: mutation.error };
 }

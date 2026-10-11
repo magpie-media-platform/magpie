@@ -1,12 +1,15 @@
 using System;
+using System.IO;
 using System.Net;
 using System.Net.Http;
+using System.Threading;
 using System.Threading.Tasks;
 
 using Magpie.Extensions.Tmdb;
 using Magpie.Extensions.Tmdb.QueryEngine;
 
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Time.Testing;
 
 using Moq;
 
@@ -21,6 +24,29 @@ public class TmdbClientTests
 {
     private const string SecretKey = "super-secret-tmdb-key-do-not-leak";
 
+    private TaskCompletionSource _reading = null!;
+    private Mock<Stream> _body = null!;
+
+    [SetUp]
+    public void SetUp()
+    {
+        _reading = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _body = new Mock<Stream> { CallBase = true };
+        _body.SetupGet(stream => stream.CanRead).Returns(true);
+        _body
+            .Setup(stream => stream.ReadAsync(
+                It.IsAny<byte[]>(),
+                It.IsAny<int>(),
+                It.IsAny<int>(),
+                It.IsAny<CancellationToken>()))
+            .Returns(async Task<int> (byte[] _, int _, int _, CancellationToken cancellationToken) =>
+            {
+                _reading.TrySetResult();
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken).ConfigureAwait(false);
+                return 0;
+            });
+    }
+
     [Test]
     public void GetAsync_ThrowsWithStatusCode_WhenServerFails()
     {
@@ -32,7 +58,7 @@ public class TmdbClientTests
         httpClient.BaseAddress = new Uri(TmdbClient.DefaultBaseUrl, UriKind.Absolute);
         var httpClientFactory = new Mock<IHttpClientFactory>();
         httpClientFactory.Setup(factory => factory.CreateClient(TmdbClient.HttpClientName)).Returns(httpClient);
-        var subject = new TmdbClient(httpClientFactory.Object, NullLogger<TmdbClient>.Instance);
+        var subject = new TmdbClient(httpClientFactory.Object, TimeProvider.System, NullLogger<TmdbClient>.Instance);
         var context = new RequestContext { ApiKey = SecretKey, Language = "en-US" };
 
         // Act
@@ -60,7 +86,7 @@ public class TmdbClientTests
         httpClient.BaseAddress = new Uri(TmdbClient.DefaultBaseUrl, UriKind.Absolute);
         var httpClientFactory = new Mock<IHttpClientFactory>();
         httpClientFactory.Setup(factory => factory.CreateClient(TmdbClient.HttpClientName)).Returns(httpClient);
-        var subject = new TmdbClient(httpClientFactory.Object, NullLogger<TmdbClient>.Instance);
+        var subject = new TmdbClient(httpClientFactory.Object, TimeProvider.System, NullLogger<TmdbClient>.Instance);
         var context = new RequestContext { ApiKey = SecretKey, Language = "en-US" };
 
         // Act
@@ -87,7 +113,7 @@ public class TmdbClientTests
         httpClient.BaseAddress = new Uri(TmdbClient.DefaultBaseUrl, UriKind.Absolute);
         var httpClientFactory = new Mock<IHttpClientFactory>();
         httpClientFactory.Setup(factory => factory.CreateClient(TmdbClient.HttpClientName)).Returns(httpClient);
-        var subject = new TmdbClient(httpClientFactory.Object, NullLogger<TmdbClient>.Instance);
+        var subject = new TmdbClient(httpClientFactory.Object, TimeProvider.System, NullLogger<TmdbClient>.Instance);
         var context = new RequestContext { ApiKey = SecretKey, Language = "en-US" };
 
         // Act
@@ -114,7 +140,7 @@ public class TmdbClientTests
         httpClient.BaseAddress = new Uri(TmdbClient.DefaultBaseUrl, UriKind.Absolute);
         var httpClientFactory = new Mock<IHttpClientFactory>();
         httpClientFactory.Setup(factory => factory.CreateClient(TmdbClient.HttpClientName)).Returns(httpClient);
-        var subject = new TmdbClient(httpClientFactory.Object, NullLogger<TmdbClient>.Instance);
+        var subject = new TmdbClient(httpClientFactory.Object, TimeProvider.System, NullLogger<TmdbClient>.Instance);
         var context = new RequestContext { ApiKey = SecretKey, Language = "en-US" };
 
         // Act
@@ -137,7 +163,7 @@ public class TmdbClientTests
         httpClient.BaseAddress = new Uri(TmdbClient.DefaultBaseUrl, UriKind.Absolute);
         var httpClientFactory = new Mock<IHttpClientFactory>();
         httpClientFactory.Setup(factory => factory.CreateClient(TmdbClient.HttpClientName)).Returns(httpClient);
-        var subject = new TmdbClient(httpClientFactory.Object, NullLogger<TmdbClient>.Instance);
+        var subject = new TmdbClient(httpClientFactory.Object, TimeProvider.System, NullLogger<TmdbClient>.Instance);
         var context = new RequestContext { ApiKey = SecretKey, Language = "en-US" };
 
         // Act
@@ -169,7 +195,7 @@ public class TmdbClientTests
         httpClient.BaseAddress = new Uri(TmdbClient.DefaultBaseUrl, UriKind.Absolute);
         var httpClientFactory = new Mock<IHttpClientFactory>();
         httpClientFactory.Setup(factory => factory.CreateClient(TmdbClient.HttpClientName)).Returns(httpClient);
-        var subject = new TmdbClient(httpClientFactory.Object, NullLogger<TmdbClient>.Instance);
+        var subject = new TmdbClient(httpClientFactory.Object, TimeProvider.System, NullLogger<TmdbClient>.Instance);
         var context = new RequestContext { ApiKey = SecretKey, Language = "en-US" };
 
         // Act
@@ -194,7 +220,7 @@ public class TmdbClientTests
         httpClient.BaseAddress = new Uri(TmdbClient.DefaultBaseUrl, UriKind.Absolute);
         var httpClientFactory = new Mock<IHttpClientFactory>();
         httpClientFactory.Setup(factory => factory.CreateClient(TmdbClient.HttpClientName)).Returns(httpClient);
-        var subject = new TmdbClient(httpClientFactory.Object, NullLogger<TmdbClient>.Instance);
+        var subject = new TmdbClient(httpClientFactory.Object, TimeProvider.System, NullLogger<TmdbClient>.Instance);
         var context = new RequestContext { ApiKey = SecretKey, Language = "en-US" };
 
         // Act
@@ -208,5 +234,35 @@ public class TmdbClientTests
         // Assert
         Assert.That(exception!.Message, Does.Contain("malformed empty response body"));
         http.VerifyNoOutstandingExpectation();
+    }
+
+    [Test]
+    public async Task GetAsync_ThrowsCancellation_WhenTheBodyStallsForTheClientTimeout()
+    {
+        // Arrange
+        using var http = new MockHttpMessageHandler();
+        http.Expect(HttpMethod.Get, "https://api.themoviedb.org/3/configuration*")
+            .Respond(_ => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StreamContent(_body.Object) });
+        var httpClient = http.ToHttpClient();
+        httpClient.BaseAddress = new Uri(TmdbClient.DefaultBaseUrl, UriKind.Absolute);
+        httpClient.Timeout = TimeSpan.FromSeconds(30);
+        var httpClientFactory = new Mock<IHttpClientFactory>();
+        httpClientFactory.Setup(factory => factory.CreateClient(TmdbClient.HttpClientName)).Returns(httpClient);
+        var timeProvider = new FakeTimeProvider();
+        var subject = new TmdbClient(httpClientFactory.Object, timeProvider, NullLogger<TmdbClient>.Instance);
+        var pending = subject.GetAsync<object>(
+            new RequestContext { ApiKey = SecretKey, Language = "en-US" },
+            "3/configuration",
+            queryParameters: null,
+            ResponseProfile.Configuration,
+            CancellationToken.None);
+        await _reading.Task.ConfigureAwait(false);
+
+        // Act
+        timeProvider.Advance(TimeSpan.FromSeconds(30));
+
+        // Assert
+        Assert.CatchAsync<OperationCanceledException>(async () =>
+            await pending.WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false));
     }
 }

@@ -135,6 +135,7 @@ public sealed class ReleaseUnmatchTests
         _subject = new ReleaseService(
             hierarchy.Object,
             Mock.Of<IIndexerRepository>(),
+            Mock.Of<IIndexerService>(),
             Mock.Of<IReleaseRepository>(),
             scopes,
             Mock.Of<IDownloadScopeRepository>(),
@@ -148,7 +149,6 @@ public sealed class ReleaseUnmatchTests
             Mock.Of<IFileSystem>(),
             Mock.Of<IAuditRecordRepository>(),
             Mock.Of<IJobManager>(),
-            Mock.Of<IJobExecutionRepository>(),
             transactionManager,
             Mock.Of<IEventBus>(),
             Mock.Of<IReleaseEvaluationService>(),

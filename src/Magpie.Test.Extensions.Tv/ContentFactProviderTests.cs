@@ -99,10 +99,11 @@ public sealed class ContentFactProviderTests
                         new ExternalId { Source = "imdb", Value = "tt0851577", Ordinal = 1 },
                     ],
                 },
-                [seasonId] = new() { Title = "Season 1" },
+                [seasonId] = new() { Title = "Season 1", SequenceNumber = 1 },
                 [episodeId] = new()
                 {
                     Title = "Rollercoaster",
+                    SequenceNumber = 1,
                     ExternalIds = [new ExternalId { Source = "tmdb", Value = "200", Ordinal = 0 }],
                 },
             },
@@ -193,6 +194,7 @@ public sealed class ContentFactProviderTests
                 [seasonId] = new()
                 {
                     Title = "Season 1",
+                    SequenceNumber = 1,
                     ExternalIds = [new ExternalId { Source = "tmdb", Value = "100", Ordinal = 0 }],
                 },
             },

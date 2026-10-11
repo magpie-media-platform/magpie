@@ -520,3 +520,8 @@ export interface BulkContentDeleteRequest {
     filter?: string;
     deleteFromLibrary?: boolean;
 }
+
+export interface ContentDeleteFile {
+    path: string;
+    size: number;
+}

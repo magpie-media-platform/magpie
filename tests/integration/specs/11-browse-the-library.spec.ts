@@ -165,7 +165,7 @@ test.describe.serial('Journey 11: browse it like a member of the household', () 
                 await page.goto('/filters');
                 const filterRow = page.locator(`[data-filter-id="${savedFilterId}"]`);
                 await expect(filterRow).toContainText(savedFilterName);
-                await filterRow.getByRole('button', { name: `View ${savedFilterName} in Library` }).click();
+                await filterRow.getByRole('button', { name: `Apply ${savedFilterName} to Library` }).click();
                 await expect(page.getByTestId('library-page__applied-saved-filter')).toContainText(savedFilterName);
                 await expect(page.getByRole('grid').locator(`[data-row-id="${ids.movie}"]`)).toBeVisible();
 
@@ -309,7 +309,7 @@ test.describe.serial('Journey 11: browse it like a member of the household', () 
                 await page.goto('/filters');
                 await page
                     .locator(`[data-filter-id="${savedFilterId}"]`)
-                    .getByRole('button', { name: `View ${savedFilterName} in Library` })
+                    .getByRole('button', { name: `Apply ${savedFilterName} to Library` })
                     .click();
                 await expect(page).toHaveURL(/savedFilter=/);
                 expect(new URL(page.url()).searchParams.get('savedFilter')).toBe(savedFilterId);

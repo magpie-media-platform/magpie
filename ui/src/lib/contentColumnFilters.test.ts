@@ -15,7 +15,7 @@ describe('contentColumnFilters', () => {
             true,
         );
         expect(readContentFilter('title contains "a" and title contains "b"', 'title')).toBe('');
-        expect(hasComplexContentFilter('title startswith "a"', 'title')).toBe(true);
+        expect(hasComplexContentFilter('title !startswith "a"', 'title')).toBe(true);
         expect(readContentFilter('Fulfillment = "partial"', 'fulfillment')).toBe('Partial');
         expect(hasComplexContentFilter('fulfillment in (Missing, Partial)', 'fulfillment')).toBe(true);
         expect(hasComplexContentFilter('publishDate >= "1999"', 'publishDateFrom')).toBe(true);
@@ -96,6 +96,63 @@ describe('contentColumnFilters', () => {
             const query = 'publishDate >= "2020-01-01" and publishDate <= "2020-12-31"';
             expect(readContentFilter(query, 'publishDateFrom')).toBe('2020-01-01');
             expect(readContentFilter(query, 'publishDateTo')).toBe('2020-12-31');
+        });
+    });
+
+    describe('title prefix', () => {
+        it.each([
+            ['', ''],
+            ['title startswith "B"', 'B'],
+            ['monitoring = Unmonitored and title startswith "b"', 'b'],
+            ['title startswith "Ba"', 'Ba'],
+            ['title contains "B"', ''],
+            ['title startswith "B" and title startswith "C"', ''],
+            ['title startswith "B" or tag has "x"', ''],
+        ])('reads the prefix of %j as %j', (query, expected) => {
+            // Act
+            const prefix = readContentFilter(query, 'titlePrefix');
+
+            // Assert
+            expect(prefix).toBe(expected);
+        });
+
+        it.each([
+            ['', 'B', 'title startswith "B"'],
+            [
+                'tag has "x" and title contains "dune"',
+                'B',
+                'tag has "x" and title contains "dune" and title startswith "B"',
+            ],
+            ['title startswith "B" and tag has "x"', 'C', 'tag has "x" and title startswith "C"'],
+            ['tag has "x" and title startswith "B"', '', 'tag has "x"'],
+            ['tag has "a" or tag has "b"', 'B', '(tag has "a" or tag has "b") and title startswith "B"'],
+            ['tag has "a" or tag has "b"', '', '(tag has "a" or tag has "b")'],
+        ])('sets the prefix of %j to %j as %j', (query, prefix, expected) => {
+            // Act
+            const result = setContentFilter(query, 'titlePrefix', prefix);
+
+            // Assert
+            expect(result).toBe(expected);
+        });
+
+        it('keeps the prefix when the title column filter changes', () => {
+            // Act
+            const result = setContentFilter('title startswith "B"', 'title', 'dune');
+
+            // Assert
+            expect(result).toBe('title startswith "B" and title contains "dune"');
+        });
+
+        it('keeps the title column filter simple next to a prefix', () => {
+            // Arrange
+            const query = 'title startswith "B" and title contains "dune"';
+
+            // Act
+            const advanced = hasComplexContentFilter(query, 'title');
+
+            // Assert
+            expect(advanced).toBe(false);
+            expect(readContentFilter(query, 'title')).toBe('dune');
         });
     });
 

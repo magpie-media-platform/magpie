@@ -25,6 +25,7 @@ import { useToast } from '@/components/ui/Toast';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { useRemotePathMappings, type ApiRemotePathMapping } from '@/hooks/useRemotePathMappings';
 import { useToggle } from '@/hooks/useToggle';
+import { useInstanceName } from '@/hooks/useInstanceName';
 
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Tooltip } from '@/components/ui/Tooltip';
@@ -46,6 +47,7 @@ function toRemotePathMappingFormValues(mapping: ApiRemotePathMapping): RemotePat
 }
 
 export function RemotePathMappingsPage() {
+    const instanceName = useInstanceName();
     useDocumentTitle('Remote Path Mappings');
     const [formOpen, , openForm, closeForm] = useToggle();
     const [editingMapping, setEditingMapping] = useState<RemotePathMappingFormValues | null>(null);
@@ -251,7 +253,7 @@ export function RemotePathMappingsPage() {
                 <PageHeader
                     className="remote-path-mappings-page__header"
                     title="Remote Path Mappings"
-                    description="Translate paths reported by remote download clients into paths Magpie can read at import time."
+                    description={`Translate paths reported by remote download clients into paths ${instanceName} can read at import time.`}
                     icon={
                         <ArrowsLeftRightIcon
                             weight="duotone"
@@ -299,11 +301,7 @@ export function RemotePathMappingsPage() {
                         <EmptyState
                             icon={<WarningCircleIcon weight="duotone" />}
                             title="Failed to load remote path mappings"
-                            action={
-                                <Button variant="secondary" size="sm" onClick={() => refetch()}>
-                                    Retry
-                                </Button>
-                            }
+                            onRetry={refetch}
                         />
                     ) : mappings.length === 0 ? (
                         <EmptyState

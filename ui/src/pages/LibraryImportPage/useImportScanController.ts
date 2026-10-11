@@ -129,7 +129,6 @@ export function useImportScanController(): ImportScanControllerValue {
         if (!job || job.id !== executionId) {
             return;
         }
-        // The worker reports 100% a beat before the runtime flips the status, so either one settles the scan.
         const reportedComplete = (job.progress ?? 0) >= 100;
         if (!isTerminalJobExecutionStatus(job.status) && !reportedComplete) {
             return;

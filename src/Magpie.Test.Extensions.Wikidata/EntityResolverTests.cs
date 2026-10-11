@@ -143,8 +143,13 @@ internal sealed class EntityResolverTests
         cache.VerifyNoOtherCalls();
     }
 
-    [Test]
-    public async Task ResolveSubjectAsync_QueriesTmdbPersonProperty_WhenNoSlugIsPresent()
+    [TestCase(Constants.TmdbSource, " 287 ", "Person|P4985|287", "wdt:P4985 \"287\"")]
+    [TestCase("tvmaze", "64989", "Person|P11449|64989", "wdt:P11449 \"64989\"")]
+    public async Task ResolveSubjectAsync_QueriesThePersonPropertyOfTheSource_WhenNoSlugIsPresent(
+        string source,
+        string value,
+        string expectedCacheKey,
+        string expectedQuery)
     {
         // Arrange
         SparqlRequest? request = null;
@@ -184,7 +189,7 @@ internal sealed class EntityResolverTests
             });
         IEntityResolver subject = new EntityResolver(client.Object, cache.Object);
         var contribution = new MetadataContribution { ProviderType = "seed" };
-        contribution.ExternalIds.Add(new ExternalId { Source = Constants.TmdbSource, Value = " 287 " });
+        contribution.ExternalIds.Add(new ExternalId { Source = source, Value = value });
         var context = new RequestContext
         {
             Language = "en",
@@ -204,8 +209,8 @@ internal sealed class EntityResolverTests
         {
             Assert.That(result.Kind, Is.EqualTo(EntityResolutionKind.Resolved));
             Assert.That(result.Qid, Is.EqualTo("Q42"));
-            Assert.That(cacheKey, Is.EqualTo("Person|P4985|287"));
-            Assert.That(request!.QueryText, Does.Contain("wdt:P4985 \"287\""));
+            Assert.That(cacheKey, Is.EqualTo(expectedCacheKey));
+            Assert.That(request!.QueryText, Does.Contain(expectedQuery));
         }
     }
 
@@ -279,7 +284,7 @@ internal sealed class EntityResolverTests
         var cache = new Mock<IQueryCoordinator>();
         IEntityResolver subject = new EntityResolver(client.Object, cache.Object);
         var contribution = new MetadataContribution { ProviderType = "seed" };
-        contribution.ExternalIds.Add(new ExternalId { Source = Constants.ImdbSource, Value = "co0144901" });
+        contribution.ExternalIds.Add(new ExternalId { Source = Constants.TvmazeSource, Value = "49" });
         var context = new RequestContext
         {
             Language = "en",

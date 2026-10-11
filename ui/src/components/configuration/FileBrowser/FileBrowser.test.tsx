@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -396,9 +396,7 @@ describe('FileBrowser', () => {
         });
 
         await waitFor(() => {
-            expect(mockApiGet).toHaveBeenCalledWith(
-                '/system/files?path=%5C%5Cnas.example%5CMedia%5CTV%5CShows',
-            );
+            expect(mockApiGet).toHaveBeenCalledWith('/system/files?path=%5C%5Cnas.example%5CMedia%5CTV%5CShows');
         });
 
         const pathInput = screen.getByPlaceholderText('Enter path manually...');
@@ -422,29 +420,21 @@ describe('FileBrowser', () => {
 
     it('accepts a UNC initial path whose root differs only by case', async () => {
         const initialPath = '\\\\NAS.example\\Media\\TV\\Shows';
-        render(
-            <FileBrowser {...defaultProps} initialPath={initialPath} rootPath="\\\\nas.example\\media" />,
-            { wrapper: createWrapper() },
-        );
+        render(<FileBrowser {...defaultProps} initialPath={initialPath} rootPath="\\\\nas.example\\media" />, {
+            wrapper: createWrapper(),
+        });
 
         await waitFor(() => {
-            expect(mockApiGet).toHaveBeenCalledWith(
-                '/system/files?path=%5C%5CNAS.example%5CMedia%5CTV%5CShows',
-            );
+            expect(mockApiGet).toHaveBeenCalledWith('/system/files?path=%5C%5CNAS.example%5CMedia%5CTV%5CShows');
         });
         expect(screen.queryByText('The path must be in the configured root folder.')).not.toBeInTheDocument();
     });
 
     it('treats a case-variant UNC configured root as the navigation boundary', async () => {
         const initialPath = '\\\\NAS.example\\Media\\TV';
-        render(
-            <FileBrowser
-                {...defaultProps}
-                initialPath={initialPath}
-                rootPath="\\\\nas.example\\media\\tv"
-            />,
-            { wrapper: createWrapper() },
-        );
+        render(<FileBrowser {...defaultProps} initialPath={initialPath} rootPath="\\\\nas.example\\media\\tv" />, {
+            wrapper: createWrapper(),
+        });
 
         await waitFor(() => {
             expect(mockApiGet).toHaveBeenCalledWith('/system/files?path=%5C%5CNAS.example%5CMedia%5CTV');
@@ -702,5 +692,96 @@ describe('FileBrowser', () => {
         await user.dblClick(screen.getByRole('button', { name: 'notes.txt' }));
 
         expect(onSelect).toHaveBeenCalledWith('/home/user/notes.txt');
+    });
+
+    describe('on a short phone', () => {
+        const deepPath = '/mnt/storage/media/library/movies';
+        let innerWidth: number;
+
+        beforeEach(() => {
+            innerWidth = window.innerWidth;
+            window.innerWidth = 320;
+        });
+
+        afterEach(() => {
+            window.innerWidth = innerWidth;
+        });
+
+        it('collapses the middle crumbs into one crumb that keeps the first crumb and the last two', async () => {
+            render(<FileBrowser {...defaultProps} initialPath={deepPath} />, { wrapper: createWrapper() });
+
+            await screen.findByText('Selected:');
+
+            const crumbs = within(screen.getByRole('navigation', { name: 'Current path' }))
+                .getAllByRole('button')
+                .map((crumb) => crumb.textContent);
+            expect(crumbs).toEqual(['/', '…', 'library', 'movies']);
+        });
+
+        it('shows every crumb after a tap on the collapsed crumb', async () => {
+            const user = userEvent.setup();
+            render(<FileBrowser {...defaultProps} initialPath={deepPath} />, { wrapper: createWrapper() });
+
+            await user.click(await screen.findByRole('button', { name: 'Show full path' }));
+
+            const crumbs = within(screen.getByRole('navigation', { name: 'Current path' }))
+                .getAllByRole('button')
+                .map((crumb) => crumb.textContent);
+            expect(crumbs).toEqual(['/', 'mnt', 'storage', 'media', 'library', 'movies']);
+        });
+
+        it('moves the focus to the first revealed crumb after a tap on the collapsed crumb', async () => {
+            const user = userEvent.setup();
+            render(<FileBrowser {...defaultProps} initialPath={deepPath} />, { wrapper: createWrapper() });
+
+            await user.click(await screen.findByRole('button', { name: 'Show full path' }));
+
+            expect(screen.getByRole('button', { name: 'mnt' })).toHaveFocus();
+        });
+
+        it('keeps a path of four crumbs whole', async () => {
+            render(<FileBrowser {...defaultProps} initialPath="/mnt/storage/media" />, { wrapper: createWrapper() });
+
+            await screen.findByText('Selected:');
+
+            const crumbs = within(screen.getByRole('navigation', { name: 'Current path' }))
+                .getAllByRole('button')
+                .map((crumb) => crumb.textContent);
+            expect(crumbs).toEqual(['/', 'mnt', 'storage', 'media']);
+        });
+
+        describe('when the crumbs are measured', () => {
+            afterEach(() => {
+                vi.restoreAllMocks();
+            });
+
+            it('Breadcrumb_ShowsTheParentCrumb_WhenTheParentCrumbFitsWhole', async () => {
+                // Arrange
+                vi.spyOn(Element.prototype, 'clientWidth', 'get').mockReturnValue(200);
+                vi.spyOn(Element.prototype, 'scrollWidth', 'get').mockReturnValue(200);
+
+                // Act
+                render(<FileBrowser {...defaultProps} initialPath={deepPath} />, { wrapper: createWrapper() });
+                await screen.findByText('Selected:');
+
+                // Assert
+                expect(screen.getByRole('navigation', { name: 'Current path' })).toHaveAttribute('data-fit', 'parent');
+            });
+
+            it('Breadcrumb_FoldsTheParentCrumb_WhenTheParentCrumbDoesNotFitWhole', async () => {
+                // Arrange
+                vi.spyOn(Element.prototype, 'clientWidth', 'get').mockReturnValue(200);
+                vi.spyOn(Element.prototype, 'scrollWidth', 'get').mockImplementation(function (this: Element) {
+                    return (this as HTMLElement).dataset.fit === 'parent' ? 260 : 200;
+                });
+
+                // Act
+                render(<FileBrowser {...defaultProps} initialPath={deepPath} />, { wrapper: createWrapper() });
+                await screen.findByText('Selected:');
+
+                // Assert
+                expect(screen.getByRole('navigation', { name: 'Current path' })).toHaveAttribute('data-fit', 'current');
+            });
+        });
     });
 });

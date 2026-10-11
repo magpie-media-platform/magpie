@@ -92,7 +92,6 @@ internal sealed class MediaFileReconciliationJob(
         before?.DurationSeconds is { } expected && after?.DurationSeconds is { } actual &&
         Math.Abs(expected - actual) <= toleranceSeconds;
 
-    // PostgreSQL keeps only microseconds, so a stored time can differ by less than one microsecond.
     private static bool IsSameWriteTime(DateTime? stored, DateTime actual) =>
         stored is { } value && Math.Abs(value.Ticks - actual.Ticks) < TimeSpan.TicksPerMicrosecond;
 

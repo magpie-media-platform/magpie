@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { CheckCircleIcon, InfoIcon, WarningIcon, XCircleIcon } from '@phosphor-icons/react';
+import { Link } from 'react-router-dom';
 
 import { Toast, ToastAction, ToastClose, ToastTitle, ToastDescription, type ToastVariant } from './Toast';
 import { useToast, type ToastData } from '@/hooks/ui/useToast';
@@ -8,6 +9,8 @@ import { useMediaQuery } from '@/hooks/ui/useMediaQuery';
 function getToastRole(variant?: ToastVariant): 'alert' | 'status' {
     return variant === 'error' || variant === 'warning' ? 'alert' : 'status';
 }
+
+function keepTap() {}
 
 /** How many of the newest toasts stay visible in the mobile phone-notification stack. */
 const MAX_MOBILE_STACK_DEPTH = 3;
@@ -80,7 +83,9 @@ function ToastItem({ data, dismiss, stackDepth }: ToastItemProps) {
             onPause={handlePause}
             onResume={handleResume}
             onOpenChange={(open) => !open && dismiss(id)}
-            inert={isConcealed}
+            tabIndex={isConcealed ? undefined : 0}
+            onClick={isConcealed ? keepTap : undefined}
+            aria-hidden={isConcealed}
             data-stack-depth={stackDepth}
             data-stack-hidden={stackDepth >= MAX_MOBILE_STACK_DEPTH}
         >
@@ -114,11 +119,16 @@ function ToastItem({ data, dismiss, stackDepth }: ToastItemProps) {
                     {data.description && <ToastDescription>{data.description}</ToastDescription>}
                 </div>
             </div>
-            {data.action && (
-                <ToastAction altText={data.action.altText} onClick={data.action.onClick}>
-                    {data.action.label}
-                </ToastAction>
-            )}
+            {data.action &&
+                (data.action.to ? (
+                    <ToastAction altText={data.action.altText} asChild>
+                        <Link to={data.action.to}>{data.action.label}</Link>
+                    </ToastAction>
+                ) : (
+                    <ToastAction altText={data.action.altText} onClick={data.action.onClick}>
+                        {data.action.label}
+                    </ToastAction>
+                ))}
             <ToastClose />
         </Toast>
     );

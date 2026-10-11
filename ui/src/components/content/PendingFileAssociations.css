@@ -7,20 +7,13 @@
         display: flex;
         flex-direction: column;
         gap: var(--space-sm);
-        margin-bottom: var(--space-md);
     }
 
     .pending-file-associations__header {
         display: flex;
-        flex-wrap: wrap;
-        align-items: flex-start;
+        align-items: center;
         justify-content: space-between;
         gap: var(--space-sm);
-    }
-
-    .pending-file-associations__heading {
-        min-width: 0;
-        flex: 1 1 18rem;
     }
 
     .pending-file-associations__title {
@@ -28,24 +21,6 @@
         font-size: var(--text-base);
         font-weight: var(--weight-medium);
         color: var(--text-primary);
-    }
-
-    .pending-file-associations--empty {
-        flex-direction: row;
-        align-items: center;
-        justify-content: space-between;
-        gap: var(--space-sm);
-
-        & .pending-file-associations__title {
-            font-size: var(--text-sm);
-            font-weight: var(--weight-normal);
-            color: var(--text-secondary);
-            white-space: nowrap;
-        }
-
-        & .button {
-            flex-shrink: 0;
-        }
     }
 
     .pending-file-associations__help {
@@ -57,12 +32,10 @@
     .pending-file-associations__path {
         display: block;
         min-width: 0;
-        overflow: hidden;
         font-family: var(--font-mono);
         font-size: var(--text-sm);
         color: var(--text-secondary);
-        text-overflow: ellipsis;
-        white-space: nowrap;
+        overflow-wrap: anywhere;
     }
 
     .pending-file-associations__actions {

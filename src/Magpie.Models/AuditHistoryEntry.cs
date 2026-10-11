@@ -60,6 +60,11 @@ public sealed record AuditHistoryEntry
     public string? EntityType { get; init; }
 
     /// <summary>
+    /// The name of the related entity, when known.
+    /// </summary>
+    public string? EntityName { get; init; }
+
+    /// <summary>
     /// The id of the user that acted, when present.
     /// </summary>
     public Guid? UserId { get; init; }

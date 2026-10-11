@@ -127,4 +127,42 @@ public class BooksContentTypeDefinitionProviderParsingTests
         // Assert
         Assert.That(result, Is.EqualTo(expected));
     }
+
+    [TestCase("1984", 1949, "George Orwell - 1984 [epub]", ReleaseMatchResult.Indeterminate)]
+    [TestCase("1984", 1949, "George Orwell - 1984 (1949) [epub]", ReleaseMatchResult.Confident)]
+    [TestCase("1984", 1949, "George Orwell - 1984 (2003) [epub]", ReleaseMatchResult.NoMatch)]
+    [TestCase("2001 A Space Odyssey", 1968, "2001 A Space Odyssey [epub]", ReleaseMatchResult.Indeterminate)]
+    [TestCase("2001 A Space Odyssey", 1968, "2001 A Space Odyssey (1968) [epub]", ReleaseMatchResult.Confident)]
+    public void IsMatch_ReturnsExpectedMatch_WhenBookTitleIsAYear(
+        string title,
+        int publishYear,
+        string releaseTitle,
+        ReleaseMatchResult expected)
+    {
+        // Arrange
+        var subject = new BooksContentTypeDefinitionProvider();
+        var item = new ContentHierarchyItem
+        {
+            Id = Guid.NewGuid(),
+            ContentType = "book",
+            Level = "ebook",
+            Slug = title,
+            Name = title
+        };
+        var target = new ContentTarget
+        {
+            Item = item,
+            Lineage = [item],
+            Metadata = new Dictionary<Guid, MaterializedMetadata>
+            {
+                [item.Id] = new() { Title = title, PublishDate = new DateTime(publishYear, 1, 1) }
+            }
+        };
+
+        // Act
+        var result = subject.IsMatch(target, [], new Release { Protocol = "torrent", Title = releaseTitle }, []);
+
+        // Assert
+        Assert.That(result, Is.EqualTo(expected));
+    }
 }

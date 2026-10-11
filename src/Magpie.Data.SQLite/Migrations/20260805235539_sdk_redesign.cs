@@ -18,7 +18,6 @@ namespace Magpie.Data.SQLite.Migrations
                 DROP TABLE magpie_monitoring_guard;
                 """);
 
-            // SQLite defers the table rebuild, so map into a nullable column before that rebuild.
             migrationBuilder.RenameColumn(
                 name: "Monitoring",
                 table: "content_hierarchyItem",

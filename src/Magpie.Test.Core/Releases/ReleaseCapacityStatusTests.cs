@@ -11,6 +11,7 @@ using Magpie.Abstractions.Releases;
 using Magpie.Abstractions.Repositories;
 using Magpie.Abstractions.Security;
 using Magpie.Core;
+using Magpie.Core.Jobs;
 using Magpie.Core.Jobs.Fulfillment;
 using Magpie.Core.Jobs.Runtime;
 using Magpie.Core.Releases;
@@ -178,18 +179,42 @@ public sealed class ReleaseCapacityStatusTests
         _files.Setup(value => value.GetStorageCapacity(It.IsAny<string>()))
             .Returns(new StorageCapacity { VolumeId = "library", AvailableBytes = 99 });
         _client = new Mock<IDownloadService>();
-        _client.Setup(value => value.GrabAsync(It.IsAny<Release>(), It.IsAny<DownloadClient>(),
-                It.IsAny<IReadOnlyDictionary<string, string>>(), It.IsAny<string?>(), It.IsAny<bool>(),
+        _client
+            .Setup(value => value.GrabAsync(
+                It.IsAny<Release>(),
+                It.IsAny<DownloadClient>(),
+                It.IsAny<IReadOnlyDictionary<string, string>>(),
+                It.IsAny<ReleaseGrabContext?>(),
+                It.IsAny<bool>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(GrabResult.FromSuccess(new DownloadInfo
             {
                 ExternalId = "recovered-transfer",
                 Status = DownloadStatus.Downloading
             }));
-        _subject = new ReleaseService(hierarchy.Object, indexers.Object, _releases.Object, releaseScopes.Object,
-            downloadScopes, _downloads, new ReleaseBlockList(_downloads), Mock.Of<ISettingsRepository>(),
-            clients.Object, [integration.Object], _client.Object, roots.Object, _files.Object, audits, jobs,
-            _executions, transactions, events, evaluation.Object, [], _time, NullLogger<ReleaseService>.Instance);
+        _subject = new ReleaseService(
+            hierarchy.Object,
+            indexers.Object,
+            Mock.Of<IIndexerService>(),
+            _releases.Object,
+            releaseScopes.Object,
+            downloadScopes,
+            _downloads,
+            new ReleaseBlockList(_downloads),
+            Mock.Of<ISettingsRepository>(),
+            clients.Object,
+            [integration.Object],
+            _client.Object,
+            roots.Object,
+            _files.Object,
+            audits,
+            jobs,
+            transactions,
+            events,
+            evaluation.Object,
+            [],
+            _time,
+            NullLogger<ReleaseService>.Instance);
     }
 
     [TearDown]
@@ -207,8 +232,13 @@ public sealed class ReleaseCapacityStatusTests
             JsonSerializer.Deserialize<Release>(body, _bindingOptions)!,
             null,
             default).ConfigureAwait(false);
-        _client.Setup(value => value.GrabAsync(It.IsAny<Release>(), It.IsAny<DownloadClient>(),
-                It.IsAny<IReadOnlyDictionary<string, string>>(), It.IsAny<string?>(), It.IsAny<bool>(),
+        _client
+            .Setup(value => value.GrabAsync(
+                It.IsAny<Release>(),
+                It.IsAny<DownloadClient>(),
+                It.IsAny<IReadOnlyDictionary<string, string>>(),
+                It.IsAny<ReleaseGrabContext?>(),
+                It.IsAny<bool>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(new GrabResult { Success = false, ErrorMessage = "The client rejected the release." });
         var searched = new Release { Id = Guid.NewGuid(), Title = "Film", Protocol = "torrent" };
@@ -244,7 +274,7 @@ public sealed class ReleaseCapacityStatusTests
                 It.IsAny<Release>(),
                 It.IsAny<DownloadClient>(),
                 It.IsAny<IReadOnlyDictionary<string, string>>(),
-                It.IsAny<string?>(),
+                It.IsAny<ReleaseGrabContext?>(),
                 It.IsAny<bool>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(new GrabResult { Success = false, ErrorMessage = "The client rejected the release." });
@@ -264,21 +294,12 @@ public sealed class ReleaseCapacityStatusTests
         }
     }
 
-    [TestCase(
-        false,
-        DownloadStatus.Failed,
-        true,
-        "Previous attempt ended Failed 0.0s ago on client Client; backoff requires 10.0s.")]
-    [TestCase(
-        true,
-        DownloadStatus.Faulted,
-        false,
-        "Previous attempt ended Faulted 0.0s ago on client Client; backoff requires 10.0s.")]
+    [TestCase(false, DownloadStatus.Failed, true)]
+    [TestCase(true, DownloadStatus.Faulted, false)]
     public async Task AcquireAsync_BlocksOnlyAPermanentRejection_WhenTheClientRejectsThePayload(
         bool transient,
         DownloadStatus expectedStatus,
-        bool expectedBlocked,
-        string expectedRetryMessage)
+        bool expectedBlocked)
     {
         // Arrange
         var rejected = await _storedReleases.CreateAsync(
@@ -309,22 +330,20 @@ public sealed class ReleaseCapacityStatusTests
                 It.IsAny<Release>(),
                 It.IsAny<DownloadClient>(),
                 It.IsAny<IReadOnlyDictionary<string, string>>(),
-                It.IsAny<string?>(),
+                It.IsAny<ReleaseGrabContext?>(),
                 It.IsAny<bool>(),
                 It.IsAny<CancellationToken>()))
             .Returns((
                 Release release,
                 DownloadClient source,
                 IReadOnlyDictionary<string, string> settings,
-                string? contentType,
+                ReleaseGrabContext? context,
                 bool interactive,
                 CancellationToken token) =>
-                downloadService.GrabAsync(release, source, settings, contentType, interactive, token));
+                downloadService.GrabAsync(release, source, settings, context, interactive, token));
 
         // Act
         Assert.CatchAsync(() => _subject.AcquireAsync(rejected.Id, null, grabTargetContentHierarchyItemId: _node.Id));
-        var retry = Assert.CatchAsync(
-            () => _subject.AcquireAsync(rejected.Id, null, grabTargetContentHierarchyItemId: _node.Id));
         var statuses = await new ReleaseBlockList(_downloads).ResolveStatusesAsync([rejected], _node.Id, default)
             .ConfigureAwait(false);
 
@@ -335,7 +354,6 @@ public sealed class ReleaseCapacityStatusTests
                 statuses.GetValueOrDefault(rejected.Id),
                 Is.EqualTo((expectedStatus, (DownloadFailureReason?)DownloadFailureReason.ClientRejected)));
             Assert.That(ReleaseBlockList.Blocked(statuses).Contains(rejected.Id), Is.EqualTo(expectedBlocked));
-            Assert.That(retry!.Message, Is.EqualTo(expectedRetryMessage));
         }
     }
 
@@ -428,46 +446,162 @@ public sealed class ReleaseCapacityStatusTests
         }
     }
 
-    [TestCase(
-        100,
-        99,
-        "Waiting for destination capacity: insufficient free space. Required: 100 bytes. Available: 99 bytes.")]
-    [TestCase(
-        null,
-        99,
-        "Waiting for destination capacity: the capacity check is unavailable. Required: unknown. Available: 99 bytes.")]
-    [TestCase(
-        100,
-        null,
-        "Waiting for destination capacity: the capacity check is unavailable. " +
-        "Required: 100 bytes. Available: unknown.")]
-    public async Task GetReleaseViewAsync_RetainsCapacityReason_WhenStoredRetryIsReloaded(
-        long? size, long? available, string expected)
+    [TestCase(null)]
+    [TestCase(-1)]
+    public async Task AcquireAsync_GrabsTheRelease_WhenDestinationSpaceCannotBeRead(long? available)
+    {
+        // Arrange
+        _files.Setup(value => value.GetStorageCapacity(It.IsAny<string>()))
+            .Returns(available is { } bytes ? new StorageCapacity { AvailableBytes = bytes } : null);
+
+        // Act
+        var acquired = await _subject.AcquireAsync(_release.Id, null, grabTargetContentHierarchyItemId: _node.Id)
+            .ConfigureAwait(false);
+        _context.ChangeTracker.Clear();
+        var stored = await _context.Downloads.AsNoTracking().SingleAsync().ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(acquired!.Status, Is.EqualTo(DownloadStatus.Downloading));
+            Assert.That(stored.Status, Is.EqualTo(DownloadStatus.Downloading));
+            Assert.That(stored.FailureReason, Is.Null);
+            _client.Verify(
+                value => value.GrabAsync(
+                    It.IsAny<Release>(),
+                    It.IsAny<DownloadClient>(),
+                    It.IsAny<IReadOnlyDictionary<string, string>>(),
+                    It.IsAny<ReleaseGrabContext?>(),
+                    It.IsAny<bool>(),
+                    It.IsAny<CancellationToken>()),
+                Times.Once);
+        }
+    }
+
+    [TestCase(0)]
+    [TestCase(99)]
+    public async Task GetReleaseViewAsync_ShowsRetryableFault_WhenReleaseExceedsDestinationSpace(long available)
+    {
+        // Arrange
+        _files.Setup(value => value.GetStorageCapacity(It.IsAny<string>()))
+            .Returns(new StorageCapacity { AvailableBytes = available });
+        _release.IdentityKeys.Add(new ReleaseIdentityKey
+        {
+            Authority = "btih",
+            Value = "ffffffffffffffffffffffffffffffffffffffff"
+        });
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        // Act
+        var exception = Assert.ThrowsAsync<InvalidOperationException>(() =>
+            _subject.AcquireAsync(_release.Id, null, grabTargetContentHierarchyItemId: _node.Id));
+        _context.ChangeTracker.Clear();
+        var view = await _subject.GetReleaseViewAsync(_node.Id).ConfigureAwait(false);
+        var stored = await _context.Downloads.AsNoTracking().Include(value => value.ReleaseIdentityKeys)
+            .ToListAsync().ConfigureAwait(false);
+        var statuses = await new ReleaseBlockList(_downloads).ResolveStatusesAsync([_release], _node.Id, default)
+            .ConfigureAwait(false);
+        var scope = await _context.DownloadScopes.AsNoTracking().SingleAsync().ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(view![0].AcquisitionStatus, Is.EqualTo(DownloadStatus.Faulted));
+            Assert.That(view[0].FailureReason, Is.EqualTo(DownloadFailureReason.InsufficientDestinationSpace));
+            Assert.That(stored, Has.Count.EqualTo(1));
+            Assert.That(stored[0].StatusReason, Is.EqualTo(exception!.Message));
+            Assert.That(stored[0].ExternalId, Is.Empty);
+            Assert.That(stored[0].FailedAt, Is.EqualTo(new DateTime(2026, 9, 22, 12, 0, 0, DateTimeKind.Utc)));
+            Assert.That(
+                stored[0].ReleaseIdentityKeys.Single().Value,
+                Is.EqualTo("ffffffffffffffffffffffffffffffffffffffff"));
+            Assert.That(scope.DownloadId, Is.EqualTo(stored[0].Id));
+            Assert.That(scope.ContentHierarchyItemId, Is.EqualTo(_node.Id));
+            Assert.That(ReleaseBlockList.Blocked(statuses), Is.Empty);
+            Assert.That(await _context.JobExecutions.CountAsync().ConfigureAwait(false), Is.Zero);
+            _client.VerifyNoOtherCalls();
+        }
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task AcquireAsync_GrabsImmediatelyOnce_WhenSpaceBecomesAvailableAfterCapacityFault(bool interactive)
+    {
+        // Arrange
+        Assert.ThrowsAsync<InvalidOperationException>(() =>
+            _subject.AcquireAsync(
+                _release.Id,
+                null,
+                interactive: interactive,
+                grabTargetContentHierarchyItemId: _node.Id));
+
+        // Act
+        _files.Setup(value => value.GetStorageCapacity(It.IsAny<string>()))
+            .Returns(new StorageCapacity { AvailableBytes = 100 });
+        var acquired = await _subject.AcquireAsync(
+            _release.Id,
+            null,
+            interactive: interactive,
+            grabTargetContentHierarchyItemId: _node.Id)
+            .ConfigureAwait(false);
+        var repeated = await _subject.AcquireAsync(
+            _release.Id,
+            null,
+            interactive: interactive,
+            grabTargetContentHierarchyItemId: _node.Id)
+            .ConfigureAwait(false);
+        _context.ChangeTracker.Clear();
+        var stored = await _context.Downloads.AsNoTracking().ToListAsync()
+            .ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(acquired!.Status, Is.EqualTo(DownloadStatus.Downloading));
+            Assert.That(repeated!.Id, Is.EqualTo(acquired.Id));
+            Assert.That(stored, Has.Count.EqualTo(2));
+            Assert.That(
+                stored.Single(value => value.Status == DownloadStatus.Faulted).FailedAt,
+                Is.EqualTo(new DateTime(2026, 9, 22, 12, 0, 0, DateTimeKind.Utc)));
+            Assert.That(acquired.FailureReason, Is.Null);
+            Assert.That(
+                await _context.JobExecutions.Select(value => value.JobType).ToListAsync().ConfigureAwait(false),
+                Is.EqualTo([MagpieJobs.Types.DownloadRefresh]));
+            _client.Verify(
+                value => value.GrabAsync(
+                    It.IsAny<Release>(),
+                    It.IsAny<DownloadClient>(),
+                    It.IsAny<IReadOnlyDictionary<string, string>>(),
+                    It.IsAny<ReleaseGrabContext?>(),
+                    It.IsAny<bool>(),
+                    It.IsAny<CancellationToken>()),
+                Times.Once);
+        }
+    }
+
+    [TestCase(null, 0)]
+    [TestCase(null, null)]
+    [TestCase(-1, 0)]
+    [TestCase(-1, null)]
+    public async Task AcquireAsync_GrabsWithoutCapacityWait_WhenReleaseSizeIsUnknown(long? size, long? available)
     {
         // Arrange
         _release.Size = size;
         await _context.SaveChangesAsync().ConfigureAwait(false);
         _files.Setup(value => value.GetStorageCapacity(It.IsAny<string>()))
-            .Returns(available is { } bytes ? new StorageCapacity { VolumeId = "library", AvailableBytes = bytes }
-                : null);
+            .Returns(available is { } bytes ? new StorageCapacity { AvailableBytes = bytes } : null);
 
         // Act
-        await _subject.AcquireAsync(_release.Id, null, grabTargetContentHierarchyItemId: _node.Id)
+        var acquired = await _subject.AcquireAsync(_release.Id, null, grabTargetContentHierarchyItemId: _node.Id)
             .ConfigureAwait(false);
-        _context.ChangeTracker.Clear();
-        var view = await _subject.GetReleaseViewAsync(_node.Id).ConfigureAwait(false);
-        var stored = await _context.JobExecutions.AsNoTracking().SingleAsync().ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(stored.Status, Is.EqualTo(JobExecutionStatus.Queued));
-            Assert.That(stored.StatusMessage, Is.EqualTo(expected));
-            Assert.That(view![0].AcquisitionWaitingReason, Is.EqualTo(expected));
-            Assert.That(view[0].AcquisitionStatus, Is.Null);
-            Assert.That(view[0].FailureReason, Is.Null);
-            Assert.That(await _context.Downloads.CountAsync().ConfigureAwait(false), Is.Zero);
-            _client.VerifyNoOtherCalls();
+            Assert.That(acquired!.Status, Is.EqualTo(DownloadStatus.Downloading));
+            Assert.That(await _context.Downloads.CountAsync().ConfigureAwait(false), Is.EqualTo(1));
+            Assert.That(await _context.JobExecutions.CountAsync().ConfigureAwait(false), Is.Zero);
+            _files.Verify(value => value.GetStorageCapacity(It.IsAny<string>()), Times.Never);
         }
     }
 
@@ -495,234 +629,7 @@ public sealed class ReleaseCapacityStatusTests
     }
 
     [Test]
-    public async Task GetReleaseViewAsync_UpdatesReasonAndClearsOnRecovery_WhenRepeatedChecksCoalesce()
-    {
-        // Arrange
-        await _subject.AcquireAsync(_release.Id, null, grabTargetContentHierarchyItemId: _node.Id)
-            .ConfigureAwait(false);
-        _time.Advance(TimeSpan.FromMinutes(1));
-        _files.Setup(value => value.GetStorageCapacity(It.IsAny<string>())).Returns((StorageCapacity?)null);
-
-        // Act
-        await _subject.AcquireAsync(_release.Id, null, grabTargetContentHierarchyItemId: _node.Id)
-            .ConfigureAwait(false);
-        _context.ChangeTracker.Clear();
-        var waiting = await _subject.GetReleaseViewAsync(_node.Id).ConfigureAwait(false);
-        var retry = await _context.JobExecutions.AsNoTracking().SingleAsync().ConfigureAwait(false);
-        _time.Advance(TimeSpan.FromMinutes(10));
-        _files.Setup(value => value.GetStorageCapacity(It.IsAny<string>()))
-            .Returns(new StorageCapacity { VolumeId = "library", AvailableBytes = 100 });
-        var job = new ReleaseDownloadItemJob(_subject, _downloads, Mock.Of<IProgressReporter>());
-        var retryContext = new JobContext(retry.Id, null, null, null, JobExecutionMode.Queue, retry.Parameters, null);
-        await job.ExecuteAsync(retryContext).ConfigureAwait(false);
-        _context.ChangeTracker.Clear();
-        var recovered = await _subject.GetReleaseViewAsync(_node.Id).ConfigureAwait(false);
-        await job.ExecuteAsync(retryContext).ConfigureAwait(false);
-
-        // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(waiting![0].AcquisitionWaitingReason, Is.EqualTo("Waiting for destination capacity: " +
-                "the capacity check is unavailable. Required: 100 bytes. Available: unknown."));
-            Assert.That(recovered![0].AcquisitionWaitingReason, Is.Null);
-            Assert.That(recovered[0].AcquisitionStatus, Is.EqualTo(DownloadStatus.Downloading));
-            Assert.That(await _context.JobExecutions.CountAsync().ConfigureAwait(false), Is.EqualTo(1));
-            Assert.That(await _context.Downloads.CountAsync().ConfigureAwait(false), Is.EqualTo(1));
-            Assert.That(await _context.DownloadScopes.CountAsync().ConfigureAwait(false), Is.EqualTo(1));
-            _client.Verify(value => value.GrabAsync(It.IsAny<Release>(), It.IsAny<DownloadClient>(),
-                It.IsAny<IReadOnlyDictionary<string, string>>(), It.IsAny<string?>(), It.IsAny<bool>(),
-                It.IsAny<CancellationToken>()), Times.Once);
-        }
-    }
-
-    [TestCase(JobExecutionStatus.Completed)]
-    [TestCase(JobExecutionStatus.Cancelled)]
-    [TestCase(JobExecutionStatus.CancellationRequested)]
-    [TestCase(JobExecutionStatus.Failed)]
-    public async Task GetReleaseViewAsync_ClearsCapacityReason_WhenRetryDoesNotWait(JobExecutionStatus status)
-    {
-        // Arrange
-        await _subject.AcquireAsync(_release.Id, null, grabTargetContentHierarchyItemId: _node.Id)
-            .ConfigureAwait(false);
-
-        // Act
-        await _context.JobExecutions.ExecuteUpdateAsync(update => update.SetProperty(value => value.Status, status))
-            .ConfigureAwait(false);
-        _context.ChangeTracker.Clear();
-        var view = await _subject.GetReleaseViewAsync(_node.Id).ConfigureAwait(false);
-
-        // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(view![0].AcquisitionWaitingReason, Is.Null);
-            Assert.That(view[0].AcquisitionStatus, Is.Null);
-            Assert.That(await _context.Downloads.CountAsync().ConfigureAwait(false), Is.Zero);
-        }
-    }
-
-    [Test]
-    public async Task ExecuteAsync_PreservesNewIntent_WhenThePreviousDownloadHasTheSameTimestamp()
-    {
-        // Arrange
-        _files.Setup(value => value.GetStorageCapacity(It.IsAny<string>()))
-            .Returns(new StorageCapacity { VolumeId = "library", AvailableBytes = 100 });
-        var previous = await _subject.AcquireAsync(_release.Id, null,
-            grabTargetContentHierarchyItemId: _node.Id).ConfigureAwait(false);
-        await _downloads.UpdateRefreshedStatusAsync(previous!.Id, DownloadStatus.Cancelled, "cancelled", null,
-            null, null, null, false, null, null, _time.GetUtcNow().UtcDateTime, null).ConfigureAwait(false);
-        _files.Setup(value => value.GetStorageCapacity(It.IsAny<string>()))
-            .Returns(new StorageCapacity { VolumeId = "library", AvailableBytes = 99 });
-
-        // Act
-        await _subject.AcquireAsync(_release.Id, null, grabTargetContentHierarchyItemId: _node.Id)
-            .ConfigureAwait(false);
-        _context.ChangeTracker.Clear();
-        var waiting = await _subject.GetReleaseViewAsync(_node.Id).ConfigureAwait(false);
-        var retry = await _context.JobExecutions.AsNoTracking().SingleAsync().ConfigureAwait(false);
-        _files.Setup(value => value.GetStorageCapacity(It.IsAny<string>()))
-            .Returns(new StorageCapacity { VolumeId = "library", AvailableBytes = 100 });
-        var job = new ReleaseDownloadItemJob(_subject, _downloads, Mock.Of<IProgressReporter>());
-        var execution = new JobContext(retry.Id, null, null, null, JobExecutionMode.Queue, retry.Parameters, null);
-        await job.ExecuteAsync(execution).ConfigureAwait(false);
-        await job.ExecuteAsync(execution).ConfigureAwait(false);
-
-        // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(waiting![0].AcquisitionWaitingReason, Does.Contain("insufficient free space"));
-            Assert.That(await _context.Downloads.CountAsync().ConfigureAwait(false), Is.EqualTo(2));
-            _client.Verify(value => value.GrabAsync(It.IsAny<Release>(), It.IsAny<DownloadClient>(),
-                It.IsAny<IReadOnlyDictionary<string, string>>(), It.IsAny<string?>(), It.IsAny<bool>(),
-                It.IsAny<CancellationToken>()), Times.Exactly(2));
-        }
-    }
-
-    [TestCase(false, 1, 1)]
-    [TestCase(true, 2, 2)]
-    public async Task ExecuteAsync_RetainsOnlyCurrentIntent_WhenAnInterveningAcquisitionWasCancelled(
-        bool requestAgain, int expectedJobs, int expectedDownloads)
-    {
-        // Arrange
-        await _subject.AcquireAsync(_release.Id, null, grabTargetContentHierarchyItemId: _node.Id)
-            .ConfigureAwait(false);
-        var original = await _context.JobExecutions.AsNoTracking().SingleAsync().ConfigureAwait(false);
-        _time.Advance(TimeSpan.FromMinutes(1));
-        _files.Setup(value => value.GetStorageCapacity(It.IsAny<string>()))
-            .Returns(new StorageCapacity { VolumeId = "library", AvailableBytes = 100 });
-        var intervening = await _subject.AcquireAsync(_release.Id, null,
-            grabTargetContentHierarchyItemId: _node.Id).ConfigureAwait(false);
-        await _downloads.UpdateRefreshedStatusAsync(intervening!.Id, DownloadStatus.Cancelled, "cancelled", null,
-            null, null, null, false, null, null, _time.GetUtcNow().UtcDateTime, null).ConfigureAwait(false);
-        _time.Advance(TimeSpan.FromMinutes(1));
-        _files.Setup(value => value.GetStorageCapacity(It.IsAny<string>()))
-            .Returns(new StorageCapacity { VolumeId = "library", AvailableBytes = 99 });
-        var correlation = new Guid("55555555-5555-5555-5555-555555555555");
-
-        // Act
-        if (requestAgain)
-        {
-            await _subject.AcquireAsync(_release.Id, null, correlation,
-                grabTargetContentHierarchyItemId: _node.Id).ConfigureAwait(false);
-            _time.Advance(TimeSpan.FromMinutes(1));
-            await _subject.AcquireAsync(_release.Id, null, Guid.NewGuid(),
-                grabTargetContentHierarchyItemId: _node.Id).ConfigureAwait(false);
-        }
-
-        _context.ChangeTracker.Clear();
-        var waiting = await _subject.GetReleaseViewAsync(_node.Id).ConfigureAwait(false);
-        var retries = await _context.JobExecutions.AsNoTracking().OrderBy(value => value.CreatedAt)
-            .ToListAsync().ConfigureAwait(false);
-        var job = new ReleaseDownloadItemJob(_subject, _downloads, Mock.Of<IProgressReporter>());
-        await job.ExecuteAsync(new JobContext(original.Id, null, null, null, JobExecutionMode.Queue,
-            original.Parameters, null)).ConfigureAwait(false);
-        _files.Setup(value => value.GetStorageCapacity(It.IsAny<string>()))
-            .Returns(new StorageCapacity { VolumeId = "library", AvailableBytes = 100 });
-        var current = retries[^1];
-        var execution = new JobContext(current.Id, null, current.CorrelationId, null, JobExecutionMode.Queue,
-            current.Parameters, null);
-        await job.ExecuteAsync(execution).ConfigureAwait(false);
-        await job.ExecuteAsync(execution).ConfigureAwait(false);
-        var recovered = await _subject.GetReleaseViewAsync(_node.Id).ConfigureAwait(false);
-
-        // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(retries, Has.Count.EqualTo(expectedJobs));
-            Assert.That(await _context.Downloads.CountAsync().ConfigureAwait(false), Is.EqualTo(expectedDownloads));
-            Assert.That(recovered![0].AcquisitionWaitingReason, Is.Null);
-            Assert.That(retries[0].Parameters["capacityDeferredAt"], Is.EqualTo("2026-09-22T12:00:00.0000000Z"));
-            if (requestAgain)
-            {
-                Assert.That(waiting![0].AcquisitionWaitingReason, Does.Contain("insufficient free space"));
-                Assert.That(current.Parameters["capacityPreviousDownloadId"], Is.EqualTo(intervening.Id.ToString("D")));
-                Assert.That(current.Parameters["capacityDeferredAt"], Is.EqualTo("2026-09-22T12:02:00.0000000Z"));
-                Assert.That(current.CorrelationId, Is.EqualTo(correlation));
-                Assert.That(current.CreatedAt, Is.EqualTo(new DateTime(2026, 9, 22, 12, 2, 0, DateTimeKind.Utc)));
-            }
-            else
-            {
-                Assert.That(waiting![0].AcquisitionWaitingReason, Is.Null);
-            }
-
-            _client.Verify(value => value.GrabAsync(It.IsAny<Release>(), It.IsAny<DownloadClient>(),
-                It.IsAny<IReadOnlyDictionary<string, string>>(), It.IsAny<string?>(), It.IsAny<bool>(),
-                It.IsAny<CancellationToken>()), Times.Exactly(expectedDownloads));
-        }
-    }
-
-    [TestCase("releaseId")]
-    [TestCase("contentHierarchyItemId")]
-    public async Task GetReleaseViewAsync_OmitsCapacityReason_WhenRetryBelongsToAnotherTarget(string parameter)
-    {
-        // Arrange
-        await _subject.AcquireAsync(_release.Id, null, grabTargetContentHierarchyItemId: _node.Id)
-            .ConfigureAwait(false);
-        var retry = await _executions.QueryAllAsync(new JobExecutionQuery()).ConfigureAwait(false);
-        retry[0].Parameters[parameter] = Guid.NewGuid().ToString("D");
-
-        // Act
-        await _executions.UpdateAsync(retry[0], null).ConfigureAwait(false);
-        _context.ChangeTracker.Clear();
-        var view = await _subject.GetReleaseViewAsync(_node.Id).ConfigureAwait(false);
-
-        // Assert
-        Assert.That(view![0].AcquisitionWaitingReason, Is.Null);
-    }
-
-    [TestCase(DownloadStatus.Failed)]
-    [TestCase(DownloadStatus.Cancelled)]
-    public async Task GetReleaseViewAsync_ShowsNewCapacityWait_WhenAnOlderTransferIsTerminal(DownloadStatus status)
-    {
-        // Arrange
-        var client = await _context.DownloadClients.AsNoTracking().SingleAsync().ConfigureAwait(false);
-        await _downloads.CreateAsync(new Download
-        {
-            Title = "Old transfer",
-            ExternalId = "old-transfer",
-            ReleaseId = _release.Id,
-            DownloadClientId = client.Id,
-            Status = status
-        }, null).ConfigureAwait(false);
-        _time.Advance(TimeSpan.FromMinutes(1));
-
-        // Act
-        await _subject.AcquireAsync(_release.Id, null, grabTargetContentHierarchyItemId: _node.Id)
-            .ConfigureAwait(false);
-        _context.ChangeTracker.Clear();
-        var view = await _subject.GetReleaseViewAsync(_node.Id).ConfigureAwait(false);
-
-        // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(view![0].AcquisitionWaitingReason, Is.EqualTo("Waiting for destination capacity: " +
-                "insufficient free space. Required: 100 bytes. Available: 99 bytes."));
-            Assert.That(await _context.Downloads.CountAsync().ConfigureAwait(false), Is.EqualTo(1));
-            _client.VerifyNoOtherCalls();
-        }
-    }
-
-    [Test]
-    public async Task AcquireAsync_StopsBeforeTheCapacityWait_WhenAnOlderTransferOfTheKeylessReleaseWasImported()
+    public async Task AcquireAsync_StopsBeforeTheCapacityCheck_WhenAnOlderTransferOfTheKeylessReleaseWasImported()
     {
         // Arrange
         var client = await _context.DownloadClients.AsNoTracking().SingleAsync().ConfigureAwait(false);
@@ -739,21 +646,18 @@ public sealed class ReleaseCapacityStatusTests
         // Act
         var download = await _subject.AcquireAsync(_release.Id, null, grabTargetContentHierarchyItemId: _node.Id)
             .ConfigureAwait(false);
-        _context.ChangeTracker.Clear();
-        var view = await _subject.GetReleaseViewAsync(_node.Id).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
         {
             Assert.That(download, Is.Null);
-            Assert.That(view![0].AcquisitionWaitingReason, Is.Null);
             Assert.That(await _context.Downloads.CountAsync().ConfigureAwait(false), Is.EqualTo(1));
             _client.VerifyNoOtherCalls();
         }
     }
 
     [Test]
-    public async Task GetReleaseViewAsync_ShowsCapacityWait_WhenEquivalentReleaseSourcesCoalesce()
+    public async Task GetReleaseViewAsync_ShowsCapacityFault_WhenEquivalentReleaseSourcesCoalesce()
     {
         // Arrange
         _release.IdentityKeys.Add(new ReleaseIdentityKey
@@ -777,8 +681,8 @@ public sealed class ReleaseCapacityStatusTests
             .ReturnsAsync(new PagedList<Release> { Items = [other, _release] });
 
         // Act
-        await _subject.AcquireAsync(_release.Id, null, grabTargetContentHierarchyItemId: _node.Id)
-            .ConfigureAwait(false);
+        Assert.ThrowsAsync<InvalidOperationException>(() =>
+            _subject.AcquireAsync(_release.Id, null, grabTargetContentHierarchyItemId: _node.Id));
         _context.ChangeTracker.Clear();
         var view = await _subject.GetReleaseViewAsync(_node.Id).ConfigureAwait(false);
 
@@ -786,8 +690,8 @@ public sealed class ReleaseCapacityStatusTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(view, Has.Count.EqualTo(1));
-            Assert.That(view![0].AcquisitionWaitingReason, Is.EqualTo("Waiting for destination capacity: " +
-                "insufficient free space. Required: 100 bytes. Available: 99 bytes."));
+            Assert.That(view![0].AcquisitionStatus, Is.EqualTo(DownloadStatus.Faulted));
+            Assert.That(view[0].FailureReason, Is.EqualTo(DownloadFailureReason.InsufficientDestinationSpace));
         }
     }
 }

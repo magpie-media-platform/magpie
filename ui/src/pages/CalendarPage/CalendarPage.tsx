@@ -9,10 +9,12 @@ import {
     SquaresFourIcon,
     RowsIcon,
     CalendarDotsIcon,
+    WarningCircleIcon,
 } from '@phosphor-icons/react';
 
 import { Button } from '@/components/ui/Button';
 import { Alert } from '@/components/ui/Alert';
+import { EmptyState } from '@/components/ui/EmptyState';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { Slot } from '@/components/ui/Slot';
@@ -91,7 +93,8 @@ export function CalendarPage() {
         }
     }, [view, currentDate]);
 
-    const { events, isLoading, isTruncated, refetch } = useCalendar(dateRange);
+    const { events, isLoading, isTruncated, error, refetch } = useCalendar(dateRange);
+    const loadFailed = Boolean(error) && events.length === 0;
 
     const getEventsForDate = useCallback(
         (date: Date): CalendarEvent[] => {
@@ -299,7 +302,15 @@ export function CalendarPage() {
                         </div>
                     )}
 
-                    {!isLoading && view === 'month' && (
+                    {!isLoading && loadFailed && (
+                        <EmptyState
+                            icon={<WarningCircleIcon weight="duotone" />}
+                            title="Failed to load calendar events"
+                            onRetry={refetch}
+                        />
+                    )}
+
+                    {!isLoading && !loadFailed && view === 'month' && (
                         <MonthView
                             currentDate={currentDate}
                             getEventsForDate={getEventsForDate}
@@ -307,7 +318,7 @@ export function CalendarPage() {
                         />
                     )}
 
-                    {!isLoading && view === 'week' && (
+                    {!isLoading && !loadFailed && view === 'week' && (
                         <WeekView
                             currentDate={currentDate}
                             getEventsForDate={getEventsForDate}
@@ -316,7 +327,7 @@ export function CalendarPage() {
                         />
                     )}
 
-                    {!isLoading && view === 'day' && (
+                    {!isLoading && !loadFailed && view === 'day' && (
                         <CalendarEventList
                             viewEvents={viewEvents}
                             onEventClick={handleEventClick}
@@ -328,7 +339,7 @@ export function CalendarPage() {
                         />
                     )}
 
-                    {!isLoading && view === 'list' && (
+                    {!isLoading && !loadFailed && view === 'list' && (
                         <CalendarEventList
                             viewEvents={viewEvents}
                             onEventClick={handleEventClick}

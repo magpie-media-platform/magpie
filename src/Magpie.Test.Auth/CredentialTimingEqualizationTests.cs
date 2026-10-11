@@ -144,7 +144,11 @@ public class CredentialTimingEqualizationTests
         _userService.Setup(s => s.GetAuthenticationUserAsync("alice", It.IsAny<CancellationToken>()))
             .ReturnsAsync(realUser);
         _userRepository
-            .Setup(r => r.RecordFailedLoginAsync(realUser.Id, It.IsAny<DateTime?>(), It.IsAny<CancellationToken>()))
+            .Setup(r => r.RecordFailedLoginAsync(
+                realUser.Id,
+                It.IsAny<int>(),
+                It.IsAny<DateTime>(),
+                It.IsAny<CancellationToken>()))
             .ReturnsAsync(new FailedLoginResult(1, null));
 
         // Act

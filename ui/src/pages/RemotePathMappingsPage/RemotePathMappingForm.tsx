@@ -3,6 +3,7 @@ import { FlaskIcon, FloppyDiskIcon, XIcon } from '@phosphor-icons/react';
 
 import { useUnsavedChangesGuard } from '@/hooks/useUnsavedChangesGuard';
 import { useExternalChangeConflict } from '@/hooks/useExternalChangeConflict';
+import { useInstanceName } from '@/hooks/useInstanceName';
 
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
@@ -100,6 +101,7 @@ export function RemotePathMappingForm({
     isSubmitting = false,
     isTestingLocalPath = false,
 }: RemotePathMappingFormProps): ReactNode {
+    const instanceName = useInstanceName();
     const isEditing = !!initialValues?.id;
 
     const [values, setValues] = useState<RemotePathMappingFormValues>(initialValues ?? emptyValues);
@@ -273,7 +275,7 @@ export function RemotePathMappingForm({
                     <SheetDescription>
                         {isEditing
                             ? 'Update the remote path mapping.'
-                            : 'Translate a download client path into one Magpie can read at import time.'}
+                            : `Translate a download client path into one ${instanceName} can read at import time.`}
                     </SheetDescription>
                 </SheetHeader>
 
@@ -339,8 +341,8 @@ export function RemotePathMappingForm({
                                 data-field="local-path"
                             />
                             <p className="remote-path-mapping-form__help">
-                                Magpie uses this path to read the files. Magpie replaces the remote prefix with this
-                                value during import.
+                                {instanceName} uses this path to read the files. {instanceName} replaces the remote
+                                prefix with this value during import.
                             </p>
                         </div>
                     </div>

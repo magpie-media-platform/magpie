@@ -9,7 +9,7 @@ import './Breadcrumb.css';
 export interface BreadcrumbItem {
     id: string;
 
-    label: string;
+    label: ReactNode;
 
     to: To;
 

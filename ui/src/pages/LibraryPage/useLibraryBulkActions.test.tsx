@@ -273,6 +273,59 @@ describe('useLibraryBulkActions', () => {
             });
         });
 
+        it('previews the files of the selected ids once the dialog is open with the file choice on', async () => {
+            vi.mocked(api.apiPost).mockResolvedValue([{ path: '/media/film.mkv', size: 3124000000 }]);
+            const { result } = renderBulkActions();
+
+            act(() => result.current.selection.toggleRow('content-1', true));
+            act(() => result.current.actions.openBulkDeleteConfirm());
+            expect(api.apiPost).not.toHaveBeenCalled();
+            act(() => result.current.actions.setBulkDeleteFiles(true));
+
+            await waitFor(() => {
+                expect(result.current.actions.bulkDeletePreview.data).toEqual([
+                    { path: '/media/film.mkv', size: 3124000000 },
+                ]);
+            });
+            expect(api.apiPost).toHaveBeenCalledWith('/content/bulk/delete-preview', {
+                ids: ['content-1'],
+                deleteFromLibrary: true,
+            });
+        });
+
+        it('does not fetch the preview again when the delete invalidates the content queries', async () => {
+            vi.mocked(api.apiPost).mockImplementation((path) =>
+                Promise.resolve(path === '/content/bulk/delete' ? { count: 1, error: null } : []),
+            );
+            const { result } = renderBulkActions();
+
+            act(() => result.current.selection.toggleRow('content-1', true));
+            act(() => result.current.actions.openBulkDeleteConfirm());
+            act(() => result.current.actions.setBulkDeleteFiles(true));
+            await waitFor(() => expect(result.current.actions.bulkDeletePreview.data).toEqual([]));
+            await act(async () => {
+                await result.current.actions.handleConfirmBulkDelete();
+            });
+
+            expect(api.apiPost).toHaveBeenCalledTimes(2);
+        });
+
+        it('previews the files of every matching item with the scope filter', async () => {
+            vi.mocked(api.apiPost).mockResolvedValue([]);
+            const { result } = renderBulkActions();
+
+            act(() => result.current.selection.selectAllAcrossPages());
+            act(() => result.current.actions.openBulkDeleteConfirm());
+            act(() => result.current.actions.setBulkDeleteFiles(true));
+
+            await waitFor(() => {
+                expect(api.apiPost).toHaveBeenCalledWith('/content/bulk/delete-preview', {
+                    filter: SCOPE_FILTER,
+                    deleteFromLibrary: true,
+                });
+            });
+        });
+
         it('refuses to widen the target set when rows were deselected inside a select-all', async () => {
             const { result } = renderBulkActions();
 

@@ -8,6 +8,7 @@ using Magpie.Data;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
+using Magpie.Models.Filtering;
 using Magpie.Models.Paging;
 
 using Microsoft.Data.Sqlite;
@@ -385,5 +386,165 @@ public sealed class WishlistDiscoveredRepositoryTests
 
         // Assert
         Assert.That(page.Items.Single().PosterUrl, Is.EqualTo("https://example.test/poster"));
+    }
+
+    [Test]
+    public async Task ListEnrichedAsync_ReturnsPrecisionOfEarliestContribution_WhenContributionsDiffer()
+    {
+        // Arrange
+        var container = new MetadataContainer();
+        var later = new MetadataContribution
+        {
+            ProviderType = "test-provider",
+            MetadataContainer = container,
+            Ordinal = 0,
+            PublishDate = new DateTime(2005, 6, 15, 0, 0, 0, DateTimeKind.Utc),
+            PublishDatePrecision = TemporalPrecision.Day,
+        };
+        later.ExternalIds.Add(new() { Source = "test-source", Value = "one" });
+        var earlier = new MetadataContribution
+        {
+            ProviderType = "other-provider",
+            MetadataContainer = container,
+            Ordinal = 1,
+            PublishDate = new DateTime(1999, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+            PublishDatePrecision = TemporalPrecision.Year,
+        };
+        _context.MetadataContributions.AddRange(later, earlier);
+        _context.ContentHierarchyItems.Add(new()
+        {
+            ContentType = "test-type",
+            Level = "test-level",
+            Slug = "test",
+            Name = "Test",
+            MetadataContainer = container
+        });
+        _context.WishlistDiscovered.Add(new()
+        {
+            WishlistId = _wishlistId,
+            ExternalIdSource = "test-source",
+            ExternalId = "one"
+        });
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        // Act
+        var page = await _subject.ListEnrichedAsync(
+            _wishlistId,
+            new() { Paging = new() { PageNumber = 1, PageSize = 10 } }).ConfigureAwait(false);
+
+        // Assert
+        var row = page.Items.Single();
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(row.PublishDate, Is.EqualTo(new DateTime(1999, 1, 1, 0, 0, 0, DateTimeKind.Utc)));
+            Assert.That(row.PublishDatePrecision, Is.EqualTo(TemporalPrecision.Year));
+        }
+    }
+
+    [Test]
+    public async Task ListEnrichedAsync_ReturnsEarliestRowOfLibraryItem_WhenRowsLinkToOneLibraryItem()
+    {
+        // Arrange
+        var container = new MetadataContainer();
+        var contribution = new MetadataContribution { ProviderType = "tmdb", MetadataContainer = container };
+        contribution.ExternalIds.Add(new() { Source = "tmdb", Value = "617126", Ordinal = 0 });
+        contribution.ExternalIds.Add(new() { Source = "wikidata", Value = "Q105105219", Ordinal = 1 });
+        _context.MetadataContributions.Add(contribution);
+        _context.ContentHierarchyItems.Add(new()
+        {
+            ContentType = "movie",
+            Level = "movie",
+            Slug = "the-fantastic-4-first-steps",
+            Name = "The Fantastic 4: First Steps",
+            MetadataContainer = container
+        });
+        _context.WishlistDiscovered.AddRange(
+            new()
+            {
+                WishlistId = _wishlistId,
+                ExternalIdSource = "wikidata",
+                ExternalId = "Q105105219",
+                Title = "The Fantastic Four: First Steps",
+                DiscoveredAt = new DateTime(2026, 8, 24, 2, 47, 57, DateTimeKind.Utc)
+            },
+            new()
+            {
+                WishlistId = _wishlistId,
+                ExternalIdSource = "tmdb",
+                ExternalId = "617126",
+                Title = "The Fantastic 4: First Steps",
+                DiscoveredAt = new DateTime(2026, 8, 24, 2, 42, 30, DateTimeKind.Utc)
+            },
+            new()
+            {
+                WishlistId = _wishlistId,
+                ExternalIdSource = "tmdb",
+                ExternalId = "1979",
+                Title = "Fantastic Four: Rise of the Silver Surfer",
+                DiscoveredAt = new DateTime(2026, 8, 24, 3, 0, 36, DateTimeKind.Utc)
+            });
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        // Act
+        var page = await _subject.ListEnrichedAsync(
+            _wishlistId,
+            new() { Paging = new() { PageNumber = 1, PageSize = 10 } }).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(
+                page.Items.Select(row => row.Title),
+                Is.EqualTo(["Fantastic Four: Rise of the Silver Surfer", "The Fantastic 4: First Steps"]));
+            Assert.That(page.TotalItems, Is.EqualTo(2));
+        }
+    }
+
+    [Test]
+    public async Task GetCountsAsync_CountsLibraryItemOnce_WhenRowsLinkToOneLibraryItem()
+    {
+        // Arrange
+        var container = new MetadataContainer();
+        var contribution = new MetadataContribution { ProviderType = "tmdb", MetadataContainer = container };
+        contribution.ExternalIds.Add(new() { Source = "tmdb", Value = "617126", Ordinal = 0 });
+        contribution.ExternalIds.Add(new() { Source = "wikidata", Value = "Q105105219", Ordinal = 1 });
+        _context.MetadataContributions.Add(contribution);
+        _context.ContentHierarchyItems.Add(new()
+        {
+            ContentType = "movie",
+            Level = "movie",
+            Slug = "the-fantastic-4-first-steps",
+            Name = "The Fantastic 4: First Steps",
+            MetadataContainer = container
+        });
+        _context.WishlistDiscovered.AddRange(
+            new()
+            {
+                WishlistId = _wishlistId,
+                ExternalIdSource = "tmdb",
+                ExternalId = "617126",
+                Title = "The Fantastic 4: First Steps",
+                DiscoveredAt = new DateTime(2026, 8, 24, 2, 42, 30, DateTimeKind.Utc)
+            },
+            new()
+            {
+                WishlistId = _wishlistId,
+                ExternalIdSource = "wikidata",
+                ExternalId = "Q105105219",
+                Title = "The Fantastic Four: First Steps",
+                DiscoveredAt = new DateTime(2026, 8, 24, 2, 47, 57, DateTimeKind.Utc)
+            });
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        // Act
+        var counts = await _subject.GetCountsAsync(_wishlistId, null).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(counts.TotalDiscovered, Is.EqualTo(1));
+            Assert.That(counts.InLibrary, Is.EqualTo(1));
+            Assert.That(counts.Missing, Is.EqualTo(1));
+        }
     }
 }

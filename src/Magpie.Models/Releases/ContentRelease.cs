@@ -85,24 +85,9 @@ public sealed record ContentRelease
     public bool? MeetsCutoff { get; init; }
 
     /// <summary>
-    /// Whether the release matches the requested content.
-    /// </summary>
-    public bool? IsMatch { get; init; }
-
-    /// <summary>
-    /// The reason for the rejection of the release.
-    /// </summary>
-    public string? RejectionReason { get; init; }
-
-    /// <summary>
     /// The acquisition status of the release.
     /// </summary>
     public DownloadStatus? AcquisitionStatus { get; init; }
-
-    /// <summary>
-    /// The reason that acquisition waits before a download starts.
-    /// </summary>
-    public string? AcquisitionWaitingReason { get; init; }
 
     /// <summary>
     /// The reason that the acquisition failed.

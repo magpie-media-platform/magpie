@@ -1,6 +1,6 @@
 import { act, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ListFilterToolbar, type ListFilterField } from './ListFilterToolbar';
 
@@ -21,7 +21,126 @@ const emptyFields: ListFilterField[] = [
 ];
 
 describe('ListFilterToolbar', () => {
-    afterEach(() => vi.restoreAllMocks());
+    beforeEach(() => vi.stubGlobal('innerWidth', 390));
+
+    afterEach(() => {
+        vi.restoreAllMocks();
+        vi.unstubAllGlobals();
+    });
+
+    it('TableLayout_RendersNoFilterOrSortControls_WhenTableHeadersProvideThem', () => {
+        // Arrange
+        vi.stubGlobal('innerWidth', 1280);
+        vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({ width: 1200 } as DOMRect);
+
+        // Act
+        render(
+            <ListFilterToolbar
+                fields={emptyFields}
+                onCommit={vi.fn()}
+                sorting={[{ id: 'name', desc: false }]}
+                sortOptions={[{ id: 'name', label: 'Name' }]}
+                onSortingChange={vi.fn()}
+                selection={{ active: false, onToggle: vi.fn() }}
+            />,
+        );
+
+        // Assert
+        expect(screen.queryByRole('group', { name: 'List filters' })).not.toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: /^Filters/ })).not.toBeInTheDocument();
+        expect(screen.queryByRole('combobox', { name: 'Sort by field' })).not.toBeInTheDocument();
+        expect(document.querySelector('[data-component="mobile-list-toolbar"]')).not.toBeInTheDocument();
+        expect(document.querySelector('[data-component="list-filter-toolbar"]')).toBeEmptyDOMElement();
+    });
+
+    it('TableLayout_KeepsActiveFilterChips_WhenTableHeadersProvideTheControls', () => {
+        // Arrange
+        vi.stubGlobal('innerWidth', 1280);
+
+        // Act
+        render(
+            <ListFilterToolbar
+                fields={[
+                    {
+                        id: 'status',
+                        label: 'Status',
+                        kind: 'facet',
+                        value: 'Ready',
+                        options: [{ value: 'Ready', label: 'Ready' }],
+                    },
+                ]}
+                onCommit={vi.fn()}
+                sorting={[{ id: 'name', desc: false }]}
+                sortOptions={[{ id: 'name', label: 'Name' }]}
+                onSortingChange={vi.fn()}
+            />,
+        );
+
+        // Assert
+        expect(screen.queryByRole('combobox', { name: 'Sort by field' })).not.toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Remove Status: Ready filter' })).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Clear all' })).toBeInTheDocument();
+    });
+
+    it('TableLayout_ClearsAllFilters_WhenClearAllIsClicked', async () => {
+        // Arrange
+        vi.stubGlobal('innerWidth', 1280);
+        const user = userEvent.setup();
+        const onCommit = vi.fn();
+        render(
+            <ListFilterToolbar
+                fields={[
+                    {
+                        id: 'status',
+                        label: 'Status',
+                        kind: 'facet',
+                        value: 'Ready',
+                        options: [{ value: 'Ready', label: 'Ready' }],
+                    },
+                ]}
+                onCommit={onCommit}
+                sorting={[{ id: 'name', desc: false }]}
+                sortOptions={[{ id: 'name', label: 'Name' }]}
+                onSortingChange={vi.fn()}
+            />,
+        );
+
+        // Act
+        await user.click(screen.getByRole('button', { name: 'Clear all' }));
+
+        // Assert
+        expect(onCommit).toHaveBeenCalledWith({ status: '' });
+    });
+
+    it('FilterModal_StaysClosed_WhenTheLayoutReturnsToCards', async () => {
+        // Arrange
+        const user = userEvent.setup();
+        const mediaListeners: ((event: { matches: boolean }) => void)[] = [];
+        vi.stubGlobal('matchMedia', (query: string) => ({
+            matches: true,
+            media: query,
+            addEventListener: (_type: string, listener: (event: { matches: boolean }) => void) =>
+                mediaListeners.push(listener),
+            removeEventListener: () => {},
+        }));
+        render(
+            <ListFilterToolbar
+                fields={emptyFields}
+                onCommit={vi.fn()}
+                sorting={[{ id: 'name', desc: false }]}
+                sortOptions={[{ id: 'name', label: 'Name' }]}
+                onSortingChange={vi.fn()}
+            />,
+        );
+        await user.click(screen.getByRole('button', { name: 'Filters, 0 active' }));
+
+        // Act
+        act(() => mediaListeners.forEach((listener) => listener({ matches: false })));
+        act(() => mediaListeners.forEach((listener) => listener({ matches: true })));
+
+        // Assert
+        expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
 
     it('FilterModal_CommitsDraftOnlyOnApply_WhenDismissedAndReopened', async () => {
         // Arrange
@@ -64,6 +183,43 @@ describe('ListFilterToolbar', () => {
             name: 'Orbit',
             size: { min: '2', max: '' },
         });
+    });
+
+    it('FilterModal_ClearsEveryFilterFromThePillField_WhenClearAllAndPillsAreOn', async () => {
+        // Arrange
+        const user = userEvent.setup();
+        const onCommit = vi.fn();
+        render(
+            <ListFilterToolbar
+                fields={[
+                    {
+                        id: 'provider',
+                        label: 'Provider',
+                        kind: 'multi',
+                        value: ['alpha'],
+                        options: [
+                            { value: 'alpha', label: 'Alpha' },
+                            { value: 'beta', label: 'Beta' },
+                        ],
+                    },
+                ]}
+                onCommit={onCommit}
+                sorting={[{ id: 'name', desc: false }]}
+                sortOptions={[{ id: 'name', label: 'Name' }]}
+                onSortingChange={vi.fn()}
+                dialogClearAll
+                pillMultiSelect
+            />,
+        );
+        await user.click(screen.getByRole('button', { name: 'Filters, 1 active' }));
+        const dialog = screen.getByRole('dialog');
+
+        // Act
+        await user.click(within(dialog).getByRole('button', { name: 'Remove Alpha' }));
+        await user.click(within(dialog).getByRole('button', { name: 'Clear all' }));
+
+        // Assert
+        expect(onCommit).toHaveBeenCalledExactlyOnceWith({ provider: [] });
     });
 
     it('FilterModal_CommitsFractionalMinimum_WhenFocusedInputSubmitsWithEnter', async () => {
@@ -140,6 +296,30 @@ describe('ListFilterToolbar', () => {
         expect(maximum.validity.stepMismatch).toBe(false);
     });
 
+    it('FiltersButton_KeepsCountOutsideLabel_WhenFiltersAreActive', () => {
+        // Arrange
+        const fields: ListFilterField[] = [
+            { id: 'provider', label: 'Provider', kind: 'multi', value: ['alpha'], options: [] },
+            { id: 'size', label: 'Size', kind: 'numberRange', value: { min: '2', max: '8' }, unit: 'GB' },
+        ];
+
+        // Act
+        render(
+            <ListFilterToolbar
+                fields={fields}
+                onCommit={vi.fn()}
+                sorting={[{ id: 'name', desc: false }]}
+                sortOptions={[{ id: 'name', label: 'Name' }]}
+                onSortingChange={vi.fn()}
+            />,
+        );
+        const button = screen.getByRole('button', { name: 'Filters, 2 active' });
+
+        // Assert
+        expect(button).toHaveTextContent('Filters (2)');
+        expect(within(button).getByText('Filters')).toHaveClass('list-filter-toolbar__compact-label');
+    });
+
     it('ActiveFilters_RemovesOneValue_WhenMultiSelectAndRangeAreActive', async () => {
         // Arrange
         const user = userEvent.setup();
@@ -210,7 +390,7 @@ describe('ListFilterToolbar', () => {
         // Assert
         expect(onCommit).toHaveBeenCalledWith({ status: '' });
         expect(onSortingChange).not.toHaveBeenCalled();
-        expect(screen.getByRole('button', { name: 'Sort ascending' })).toHaveAttribute('data-direction', 'desc');
+        expect(screen.getByRole('button', { name: 'Sort descending' })).toHaveAttribute('aria-pressed', 'true');
     });
 
     it('LayoutSwitch_PreservesCommittedFiltersAndSort_WhenModalDraftIsOpen', async () => {
@@ -268,7 +448,7 @@ describe('ListFilterToolbar', () => {
         await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Cancel' }));
 
         // Assert
-        expect(screen.getByRole('button', { name: 'Sort ascending' })).toHaveAttribute('data-direction', 'desc');
+        expect(screen.getByRole('button', { name: 'Sort descending' })).toHaveAttribute('aria-pressed', 'true');
         expect(onCommit).not.toHaveBeenCalled();
     });
 });

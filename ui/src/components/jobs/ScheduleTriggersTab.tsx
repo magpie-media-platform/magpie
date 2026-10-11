@@ -20,6 +20,7 @@ import {
     DialogDescription,
 } from '@/components/ui/Dialog';
 import type { ApiScheduleTrigger } from '@/hooks/useScheduleTriggers';
+import { useInstanceName } from '@/hooks/useInstanceName';
 import { formatJobDateTime, type TemplateOption } from '@/lib/jobExecution';
 import { ScheduleTriggerForm } from './ScheduleTriggerForm';
 import type { useScheduleTriggerCrud } from './useScheduleTriggerCrud';
@@ -176,6 +177,7 @@ function ScheduleTriggerRow({
     onToggle,
     onRunNow,
 }: ScheduleTriggerRowProps) {
+    const instanceName = useInstanceName();
     return (
         <div
             className={`jobs-page__trigger ${!trigger.enabled ? 'jobs-page__trigger--disabled' : ''}`}
@@ -204,7 +206,7 @@ function ScheduleTriggerRow({
                                 size="sm"
                                 badgeStyle="outline"
                                 data-field="system-badge"
-                                title="Built-in triggers are managed by Magpie and cannot be edited."
+                                title={`Built-in triggers are managed by ${instanceName} and cannot be edited.`}
                             >
                                 <LockSimpleIcon weight="regular" aria-hidden="true" />
                                 System

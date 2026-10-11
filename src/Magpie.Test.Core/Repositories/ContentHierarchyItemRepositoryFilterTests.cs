@@ -9,6 +9,7 @@ using Magpie.Core;
 using Magpie.Core.Repositories;
 using Magpie.Data;
 using Magpie.Data.SQLite;
+using Magpie.Models;
 using Magpie.Models.Arguments;
 using Magpie.Models.Bulk;
 using Magpie.Models.Data;
@@ -70,11 +71,50 @@ public sealed class ContentHierarchyItemRepositoryFilterTests
         _metadataContainerId = metadataContainer.Id;
         _eventBus = new Mock<IEventBus>();
         _transactionManager = new TransactionManager(_context, NullLogger<TransactionManager>.Instance);
+        var contentTypeRegistry = new Mock<IContentTypeRegistry>();
+        contentTypeRegistry
+            .Setup(registry => registry.Definitions)
+            .Returns(
+            [
+                new ContentTypeDefinition
+                {
+                    Slug = "tv",
+                    DisplayName = "TV",
+                    LevelDefinitions =
+                    [
+                        new ContentHierarchyLevelDefinition
+                        {
+                            Slug = "show",
+                            DisplayName = "Show",
+                            CustomMetadataFields = []
+                        },
+                        new ContentHierarchyLevelDefinition
+                        {
+                            Slug = "season",
+                            ParentSlug = "show",
+                            DisplayName = "Season",
+                            CustomMetadataFields = []
+                        },
+                        new ContentHierarchyLevelDefinition
+                        {
+                            Slug = "episode",
+                            ParentSlug = "season",
+                            DisplayName = "Episode",
+                            CustomMetadataFields = []
+                        }
+                    ]
+                }
+            ]);
         _subject = new ContentHierarchyItemRepository(
-            _context, Mock.Of<IAuditRecordRepository>(), _transactionManager,
+            _context,
+            Mock.Of<IAuditRecordRepository>(),
+            _transactionManager,
             Mock.Of<IMetadataContainerRepository>(),
-            Mock.Of<IContentTypeRegistry>(), _eventBus.Object,
-            NullLogger<ContentHierarchyItemRepository>.Instance, TimeProvider.System, Mock.Of<IContentRepository>());
+            contentTypeRegistry.Object,
+            _eventBus.Object,
+            NullLogger<ContentHierarchyItemRepository>.Instance,
+            TimeProvider.System,
+            Mock.Of<IContentRepository>());
     }
 
     [TearDown]
@@ -3363,5 +3403,251 @@ public sealed class ContentHierarchyItemRepositoryFilterTests
                 ["subtitled"] = MonitoringMode.Unmonitored,
                 ["plain"] = MonitoringMode.Monitored
             }));
+    }
+
+    [TestCase(
+        MonitoringMode.Monitored,
+        new[] { "Chernobyl" },
+        new[] { "Season 1" },
+        new[] { "The Happiness of All Mankind" })]
+    [TestCase(MonitoringMode.Unmonitored, new string[0], new string[0], new string[0])]
+    public async Task QueryAsync_ReturnsTheItemsWhoseSubtreeMatches_WhenTheSubtreeCriteriaAreSet(
+        MonitoringMode episodeMonitoring,
+        string[] expectedRoot,
+        string[] expectedShowScope,
+        string[] expectedSeasonScope)
+    {
+        // Arrange
+        var showContainer = new MetadataContainer { CreatedAt = DateTime.UtcNow };
+        var seasonContainer = new MetadataContainer { CreatedAt = DateTime.UtcNow };
+        var episodeContainer = new MetadataContainer { CreatedAt = DateTime.UtcNow };
+        _context.MetadataContainers.AddRange(showContainer, seasonContainer, episodeContainer);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        var show = new ContentHierarchyItem
+        {
+            MetadataContainerId = showContainer.Id,
+            ContentType = "tv",
+            Level = "show",
+            Slug = "chernobyl",
+            Name = "Chernobyl",
+            Monitoring = MonitoringMode.Unmonitored,
+            EffectiveMonitoring = MonitoringMode.Unmonitored,
+            CreatedAt = DateTime.UtcNow
+        };
+        _context.ContentHierarchyItems.Add(show);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        var season = new ContentHierarchyItem
+        {
+            MetadataContainerId = seasonContainer.Id,
+            ParentId = show.Id,
+            ContentType = "tv",
+            Level = "season",
+            Slug = "season-1",
+            Name = "Season 1",
+            EffectiveMonitoring = MonitoringMode.Unmonitored,
+            CreatedAt = DateTime.UtcNow
+        };
+        _context.ContentHierarchyItems.Add(season);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        var episode = new ContentHierarchyItem
+        {
+            MetadataContainerId = episodeContainer.Id,
+            ParentId = season.Id,
+            ContentType = "tv",
+            Level = "episode",
+            Slug = "episode-4",
+            Name = "The Happiness of All Mankind",
+            Monitoring = episodeMonitoring,
+            EffectiveMonitoring = episodeMonitoring,
+            CreatedAt = DateTime.UtcNow
+        };
+        _context.ContentHierarchyItems.Add(episode);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.ContentItems.AddRange(
+            new ContentItem
+            {
+                ContentHierarchyItemId = show.Id,
+                Fulfillment = FulfillmentStatus.Partial,
+                CreatedAt = DateTime.UtcNow
+            },
+            new ContentItem
+            {
+                ContentHierarchyItemId = season.Id,
+                Fulfillment = FulfillmentStatus.Partial,
+                CreatedAt = DateTime.UtcNow
+            },
+            new ContentItem
+            {
+                ContentHierarchyItemId = episode.Id,
+                Fulfillment = FulfillmentStatus.Missing,
+                CreatedAt = DateTime.UtcNow
+            });
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        var subtree = new CollectionCriteria<ContentHierarchyItemCriteria>
+        {
+            Some =
+            [
+                [
+                    new()
+                    {
+                        Monitoring = new()
+                        {
+                            And =
+                            [
+                                new() { Operator = CriteriaValueOperator.NotEquals, Value = MonitoringMode.Unmonitored }
+                            ]
+                        },
+                        Fulfillment = new() { And = [new() { Value = FulfillmentStatus.Missing }] }
+                    },
+                    new()
+                    {
+                        Monitoring = new()
+                        {
+                            And =
+                            [
+                                new() { Operator = CriteriaValueOperator.NotEquals, Value = MonitoringMode.Unmonitored }
+                            ]
+                        },
+                        Fulfillment = new() { And = [new() { Value = FulfillmentStatus.Partial }] }
+                    }
+                ]
+            ]
+        };
+
+        // Act
+        var root = await _subject.QueryAsync(
+            new ContentHierarchyItemCriteria { RootLevelOnly = true, Subtree = subtree },
+            new() { PageNumber = 1, PageSize = 100 },
+            null).ConfigureAwait(false);
+        var showScope = await _subject.QueryAsync(
+            new ContentHierarchyItemCriteria
+            {
+                ParentId = new() { And = [new() { Value = show.Id }] },
+                Subtree = subtree
+            },
+            new() { PageNumber = 1, PageSize = 100 },
+            null).ConfigureAwait(false);
+        var seasonScope = await _subject.QueryAsync(
+            new ContentHierarchyItemCriteria
+            {
+                ParentId = new() { And = [new() { Value = season.Id }] },
+                Subtree = subtree
+            },
+            new() { PageNumber = 1, PageSize = 100 },
+            null).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(root.Items.Select(i => i.Name), Is.EqualTo(expectedRoot));
+            Assert.That(showScope.Items.Select(i => i.Name), Is.EqualTo(expectedShowScope));
+            Assert.That(seasonScope.Items.Select(i => i.Name), Is.EqualTo(expectedSeasonScope));
+        }
+    }
+
+    [TestCase(MonitoringMode.Monitored, new string[0])]
+    [TestCase(MonitoringMode.Unmonitored, new[] { "Chernobyl" })]
+    public async Task QueryAsync_ReturnsTheItemsWhoseSubtreeDoesNotMatch_WhenTheExcludedSubtreeCriteriaAreSet(
+        MonitoringMode episodeMonitoring,
+        string[] expectedRoot)
+    {
+        // Arrange
+        var showContainer = new MetadataContainer { CreatedAt = DateTime.UtcNow };
+        var seasonContainer = new MetadataContainer { CreatedAt = DateTime.UtcNow };
+        var episodeContainer = new MetadataContainer { CreatedAt = DateTime.UtcNow };
+        _context.MetadataContainers.AddRange(showContainer, seasonContainer, episodeContainer);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        var show = new ContentHierarchyItem
+        {
+            MetadataContainerId = showContainer.Id,
+            ContentType = "tv",
+            Level = "show",
+            Slug = "chernobyl",
+            Name = "Chernobyl",
+            Monitoring = MonitoringMode.Unmonitored,
+            EffectiveMonitoring = MonitoringMode.Unmonitored,
+            CreatedAt = DateTime.UtcNow
+        };
+        _context.ContentHierarchyItems.Add(show);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        var season = new ContentHierarchyItem
+        {
+            MetadataContainerId = seasonContainer.Id,
+            ParentId = show.Id,
+            ContentType = "tv",
+            Level = "season",
+            Slug = "season-1",
+            Name = "Season 1",
+            EffectiveMonitoring = MonitoringMode.Unmonitored,
+            CreatedAt = DateTime.UtcNow
+        };
+        _context.ContentHierarchyItems.Add(season);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        var episode = new ContentHierarchyItem
+        {
+            MetadataContainerId = episodeContainer.Id,
+            ParentId = season.Id,
+            ContentType = "tv",
+            Level = "episode",
+            Slug = "episode-4",
+            Name = "The Happiness of All Mankind",
+            Monitoring = episodeMonitoring,
+            EffectiveMonitoring = episodeMonitoring,
+            CreatedAt = DateTime.UtcNow
+        };
+        _context.ContentHierarchyItems.Add(episode);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.ContentItems.AddRange(
+            new ContentItem
+            {
+                ContentHierarchyItemId = show.Id,
+                Fulfillment = FulfillmentStatus.Partial,
+                CreatedAt = DateTime.UtcNow
+            },
+            new ContentItem
+            {
+                ContentHierarchyItemId = season.Id,
+                Fulfillment = FulfillmentStatus.Partial,
+                CreatedAt = DateTime.UtcNow
+            },
+            new ContentItem
+            {
+                ContentHierarchyItemId = episode.Id,
+                Fulfillment = FulfillmentStatus.Missing,
+                CreatedAt = DateTime.UtcNow
+            });
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        // Act
+        var root = await _subject.QueryAsync(
+            new ContentHierarchyItemCriteria
+            {
+                RootLevelOnly = true,
+                Subtree = new()
+                {
+                    None =
+                    [
+                        new()
+                        {
+                            Monitoring = new()
+                            {
+                                And =
+                                [
+                                    new()
+                                    {
+                                        Operator = CriteriaValueOperator.NotEquals,
+                                        Value = MonitoringMode.Unmonitored
+                                    }
+                                ]
+                            }
+                        }
+                    ]
+                }
+            },
+            new() { PageNumber = 1, PageSize = 100 },
+            null).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(root.Items.Select(i => i.Name), Is.EqualTo(expectedRoot));
     }
 }

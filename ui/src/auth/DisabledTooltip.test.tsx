@@ -56,6 +56,24 @@ describe('DisabledTooltip', () => {
             expect(trigger).toHaveAccessibleDescription('Configure a root folder before adding');
         });
 
+        it('Click_ShowsTheReason_WhenTheControlIsDisabled', async () => {
+            // Arrange
+            const user = userEvent.setup();
+            render(
+                <DisabledTooltip disabled message="Configure a root folder before adding">
+                    <button disabled>Add</button>
+                </DisabledTooltip>,
+                { wrapper: TooltipProvider },
+            );
+            const trigger = screen.getByRole('button', { name: 'Add' }).parentElement as HTMLElement;
+
+            // Act
+            await user.click(trigger);
+
+            // Assert
+            expect(await screen.findByRole('tooltip')).toHaveTextContent('Configure a root folder before adding');
+        });
+
         it('renders the control without a tooltip when the supplied state is enabled', () => {
             render(
                 <DisabledTooltip disabled={false} message="Unavailable">

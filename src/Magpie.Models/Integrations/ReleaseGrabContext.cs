@@ -1,3 +1,5 @@
+using System;
+
 namespace Magpie.Models.Integrations;
 
 /// <summary>
@@ -9,4 +11,9 @@ public sealed record ReleaseGrabContext
     /// The content type slug.
     /// </summary>
     public string? ContentType { get; set; }
+
+    /// <summary>
+    /// The id of the indexer connection that supplied the release.
+    /// </summary>
+    public Guid? IndexerConnectionId { get; set; }
 }

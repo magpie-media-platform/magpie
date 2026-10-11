@@ -26,7 +26,7 @@ public sealed record ExtensionPatch
     public ScalarPatch<string?>? PackageRepository { get; init; }
 
     /// <summary>
-    /// The patch for whether the extension upgrades automatically.
+    /// The patch for the stored automatic-upgrade flag.
     /// </summary>
     public ScalarPatch<bool>? AutoUpgrade { get; init; }
 

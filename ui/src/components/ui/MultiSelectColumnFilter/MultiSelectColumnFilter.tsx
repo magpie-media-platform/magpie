@@ -1,7 +1,7 @@
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
-import { FunnelIcon, CheckIcon, XIcon, MagnifyingGlassIcon } from '@phosphor-icons/react';
+import { CaretDownIcon, FunnelIcon, CheckIcon, XIcon, MagnifyingGlassIcon } from '@phosphor-icons/react';
 
-import { Popover, PopoverTrigger, PopoverContent } from '../Popover';
+import { Popover, PopoverAnchor, PopoverTrigger, PopoverContent } from '../Popover';
 import { Input } from '../Input';
 import { Badge } from '../Badge';
 import { Button } from '../Button';
@@ -20,6 +20,7 @@ export interface MultiSelectColumnFilterProps {
     onChange: (next: string[]) => void;
     searchPlaceholder?: string;
     hideLabel?: boolean;
+    trigger?: 'icon' | 'field';
 }
 
 function normalizeOptions(options: ReadonlyArray<MultiSelectOption | string>): MultiSelectOption[] {
@@ -33,6 +34,7 @@ export function MultiSelectColumnFilter({
     onChange,
     searchPlaceholder,
     hideLabel,
+    trigger = 'icon',
 }: MultiSelectColumnFilterProps) {
     const [open, setOpen] = useState(false);
     const [query, setQuery] = useState('');
@@ -44,10 +46,13 @@ export function MultiSelectColumnFilter({
 
     const allOptions = useMemo(() => normalizeOptions(options), [options]);
     const selectedSet = useMemo(() => new Set(value), [value]);
+    const labelOf = (optionValue: string) =>
+        allOptions.find((option) => option.value === optionValue)?.label ?? optionValue;
 
     const active = value.length > 0;
     const columnName = typeof label === 'string' ? label : 'column';
     const triggerLabel = active ? `${columnName} filtered (${value.length}), edit filter` : `Filter by ${columnName}`;
+    const isField = trigger === 'field';
 
     const filtered = useMemo(() => {
         const q = query.trim().toLowerCase();
@@ -123,8 +128,56 @@ export function MultiSelectColumnFilter({
         }
     };
 
+    const chips = value.map((v) => (
+        <Badge key={v} variant="default" size="sm" className="multiselect-column-filter__chip">
+            {labelOf(v)}
+            <button
+                type="button"
+                className="multiselect-column-filter__chip-remove"
+                onClick={() => toggle(v)}
+                aria-label={`Remove ${labelOf(v)}`}
+            >
+                <XIcon weight="bold" aria-hidden="true" />
+            </button>
+        </Badge>
+    ));
+
+    const triggerButton = (
+        <PopoverTrigger asChild>
+            <button
+                type="button"
+                className={isField ? 'multiselect-column-filter__field-trigger' : 'multiselect-column-filter__trigger'}
+                onClick={(e) => e.stopPropagation()}
+                onKeyDown={(e) => e.stopPropagation()}
+                aria-label={triggerLabel}
+                title={triggerLabel}
+                aria-pressed={active}
+                data-action="column-filter-multi"
+                data-active={active || undefined}
+            >
+                {isField ? (
+                    <>
+                        {!active && 'All'}
+                        <CaretDownIcon
+                            className="multiselect-column-filter__field-caret"
+                            size={16}
+                            weight="bold"
+                            aria-hidden="true"
+                        />
+                    </>
+                ) : (
+                    <FunnelIcon size="1rem" weight={active ? 'fill' : 'regular'} aria-hidden="true" />
+                )}
+            </button>
+        </PopoverTrigger>
+    );
+
     return (
-        <span className="multiselect-column-filter">
+        <span
+            className={
+                isField ? 'multiselect-column-filter multiselect-column-filter--field' : 'multiselect-column-filter'
+            }
+        >
             <span className={hideLabel ? 'sr-only' : 'multiselect-column-filter__label'}>{label}</span>
             <Popover
                 open={open}
@@ -135,24 +188,23 @@ export function MultiSelectColumnFilter({
                     }
                 }}
             >
-                <PopoverTrigger asChild>
-                    <button
-                        type="button"
-                        className="multiselect-column-filter__trigger"
-                        onClick={(e) => e.stopPropagation()}
-                        onKeyDown={(e) => e.stopPropagation()}
-                        aria-label={triggerLabel}
-                        title={triggerLabel}
-                        aria-pressed={active}
-                        data-action="column-filter-multi"
-                        data-active={active || undefined}
-                    >
-                        <FunnelIcon size="1rem" weight={active ? 'fill' : 'regular'} aria-hidden="true" />
-                    </button>
-                </PopoverTrigger>
+                {isField ? (
+                    <PopoverAnchor asChild>
+                        <span className="multiselect-column-filter__field">
+                            {active && <span className="multiselect-column-filter__field-chips">{chips}</span>}
+                            {triggerButton}
+                        </span>
+                    </PopoverAnchor>
+                ) : (
+                    triggerButton
+                )}
                 <PopoverContent
                     align="start"
-                    className="multiselect-column-filter__menu"
+                    className={
+                        isField
+                            ? 'multiselect-column-filter__menu multiselect-column-filter__menu--field'
+                            : 'multiselect-column-filter__menu'
+                    }
                     onClick={(e) => e.stopPropagation()}
                     onOpenAutoFocus={(e) => {
                         e.preventDefault();
@@ -178,29 +230,9 @@ export function MultiSelectColumnFilter({
                             }}
                         />
 
-                        {value.length > 0 && (
+                        {!isField && active && (
                             <div className="multiselect-column-filter__chips" data-testid="multiselect-chips">
-                                {value.map((v) => {
-                                    const opt = allOptions.find((o) => o.value === v);
-                                    return (
-                                        <Badge
-                                            key={v}
-                                            variant="default"
-                                            size="sm"
-                                            className="multiselect-column-filter__chip"
-                                        >
-                                            {opt?.label ?? v}
-                                            <button
-                                                type="button"
-                                                className="multiselect-column-filter__chip-remove"
-                                                onClick={() => toggle(v)}
-                                                aria-label={`Remove ${opt?.label ?? v}`}
-                                            >
-                                                <XIcon weight="bold" aria-hidden="true" />
-                                            </button>
-                                        </Badge>
-                                    );
-                                })}
+                                {chips}
                             </div>
                         )}
 

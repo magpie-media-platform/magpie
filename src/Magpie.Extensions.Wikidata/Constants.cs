@@ -24,6 +24,24 @@ internal static class Constants
 
     public const string TvdbSource = "tvdb";
 
+    public const string TvmazeSource = "tvmaze";
+
+    public const string MusicBrainzSource = "musicbrainz";
+
+    public const string OpenLibrarySource = "openlibrary";
+
+    public const string ViafSource = "viaf";
+
+    public const string IsniSource = "isni";
+
+    public const string IpiSource = "ipi";
+
+    public const string GoodreadsSource = "goodreads";
+
+    public const string AmazonSource = "amazon";
+
+    public const string LibraryThingSource = "librarything";
+
     public const string ImdbPropertyId = "P345";
 
     public const string TmdbMoviePropertyId = "P4947";
@@ -37,6 +55,30 @@ internal static class Constants
     public const string TmdbPersonPropertyId = "P4985";
 
     public const string TmdbCompanyPropertyId = "P11806";
+
+    public const string TvdbPersonPropertyId = "P7920";
+
+    public const string TvdbCompanyPropertyId = "P12398";
+
+    public const string TvmazePersonPropertyId = "P11449";
+
+    public const string MusicBrainzArtistPropertyId = "P434";
+
+    public const string MusicBrainzLabelPropertyId = "P966";
+
+    public const string OpenLibraryPropertyId = "P648";
+
+    public const string ViafPropertyId = "P214";
+
+    public const string IsniPropertyId = "P213";
+
+    public const string IpiPropertyId = "P1828";
+
+    public const string GoodreadsAuthorPropertyId = "P2963";
+
+    public const string AmazonAuthorPropertyId = "P4862";
+
+    public const string LibraryThingAuthorPropertyId = "P7400";
 
     public const string TvdbShowPropertyId = "P4835";
 
@@ -171,6 +213,30 @@ internal static class Constants
     public const string EndedProductionStatus = "Ended";
 
     public const string WonAwardStatus = "Won";
+
+    public static readonly IReadOnlyList<(string Source, string PropertyId)> PersonExternalIds =
+    [
+        (TmdbSource, TmdbPersonPropertyId),
+        (ImdbSource, ImdbPropertyId),
+        (TvdbSource, TvdbPersonPropertyId),
+        (TvmazeSource, TvmazePersonPropertyId),
+        (MusicBrainzSource, MusicBrainzArtistPropertyId),
+        (OpenLibrarySource, OpenLibraryPropertyId),
+        (ViafSource, ViafPropertyId),
+        (IsniSource, IsniPropertyId),
+        (IpiSource, IpiPropertyId),
+        (GoodreadsSource, GoodreadsAuthorPropertyId),
+        (AmazonSource, AmazonAuthorPropertyId),
+        (LibraryThingSource, LibraryThingAuthorPropertyId)
+    ];
+
+    public static readonly IReadOnlyList<(string Source, string PropertyId)> StudioExternalIds =
+    [
+        (TmdbSource, TmdbCompanyPropertyId),
+        (ImdbSource, ImdbPropertyId),
+        (TvdbSource, TvdbCompanyPropertyId),
+        (MusicBrainzSource, MusicBrainzLabelPropertyId)
+    ];
 
     public static readonly IReadOnlyList<(string PropertyId, string Body)> RatingSystems =
     [

@@ -41,6 +41,7 @@ import { getErrorMessage } from '@/lib/errors';
 import { editableCriteriaToEventContext, eventContextToEditableCriteria } from '@/lib/eventContextCriteria';
 import { formatRelativeTime } from '@/lib/formatTime';
 import type { ApiEventFilter } from '@/hooks/useEventTriggers';
+import { useInstanceName } from '@/hooks/useInstanceName';
 
 import {
     NotificationRuleForm,
@@ -98,6 +99,7 @@ const enabledOptions: FacetOption[] = [
 ];
 
 export function NotificationsPage() {
+    const instanceName = useInstanceName();
     useDocumentTitle('Notifications');
     const { toast } = useToast();
     const runBulk = useBulkRun();
@@ -200,7 +202,7 @@ export function NotificationsPage() {
                 }
                 toast({
                     title: isNew ? 'Rule Created' : 'Rule Updated',
-                    description: `Magpie ${isNew ? 'created' : 'updated'} "${values.name}".`,
+                    description: `${instanceName} ${isNew ? 'created' : 'updated'} "${values.name}".`,
                     variant: 'success',
                 });
                 closeForm();
@@ -217,7 +219,7 @@ export function NotificationsPage() {
                 throw error;
             }
         },
-        [createRule, updateRule, closeForm, toast],
+        [createRule, updateRule, closeForm, toast, instanceName],
     );
 
     const handleDelete = useCallback((rule: NotificationRule) => {
@@ -233,7 +235,7 @@ export function NotificationsPage() {
             await deleteRule(deletingRule.id);
             toast({
                 title: 'Rule Deleted',
-                description: `Magpie deleted "${deletingRule.name}".`,
+                description: `${instanceName} deleted "${deletingRule.name}".`,
                 variant: 'success',
             });
         } catch {
@@ -246,7 +248,7 @@ export function NotificationsPage() {
             setIsDeleting(false);
             setDeletingRule(null);
         }
-    }, [deletingRule, deleteRule, toast]);
+    }, [deletingRule, deleteRule, toast, instanceName]);
 
     const handleCancelDelete = useCallback(() => {
         setDeletingRule(null);
@@ -276,7 +278,7 @@ export function NotificationsPage() {
                     result.success
                         ? {
                               title: 'Test Sent',
-                              description: `Magpie sent a test event through "${rule.name}". Check the destination to confirm it arrived.`,
+                              description: `${instanceName} sent a test event through "${rule.name}". Check the destination to confirm it arrived.`,
                               variant: 'success',
                           }
                         : {
@@ -295,7 +297,7 @@ export function NotificationsPage() {
                 setTestingId(null);
             }
         },
-        [testRule, toast],
+        [testRule, toast, instanceName],
     );
 
     const handleRefresh = useCallback(async () => {
@@ -560,11 +562,7 @@ export function NotificationsPage() {
         <EmptyState
             icon={<WarningCircleIcon weight="duotone" />}
             title="Failed to load notification rules"
-            action={
-                <Button variant="secondary" size="sm" onClick={() => refetch()}>
-                    Retry
-                </Button>
-            }
+            onRetry={refetch}
         />
     );
 
@@ -574,7 +572,7 @@ export function NotificationsPage() {
                 <PageHeader
                     className="notifications-page__header"
                     title="Notifications"
-                    description="Magpie events can be sent through configured notification providers."
+                    description={`${instanceName} events can be sent through configured notification providers.`}
                     icon={<BellIcon weight="duotone" aria-hidden="true" data-testid="notifications-page__icon" />}
                     actions={
                         <div className="notifications-page__header-actions">

@@ -54,7 +54,6 @@ export function useSubjectContent(metadataContainerId: string | undefined): Subj
     const [sorting, setSorting] = useState<SortingState>(DEFAULT_SORTING);
     const [pageIndex, setPageIndex] = useState(0);
 
-    // Header filters are the only filter controls, and the card layout has none, so they apply only to the table.
     const hasActiveFilters = !usesCardLayout && filterQuery.trim().length > 0;
     const [pagedWithFilters, setPagedWithFilters] = useState(hasActiveFilters);
     if (pagedWithFilters !== hasActiveFilters) {

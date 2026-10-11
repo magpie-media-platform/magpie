@@ -156,13 +156,6 @@
         overflow-wrap: anywhere;
     }
 
-    .library-import-page__group-title {
-        min-width: 0;
-        font-weight: var(--weight-medium);
-        color: var(--text-primary);
-        overflow-wrap: anywhere;
-    }
-
     .library-import-page__group-subtitle {
         color: var(--text-muted);
         font-size: var(--text-sm);
@@ -178,12 +171,6 @@
         color: var(--text-secondary);
         font-size: var(--text-sm);
         white-space: nowrap;
-    }
-
-    .library-import-page__status-rollup {
-        display: flex;
-        gap: var(--space-xs);
-        flex-wrap: wrap;
     }
 
     .library-import-page__row-actions {

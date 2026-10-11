@@ -456,7 +456,8 @@ internal sealed class UserRepository(
 
     public async Task<FailedLoginResult> RecordFailedLoginAsync(
         Guid userId,
-        DateTime? lockedUntil,
+        int maxFailedAttempts,
+        DateTime lockedUntil,
         CancellationToken cancellationToken)
     {
         try
@@ -466,7 +467,9 @@ internal sealed class UserRepository(
                 .ExecuteUpdateAsync(
                     s => s
                         .SetProperty(u => u.FailedLoginAttempts, u => u.FailedLoginAttempts + 1)
-                        .SetProperty(u => u.LockedUntil, u => lockedUntil ?? u.LockedUntil),
+                        .SetProperty(
+                            u => u.LockedUntil,
+                            u => u.FailedLoginAttempts + 1 >= maxFailedAttempts ? lockedUntil : u.LockedUntil),
                     cancellationToken)
                 .ConfigureAwait(false);
 

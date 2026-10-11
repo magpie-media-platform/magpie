@@ -527,8 +527,7 @@ test.describe.serial('Journey 7: set it and forget it', () => {
                     ],
                 });
                 await api.post(
-                    `/api/interactive-search/${contentByExternalId.get(movies[0]!.externalId)!.id}/grab`,
-                    candidate?.release,
+                    `/api/interactive-search/${contentByExternalId.get(movies[0]!.externalId)!.id}/grab/${candidate?.release.id}`,
                 );
                 const stray = await until(
                     'stray download to appear',

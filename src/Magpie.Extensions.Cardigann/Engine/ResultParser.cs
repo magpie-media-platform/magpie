@@ -139,7 +139,10 @@ internal sealed class ResultParser(TimeProvider timeProvider, ILogger<ResultPars
         });
     }
 
-    private static string? ResolveRawValue(IElement? root, FieldDefinition field)
+    private static string? ResolveRawValue(
+        IElement? root,
+        FieldDefinition field,
+        IReadOnlyDictionary<string, object?> variables)
     {
         if (root is null)
         {
@@ -148,7 +151,7 @@ internal sealed class ResultParser(TimeProvider timeProvider, ILogger<ResultPars
 
         if (field.Text is not null && string.IsNullOrEmpty(field.Selector))
         {
-            return field.Text.RenderCardigannTemplate(EmptyVars);
+            return field.Text.RenderCardigannTemplate(variables);
         }
 
         if (field.Case is not null && field.Case.Count > 0)
@@ -261,16 +264,20 @@ internal sealed class ResultParser(TimeProvider timeProvider, ILogger<ResultPars
         var releases = new List<Release>();
         var categoryMappings = definition.ResolveCategoryMappings();
 
-        var rowIndex = 0;
-        foreach (var row in rows)
+        var after = Math.Clamp(definition.Search.Rows.After, 0, rows.Length);
+        for (var rowIndex = 0; rowIndex < rows.Length; rowIndex += 1 + after)
         {
-            var release = ExtractRow(row, rowIndex, definition.Search.Fields, baseUri, categoryMappings);
+            var row = rows[rowIndex];
+            for (var offset = 1; offset <= after && rowIndex + offset < rows.Length; offset++)
+            {
+                row.Append([.. rows[rowIndex + offset].ChildNodes]);
+            }
+
+            var release = ExtractRow(row, rowIndex, definition, variables ?? EmptyVars, baseUri, categoryMappings);
             if (release is not null)
             {
                 releases.Add(release);
             }
-
-            rowIndex++;
         }
 
         return releases;
@@ -330,7 +337,7 @@ internal sealed class ResultParser(TimeProvider timeProvider, ILogger<ResultPars
             var categoryMappings = definition.ResolveCategoryMappings();
             foreach (var item in rowsElement.EnumerateArray())
             {
-                var release = ExtractJsonRow(item, definition, baseUri, categoryMappings);
+                var release = ExtractJsonRow(item, definition, variables, baseUri, categoryMappings);
                 if (release is not null)
                 {
                     releases.Add(release);
@@ -458,23 +465,26 @@ internal sealed class ResultParser(TimeProvider timeProvider, ILogger<ResultPars
     private Release? ExtractRow(
         IElement row,
         int rowIndex,
-        IReadOnlyDictionary<string, FieldDefinition> fields,
+        CardigannDefinition definition,
+        IReadOnlyDictionary<string, object?> variables,
         Uri baseUri,
         IReadOnlyList<CategoryMapping> categoryMappings)
     {
         var values = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
-        foreach (var (fieldName, field) in fields)
+        var rowVariables = new Dictionary<string, object?>(variables);
+        foreach (var (fieldName, field) in definition.Search.Fields)
         {
-            if (ExtractField(row, field, $"row[{rowIndex}].{fieldName}") is { } value)
+            if (ExtractField(row, field, $"row[{rowIndex}].{fieldName}", rowVariables) is { } value)
             {
                 values[fieldName] = value;
+                rowVariables[$".Result.{fieldName}"] = value;
             }
         }
 
         var title = Get(values, "title");
         if (string.IsNullOrWhiteSpace(title))
         {
-            logger.LogDebug("Cardigann skipped row {RowIndex} that has no title", rowIndex);
+            logger.LogDebug("Cardigann {Tracker} skipped row {RowIndex} that has no title", definition.Id, rowIndex);
             return null;
         }
 
@@ -565,10 +575,19 @@ internal sealed class ResultParser(TimeProvider timeProvider, ILogger<ResultPars
 
     public string? ExtractField(IElement? root, FieldDefinition field, string context)
     {
+        return ExtractField(root, field, context, EmptyVars);
+    }
+
+    private string? ExtractField(
+        IElement? root,
+        FieldDefinition field,
+        string context,
+        IReadOnlyDictionary<string, object?> variables)
+    {
         string? raw;
         try
         {
-            raw = ResolveRawValue(root, field);
+            raw = ResolveRawValue(root, field, variables);
         }
         catch (Exception ex)
         {
@@ -584,11 +603,11 @@ internal sealed class ResultParser(TimeProvider timeProvider, ILogger<ResultPars
         {
             if (!string.IsNullOrEmpty(field.Default))
             {
-                raw = field.Default;
+                raw = field.Default.RenderCardigannTemplate(variables);
             }
             else if (field.Optional || field.Text is not null || field.Case is not null)
             {
-                raw = string.Empty;
+                return string.Empty;
             }
             else
             {
@@ -596,10 +615,14 @@ internal sealed class ResultParser(TimeProvider timeProvider, ILogger<ResultPars
             }
         }
 
-        return ApplyFilters(raw, field, context);
+        return ApplyFilters(raw, field, context, variables);
     }
 
-    private string ApplyFilters(string raw, FieldDefinition field, string context)
+    private string ApplyFilters(
+        string raw,
+        FieldDefinition field,
+        string context,
+        IReadOnlyDictionary<string, object?> variables)
     {
         var current = raw.Trim();
         if (field.Filters is null)
@@ -611,7 +634,7 @@ internal sealed class ResultParser(TimeProvider timeProvider, ILogger<ResultPars
         {
             try
             {
-                current = current.ApplyCardigannFilter(step.Name, step.Args, timeProvider);
+                current = current.ApplyCardigannFilter(step.Name, step.Args, variables, timeProvider);
             }
             catch (RegexMatchTimeoutException ex)
             {
@@ -629,18 +652,22 @@ internal sealed class ResultParser(TimeProvider timeProvider, ILogger<ResultPars
     private Release? ExtractJsonRow(
         JsonElement item,
         CardigannDefinition definition,
+        IReadOnlyDictionary<string, object?> variables,
         Uri baseUri,
         IReadOnlyList<CategoryMapping> categoryMappings)
     {
         var values = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+        var rowVariables = new Dictionary<string, object?>(variables);
         foreach (var (fieldName, field) in definition.Search.Fields)
         {
-            values[fieldName] = ExtractJsonField(item, field, $"json.{fieldName}");
+            values[fieldName] = ExtractJsonField(item, field, $"json.{fieldName}", rowVariables);
+            rowVariables[$".Result.{fieldName}"] = values[fieldName];
         }
 
         var title = Get(values, "title");
         if (string.IsNullOrWhiteSpace(title))
         {
+            logger.LogDebug("Cardigann {Tracker} skipped a JSON row that has no title", definition.Id);
             return null;
         }
 
@@ -759,12 +786,16 @@ internal sealed class ResultParser(TimeProvider timeProvider, ILogger<ResultPars
         return JsonSerializer.Serialize(retained);
     }
 
-    private string? ExtractJsonField(JsonElement item, FieldDefinition field, string context)
+    private string? ExtractJsonField(
+        JsonElement item,
+        FieldDefinition field,
+        string context,
+        IReadOnlyDictionary<string, object?> variables)
     {
         string? raw = null;
         if (field.Text is not null && string.IsNullOrEmpty(field.Selector))
         {
-            raw = field.Text.RenderCardigannTemplate(EmptyVars);
+            raw = field.Text.RenderCardigannTemplate(variables);
         }
         else if (!string.IsNullOrEmpty(field.Selector))
         {
@@ -776,11 +807,11 @@ internal sealed class ResultParser(TimeProvider timeProvider, ILogger<ResultPars
         {
             if (!string.IsNullOrEmpty(field.Default))
             {
-                raw = field.Default;
+                raw = field.Default.RenderCardigannTemplate(variables);
             }
             else if (field.Optional)
             {
-                raw = string.Empty;
+                return string.Empty;
             }
             else
             {
@@ -788,6 +819,6 @@ internal sealed class ResultParser(TimeProvider timeProvider, ILogger<ResultPars
             }
         }
 
-        return ApplyFilters(raw, field, context);
+        return ApplyFilters(raw, field, context, variables);
     }
 }

@@ -16,7 +16,6 @@ function makeEvent(id: string, title: string): CalendarEvent {
         contentType: 'tv',
         level: 'episode',
         fulfillment: 'missing',
-        monitoring: 'Monitored',
         effectiveMonitoring: 'Monitored',
     };
 }
@@ -65,11 +64,10 @@ describe('MonthView', () => {
         ['upgradable', 'Upgradable'],
         ['fulfilled', 'Fulfilled'],
         ['fulfilledExternally', 'External'],
-    ] as const)('shows inherited monitoring separately from %s fulfillment in month entries', (fulfillment, label) => {
+    ] as const)('shows monitoring separately from %s fulfillment in month entries', (fulfillment, label) => {
         // Arrange
         const event = {
             ...makeEvent('1', 'Month release'),
-            monitoring: null,
             effectiveMonitoring: 'Unmonitored' as const,
             fulfillment,
         };
@@ -88,10 +86,13 @@ describe('MonthView', () => {
         // Assert
         const entry = screen.getByTestId('calendar-page__day-event');
         const title = within(entry).getByText('Month release', { selector: '.content-lineage-title__segment--leaf' });
-        const monitoring = within(entry).getByLabelText('Unmonitored (inherited)');
+        const monitoring = within(entry).getByLabelText('Unmonitored');
         const fulfillmentBadge = within(entry).getByText(label).closest('[data-component="badge"]');
 
-        expect(title.closest('[data-component="content-lineage-title"]')).toHaveClass('calendar-page__day-event-title');
+        expect(title.closest('[data-component="content-lineage-title"]')).toHaveClass(
+            'calendar-page__day-event-title',
+            'content-lineage-title--stacked',
+        );
         expect(monitoring.closest('.calendar-page__day-event-monitoring')).toBeInTheDocument();
         expect(fulfillmentBadge).toHaveClass('calendar-page__day-event-badge');
         expect(fulfillmentBadge).toHaveTextContent(label);

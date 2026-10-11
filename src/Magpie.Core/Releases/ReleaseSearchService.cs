@@ -479,13 +479,29 @@ internal sealed class ReleaseSearchService(
             var executedPhases = execution.ExecutedRoutes;
             coalesced.AddRange(execution.Results.Select(result =>
                 (result.Release, result.ReleaseFacts, result.Assessment)));
+            await transactionManager.ExecuteWithTransactionAsync(
+                async transactionCancellationToken =>
+                {
+                    var observedReleaseIds = new List<Guid>();
+                    foreach (var result in coalesced)
+                    {
+                        if (!await StoreReleaseAsync(result.Release, null, transactionCancellationToken)
+                            .ConfigureAwait(false))
+                        {
+                            observedReleaseIds.Add(result.Release.Id);
+                        }
+                    }
+
+                    await releaseRepository.MarkObservedAsync(observedReleaseIds, transactionCancellationToken)
+                        .ConfigureAwait(false);
+                },
+                cancellationToken).ConfigureAwait(false);
 
             var candidates = new List<(InteractiveSearchCandidate Candidate, int EffectiveQualityRank)>();
             foreach (var result in coalesced)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 var release = result.Release;
-                release.Id = Guid.NewGuid();
                 var candidate = new InteractiveSearchCandidate(
                     release,
                     result.Assessment.MatchResult,
@@ -541,7 +557,6 @@ internal sealed class ReleaseSearchService(
         bool force = false,
         CancellationToken cancellationToken = default)
     {
-        // The first progress report overwrites the status message that marks a deferred execution.
         var execution = currentExecutionId is { } executionId
             ? await jobExecutionRepository.GetByIdAsync(executionId, cancellationToken).ConfigureAwait(false)
             : null;
@@ -1531,11 +1546,12 @@ internal sealed class ReleaseSearchService(
 
     public async Task<InteractiveReleaseGrabOutcome> GrabInteractiveAsync(
         Guid contentHierarchyItemId,
-        Release release,
+        Guid releaseId,
         Guid? actingUserId,
         CancellationToken cancellationToken = default)
     {
-        if (release is null || string.IsNullOrWhiteSpace(release.Title))
+        var release = await releaseRepository.GetByIdAsync(releaseId, cancellationToken).ConfigureAwait(false);
+        if (release is null)
         {
             ReleaseTelemetry.Grabs.Add(
                 1,
@@ -1544,7 +1560,7 @@ internal sealed class ReleaseSearchService(
             return new InteractiveReleaseGrabOutcome(
                 InteractiveReleaseGrabResult.InvalidRelease,
                 null,
-                "A release with a title is required.");
+                $"Release {releaseId} does not exist.");
         }
 
         var hierarchyItem = await contentHierarchyItemRepository
@@ -1597,16 +1613,11 @@ internal sealed class ReleaseSearchService(
         await transactionManager.ExecuteWithTransactionAsync(
             async transactionCancellationToken =>
             {
-                release.Id = Guid.NewGuid();
-                release.CreatedAt = timeProvider.GetUtcNow().UtcDateTime;
-                release.CreatedByUserId = actingUserId;
-                release.ModifiedAt = null;
-                release.ModifiedByUserId = null;
-                await UpsertReleaseAsync(
+                await ScopeReleaseAsync(
                     release,
                     [],
                     contentHierarchyItemId,
-                    actingUserId,
+                    created: false,
                     actingUserId,
                     transactionCancellationToken)
                     .ConfigureAwait(false);
@@ -1702,9 +1713,14 @@ internal sealed class ReleaseSearchService(
             cancellationToken).ConfigureAwait(false);
         foreach (var release in releases.Where(release => !blockedReleaseIds.Contains(release.Id)))
         {
-            var assessment = releaseEvaluationService.AssessMatch(release, [], evaluationContext);
-            if (assessment.MatchResult is ReleaseMatchResult.Identity or ReleaseMatchResult.Confident &&
-                assessment.IsAcceptable == true &&
+            var assessment = await releaseEvaluationService
+                .ScoreForContentAsync(
+                    release,
+                    candidate.ContentHierarchyItemId,
+                    evaluationContext.CurrentFileQualityRank,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            if (assessment?.IsAcceptable == true &&
                 (candidate.Fulfillment != FulfillmentStatus.Upgradable ||
                     releaseEvaluationService.IsAcceptableUpgradeOverCurrentFile(
                         assessment,
@@ -2196,25 +2212,24 @@ internal sealed class ReleaseSearchService(
         Guid? scopeUserId,
         CancellationToken cancellationToken)
     {
-        var created = false;
-        if (!await releaseRepository.UpdateAsync(release, userId, cancellationToken).ConfigureAwait(false))
-        {
-            try
-            {
-                var persisted = await releaseRepository.CreateAsync(release, userId, cancellationToken)
-                    .ConfigureAwait(false);
-                release.Id = persisted.Id;
-                created = true;
-            }
-            catch (DbUpdateException)
-            {
-                if (!await releaseRepository.UpdateAsync(release, userId, cancellationToken).ConfigureAwait(false))
-                {
-                    throw;
-                }
-            }
-        }
+        var created = await StoreReleaseAsync(release, userId, cancellationToken).ConfigureAwait(false);
+        return await ScopeReleaseAsync(
+            release,
+            releaseFacts,
+            searchedHierarchyItemId,
+            created,
+            scopeUserId,
+            cancellationToken).ConfigureAwait(false);
+    }
 
+    private async Task<ReleaseUpsertResult> ScopeReleaseAsync(
+        Release release,
+        IReadOnlyList<ContentFact> releaseFacts,
+        Guid searchedHierarchyItemId,
+        bool created,
+        Guid? scopeUserId,
+        CancellationToken cancellationToken)
+    {
         var releaseScope = await releaseEvaluationService
             .ResolveScopeAsync(release, releaseFacts, searchedHierarchyItemId, cancellationToken)
             .ConfigureAwait(false);
@@ -2269,6 +2284,31 @@ internal sealed class ReleaseSearchService(
             !created);
     }
 
+    private async Task<bool> StoreReleaseAsync(Release release, Guid? userId, CancellationToken cancellationToken)
+    {
+        if (await releaseRepository.UpdateAsync(release, userId, cancellationToken).ConfigureAwait(false))
+        {
+            return false;
+        }
+
+        try
+        {
+            var persisted = await releaseRepository.CreateAsync(release, userId, cancellationToken)
+                .ConfigureAwait(false);
+            release.Id = persisted.Id;
+            return true;
+        }
+        catch (DbUpdateException)
+        {
+            if (!await releaseRepository.UpdateAsync(release, userId, cancellationToken).ConfigureAwait(false))
+            {
+                throw;
+            }
+
+            return false;
+        }
+    }
+
     private async Task MarkContentItemSearchedAsync(
         ContentHierarchyItem item,
         Guid contentItemId,
@@ -2305,7 +2345,8 @@ internal sealed class ReleaseSearchService(
         bool force,
         CancellationToken cancellationToken)
     {
-        var since = timeProvider.GetUtcNow().UtcDateTime - searchOptions.CoalescingWindow;
+        var now = timeProvider.GetUtcNow().UtcDateTime;
+        var since = now - searchOptions.CoalescingWindow;
 
         var recent = await jobExecutionRepository.QueryAllAsync(
             new()
@@ -2347,6 +2388,11 @@ internal sealed class ReleaseSearchService(
             }
 
             if (execution.Status != JobExecutionStatus.Completed && !IsStrictlyOlderThanSelf(execution, self))
+            {
+                continue;
+            }
+
+            if (force && execution.Status == JobExecutionStatus.Queued && execution.NotBeforeAt > now)
             {
                 continue;
             }

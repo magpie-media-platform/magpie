@@ -20,6 +20,12 @@ internal sealed class PostgreSqlModelCustomizer(ModelCustomizerDependencies depe
             builder.Property(e => e.Payload).IsRequired();
             builder.HasIndex(e => e.PublishedAt);
         });
+        modelBuilder.Entity<ContentHierarchyItem>()
+            .HasIndex(e => e.ParentId)
+            .IncludeProperties(e => e.EffectiveMonitoring);
+        modelBuilder.Entity<ContentItem>()
+            .HasIndex(e => e.ContentHierarchyItemId)
+            .IncludeProperties(e => e.Fulfillment);
         modelBuilder.Entity<ReleaseIdentityKey>()
             .HasIndex(e => new { e.Authority, e.Value })
             .IsUnique()

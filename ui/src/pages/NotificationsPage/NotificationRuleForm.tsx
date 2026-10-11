@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { FloppyDiskIcon, InfoIcon, PlusIcon, TrashIcon, XIcon } from '@phosphor-icons/react';
+import { FloppyDiskIcon, InfoIcon, PlusIcon, XIcon } from '@phosphor-icons/react';
 
 import { Button } from '@/components/ui/Button';
+import { EventContextFilterRow } from '@/components/ui/EventContextFilterRow';
 import { Input } from '@/components/ui/Input';
 import { IntegrationSettingsForm } from '@/components/integrations/IntegrationSettingsForm';
 import { Label } from '@/components/ui/Label';
@@ -523,55 +524,18 @@ export function NotificationRuleForm({
                                     </p>
                                 )}
                                 {values.contextFilters.map((filter, index) => (
-                                    <div
+                                    <EventContextFilterRow
                                         key={filterKeys[index]}
-                                        className="notification-rule-form__filter"
-                                        data-filter-index={index}
-                                    >
-                                        <Input
-                                            value={filter.key}
-                                            onChange={(e) => handleFilterKeyChange(index, e.target.value)}
-                                            placeholder="Key"
-                                            error={!!errors[`filter-${index}-key`]}
-                                            errorMessage={errors[`filter-${index}-key`] || undefined}
-                                            disabled={isSubmitting}
-                                            aria-label={`Filter ${index + 1} key`}
-                                            data-field={`filter-${index}-key`}
-                                            className="notification-rule-form__filter-input"
-                                        />
-                                        <Input
-                                            value={filter.pattern ?? ''}
-                                            onChange={(e) => handleFilterPatternChange(index, e.target.value)}
-                                            placeholder="Pattern (regex)"
-                                            error={!!errors[`filter-${index}-pattern`]}
-                                            errorMessage={errors[`filter-${index}-pattern`] || undefined}
-                                            disabled={isSubmitting}
-                                            aria-label={`Filter ${index + 1} pattern`}
-                                            data-field={`filter-${index}-pattern`}
-                                            className="notification-rule-form__filter-input"
-                                        />
-                                        <div className="notification-rule-form__filter-negate">
-                                            <Switch
-                                                checked={filter.negate}
-                                                onCheckedChange={(negate) => handleFilterNegateChange(index, negate)}
-                                                disabled={isSubmitting}
-                                                aria-label={`Filter ${index + 1} negate`}
-                                                data-field={`filter-${index}-negate`}
-                                            />
-                                            <span className="notification-rule-form__filter-negate-label">Negate</span>
-                                        </div>
-                                        <Button
-                                            type="button"
-                                            variant="ghost"
-                                            size="sm"
-                                            onClick={() => handleRemoveFilter(index)}
-                                            disabled={isSubmitting}
-                                            aria-label={`Remove filter ${index + 1}`}
-                                            data-action={`remove-filter-${index}`}
-                                        >
-                                            <TrashIcon weight="bold" aria-hidden="true" />
-                                        </Button>
-                                    </div>
+                                        index={index}
+                                        filter={filter}
+                                        keyError={errors[`filter-${index}-key`]}
+                                        patternError={errors[`filter-${index}-pattern`]}
+                                        disabled={isSubmitting}
+                                        onKeyChange={handleFilterKeyChange}
+                                        onPatternChange={handleFilterPatternChange}
+                                        onNegateChange={handleFilterNegateChange}
+                                        onRemove={handleRemoveFilter}
+                                    />
                                 ))}
                                 <Button
                                     type="button"

@@ -35,7 +35,6 @@ export function useLibraryPage() {
         isAdmin: hasRole(Role.Admin),
         canWriteFilters: hasPermission('filters.own'),
     });
-    // An empty bulk filter selects nothing, so the all-levels scope needs a filter to bound it.
     const allLevels = params.levels === 'all' && filters.filterQuery.trim() !== '';
     const content = useLibraryContent({
         contentTypeSlug: route.contentTypeSlug,
@@ -87,10 +86,10 @@ export function useLibraryPage() {
     const pageCount = Math.max(1, Math.ceil(content.totalItems / PAGE_SIZE));
     const { pageNumber, goToPage } = pagination;
     useEffect(() => {
-        if (!content.isLoading && !filters.isRestoringFilter && pageNumber > pageCount) {
+        if (!content.isLoading && !content.isPlaceholderData && !filters.isRestoringFilter && pageNumber > pageCount) {
             goToPage(pageCount);
         }
-    }, [content.isLoading, filters.isRestoringFilter, pageNumber, pageCount, goToPage]);
+    }, [content.isLoading, content.isPlaceholderData, filters.isRestoringFilter, pageNumber, pageCount, goToPage]);
 
     return {
         route,

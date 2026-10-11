@@ -74,7 +74,6 @@ const LIFECYCLE_DEFINITION_ID = '8a7fef37-6dd6-4bb5-a2ae-69c78d14e24c';
 const LIFECYCLE_PROVIDER_TYPE = 'lifecycle-notification';
 const LIFECYCLE_GROUP = 'lifecycle';
 const BROKEN_PACKAGE_ID = 'Magpie.Extensions.IntegrationTestBrokenAssembly';
-const BROKEN_DISABLED_REASON = 'The extension assembly failed to load.';
 const SHIMS_PACKAGE_ID = 'Magpie.Extensions.IntegrationTestShims';
 const SHIMS_EXTENSION_ID = 'd6e20b46-39ef-4afb-8b85-fabce83f4c25';
 const SHIMS_SETTINGS_GROUP = 'integration-test-shims';
@@ -425,12 +424,18 @@ test.describe.serial('Journey 06: add, upgrade, and remove a plugin', () => {
                 const broken = (await api.get<ExtensionListItem[]>('/api/extensions')).find(
                     (item) => item.extension.packageId === BROKEN_PACKAGE_ID,
                 )!.extension;
-                expect(broken).toMatchObject({ enabled: false, disabledReason: BROKEN_DISABLED_REASON });
+                expect(broken).toMatchObject({ enabled: true, disabledReason: null });
 
-                await page.goto('/admin/extensions');
-                const brokenCard = page.getByRole('listitem').filter({ hasText: 'Broken assembly fixture' });
-                await expect(brokenCard.getByText('Failed', { exact: true })).toBeVisible();
-                await expect(brokenCard.locator('.extensions-page__card-reason')).toHaveText(BROKEN_DISABLED_REASON);
+                const scan = await api.post<{ status: string }>('/api/jobs/execute-immediate', {
+                    jobType: 'DiagnosticCheck',
+                });
+                expect(scan.status).toBe('Completed');
+                const findings = await api.get<{ findings: Array<{ affectedEntity: string | null }> }>(
+                    '/api/diagnostics/findings',
+                );
+                expect(findings.findings).toContainEqual(
+                    expect.objectContaining({ affectedEntity: `Extension:${broken.id}` }),
+                );
             });
 
             await test.step('upgrade the shim extension itself and prove the mock seams still resolve', async () => {

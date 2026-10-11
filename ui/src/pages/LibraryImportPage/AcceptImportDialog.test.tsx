@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { createRef, useState } from 'react';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -91,5 +91,64 @@ describe('AcceptImportDialog', () => {
         await user.click(screen.getByRole('button', { name: 'Cancel' }));
         expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
         expect(run).not.toHaveBeenCalled();
+    });
+
+    it('Cancel_ReturnsFocusToTheOpener_WhenChosen', async () => {
+        // Arrange
+        const user = userEvent.setup();
+        render(<DialogHarness run={() => {}} />);
+        await user.click(screen.getByRole('button', { name: 'Cancel' }));
+        await user.click(screen.getByRole('button', { name: 'Open accept' }));
+
+        // Act
+        await user.click(screen.getByRole('button', { name: 'Cancel' }));
+
+        // Assert
+        await waitFor(() => expect(screen.getByRole('button', { name: 'Open accept' })).toHaveFocus());
+    });
+
+    it('Accept_PutsFocusOnTheFallback_WhenTheActionHasAFallback', async () => {
+        // Arrange
+        const user = userEvent.setup();
+        const fallbackFocusRef = createRef<HTMLHeadingElement>();
+        render(
+            <>
+                <h2 ref={fallbackFocusRef} tabIndex={-1}>
+                    Season 1
+                </h2>
+                <DialogHarness run={Object.assign(vi.fn(), { fallbackFocusRef })} />
+            </>,
+        );
+        await user.click(screen.getByRole('button', { name: 'Cancel' }));
+        await user.click(screen.getByRole('button', { name: 'Open accept' }));
+        await user.click(screen.getByRole('button', { name: 'Select monitoring' }));
+
+        // Act
+        await user.click(screen.getByRole('button', { name: 'Accept' }));
+
+        // Assert
+        await waitFor(() => expect(screen.getByRole('heading', { name: 'Season 1' })).toHaveFocus());
+    });
+
+    it('Cancel_ReturnsFocusToTheOpener_WhenTheActionHasAFallback', async () => {
+        // Arrange
+        const user = userEvent.setup();
+        const fallbackFocusRef = createRef<HTMLHeadingElement>();
+        render(
+            <>
+                <h2 ref={fallbackFocusRef} tabIndex={-1}>
+                    Season 1
+                </h2>
+                <DialogHarness run={Object.assign(vi.fn(), { fallbackFocusRef })} />
+            </>,
+        );
+        await user.click(screen.getByRole('button', { name: 'Cancel' }));
+        await user.click(screen.getByRole('button', { name: 'Open accept' }));
+
+        // Act
+        await user.click(screen.getByRole('button', { name: 'Cancel' }));
+
+        // Assert
+        await waitFor(() => expect(screen.getByRole('button', { name: 'Open accept' })).toHaveFocus());
     });
 });

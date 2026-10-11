@@ -73,4 +73,29 @@ describe('useIntegrationSettingsFormController', () => {
         // Assert
         expect(result.current.isDirty).toBe(false);
     });
+
+    it('keeps the seeded defaults when the stored values refetch while open', async () => {
+        // Arrange
+        const stored: Values = { id: 'server-1', name: 'Server', provider: 'sample', settings: { url: 'http://host' } };
+        const { result, rerender } = renderHook(
+            ({ initialValues }: { initialValues: Values }) =>
+                useIntegrationSettingsFormController<Values>({
+                    open: true,
+                    onOpenChange: vi.fn(),
+                    initialValues,
+                    emptyValues,
+                    onSubmit: vi.fn(),
+                    useSchema,
+                }),
+            { initialProps: { initialValues: stored } },
+        );
+        await waitFor(() => expect(result.current.settings).toEqual({ url: 'http://host', category: 'tv' }));
+
+        // Act
+        rerender({ initialValues: { ...stored } });
+
+        // Assert
+        expect(result.current.settings).toEqual({ url: 'http://host', category: 'tv' });
+        expect(result.current.isDirty).toBe(false);
+    });
 });

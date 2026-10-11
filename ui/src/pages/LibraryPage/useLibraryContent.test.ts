@@ -50,10 +50,45 @@ describe('useLibraryContent bulk filter', () => {
             }),
         );
 
-        expect(mockUseContentList).toHaveBeenLastCalledWith(expect.anything(), { enabled: false });
+        expect(mockUseContentList).toHaveBeenLastCalledWith(expect.anything(), {
+            enabled: false,
+            keepPreviousData: true,
+        });
         expect(result.current.contentItems).toEqual([]);
         expect(result.current.pageRowIds).toEqual([]);
         expect(result.current.totalItems).toBe(0);
+    });
+
+    it('useLibraryContent_ReturnsNoPageRowIds_WhenPreviousRowsShowForANewFilter', () => {
+        // Arrange
+        mockUseContentList.mockReturnValue({
+            data: { items: [{ id: 'previous-row' }], totalItems: 1 },
+            isLoading: false,
+            isPlaceholderData: true,
+            error: null,
+            refetch: vi.fn(),
+        });
+
+        // Act
+        const { result } = renderHook(() =>
+            useLibraryContent({
+                contentTypeSlug: undefined,
+                currentContentType: null,
+                routeContentTypeSlug: undefined,
+                selectedLevel: null,
+                libraryTypesError: null,
+                debouncedFilterQuery: '',
+                filterQuery: '',
+                sortField: 'title',
+                sortDir: 'asc',
+                pageIndex: 0,
+            }),
+        );
+
+        // Assert
+        expect(result.current.isPlaceholderData).toBe(true);
+        expect(result.current.pageRowIds).toEqual([]);
+        expect(result.current.contentItems).toHaveLength(1);
     });
 
     it('restricts the selection to top-level rows when no scope is chosen', () => {
@@ -100,7 +135,7 @@ describe('useLibraryContent bulk filter', () => {
                 sortBy: 'Name',
                 sortDirection: 'Ascending',
             },
-            { enabled: true },
+            { enabled: true, keepPreviousData: true },
         );
         expect(result.current.bulkFilter).toBe('(title contains "dark")');
     });
@@ -136,7 +171,7 @@ describe('useLibraryContent bulk filter', () => {
                 sortBy: 'Name',
                 sortDirection: 'Ascending',
             },
-            { enabled: true },
+            { enabled: true, keepPreviousData: true },
         );
     });
 
@@ -158,7 +193,7 @@ describe('useLibraryContent bulk filter', () => {
 
         expect(mockUseContentList).toHaveBeenLastCalledWith(
             expect.objectContaining({ sortBy: 'FulfilledAt', sortDirection: 'Descending' }),
-            { enabled: true },
+            { enabled: true, keepPreviousData: true },
         );
     });
 
@@ -248,7 +283,7 @@ describe('useLibraryContent bulk filter', () => {
         // Assert
         expect(mockUseContentList).toHaveBeenLastCalledWith(
             expect.objectContaining({ filter: 'Name contains "older"' }),
-            { enabled: true },
+            { enabled: true, keepPreviousData: true },
         );
         expect(result.current.bulkFilter).toBe('ParentId null and ContentType = "tv" and (Name contains "latest")');
     });

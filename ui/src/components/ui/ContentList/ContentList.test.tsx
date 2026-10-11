@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+
 import type { BulkSelectionState } from '@/types/bulkSelection';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render as rtlRender, screen, within } from '@testing-library/react';
@@ -183,7 +186,7 @@ describe('ContentList', () => {
             within(screen.getByText('Dune: Part Two').closest('tr')!).getByLabelText('Unmonitored'),
         ).toBeInTheDocument();
         expect(
-            within(screen.getByText('Poor Things').closest('tr')!).getByLabelText('Unmonitored (inherited)'),
+            within(screen.getByText('Poor Things').closest('tr')!).getByLabelText('Unmonitored'),
         ).toBeInTheDocument();
     });
 
@@ -250,6 +253,30 @@ describe('ContentList', () => {
         const pills = cell?.querySelectorAll('.badge');
         expect(pills?.[0]).toHaveTextContent('Missing');
         expect(pills?.[1]).toHaveTextContent('Downloading');
+    });
+
+    it('StatusCell_ShowsUpcoming_WhenAMissingItemHasAFuturePublishDate', () => {
+        // Act
+        render(
+            <ContentList
+                items={[
+                    {
+                        id: 'future',
+                        title: 'Future Movie',
+                        monitoring: 'Monitored',
+                        effectiveMonitoring: 'Monitored',
+                        fulfillment: 'missing',
+                        publishDate: '2099-01-01',
+                        publishDatePrecision: 'Day',
+                    },
+                ]}
+            />,
+        );
+
+        // Assert
+        const cell = document.querySelector('.content-list__status-cell') as HTMLElement;
+        expect(within(cell).getByText('Upcoming')).toBeInTheDocument();
+        expect(within(cell).queryByText('Missing')).not.toBeInTheDocument();
     });
 
     it('renders a single fulfillment pill with no placeholder when no acquisition is in flight', () => {
@@ -482,6 +509,63 @@ describe('ContentList', () => {
         });
     });
 
+    describe('table layout', () => {
+        const css = readFileSync(resolve(process.cwd(), 'src/components/ui/ContentList/ContentList.css'), 'utf8');
+
+        it('sizes the table to its container with no fixed layout or minimum width', () => {
+            // Assert
+            expect(css).not.toMatch(/table-layout:\s*fixed/);
+            expect(css).not.toMatch(/\.data-table__table\s*\{[^}]*min-width/);
+        });
+
+        it('lets the title column take the width the other columns leave', () => {
+            // Assert
+            expect(css).toMatch(
+                /@media \(min-width: 1024px\) \{[^@]*\.data-table__header-cell\[data-column='title'\] \{\s*width: 100% !important;/,
+            );
+            expect(css).toMatch(/\.data-table__cell\[data-column='title'\] \{\s*max-width: 0;/);
+        });
+
+        it('hides the published and added columns only below the table layout width', () => {
+            // Assert
+            expect(css).toMatch(
+                /@media \(min-width: 768px\) and \(max-width: 1023px\) \{\s*\.content-list \.data-table__header-cell\[data-column='publishDate'\]/,
+            );
+            expect(css).not.toMatch(
+                /max-width: 1279px\) \{\s*\.content-list \.data-table__header-cell\[data-column='publishDate'\]/,
+            );
+        });
+
+        it('keeps the sort icon beside the header label at table widths', () => {
+            // Assert
+            expect(css).toMatch(
+                /@media \(min-width: 1024px\) \{[^@]*\.content-list \.data-table__header-cell \{\s*white-space: normal;\s*letter-spacing: normal;/,
+            );
+            expect(css).not.toMatch(/@media \(min-width: 1024px\) \{[^@]*flex-wrap/);
+        });
+
+        it('TableLayout_KeepsTheSameHeadersAtEveryTableWidth_WhenTheViewportGrows', () => {
+            // Assert
+            expect(css).not.toMatch(/max-width: 1279px/);
+            expect(css).not.toMatch(/min-width: 1280px/);
+        });
+
+        it('TableLayout_GivesTheDataColumnsTheirOneLineWidth_WhenTheListGetsWider', () => {
+            // Assert
+            expect(css).toMatch(/@media \(min-width: 1024px\) \{\s*\.content-list \{\s*container-type: inline-size;/);
+            expect(css).toMatch(
+                /\.data-table__header-content \{\s*width: max-content;\s*min-width: min-content;\s*max-width: calc\([^)]*cqi[^)]*\);/,
+            );
+        });
+
+        it('TableLayout_KeepsAMinimumWidthForTheParentNameAndTheItemName_WhenTheTitleColumnGetsNarrower', () => {
+            // Assert
+            expect(css).toMatch(
+                /@container \(min-width: \d+px\) \{\s*\.content-list \.content-list__title\[data-qualified='true'\] \.content-lineage-title__visual \{\s*width: 100%;\s*\}\s*\.content-list\s+\.content-list__title\[data-qualified='true'\]\s+\.content-lineage-title__visual\s+\.content-lineage-title__segment \{\s*flex-basis: content;\s*width: clamp\([^;]*\);\s*min-width: auto;\s*overflow: clip;\s*\}\s*\.content-list\s+\.content-list__title\[data-qualified='true'\]\s+\.content-lineage-title__visual\s+\.content-lineage-title__segment--ancestor \{\s*width: clamp\([^;]*\);/,
+            );
+        });
+    });
+
     describe('header filter columns', () => {
         const headerFilters: ContentHeaderFilters = {
             contentTypeOptions: [{ value: 'tv', label: 'TV' }],
@@ -540,20 +624,6 @@ describe('ContentList', () => {
 
             const checkboxes = screen.getAllByRole('checkbox');
             expect(checkboxes).toHaveLength(mockItems.length + 1);
-        });
-
-        it('sets data-selection-enabled attribute when selection is enabled', () => {
-            render(<ContentList items={mockItems} selection={selection} />);
-
-            const list = document.querySelector('[data-selection-enabled="true"]');
-            expect(list).toBeInTheDocument();
-        });
-
-        it('does not set data-selection-enabled attribute when selection is disabled', () => {
-            render(<ContentList items={mockItems} />);
-
-            const list = document.querySelector('[data-selection-enabled]');
-            expect(list).not.toBeInTheDocument();
         });
 
         it('calls toggleRow when a row is selected', async () => {

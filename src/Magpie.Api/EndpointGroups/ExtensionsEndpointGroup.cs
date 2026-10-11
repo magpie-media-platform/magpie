@@ -46,7 +46,7 @@ internal sealed class ExtensionsEndpointGroup : IApiEndpointGroup
         builder.MapGet("search", SearchExtensionsAsync)
             .WithName(nameof(SearchExtensionsAsync))
             .Produces<IReadOnlyList<NuGetSearchResult>>()
-            .RequireViewer();
+            .RequireAdmin();
 
         builder.MapPost("upload", UploadExtensionAsync)
             .WithName(nameof(UploadExtensionAsync))

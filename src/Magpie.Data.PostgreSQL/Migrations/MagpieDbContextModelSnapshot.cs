@@ -223,8 +223,6 @@ namespace Magpie.Data.PostgreSQL.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("Category");
-
                     b.HasIndex("CorrelationId");
 
                     b.HasIndex("EntityId");
@@ -233,9 +231,7 @@ namespace Magpie.Data.PostgreSQL.Migrations
 
                     b.HasIndex("JobExecutionId");
 
-                    b.HasIndex("Timestamp");
-
-                    b.HasIndex("UserId");
+                    b.HasIndex("Timestamp", "Id", "Category", "UserId");
 
                     b.ToTable("system_audit", (string)null);
                 });
@@ -446,6 +442,8 @@ namespace Magpie.Data.PostgreSQL.Migrations
 
                     b.HasIndex("ParentId");
 
+                    NpgsqlIndexBuilderExtensions.IncludeProperties(b.HasIndex("ParentId"), new[] { "EffectiveMonitoring" });
+
                     b.HasIndex("QualityTierListId");
 
                     b.HasIndex("RootFolderId");
@@ -525,6 +523,8 @@ namespace Magpie.Data.PostgreSQL.Migrations
 
                     b.HasIndex("ContentHierarchyItemId")
                         .IsUnique();
+
+                    NpgsqlIndexBuilderExtensions.IncludeProperties(b.HasIndex("ContentHierarchyItemId"), new[] { "Fulfillment" });
 
                     b.HasIndex("Fulfillment");
 
@@ -1469,6 +1469,8 @@ namespace Magpie.Data.PostgreSQL.Migrations
 
                     b.HasIndex("ParentExecutionId", "CreatedAt");
 
+                    b.HasIndex("CompletedAt", "Id", "CreatedByUserId");
+
                     b.HasIndex("JobType", "CreatedAt", "Id")
                         .IsDescending(false, true, false);
 
@@ -2311,6 +2313,9 @@ namespace Magpie.Data.PostgreSQL.Migrations
                     b.Property<string>("ExternalId")
                         .HasColumnType("text");
 
+                    b.Property<Guid?>("IndexerConnectionId")
+                        .HasColumnType("uuid");
+
                     b.Property<Guid?>("IndexerId")
                         .HasColumnType("uuid");
 
@@ -2350,6 +2355,8 @@ namespace Magpie.Data.PostgreSQL.Migrations
                         .HasColumnType("text");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("IndexerConnectionId");
 
                     b.HasIndex("IndexerId");
 
@@ -3321,6 +3328,11 @@ namespace Magpie.Data.PostgreSQL.Migrations
 
             modelBuilder.Entity("Magpie.Models.Data.ReleaseSource", b =>
                 {
+                    b.HasOne("Magpie.Models.Data.IndexerConnection", null)
+                        .WithMany()
+                        .HasForeignKey("IndexerConnectionId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
                     b.HasOne("Magpie.Models.Data.Indexer", null)
                         .WithMany()
                         .HasForeignKey("IndexerId")

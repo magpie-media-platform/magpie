@@ -9,13 +9,15 @@ using Magpie.Models.Data;
 using Magpie.Models.Enums;
 using Magpie.Sdk.Diagnostics;
 using Magpie.Sdk.Integrations;
+using Magpie.Sdk.Services;
 
 namespace Magpie.Core.Diagnostics;
 
 internal sealed class SetupPrerequisitesDiagnostic(
     IIndexerConnectionRepository indexerConnections,
     IRootFolderRepository rootFolders,
-    IEnumerable<IDownloadClientIntegration> downloadClientIntegrations) : IDiagnosticCheck
+    IEnumerable<IDownloadClientIntegration> downloadClientIntegrations,
+    ISettingsService settingsService) : IDiagnosticCheck
 {
     public const string Id = "core.config.setup-prerequisites";
 
@@ -45,6 +47,8 @@ internal sealed class SetupPrerequisitesDiagnostic(
     {
         var findings = new List<DiagnosticFinding>();
 
+        var instanceName = await settingsService.GetInstanceNameAsync(cancellationToken).ConfigureAwait(false);
+
         var connections = (await indexerConnections.ListAllAsync(cancellationToken).ConfigureAwait(false)).ToList();
         if (connections.Count == 0)
         {
@@ -64,16 +68,16 @@ internal sealed class SetupPrerequisitesDiagnostic(
         {
             findings.Add(Error(
                 "No download client is configured",
-                "No download client is configured, so Magpie cannot send downloads."));
+                $"No download client is configured, so {instanceName} cannot send downloads."));
         }
         else if (!clients.Any(c => c.Enabled))
         {
             findings.Add(Error(
                 "All download clients are disabled",
-                "Every download client is disabled, so Magpie cannot send downloads."));
+                $"Every download client is disabled, so {instanceName} cannot send downloads."));
         }
 
-        AddDuplicateDownloadClientProviderFindings(findings);
+        AddDuplicateDownloadClientProviderFindings(findings, instanceName);
 
         var folders = await rootFolders.ListAllAsync(cancellationToken).ConfigureAwait(false);
         if (!folders.Any())
@@ -90,7 +94,7 @@ internal sealed class SetupPrerequisitesDiagnostic(
         return findings;
     }
 
-    private void AddDuplicateDownloadClientProviderFindings(List<DiagnosticFinding> findings)
+    private void AddDuplicateDownloadClientProviderFindings(List<DiagnosticFinding> findings, string instanceName)
     {
         foreach (var group in downloadClientIntegrations
             .Where(i => !string.IsNullOrWhiteSpace(i.ProviderType))
@@ -110,7 +114,7 @@ internal sealed class SetupPrerequisitesDiagnostic(
                 Severity = DiagnosticFindingSeverity.Warning,
                 Title = $"Multiple download client integrations use \"{group.Key}\"",
                 Detail =
-                    $"Magpie will use {NameOf(winner)} for \"{group.Key}\" and ignore " +
+                    $"{instanceName} will use {NameOf(winner)} for \"{group.Key}\" and ignore " +
                     $"{string.Join(", ", displaced.Select(NameOf))}.",
             });
         }

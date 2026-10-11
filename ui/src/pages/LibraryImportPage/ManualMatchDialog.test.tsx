@@ -618,6 +618,27 @@ describe('ManualMatchDialog', () => {
         });
     });
 
+    it('Match_ShowsNoToast_WhenTheSuccessToastIsSuppressed', async () => {
+        // Arrange
+        const user = userEvent.setup();
+        const onClose = vi.fn();
+        render(
+            <ManualMatchDialog target={candidateTarget()} onClose={onClose} onMatched={vi.fn()} suppressSuccessToast />,
+            { wrapper: createWrapper() },
+        );
+        await user.click(screen.getByRole('button', { name: /^Search$/ }));
+        await waitFor(() => {
+            expect(screen.getByTestId('manual-match-dialog__results')).toBeInTheDocument();
+        });
+
+        // Act
+        await user.click(screen.getByRole('button', { name: /^Match$/ }));
+
+        // Assert
+        await waitFor(() => expect(onClose).toHaveBeenCalled());
+        expect(mockToast).not.toHaveBeenCalled();
+    });
+
     it('names the gone file and closes when a candidate match 404s, instead of asking for a retry', async () => {
         const user = userEvent.setup();
         const onClose = vi.fn();

@@ -1,4 +1,5 @@
 import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
 import { FolderIcon, MagnifyingGlassIcon } from '@phosphor-icons/react';
@@ -76,6 +77,19 @@ describe('EmptyState', () => {
     it('renders action when provided', () => {
         render(<EmptyState title="No items" action={<button type="button">Add item</button>} />);
         expect(screen.getByRole('button', { name: 'Add item' })).toBeInTheDocument();
+    });
+
+    it('EmptyState_CallsOnRetry_WhenRetryIsClicked', async () => {
+        // Arrange
+        const user = userEvent.setup();
+        const onRetry = vi.fn();
+        render(<EmptyState title="Failed to load items" onRetry={onRetry} />);
+
+        // Act
+        await user.click(screen.getByRole('button', { name: 'Retry' }));
+
+        // Assert
+        expect(onRetry).toHaveBeenCalledWith();
     });
 
     it('does not render action container when action not provided', () => {

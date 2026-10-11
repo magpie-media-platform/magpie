@@ -1,4 +1,5 @@
 import type { FulfillmentStatus, MonitoringMode } from './content';
+import type { TemporalPrecision } from './contentMetadata';
 
 export interface CalendarEvent {
     id: string;
@@ -13,6 +14,8 @@ export interface CalendarEvent {
 
     date: string;
 
+    datePrecision?: TemporalPrecision;
+
     posterUrl?: string;
 
     contentType: string;
@@ -22,8 +25,6 @@ export interface CalendarEvent {
     levelLabel?: string;
 
     fulfillment: FulfillmentStatus;
-
-    monitoring: MonitoringMode | null;
 
     effectiveMonitoring: MonitoringMode;
 }

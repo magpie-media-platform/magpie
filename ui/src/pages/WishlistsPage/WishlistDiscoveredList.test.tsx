@@ -169,6 +169,45 @@ describe('WishlistDiscoveredList', () => {
         expect(within(row).getByText('Fulfilled')).toBeInTheDocument();
     });
 
+    it.each([
+        { width: 1024, host: 'wishlist-discovered-table', published: '1975' },
+        { width: 390, host: 'wishlist-discovered__mobile-list', published: 'Published 1975' },
+    ])('PublishedDate_ShowsYearOnly_WhenPrecisionIsYearAt$width', async ({ width, host, published }) => {
+        // Arrange
+        installMatchMedia(width);
+        mockApiGet.mockResolvedValue(
+            response({
+                items: [
+                    {
+                        discoveredId: 'discovered-year',
+                        source: 'provider-h',
+                        externalId: '1234',
+                        title: 'Year Only',
+                        discoveredAt: '2024-01-01T00:00:00Z',
+                        linkId: 'ci-year',
+                        posterUrl: null,
+                        publishDate: '1975-01-01T00:00:00Z',
+                        publishDatePrecision: 'Year',
+                        addedAt: '2024-01-02T00:00:00Z',
+                        status: 'Found',
+                    },
+                ],
+                totalItems: 1,
+            }),
+        );
+
+        // Act
+        render(
+            <TestWrapper>
+                <WishlistDiscoveredList wishlistId={WISHLIST_ID} />
+            </TestWrapper>,
+        );
+
+        // Assert
+        const list = await screen.findByTestId(host);
+        expect(within(list).getByText(published)).toBeInTheDocument();
+    });
+
     it('renders the placeholder and (not in library) marker for a not-in-library row', async () => {
         render(
             <TestWrapper>

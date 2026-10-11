@@ -17,6 +17,7 @@ export const integrationEnvironment = {
     skipBoot: process.env['MAGPIE_SKIP_BOOT'] === 'true',
     adminUsername: process.env['MAGPIE_ADMIN_USERNAME']?.trim() || 'magpie-admin',
     adminPassword: process.env['MAGPIE_ADMIN_PASSWORD'] || 'integration-suite-pa55!',
+    databaseProvider: process.env['MAGPIE_DATABASE_PROVIDER_NAME']?.trim() || 'SQLite',
     paths: {
         fixtures: optionalPath('MAGPIE_TEST_FIXTURES_ROOT', resolve(INTEGRATION_ROOT, 'test-fixtures')),
         downloads: optionalPath('MAGPIE_TEST_DOWNLOADS_ROOT', resolve(INTEGRATION_ROOT, 'downloads')),

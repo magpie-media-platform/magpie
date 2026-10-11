@@ -1,5 +1,14 @@
-import { createContext, useCallback, useContext, useRef, useState, type ReactNode, type ComponentProps } from 'react';
-import { Link, useLocation, useNavigate } from 'react-router-dom';
+import {
+    createContext,
+    useCallback,
+    useContext,
+    useEffect,
+    useRef,
+    useState,
+    type ReactNode,
+    type ComponentProps,
+} from 'react';
+import { Link, useLocation } from 'react-router-dom';
 
 import { PreviewDrawer } from './PreviewDrawer';
 import { Button } from '@/components/ui/Button';
@@ -13,8 +22,10 @@ export function LocalContentPreviewProvider({ children }: { children: ReactNode 
     const [identity, setIdentity] = useState<'hierarchy' | 'item'>('hierarchy');
     const [open, setOpen] = useState(false);
     const trigger = useRef<HTMLElement | null>(null);
-    const navigate = useNavigate();
     const location = useLocation();
+    useEffect(() => {
+        setOpen(false);
+    }, [location.key]);
     const openPreview = useCallback(
         (contentId: string, invokingElement?: HTMLElement, contentIdentity: 'hierarchy' | 'item' = 'hierarchy') => {
             trigger.current =
@@ -40,18 +51,13 @@ export function LocalContentPreviewProvider({ children }: { children: ReactNode 
                         event.preventDefault();
                         if (trigger.current?.isConnected) trigger.current.focus({ preventScroll: true });
                     }}
-                    onOpenContent={(resolvedId) => {
-                        setOpen(false);
-                        void navigate(`/library/${encodeURIComponent(resolvedId)}`, {
-                            state: {
-                                contentOrigin: {
-                                    pathname: location.pathname,
-                                    search: location.search,
-                                    hash: location.hash,
-                                    state: location.state,
-                                },
-                            },
-                        });
+                    openContentState={{
+                        contentOrigin: {
+                            pathname: location.pathname,
+                            search: location.search,
+                            hash: location.hash,
+                            state: location.state,
+                        },
                     }}
                 />
             )}

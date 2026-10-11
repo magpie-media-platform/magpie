@@ -5,10 +5,15 @@
         gap: var(--space-md);
     }
 
+    .candidate-leaf-table__toolbar {
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        gap: var(--space-sm);
+    }
+
     .candidate-leaf-table__file-cell {
         display: flex;
-        flex-direction: column;
-        gap: 2px;
         min-width: 0;
     }
 
@@ -16,31 +21,44 @@
         opacity: 0.6;
     }
 
-    .candidate-leaf-table__parsed-title {
-        font-weight: var(--weight-medium);
-        color: var(--text-primary);
-        overflow-wrap: anywhere;
-    }
-
-    .candidate-leaf-table__file-path {
+    .candidate-leaf-table__file-name {
         min-width: 0;
-        font-family: var(--font-mono);
+        padding: 0;
+        border: none;
+        background: none;
+        color: var(--text-primary);
+        font-family: inherit;
         font-size: var(--text-sm);
-        color: var(--text-secondary);
+        font-weight: var(--weight-medium);
+        text-align: left;
         overflow-wrap: anywhere;
+        cursor: pointer;
+
+        &:hover {
+            color: var(--accent-primary);
+            text-decoration: underline;
+        }
     }
 
-    .candidate-leaf-table__candidate-year {
-        color: var(--text-muted);
-        font-size: var(--text-sm);
-        font-weight: var(--weight-normal);
+    .candidate-leaf-table__status {
+        display: inline-flex;
+        padding: 0;
+        border: none;
+        background: none;
+        cursor: pointer;
+
+        &:hover .badge {
+            text-decoration: underline;
+        }
     }
 
-    .candidate-leaf-table__row-actions {
-        display: flex;
-        gap: var(--space-xs);
-        justify-content: flex-end;
-        flex-wrap: wrap;
+    .candidate-leaf-table__selection-actions > .button {
+        flex: 1 1 auto;
+        justify-content: center;
+    }
+
+    .candidate-leaf-table__menu-trigger {
+        margin-inline-start: auto;
     }
 
     .candidate-leaf-table__mobile-select-toggle {
@@ -54,7 +72,38 @@
 
         .candidate-leaf-table__mobile-select-toggle {
             display: flex;
-            margin-bottom: var(--space-sm);
         }
+    }
+
+    .candidate-details-dialog__status {
+        align-self: flex-start;
+    }
+
+    .candidate-details-dialog__body {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-lg);
+    }
+
+    .candidate-details-dialog__match-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: var(--space-sm);
+
+        &:empty {
+            display: none;
+        }
+    }
+
+    .candidate-details-dialog__pager {
+        display: flex;
+        align-items: center;
+        gap: var(--space-xs);
+        color: var(--text-secondary);
+        font-size: var(--text-sm);
+    }
+
+    .candidate-details-dialog__failure {
+        margin: 0 var(--space-lg) var(--space-lg);
     }
 }

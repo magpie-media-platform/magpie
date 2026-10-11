@@ -18,6 +18,7 @@ using Magpie.Sdk.Configuration;
 using Magpie.Sdk.Integrations;
 using Magpie.Sdk.Services;
 
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace Magpie.Core;
@@ -29,11 +30,15 @@ internal sealed class SettingsService(
     IEnumerable<IExtensionSettingsSchemaProvider> schemaProviders,
     IEnumerable<IExtensionConfigurationTester> configurationTesters,
     ILogger<SettingsService> logger,
-    IExtensionRepository extensionRepository) : ISettingsService
+    IExtensionRepository extensionRepository,
+    IServiceScopeFactory scopeFactory) : ISettingsService
 {
     private static readonly IReadOnlyList<string> SystemSettingsGroupNames = [MonitoringGroupName, SetupGroupName];
     private const string MonitoringGroupName = "monitoring";
     private const string SetupGroupName = "setup";
+    private const string GeneralGroupName = "general";
+    private const string InstanceNameKey = "instanceName";
+    private const string DefaultInstanceName = "Magpie";
 
     private static IntegrationSettingsValidationResult Validate(
         IReadOnlyList<SettingSchemaDefinition> schema,
@@ -285,7 +290,8 @@ internal sealed class SettingsService(
             }
         }
 
-        foreach (var binding in await GetExtensionSettingsGroupBindingsAsync(cancellationToken).ConfigureAwait(false))
+        foreach (var binding in await GetExtensionSettingsGroupBindingsAsync(extensionRepository, cancellationToken)
+            .ConfigureAwait(false))
         {
             var definition = binding.Definition;
             var group = await settingsRepository
@@ -334,17 +340,34 @@ internal sealed class SettingsService(
             : null;
     }
 
+    public async Task<string> GetInstanceNameAsync(CancellationToken cancellationToken = default)
+    {
+        var group = await settingsRepository
+            .GetByIdAsync(new(null, GeneralGroupName), cancellationToken)
+            .ConfigureAwait(false);
+        var instanceName = group?.Settings.FirstOrDefault(setting => setting.Key == InstanceNameKey)?.Value.Trim();
+
+        return string.IsNullOrEmpty(instanceName) ? DefaultInstanceName : instanceName;
+    }
+
     public async Task<SettingsGroupDetail?> GetExtensionGroupAsync(
         Guid extensionId,
         string name,
         CancellationToken cancellationToken = default)
     {
-        var binding = await FindExtensionSettingsGroupBindingAsync(extensionId, name, cancellationToken)
+        var scope = scopeFactory.CreateAsyncScope();
+        await using var scopeHandle = scope.ConfigureAwait(false);
+
+        var binding = await FindExtensionSettingsGroupBindingAsync(
+            scope.ServiceProvider.GetRequiredService<IExtensionRepository>(),
+            extensionId,
+            name,
+            cancellationToken)
             .ConfigureAwait(false);
         var settingsExtensionId = binding?.LoadedExtensionId ?? extensionId;
         var schema = binding?.Definition.SettingsSchema;
 
-        var group = await settingsRepository
+        var group = await scope.ServiceProvider.GetRequiredService<ISettingsRepository>()
             .GetByIdAsync(new SettingsGroupLookupKey(settingsExtensionId, name), cancellationToken)
             .ConfigureAwait(false);
         var settings = ToSettings(group);
@@ -387,7 +410,11 @@ internal sealed class SettingsService(
     {
         ArgumentNullException.ThrowIfNull(patch);
 
-        var binding = await FindExtensionSettingsGroupBindingAsync(extensionId, name, cancellationToken)
+        var binding = await FindExtensionSettingsGroupBindingAsync(
+            extensionRepository,
+            extensionId,
+            name,
+            cancellationToken)
             .ConfigureAwait(false);
 
         return await WriteGroupAsync(
@@ -405,7 +432,11 @@ internal sealed class SettingsService(
         IReadOnlyDictionary<string, string> settings,
         CancellationToken cancellationToken = default)
     {
-        var binding = await FindExtensionSettingsGroupBindingAsync(extensionId, name, cancellationToken)
+        var binding = await FindExtensionSettingsGroupBindingAsync(
+            extensionRepository,
+            extensionId,
+            name,
+            cancellationToken)
             .ConfigureAwait(false);
         var settingsExtensionId = binding?.Definition.ExtensionId ?? extensionId;
         var tester = configurationTesters.FirstOrDefault(t =>
@@ -508,21 +539,23 @@ internal sealed class SettingsService(
     }
 
     private async Task<ExtensionSettingsGroupBinding?> FindExtensionSettingsGroupBindingAsync(
+        IExtensionRepository extensions,
         Guid extensionId,
         string name,
         CancellationToken cancellationToken)
     {
-        var bindings = await GetExtensionSettingsGroupBindingsAsync(cancellationToken).ConfigureAwait(false);
+        var bindings = await GetExtensionSettingsGroupBindingsAsync(extensions, cancellationToken)
+            .ConfigureAwait(false);
         return bindings.FirstOrDefault(binding =>
             (binding.LoadedExtensionId == extensionId || binding.Definition.ExtensionId == extensionId) &&
             string.Equals(binding.Definition.Name, name, StringComparison.Ordinal));
     }
 
     private async Task<IReadOnlyList<ExtensionSettingsGroupBinding>> GetExtensionSettingsGroupBindingsAsync(
+        IExtensionRepository extensions,
         CancellationToken cancellationToken)
     {
-        var extensions = await extensionRepository.ListAllAsync(cancellationToken).ConfigureAwait(false);
-        var extensionsByAssemblyName = extensions
+        var extensionsByAssemblyName = (await extensions.ListAllAsync(cancellationToken).ConfigureAwait(false))
             .ToLookup(extension => extension.AssemblyName, StringComparer.OrdinalIgnoreCase);
         var bindings = new List<ExtensionSettingsGroupBinding>();
 

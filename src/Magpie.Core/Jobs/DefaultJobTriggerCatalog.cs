@@ -200,9 +200,9 @@ public static class DefaultJobTriggerCatalog
                 },
                 new()
                 {
-                    JobType = MagpieJobs.Types.PruneOrphanedSubjects,
+                    JobType = MagpieJobs.Types.SubjectMaintenance,
                     Scope = JobScope.Administrative,
-                    Name = "Orphaned subject pruning schedule",
+                    Name = "Subject maintenance schedule",
                     Schedule = "15 2 * * *",
                     ExecutionMode = JobExecutionMode.Queue,
                     Enabled = true,

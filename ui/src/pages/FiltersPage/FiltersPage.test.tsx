@@ -268,6 +268,19 @@ describe('FiltersPage', () => {
         expect(screen.getByRole('heading', { name: 'Filters', level: 1 })).toBeInTheDocument();
     });
 
+    it('PageHeader_ShowsSavedFiltersSubtitle_WhenPageRenders', () => {
+        // Arrange & Act
+        render(
+            <TestWrapper>
+                <FiltersPage />
+            </TestWrapper>,
+        );
+
+        // Assert
+        expect(screen.getByText('Create and manage saved filters.')).toBeInTheDocument();
+        expect(screen.queryByText('Reusable filters for the library and wishlists.')).not.toBeInTheDocument();
+    });
+
     it('renders the page icon as decorative', () => {
         render(
             <TestWrapper>
@@ -932,7 +945,8 @@ describe('FiltersPage duplicate action', () => {
         const button = document.querySelector('[data-action="duplicate"]');
         expect(button).toBeInTheDocument();
         expect(button).toHaveAttribute('data-target', 'filter-1');
-        expect(button).toHaveTextContent('Duplicate');
+        expect(button).toHaveTextContent('Clone');
+        expect(button).not.toHaveTextContent('Duplicate');
     });
 
     it('shows the duplicate item to a requester who cannot edit a shared filter', async () => {
@@ -1025,6 +1039,61 @@ describe('FiltersPage duplicate action', () => {
         await waitFor(() => {
             expect(mockApiPost).toHaveBeenCalled();
         });
+    });
+
+    it('Clone_OpensEditableCopy_WhenRequesterClonesSharedFilter', async () => {
+        // Arrange
+        const user = userEvent.setup();
+
+        render(
+            <TestWrapper role={Role.Requester}>
+                <FiltersPage />
+            </TestWrapper>,
+        );
+
+        await waitFor(() => {
+            expect(screen.getByText('Action Movies')).toBeInTheDocument();
+        });
+        await openOverflowMenu(user, 'filter-1');
+
+        // Act
+        await user.click(document.querySelector('[data-action="duplicate"]') as HTMLButtonElement);
+
+        // Assert
+        const nameInput = await screen.findByLabelText(/name/i);
+        expect(nameInput).toBeEnabled();
+        expect(nameInput).toHaveValue('Action Movies (Copy)');
+        expect(document.querySelector('[data-action="save-filter"]')).toBeInTheDocument();
+    });
+
+    it('Clone_CreatesPersonalCopyWithoutEditingOriginal_WhenRequesterSavesClone', async () => {
+        // Arrange
+        const user = userEvent.setup();
+
+        render(
+            <TestWrapper role={Role.Requester}>
+                <FiltersPage />
+            </TestWrapper>,
+        );
+
+        await waitFor(() => {
+            expect(screen.getByText('Action Movies')).toBeInTheDocument();
+        });
+        await openOverflowMenu(user, 'filter-1');
+        await user.click(document.querySelector('[data-action="duplicate"]') as HTMLButtonElement);
+        await screen.findByRole('dialog');
+
+        // Act
+        await user.click(document.querySelector('[data-action="save-filter"]') as HTMLButtonElement);
+
+        // Assert
+        await waitFor(() => {
+            expect(apiPost).toHaveBeenCalledWith('/content-filters', {
+                name: 'Action Movies (Copy)',
+                criteria: { contentHierarchyItem: { and: [{}] } },
+            });
+        });
+        expect(apiPatch).not.toHaveBeenCalled();
     });
 });
 
@@ -1555,10 +1624,10 @@ describe('FiltersPage view in library action', () => {
 
         const filter1 = document.querySelector('[data-filter-id="filter-1"]');
         const viewButton = filter1?.querySelector('[data-action="view-in-library"]');
-        expect(viewButton).toHaveAttribute('aria-label', 'View Action Movies in Library');
+        expect(viewButton).toHaveAttribute('aria-label', 'Apply Action Movies to Library');
     });
 
-    it('view button shows labeled text', async () => {
+    it('apply button shows labeled text', async () => {
         render(
             <TestWrapper>
                 <FiltersPage />
@@ -1571,7 +1640,28 @@ describe('FiltersPage view in library action', () => {
 
         const filter1 = document.querySelector('[data-filter-id="filter-1"]');
         const viewButton = filter1?.querySelector('[data-action="view-in-library"]');
-        expect(viewButton).toHaveTextContent('View');
+        expect(viewButton).toHaveTextContent(/^Apply$/);
+    });
+
+    it('ApplyButton_ShowsTooltip_WhenHovered', async () => {
+        // Arrange
+        const user = userEvent.setup();
+
+        render(
+            <TestWrapper>
+                <FiltersPage />
+            </TestWrapper>,
+        );
+
+        await waitFor(() => {
+            expect(screen.getByText('Action Movies')).toBeInTheDocument();
+        });
+
+        // Act
+        await user.hover(screen.getByRole('button', { name: 'Apply Action Movies to Library' }));
+
+        // Assert
+        expect(await screen.findByRole('tooltip')).toHaveTextContent(/^Apply to Library$/);
     });
 
     it('navigates to library referencing the saved filter by id', async () => {
@@ -1641,7 +1731,7 @@ describe('FiltersPage search providers action', () => {
 
         const searchItem = document.querySelector('[data-action="search-providers"]') as HTMLElement;
         expect(searchItem).toBeInTheDocument();
-        expect(searchItem).toHaveTextContent('Search providers');
+        expect(searchItem).toHaveTextContent('Search for new content');
         await user.click(searchItem);
 
         expect(mockNavigate).toHaveBeenCalledWith(
@@ -1833,7 +1923,7 @@ describe('FiltersPage wishlist-backed filters', () => {
         expect(screen.queryByText('Edit Filter')).not.toBeInTheDocument();
     });
 
-    it('keeps View and Duplicate available on wishlist-backed rows', async () => {
+    it('keeps Apply and Clone available on wishlist-backed rows', async () => {
         const user = userEvent.setup();
         setupWishlistBackedMocks();
 
@@ -1852,6 +1942,30 @@ describe('FiltersPage wishlist-backed filters', () => {
 
         await openOverflowMenu(user, 'filter-9');
         expect(document.querySelector('[data-action="duplicate"]')).toBeInTheDocument();
+    });
+
+    it('Clone_OpensEditableCopy_WhenFilterBacksAWishlist', async () => {
+        // Arrange
+        const user = userEvent.setup();
+        setupWishlistBackedMocks();
+
+        render(
+            <TestWrapper role={Role.Admin}>
+                <FiltersPage />
+            </TestWrapper>,
+        );
+
+        await waitFor(() => {
+            expect(screen.getByText('Wishlist Backing')).toBeInTheDocument();
+        });
+        await openOverflowMenu(user, 'filter-9');
+
+        // Act
+        await user.click(document.querySelector('[data-action="duplicate"]') as HTMLButtonElement);
+
+        // Assert
+        expect(await screen.findByLabelText(/name/i)).toBeEnabled();
+        expect(document.querySelector('[data-action="save-filter"]')).toBeInTheDocument();
     });
 
     it('keeps edit and delete on a standalone filter', async () => {

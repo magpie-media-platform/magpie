@@ -98,7 +98,7 @@ test.describe.serial('Journey 16: administer and restore the application', () =>
             await page.getByLabel('Instance Name').fill('Journey administration');
             await page.getByLabel('Base URL').fill('https://admin.journey.invalid');
             await page.locator('[data-action="save-settings"]').click();
-            await expect(page.getByText('Magpie updated the general settings.', { exact: true })).toBeVisible();
+            await expect(page.getByText(/ updated the general settings\.$/)).toBeVisible();
 
             expect(settingsRecord(await cli.json<SettingsGroup>(['settings', 'get-system', 'general']))).toMatchObject({
                 instanceName: 'Journey administration',
@@ -595,14 +595,16 @@ test.describe.serial('Journey 16: administer and restore the application', () =>
                 startedAt: string;
             }>('/api/system');
             const health = await api.get<{ status: string }>('/api/system/health');
-            const disk = await api.get<{ totalBytes: number; freeBytes: number; usedBytes: number }>(
-                '/api/system/disk-space',
-            );
+            const disk = await api.get<{
+                folders: Array<{ totalBytes: number; freeBytes: number; usedBytes: number }>;
+            }>('/api/system/disk-space');
             expect(system.version).toBeTruthy();
             expect(system.nodeId).toBeTruthy();
             expect(system.restartSupported).toBe(true);
             expect(health.status).toMatch(/Healthy|Degraded|Unhealthy/);
-            expect(disk.freeBytes + disk.usedBytes).toBe(disk.totalBytes);
+            for (const folder of disk.folders) {
+                expect(folder.freeBytes + folder.usedBytes).toBe(folder.totalBytes);
+            }
 
             const schedules = (await api.get<Array<Named & { jobType: string }>>('/api/schedule-triggers')).filter(
                 (trigger) => trigger.jobType === 'IntegrationHealthCheck',
@@ -754,17 +756,25 @@ test.describe.serial('Journey 16: administer and restore the application', () =>
             await requesterPage.close();
         });
 
-        await test.step('create, download, delete and restore a current-runtime backup', async () => {
+        await test.step('run a scheduled backup and an optimization through database maintenance', async () => {
+            const maintenanceId = await api.post<string>('/api/jobs/enqueue', {
+                jobType: 'DatabaseMaintenance',
+                parameters: { backupEnabled: 'true', optimizeEnabled: 'true' },
+            });
+            expect((await waitForJob(api, maintenanceId, 90_000)).status).toBe('Completed');
+            expect(await api.get<Array<{ kind: string }>>('/api/database/backups')).toContainEqual(
+                expect.objectContaining({ kind: 'Scheduled' }),
+            );
+            expect((await api.get<{ lastOptimizedAt: string | null }>('/api/database')).lastOptimizedAt).not.toBeNull();
+        });
+
+        await test.step('create, delete and restore a current-runtime backup', async () => {
             const fixtureAnchor = resolve(integrationEnvironment.paths.library, 'movies', 'administration-restore.txt');
             await writeFile(fixtureAnchor, 'restore fixture anchor', 'utf8');
-            const backup = await createCheckpoint(api, 'administration-restore-point', [
+            await createCheckpoint(api, 'administration-restore-point', [
                 'library/movies/administration-restore.txt',
                 'test-fixtures/mock-indexer/_active',
             ]);
-            const output = resolve(integrationEnvironment.paths.downloads, 'administration-backup.db');
-            await cli.run(['database', 'download', backup.id, '--output', output]);
-            expect((await stat(output)).size).toBeGreaterThan(0);
-            await rm(output, { force: true });
 
             const disposableId = await cli.json<string>([
                 'jobs',

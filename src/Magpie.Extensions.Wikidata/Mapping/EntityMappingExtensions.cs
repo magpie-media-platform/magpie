@@ -366,14 +366,7 @@ internal static class EntityMappingExtensions
         contribution.BirthDate = EarliestTime(entity, Constants.BirthDatePropertyId)?.PeriodStart();
         contribution.DeathDate = EarliestTime(entity, Constants.DeathDatePropertyId)?.PeriodStart();
         AddAwards(contribution, entity, supportEntities, language);
-        AddExternalId(
-            contribution,
-            Constants.ImdbSource,
-            entity.StringClaimValues(Constants.ImdbPropertyId).FirstOrDefault());
-        AddExternalId(
-            contribution,
-            Constants.TmdbSource,
-            entity.StringClaimValues(Constants.TmdbPersonPropertyId).FirstOrDefault());
+        AddExternalIds(contribution, entity, Constants.PersonExternalIds);
         AddAliases(contribution, entity, language);
         contribution.Images.AddImage(
             entity.StringClaimValues(Constants.ImagePropertyId).FirstOrDefault(),
@@ -394,10 +387,7 @@ internal static class EntityMappingExtensions
         contribution.Established = EarliestTime(entity, Constants.InceptionPropertyId)?.PeriodStart();
         contribution.Dissolved = EarliestTime(entity, Constants.DissolutionPropertyId)?.PeriodStart();
         AddAwards(contribution, entity, supportEntities, language);
-        AddExternalId(
-            contribution,
-            Constants.TmdbSource,
-            entity.StringClaimValues(Constants.TmdbCompanyPropertyId).FirstOrDefault());
+        AddExternalIds(contribution, entity, Constants.StudioExternalIds);
         contribution.Images.AddImage(
             entity.StringClaimValues(Constants.LogoPropertyId).FirstOrDefault(),
             "logo",
@@ -756,6 +746,17 @@ internal static class EntityMappingExtensions
         }
 
         return result;
+    }
+
+    private static void AddExternalIds(
+        MetadataContribution contribution,
+        EntityDto entity,
+        IReadOnlyList<(string Source, string PropertyId)> externalIds)
+    {
+        foreach (var (source, propertyId) in externalIds)
+        {
+            AddExternalId(contribution, source, entity.StringClaimValues(propertyId).FirstOrDefault());
+        }
     }
 
     private static void AddExternalId(

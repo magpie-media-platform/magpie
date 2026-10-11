@@ -42,6 +42,7 @@ internal sealed class SubjectRepository(
 
     private const string UserProviderType = "user";
     private const string SystemProviderType = "system";
+    private const string CreateSavepoint = "content_subject_create";
 
     private const int ParameterBatchSize = 1_000;
 
@@ -196,7 +197,6 @@ internal sealed class SubjectRepository(
                 select new { subject.Id, externalId.Source, externalId.Value };
             var matches = new HashSet<Guid>();
 
-            // Identifier normalization includes GUID and numeric parsing, which SQL providers do not share.
             await foreach (var row in rows.TagWith("Subject identity candidates").AsAsyncEnumerable()
                 .WithCancellation(cancellationToken).ConfigureAwait(false))
             {
@@ -807,56 +807,342 @@ internal sealed class SubjectRepository(
     {
         try
         {
-            var created = await transactionManager.ExecuteWithTransactionAsync(
-                async _ =>
-                {
-                    var now = _time.GetUtcNow().UtcDateTime;
-                    model.CreatedAt = now;
-                    model.CreatedByUserId = createdByUserId;
-
-                    if (model.MetadataContainer is not null)
-                    {
-                        model.MetadataContainer.CreatedAt = now;
-                        model.MetadataContainerId = model.MetadataContainer.Id;
-                        foreach (var contribution in model.MetadataContainer.Contributions)
-                        {
-                            contribution.MetadataContainerId = model.MetadataContainer.Id;
-                            contribution.CreatedAt = now;
-                            contribution.CreatedByUserId ??= createdByUserId;
-                        }
-                    }
-
-                    context.Subjects.Add(model);
-                    await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
-
-                    await auditRecordRepository.CreateAsync(
-                        new()
-                        {
-                            Category = AuditCategories.System,
-                            Operation = "Create",
-                            EntityId = model.Id.ToString(),
-                            EntityType = nameof(Subject),
-                            Detail = $"Created subject of kind {model.Kind}",
-                            Timestamp = now,
-                            UserId = createdByUserId
-                        },
-                        cancellationToken).ConfigureAwait(false);
-
-                    return model;
-                },
-                cancellationToken).ConfigureAwait(false);
-
-            await transactionManager.OnCommittedAsync(
-                token => eventBus.PublishAsync(SubjectEventBuilder.BuildSubjectCreatedEvent(created.Id), token),
-                cancellationToken).ConfigureAwait(false);
-
-            return created;
+            return await CreateCoreAsync(model, createdByUserId, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
             logger.LogError(ex, "The subject repository failed to create a subject of kind {Kind}.", model.Kind);
             throw;
         }
+    }
+
+    /// <inheritdoc />
+    public async Task<bool> TryCreateAsync(
+        Subject model,
+        Guid? createdByUserId,
+        CancellationToken cancellationToken = default)
+    {
+        var transaction = context.Database.CurrentTransaction;
+        var savepointTaken = transaction is { SupportsSavepoints: true };
+        try
+        {
+            if (savepointTaken)
+            {
+                await transaction!.CreateSavepointAsync(CreateSavepoint, cancellationToken).ConfigureAwait(false);
+            }
+
+            await CreateCoreAsync(model, createdByUserId, cancellationToken).ConfigureAwait(false);
+            if (savepointTaken)
+            {
+                await transaction!.ReleaseSavepointAsync(CreateSavepoint, cancellationToken).ConfigureAwait(false);
+            }
+
+            return true;
+        }
+        catch (DbUpdateException ex)
+        {
+            context.Entry(model).State = EntityState.Detached;
+            if (model.MetadataContainer is not null)
+            {
+                context.Entry(model.MetadataContainer).State = EntityState.Detached;
+                foreach (var contribution in model.MetadataContainer.Contributions)
+                {
+                    context.Entry(contribution).State = EntityState.Detached;
+                }
+            }
+
+            if (savepointTaken)
+            {
+                await transaction!.RollbackToSavepointAsync(CreateSavepoint, cancellationToken)
+                    .ConfigureAwait(false);
+                await transaction.ReleaseSavepointAsync(CreateSavepoint, cancellationToken).ConfigureAwait(false);
+            }
+
+            if (!await context.Subjects.AsNoTracking()
+                .AnyAsync(subject => subject.Id == model.Id, cancellationToken)
+                .ConfigureAwait(false))
+            {
+                logger.LogError(ex, "The subject repository failed to create subject {SubjectId}.", model.Id);
+                throw;
+            }
+
+            logger.LogWarning(ex, "The subject {SubjectId} of kind {Kind} already exists", model.Id, model.Kind);
+            return false;
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "The subject repository failed to create subject {SubjectId}.", model.Id);
+            throw;
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<IReadOnlyList<Subject>>> FindDuplicatesAsync(
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var rows = await (
+                from subject in context.Subjects.AsNoTracking()
+                join contribution in context.MetadataContributions.AsNoTracking()
+                    on subject.MetadataContainerId equals contribution.MetadataContainerId
+                join externalId in context.ExternalIds.AsNoTracking()
+                    on contribution.Id equals externalId.MetadataContributionId
+                where externalId.Source != null && externalId.Value != ""
+                select new { SubjectId = subject.Id, subject.Kind, externalId.Source, externalId.Value })
+                .ToListAsync(cancellationToken)
+                .ConfigureAwait(false);
+            var identities = rows
+                .Select(row => (
+                    row.SubjectId,
+                    Identity: (
+                        row.Kind,
+                        Source: row.Source!.NormalizeExternalIdentifierName(),
+                        Value: row.Value.NormalizeExternalIdentifierValue())))
+                .Where(row => row.Identity.Source.Length > 0 && row.Identity.Value.Length > 0)
+                .Distinct()
+                .ToList();
+            var identitiesBySubject = identities.ToLookup(row => row.SubjectId, row => row.Identity);
+            var subjectsByIdentity = identities.ToLookup(row => row.Identity, row => row.SubjectId);
+            var visited = new HashSet<Guid>();
+            var sets = new List<List<Guid>>();
+            foreach (var start in identitiesBySubject)
+            {
+                if (!visited.Add(start.Key))
+                {
+                    continue;
+                }
+
+                List<Guid> set = [start.Key];
+                for (var index = 0; index < set.Count; index++)
+                {
+                    foreach (var identity in identitiesBySubject[set[index]])
+                    {
+                        foreach (var subjectId in subjectsByIdentity[identity])
+                        {
+                            if (visited.Add(subjectId))
+                            {
+                                set.Add(subjectId);
+                            }
+                        }
+                    }
+                }
+
+                var clash = set
+                    .SelectMany(subjectId => identitiesBySubject[subjectId]
+                        .Select(identity => (SubjectId: subjectId, identity.Source, identity.Value)))
+                    .GroupBy(row => row.Source)
+                    .Any(source => source.Select(row => row.Value).Distinct().Count() >
+                        source.GroupBy(row => row.SubjectId).Max(subject => subject.Count()));
+                if (set.Count > 1 && !clash)
+                {
+                    sets.Add(set);
+                }
+            }
+
+            var subjects = await ListIdentityDetailsAsync([.. sets.SelectMany(ids => ids)], cancellationToken)
+                .ConfigureAwait(false);
+            var subjectsById = subjects.ToDictionary(subject => subject.Id);
+
+            return [.. sets
+                .Select(ids => ids.Where(subjectsById.ContainsKey).Select(id => subjectsById[id]).ToList())
+                .Where(set => set.Count > 1)];
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "The subject repository failed to find duplicate subjects.");
+            throw;
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task MergeAsync(
+        Guid survivorId,
+        IReadOnlyCollection<Guid> duplicateIds,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            await transactionManager.ExecuteWithTransactionAsync(
+                async ct =>
+                {
+                    var survivorContainerId = await context.Subjects.AsNoTracking()
+                        .Where(subject => subject.Id == survivorId)
+                        .Select(subject => subject.MetadataContainerId)
+                        .SingleAsync(ct)
+                        .ConfigureAwait(false);
+                    var containerIds = await context.Subjects.AsNoTracking()
+                        .Where(subject => duplicateIds.Contains(subject.Id))
+                        .Select(subject => subject.MetadataContainerId)
+                        .ToListAsync(ct)
+                        .ConfigureAwait(false);
+
+                    await context.Relationships
+                        .Where(relationship => relationship.RelatedMetadataContainerId != null &&
+                            containerIds.Contains(relationship.RelatedMetadataContainerId.Value))
+                        .ExecuteUpdateAsync(
+                            setters => setters.SetProperty(
+                                relationship => relationship.RelatedMetadataContainerId,
+                                survivorContainerId),
+                            ct)
+                        .ConfigureAwait(false);
+
+                    await context.MetadataContributions
+                        .Where(contribution => containerIds.Contains(contribution.MetadataContainerId) &&
+                            contribution.ProviderType == UserProviderType)
+                        .ExecuteUpdateAsync(
+                            setters => setters.SetProperty(
+                                contribution => contribution.MetadataContainerId,
+                                survivorContainerId),
+                            ct)
+                        .ConfigureAwait(false);
+
+                    var survivorContributions = await context.MetadataContributions.AsNoTracking()
+                        .Where(contribution => contribution.MetadataContainerId == survivorContainerId)
+                        .Select(contribution => new { contribution.Id, contribution.ProviderType })
+                        .ToListAsync(ct)
+                        .ConfigureAwait(false);
+                    var duplicateContributions = await context.MetadataContributions.AsNoTracking()
+                        .Where(contribution => containerIds.Contains(contribution.MetadataContainerId))
+                        .Select(contribution => new { contribution.Id, contribution.ProviderType })
+                        .ToListAsync(ct)
+                        .ConfigureAwait(false);
+                    foreach (var contribution in duplicateContributions)
+                    {
+                        var target = survivorContributions.FirstOrDefault(survivorContribution =>
+                            survivorContribution.ProviderType == contribution.ProviderType);
+                        if (target is null)
+                        {
+                            await context.MetadataContributions
+                                .Where(moved => moved.Id == contribution.Id)
+                                .ExecuteUpdateAsync(
+                                    setters => setters.SetProperty(
+                                        moved => moved.MetadataContainerId,
+                                        survivorContainerId),
+                                    ct)
+                                .ConfigureAwait(false);
+                            survivorContributions.Add(contribution);
+                            continue;
+                        }
+
+                        await context.Relationships
+                            .Where(relationship => relationship.MetadataContributionId == contribution.Id)
+                            .ExecuteUpdateAsync(
+                                setters => setters.SetProperty(
+                                    relationship => relationship.MetadataContributionId,
+                                    target.Id),
+                                ct)
+                            .ConfigureAwait(false);
+                    }
+
+                    var survivorContributionIds =
+                        survivorContributions.Select(contribution => contribution.Id).ToList();
+                    var repeatedIds = (await context.Relationships.AsNoTracking()
+                        .Where(relationship => relationship.RelatedMetadataContainerId != null &&
+                            (relationship.RelatedMetadataContainerId == survivorContainerId ||
+                                survivorContributionIds.Contains(relationship.MetadataContributionId)))
+                        .Select(relationship => new
+                        {
+                            relationship.Id,
+                            relationship.MetadataContributionId,
+                            relationship.RelatedMetadataContainerId,
+                            relationship.Kind,
+                            relationship.Qualifier
+                        })
+                        .ToListAsync(ct)
+                        .ConfigureAwait(false))
+                        .GroupBy(relationship => (
+                            relationship.MetadataContributionId,
+                            relationship.RelatedMetadataContainerId,
+                            relationship.Kind,
+                            relationship.Qualifier))
+                        .SelectMany(group => group.Skip(1))
+                        .Select(relationship => relationship.Id)
+                        .ToList();
+                    await context.Relationships
+                        .Where(relationship => repeatedIds.Contains(relationship.Id))
+                        .ExecuteDeleteAsync(ct)
+                        .ConfigureAwait(false);
+
+                    var tags = await context.Tags
+                        .Where(tag => tag.MetadataContainers.Any(container => containerIds.Contains(container.Id)) &&
+                            !tag.MetadataContainers.Any(container => container.Id == survivorContainerId))
+                        .ToListAsync(ct)
+                        .ConfigureAwait(false);
+                    if (tags.Count > 0)
+                    {
+                        var survivorContainer = await context.MetadataContainers
+                            .SingleAsync(container => container.Id == survivorContainerId, ct)
+                            .ConfigureAwait(false);
+                        foreach (var tag in tags)
+                        {
+                            tag.MetadataContainers.Add(survivorContainer);
+                        }
+
+                        await context.SaveChangesAsync(ct).ConfigureAwait(false);
+                    }
+                },
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(
+                ex,
+                "The subject repository failed to merge duplicate subjects into subject {SubjectId}.",
+                survivorId);
+            throw;
+        }
+    }
+
+    private async Task<Subject> CreateCoreAsync(
+        Subject model,
+        Guid? createdByUserId,
+        CancellationToken cancellationToken)
+    {
+        var created = await transactionManager.ExecuteWithTransactionAsync(
+            async _ =>
+            {
+                var now = _time.GetUtcNow().UtcDateTime;
+                model.CreatedAt = now;
+                model.CreatedByUserId = createdByUserId;
+
+                if (model.MetadataContainer is not null)
+                {
+                    model.MetadataContainer.CreatedAt = now;
+                    model.MetadataContainerId = model.MetadataContainer.Id;
+                    foreach (var contribution in model.MetadataContainer.Contributions)
+                    {
+                        contribution.MetadataContainerId = model.MetadataContainer.Id;
+                        contribution.CreatedAt = now;
+                        contribution.CreatedByUserId ??= createdByUserId;
+                    }
+                }
+
+                context.Subjects.Add(model);
+                await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+
+                await auditRecordRepository.CreateAsync(
+                    new()
+                    {
+                        Category = AuditCategories.System,
+                        Operation = "Create",
+                        EntityId = model.Id.ToString(),
+                        EntityType = nameof(Subject),
+                        Detail = $"Created subject of kind {model.Kind}",
+                        Timestamp = now,
+                        UserId = createdByUserId
+                    },
+                    cancellationToken).ConfigureAwait(false);
+
+                return model;
+            },
+            cancellationToken).ConfigureAwait(false);
+
+        await transactionManager.OnCommittedAsync(
+            token => eventBus.PublishAsync(SubjectEventBuilder.BuildSubjectCreatedEvent(created.Id), token),
+            cancellationToken).ConfigureAwait(false);
+
+        return created;
     }
 
     public async Task<bool> UpdateAsync(Subject model, Guid? modifiedByUserId, CancellationToken cancellationToken)

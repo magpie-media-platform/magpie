@@ -43,6 +43,41 @@ describe('LibraryMobileCard', () => {
         expect(screen.getByRole('link')).toHaveAttribute('href', '/library/pilot');
     });
 
+    it('LibraryMobileCard_RendersReadableDescription_WhenStoredOverviewHasMarkdown', () => {
+        // Arrange
+        const item: ContentListItem = {
+            id: 'book',
+            title: 'The Left Hand of Darkness',
+            level: 'ebook',
+            levelLabel: 'E-book',
+            contentType: 'book',
+            monitoring: 'Monitored',
+            effectiveMonitoring: 'Monitored',
+            fulfillment: 'missing',
+            overview:
+                "[Comment by Kim Stanley Robinson, on The Guardian's website][1]: The Left Hand of Darkness by Ursula K Le Guin (1969) > One of my favorite novels is The Left Hand of Darkness. [1]: https://www.theguardian.com/books/2011/may/14/science-fiction-authors-choice",
+        };
+
+        // Act
+        render(
+            <MemoryRouter>
+                <QueryClientProvider client={new QueryClient()}>
+                    <ContentLineageProvider contentTypes={[]}>
+                        <LibraryMobileCard item={item} />
+                    </ContentLineageProvider>
+                </QueryClientProvider>
+            </MemoryRouter>,
+            { wrapper: TooltipProvider },
+        );
+
+        // Assert
+        expect(
+            screen.getByText(
+                "Comment by Kim Stanley Robinson, on The Guardian's website: The Left Hand of Darkness by Ursula K Le Guin (1969) One of my favorite novels is The Left Hand of Darkness.",
+            ),
+        ).toBeInTheDocument();
+    });
+
     it('uses a singular primary-media file label', () => {
         const item: ContentListItem = {
             id: 'history',
@@ -71,7 +106,7 @@ describe('LibraryMobileCard', () => {
         expect(screen.getByText('Media: 1 file · 1 KB')).toBeInTheDocument();
     });
 
-    it('shows inherited unmonitored, external fulfillment, and the fulfillment date independently', () => {
+    it('shows unmonitored, external fulfillment, and the fulfillment date independently', () => {
         // Arrange
         const item: ContentListItem = {
             id: 'external',
@@ -98,7 +133,7 @@ describe('LibraryMobileCard', () => {
         );
 
         // Assert
-        expect(screen.getByLabelText('Unmonitored (inherited)')).toBeInTheDocument();
+        expect(screen.getByLabelText('Unmonitored')).toBeInTheDocument();
         expect(screen.getByText('External')).toBeInTheDocument();
         expect(screen.getByText(/Fulfilled:/)).not.toHaveTextContent('—');
     });

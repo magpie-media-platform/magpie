@@ -115,15 +115,51 @@ jobs:
 
       - run: corepack enable
 
-      - run: bash scripts/package-app.sh "$VERSION" "$RID" artifacts/app $EXTENSION_PROJECTS
+      - run: bash scripts/package-app.sh "$VERSION" "$RID" artifacts/app
 
       - uses: actions/upload-artifact@v7
         with:
           name: app-${{ matrix.rid }}
           path: artifacts/app/*.tar.gz
 
+  installer:
+    needs: [build, pack, app]
+    runs-on: windows-latest
+    env:
+      VERSION: ${{ needs.build.outputs.version }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: app-win-x64
+          path: artifacts/app
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: packages
+          path: artifacts/packages
+
+      - run: >
+          bash scripts/package-installer.sh "$VERSION" "artifacts/app/magpie-$VERSION-win-x64.tar.gz"
+          artifacts/packages artifacts/installer $EXTENSION_PROJECTS
+
+      - run: bash scripts/verify-installer.sh "artifacts/installer/magpie-$VERSION-win-x64.msi" $EXTENSION_PROJECTS
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: installer
+          path: artifacts/installer/*.msi
+
   image:
-    needs: [build, app]
+    needs: [build, pack, app]
     runs-on: ubuntu-latest
     env:
       VERSION: ${{ needs.build.outputs.version }}
@@ -135,16 +171,39 @@ jobs:
           name: app-linux-x64
           path: artifacts/app
 
-      - name: Build image
+      - uses: actions/download-artifact@v8
+        with:
+          name: packages
+          path: artifacts/packages
+
+      - name: Install the Standard extension packages
         run: |
-          mkdir artifacts/image
-          tar -xzf "artifacts/app/magpie-$VERSION-linux-x64.tar.gz" -C artifacts/image
-          docker build --platform linux/amd64 --file Dockerfile --tag "magpie:$VERSION" \
+          mkdir -p artifacts/image/extensions
+          for project in $EXTENSION_PROJECTS; do
+            package="artifacts/packages/$project.$VERSION.nupkg"
+            if [ "$(unzip -Z1 "$package" 'lib/*' | cut -d/ -f2 | sort -u | wc -l)" -ne 1 ]; then
+              echo "$package does not have exactly one lib folder" >&2
+              exit 1
+            fi
+            unzip -q "$package" 'lib/*' '*.nuspec' -d "artifacts/image/extensions/$project"
+          done
+
+      - name: Build images
+        run: |
+          mkdir -p artifacts/image/app
+          tar -xzf "artifacts/app/magpie-$VERSION-linux-x64.tar.gz" -C artifacts/image/app
+          docker build --platform linux/amd64 --file Dockerfile --target standard --tag "magpie:$VERSION" \
             --label "org.opencontainers.image.version=$VERSION" \
             --label "org.opencontainers.image.revision=$GITHUB_SHA" \
             artifacts/image
-          docker run --rm "magpie:$VERSION" version | grep -F "Magpie $VERSION"
-          docker save "magpie:$VERSION" | gzip > "artifacts/magpie-$VERSION-image.tar.gz"
+          docker build --platform linux/amd64 --file Dockerfile --target bare --tag "magpie:$VERSION-bare" \
+            --label "org.opencontainers.image.version=$VERSION" \
+            --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+            artifacts/image
+
+      - run: bash scripts/verify-images.sh "$VERSION" $EXTENSION_PROJECTS
+
+      - run: docker save "magpie:$VERSION" "magpie:$VERSION-bare" | gzip > "artifacts/magpie-$VERSION-image.tar.gz"
 
       - uses: actions/upload-artifact@v7
         with:
@@ -178,7 +237,7 @@ jobs:
           "artifacts/app/magpie-$VERSION-linux-x64.tar.gz" artifacts/packages
 
   publish:
-    needs: [build, pack, app, image, verify]
+    needs: [build, pack, app, installer, image, verify]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     environment: release
@@ -214,8 +273,14 @@ jobs:
         run: |
           docker load --input "artifacts/image/magpie-$VERSION-image.tar.gz"
           echo "$REGISTRY_PASSWORD" | docker login "${MAGPIE_IMAGE%%/*}" --username "$REGISTRY_USERNAME" --password-stdin
-          docker tag "magpie:$VERSION" "$MAGPIE_IMAGE:$VERSION"
-          docker push "$MAGPIE_IMAGE:$VERSION"
+          for tag in "$VERSION" "$VERSION-bare"; do
+            docker tag "magpie:$tag" "$MAGPIE_IMAGE:$tag"
+            docker push "$MAGPIE_IMAGE:$tag"
+          done
+          if [[ "$VERSION" != *-* ]]; then
+            docker tag "magpie:$VERSION" "$MAGPIE_IMAGE:latest"
+            docker push "$MAGPIE_IMAGE:latest"
+          fi
 
       - name: Create the GitHub release
         env:
@@ -225,5 +290,5 @@ jobs:
           if [[ "$VERSION" == *-* ]]; then
             prerelease=(--prerelease)
           fi
-          gh release create "$GITHUB_REF_NAME" artifacts/app-*/*.tar.gz \
+          gh release create "$GITHUB_REF_NAME" artifacts/app-*/*.tar.gz artifacts/installer/*.msi \
             --verify-tag --title "$VERSION" --notes "" "${prerelease[@]}"

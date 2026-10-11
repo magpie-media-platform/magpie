@@ -1,0 +1,56 @@
+@layer components {
+    .content-delete-files {
+        display: flex;
+        flex-direction: column;
+        flex-shrink: 0;
+        margin: var(--space-md) var(--space-lg) 0;
+    }
+
+    .content-delete-files__box {
+        display: flex;
+        flex-direction: column;
+        background-color: var(--bg-primary);
+        border: 1px solid var(--border-default);
+        border-radius: var(--radius-md);
+        font-size: var(--text-sm);
+    }
+
+    .content-delete-files__list {
+        max-height: 40vh;
+        margin: 0;
+        padding: 0;
+        list-style: none;
+        overflow-y: auto;
+    }
+
+    .content-delete-files__file,
+    .content-delete-files__total {
+        display: flex;
+        justify-content: space-between;
+        gap: var(--space-md);
+        padding: var(--space-xs) var(--space-md);
+    }
+
+    .content-delete-files__file + .content-delete-files__file {
+        border-top: 1px solid var(--border-subtle);
+    }
+
+    .content-delete-files__path {
+        min-width: 0;
+        overflow-wrap: anywhere;
+        color: var(--text-secondary);
+    }
+
+    .content-delete-files__size {
+        flex-shrink: 0;
+        white-space: nowrap;
+        color: var(--text-primary);
+    }
+
+    .content-delete-files__total {
+        flex-shrink: 0;
+        border-top: 1px solid var(--border-default);
+        font-weight: var(--weight-semibold);
+        color: var(--text-primary);
+    }
+}

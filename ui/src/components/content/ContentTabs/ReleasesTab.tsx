@@ -41,15 +41,11 @@ export interface ReleaseRow {
 
     properties?: string | null;
 
-    isMatch?: boolean | null;
-
-    rejectionReason?: string | null;
-
     acquisitionStatus?: DownloadStatusValue | null;
 
-    acquisitionWaitingReason?: string | null;
-
     failureReason?: string | null;
+
+    decisionReason?: string | null;
 
     status?: ReleaseScopeStatus;
 }
@@ -117,28 +113,28 @@ function TitleCell({ release, onTitleClick }: { release: ReleaseRow; onTitleClic
 function StatusCell({
     status,
     failureReason,
-    waitingReason,
+    decisionReason,
     unmatched,
 }: {
     status?: DownloadStatusValue | null;
     failureReason?: string | null;
-    waitingReason?: string | null;
+    decisionReason?: string | null;
     unmatched?: boolean;
 }) {
     if (!unmatched) {
-        return <AcquisitionStatus status={status} failureReason={failureReason} waitingReason={waitingReason} />;
+        return <AcquisitionStatus status={status} failureReason={failureReason} decisionReason={decisionReason} />;
     }
     const unmatchedBadge = (
         <Badge variant="default" size="sm" dot data-acquisition-status="Unmatched">
             Unmatched
         </Badge>
     );
-    if (!status && !waitingReason) {
+    if (!status) {
         return unmatchedBadge;
     }
     return (
         <span className="releases-tab__statuses">
-            <AcquisitionStatus status={status} failureReason={failureReason} waitingReason={waitingReason} />
+            <AcquisitionStatus status={status} failureReason={failureReason} />
             {unmatchedBadge}
         </span>
     );
@@ -147,24 +143,18 @@ function StatusCell({
 function AcquisitionStatus({
     status,
     failureReason,
-    waitingReason,
+    decisionReason,
 }: {
     status?: DownloadStatusValue | null;
     failureReason?: string | null;
-    waitingReason?: string | null;
+    decisionReason?: string | null;
 }) {
-    if (waitingReason) {
-        return (
-            <span data-acquisition-status="Waiting">
-                <Badge variant="queued" size="sm" dot>
-                    Waiting for capacity
-                </Badge>
-                <span className="releases-tab__waiting-reason">{waitingReason}</span>
-            </span>
-        );
-    }
     if (!status) {
-        return <span className="releases-tab__empty-cell">-</span>;
+        return decisionReason ? (
+            <span className="releases-tab__reason">{decisionReason}</span>
+        ) : (
+            <span className="releases-tab__empty-cell">-</span>
+        );
     }
     return <ReleaseStatusBadge status={status} failureReason={failureReason} />;
 }
@@ -212,7 +202,7 @@ function ActionCell({
     onUnmatchChange?: (release: ReleaseRow, status: ReleaseScopeStatus) => void;
 }) {
     const status = release.acquisitionStatus;
-    const showGrab = canGrab && !release.acquisitionWaitingReason && canRegrab(status);
+    const showGrab = canGrab && canRegrab(status);
     if (!showGrab && !onUnmatchChange) {
         return null;
     }
@@ -275,7 +265,7 @@ export const ReleasesTab = forwardRef<HTMLDivElement, ReleasesTabProps>(
             onUnmatchChange,
             unmatchingReleaseIds = new Set(),
             onTitleClick,
-            emptyMessage = 'No releases found. Try Search Now to query indexers.',
+            emptyMessage = 'No releases found. Try Search releases to query indexers.',
             className,
             ...props
         },
@@ -310,12 +300,12 @@ export const ReleasesTab = forwardRef<HTMLDivElement, ReleasesTabProps>(
                     id: 'status',
                     accessorKey: 'acquisitionStatus',
                     header: 'Status',
-                    size: 140,
+                    size: 176,
                     cell: ({ row }) => (
                         <StatusCell
                             status={row.original.acquisitionStatus}
                             failureReason={row.original.failureReason}
-                            waitingReason={row.original.acquisitionWaitingReason}
+                            decisionReason={row.original.decisionReason}
                             unmatched={row.original.status === 'Unmatched'}
                         />
                     ),
@@ -406,7 +396,7 @@ export const ReleasesTab = forwardRef<HTMLDivElement, ReleasesTabProps>(
                                         <StatusCell
                                             status={release.acquisitionStatus}
                                             failureReason={release.failureReason}
-                                            waitingReason={release.acquisitionWaitingReason}
+                                            decisionReason={release.decisionReason}
                                             unmatched={release.status === 'Unmatched'}
                                         />
                                         <span className="releases-tab__mobile-date">

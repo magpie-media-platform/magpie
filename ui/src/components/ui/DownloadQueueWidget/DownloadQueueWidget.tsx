@@ -1,10 +1,9 @@
 import { LocalContentLink } from '@/components/content/LocalContentPreview';
 import { forwardRef, memo, type HTMLAttributes, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
-import { ArrowCounterClockwiseIcon, TrayIcon, WarningCircleIcon } from '@phosphor-icons/react';
+import { TrayIcon } from '@phosphor-icons/react';
 
-import { Alert } from '@/components/ui/Alert';
-import { Button } from '@/components/ui/Button';
+import { LoadErrorAlert } from '@/components/ui/LoadErrorAlert';
 import { ContentLineageTitle } from '@/components/content/ContentLineageTitle';
 import { EmptyState } from '@/components/ui/EmptyState';
 import type { DownloadState, DownloadStateCounts, ActiveDownloadItem } from '@/types/system';
@@ -169,14 +168,7 @@ const DownloadQueueWidgetBase = forwardRef<HTMLDivElement, DownloadQueueWidgetPr
                             <SharedStatusRow loading />
                         </>
                     ) : error ? (
-                        <Alert variant="error" icon={<WarningCircleIcon weight="duotone" />} title="Failed to load">
-                            {onRetry && (
-                                <Button variant="ghost" size="sm" onClick={onRetry}>
-                                    <ArrowCounterClockwiseIcon weight="bold" aria-hidden="true" />
-                                    Try again
-                                </Button>
-                            )}
-                        </Alert>
+                        <LoadErrorAlert onRetry={onRetry} />
                     ) : showEmptyState ? null : (
                         <>
                             <StatusRow

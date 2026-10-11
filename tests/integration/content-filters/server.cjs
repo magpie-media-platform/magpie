@@ -19,8 +19,9 @@ const ui = path.join(runtime, 'ui');
 fs.cpSync(builtUi, ui, { recursive: true });
 const extensions = path.join(runtime, 'extensions');
 fs.mkdirSync(extensions);
-for (const name of ['Movies', 'Tv']) {
-    fs.cpSync(path.join(workspace, 'src/Magpie.Extensions.' + name + '/bin/Release/netstandard2.1'), path.join(extensions, name), { recursive: true });
+for (const id of ['Magpie.Extensions.Movies', 'Magpie.Extensions.Tv']) {
+    fs.cpSync(path.join(workspace, 'src', id, 'bin/Release/netstandard2.1'), path.join(extensions, id, 'lib/netstandard2.1'), { recursive: true });
+    fs.writeFileSync(path.join(extensions, id, id + '.nuspec'), `<package><metadata><id>${id}</id><version>1.0.0</version></metadata></package>`);
 }
 const backend = spawn('dotnet', [artifact, 'run'], {
     cwd: runtime, windowsHide: true,

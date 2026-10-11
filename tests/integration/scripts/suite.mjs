@@ -41,7 +41,6 @@ try {
   await rm(suiteLockPath, { force: true });
 }
 
-// One compose project over one set of bind-mounted directories: a second run tears the first one down.
 async function acquireSuiteLock() {
   for (let attempt = 0; attempt < 2; attempt += 1) {
     let lock;

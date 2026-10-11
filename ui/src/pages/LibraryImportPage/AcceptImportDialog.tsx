@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useLayoutEffect, useRef, useState, type RefObject } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { Button } from '@/components/ui/Button';
@@ -15,10 +15,12 @@ import { Label } from '@/components/ui/Label';
 import { Checkbox } from '@/components/ui/Checkbox';
 import { RenamePreviewTable, type FileRenamePreview } from '@/components/content/FileRenameDialog';
 import { apiPost } from '@/lib/api';
+import { returnFocusOnClose } from '@/lib/returnFocus';
 import type { LibraryImportSubmissionResult } from '@/hooks/useBulkAcceptLibraryImportCandidates';
 import type { LibraryImportMonitoringMode } from '@/hooks/useBulkAcceptLibraryImportCandidates';
 import { libraryImportCandidateQueryKeys } from '@/hooks/useLibraryImportCandidates';
 import { libraryImportCandidateGroupQueryKeys } from '@/hooks/useLibraryImportCandidateGroups';
+import { useInstanceName } from '@/hooks/useInstanceName';
 
 import { ImportMonitoringSelect } from './ImportMonitoringSelect';
 
@@ -29,6 +31,9 @@ export interface ImportRenameSelection {
 
 export type ImportAcceptAction = ((monitoringMode: LibraryImportMonitoringMode) => void | Promise<void>) & {
     renameSelection?: ImportRenameSelection;
+
+    /** Where focus goes after Accept, and when the control that opened the dialog is gone. */
+    fallbackFocusRef?: RefObject<HTMLElement | null>;
 };
 
 interface AcceptImportDialogProps {
@@ -44,12 +49,25 @@ export function AcceptImportDialog({
     onMonitoringModeChange,
     onClose,
 }: AcceptImportDialogProps) {
+    const instanceName = useInstanceName();
+    const openerRef = useRef<HTMLElement | null>(null);
+    const fallbackFocusRef = useRef<HTMLElement | null>(null);
+    useLayoutEffect(() => {
+        if (!action) return;
+        openerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+        fallbackFocusRef.current =
+            openerRef.current?.closest<HTMLElement>('[role="dialog"]') ?? action.fallbackFocusRef?.current ?? null;
+    }, [action]);
     return (
         <Dialog open={action !== null} onOpenChange={(open) => !open && onClose()}>
-            <DialogContent data-component="accept-import-dialog" className="file-rename-dialog">
+            <DialogContent
+                data-component="accept-import-dialog"
+                className="file-rename-dialog"
+                onCloseAutoFocus={returnFocusOnClose(openerRef, fallbackFocusRef)}
+            >
                 <DialogHeader>
                     <DialogTitle>Accept import</DialogTitle>
-                    <DialogDescription>Choose how Magpie monitors this import.</DialogDescription>
+                    <DialogDescription>Choose how {instanceName} monitors this import.</DialogDescription>
                 </DialogHeader>
                 <AcceptImportForm
                     renameSelection={action?.renameSelection}
@@ -57,6 +75,9 @@ export function AcceptImportDialog({
                     onCancel={onClose}
                     onMonitoringModeChange={onMonitoringModeChange}
                     onAccept={(mode) => {
+                        if (action?.fallbackFocusRef) {
+                            openerRef.current = null;
+                        }
                         onMonitoringModeChange(mode);
                         onClose();
                         void action?.(mode);

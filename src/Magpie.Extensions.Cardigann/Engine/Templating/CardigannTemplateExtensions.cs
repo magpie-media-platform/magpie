@@ -44,7 +44,7 @@ internal static class CardigannTemplateExtensions
 
     private static readonly Regex SimpleVariableRegex = new(@"{{\s*(\..+?)\s*}}", RegexOptions.Compiled);
 
-    private const string TrueVar = ".True";
+    internal const string TrueVar = ".True";
 
     private const string FalseVar = ".False";
 

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useQuery, useQueries, useMutation, useQueryClient, type QueryKey } from '@tanstack/react-query';
+import { skipToken, useQuery, useQueries, useMutation, useQueryClient, type QueryKey } from '@tanstack/react-query';
 
 import { type ApiTag, tagQueryKeys } from '@/hooks/useTags';
 import { createMetadataInspectorHooks, relatedContentSubjectRefs } from '@/hooks/metadataInspectorHooks';
@@ -24,6 +24,7 @@ import {
     type BulkContentDeleteRequest,
     type BulkContentPatchRequest,
     type BulkResult,
+    type ContentDeleteFile,
     type ContentListResult,
     type ContentRelationship,
     type EffectiveQualityTierList,
@@ -46,6 +47,7 @@ export const contentQueryKeys = {
     metadataInspector: (id: string) => ['content', 'metadata-inspector', id] as const,
     effectiveRootFolder: (id: string) => ['content', 'effective-root-folder', id] as const,
     effectiveQualityTierList: (id: string) => ['content', 'effective-quality-tier-list', id] as const,
+    deletePreview: (request?: BulkContentDeleteRequest) => ['content', 'delete-preview', request] as const,
 };
 
 const CONTENT_CHANGE_EVENTS = [
@@ -397,7 +399,10 @@ async function searchContentReleases({ id, mode }: SearchContentReleasesParams):
     });
 }
 
-export function useContentList(params?: ContentQueryParams, options?: { enabled?: boolean }) {
+export function useContentList(
+    params?: ContentQueryParams,
+    options?: { enabled?: boolean; keepPreviousData?: boolean },
+) {
     const queryClient = useQueryClient();
     const hasFilters = Boolean(
         params?.contentType ||
@@ -441,6 +446,14 @@ export function useContentList(params?: ContentQueryParams, options?: { enabled?
         }),
         staleTime: POLLING_INTERVALS.slow / 2,
         enabled: options?.enabled ?? true,
+        placeholderData: options?.keepPreviousData
+            ? (previousData, previousQuery) => {
+                  const [, , previous] = previousQuery?.queryKey ?? [];
+                  return previous?.contentType === params?.contentType && previous?.level === params?.level
+                      ? previousData
+                      : undefined;
+              }
+            : undefined,
     });
 }
 
@@ -772,6 +785,19 @@ async function bulkPatchContent(request: BulkContentPatchRequest): Promise<BulkR
 
 async function bulkDeleteContent(request: BulkContentDeleteRequest): Promise<BulkResult> {
     return apiPost<BulkResult>('/content/bulk/delete', request);
+}
+
+async function previewBulkDeleteContent(request: BulkContentDeleteRequest): Promise<ContentDeleteFile[]> {
+    return apiPost<ContentDeleteFile[]>('/content/bulk/delete-preview', request);
+}
+
+export function useBulkDeletePreview(request: BulkContentDeleteRequest | undefined) {
+    return useQuery({
+        queryKey: contentQueryKeys.deletePreview(request),
+        queryFn: request ? () => previewBulkDeleteContent(request) : skipToken,
+        staleTime: 'static',
+        gcTime: 0,
+    });
 }
 
 export function useBulkPatchContent() {

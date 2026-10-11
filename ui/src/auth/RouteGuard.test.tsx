@@ -1,9 +1,11 @@
 import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 
 import { AuthTestProvider as AuthProvider } from '@/test/AuthTestProvider';
+import { testEffectivePermissions } from '@/test/permissions';
 import { AuthProvider as CatalogAuthProvider } from './AuthContext';
 import { RequireAuth, RoleGuard } from './RouteGuard';
 import { Role } from './types';
@@ -214,6 +216,66 @@ describe('RoleGuard', () => {
         );
 
         expect(screen.getByRole('status', { name: 'Loading page' })).toBeInTheDocument();
+    });
+
+    it('renders an error with retry rather than loading when the permission request fails', async () => {
+        // Arrange
+        vi.stubGlobal('fetch', () => Promise.resolve(new Response(null, { status: 500 })));
+
+        // Act
+        renderWithRouter(
+            <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+                <CatalogAuthProvider initialUser={{ id: '1', username: 'user', role: Role.Requester }}>
+                    <Routes>
+                        <Route
+                            path="/"
+                            element={
+                                <RoleGuard permission="content.add">
+                                    <span>Add content</span>
+                                </RoleGuard>
+                            }
+                        />
+                    </Routes>
+                </CatalogAuthProvider>
+            </QueryClientProvider>,
+        );
+
+        // Assert
+        expect(await screen.findByRole('button', { name: 'Retry' })).toBeInTheDocument();
+        expect(screen.queryByRole('status', { name: 'Loading page' })).not.toBeInTheDocument();
+    });
+
+    it('renders the gated route when a retry of the failed permission request succeeds', async () => {
+        // Arrange
+        vi.stubGlobal(
+            'fetch',
+            vi
+                .fn()
+                .mockResolvedValueOnce(new Response(null, { status: 500 }))
+                .mockResolvedValueOnce(Response.json(testEffectivePermissions(Role.Requester))),
+        );
+        renderWithRouter(
+            <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+                <CatalogAuthProvider initialUser={{ id: '1', username: 'user', role: Role.Requester }}>
+                    <Routes>
+                        <Route
+                            path="/"
+                            element={
+                                <RoleGuard permission="content.add">
+                                    <span>Add content</span>
+                                </RoleGuard>
+                            }
+                        />
+                    </Routes>
+                </CatalogAuthProvider>
+            </QueryClientProvider>,
+        );
+
+        // Act
+        await userEvent.click(await screen.findByRole('button', { name: 'Retry' }));
+
+        // Assert
+        expect(await screen.findByText('Add content')).toBeInTheDocument();
     });
 
     it('allows Manager when Manager role is required', () => {

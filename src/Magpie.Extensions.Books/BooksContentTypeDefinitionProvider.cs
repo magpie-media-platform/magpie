@@ -172,14 +172,14 @@ internal sealed class BooksContentTypeDefinitionProvider :
                 .Prepend(metadata?.Title)
             where !string.IsNullOrWhiteSpace(title)
             select title.Trim()).ToArray();
-        var titleMatched = titles.Any(title =>
+        var matchedTitle = titles.FirstOrDefault(title =>
         {
             var normalizedTitle = title.NormalizeMediaFilename();
             return normalizedTitle.Length > 0 && normalizedRelease.Contains(
                 string.Concat(" ", normalizedTitle, " "),
                 StringComparison.OrdinalIgnoreCase);
         });
-        if (!titleMatched)
+        if (matchedTitle is null)
         {
             return !titles.Any()
                 ? ReleaseMatchResult.Indeterminate
@@ -205,19 +205,23 @@ internal sealed class BooksContentTypeDefinitionProvider :
             }
         }
 
-        var yearMatches = release.Title.FindYearTokens();
         if (metadata?.PublishDate?.Year is { } year)
         {
-            if (yearMatches.Count == 0)
+            var releaseYears = release.Title
+                .FindYearTokens()
+                .Select(static match => match.Value)
+                .ToList();
+            foreach (Match titleYear in matchedTitle.FindYearTokens())
+            {
+                releaseYears.Remove(titleYear.Value);
+            }
+
+            if (releaseYears.Count == 0)
             {
                 return ReleaseMatchResult.Indeterminate;
             }
 
-            if (!int.TryParse(
-                yearMatches[^1].Groups[1].Value,
-                NumberStyles.None,
-                CultureInfo.InvariantCulture,
-                out var parsedYear) ||
+            if (!int.TryParse(releaseYears[^1], NumberStyles.None, CultureInfo.InvariantCulture, out var parsedYear) ||
                 parsedYear != year)
             {
                 return ReleaseMatchResult.NoMatch;

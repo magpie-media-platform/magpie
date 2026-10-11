@@ -57,7 +57,8 @@ export type DownloadFailureReasonValue =
     | 'DownloadErrored'
     | 'ImportFailed'
     | 'NoCompatibleClient'
-    | 'ClientRejected';
+    | 'ClientRejected'
+    | 'InsufficientDestinationSpace';
 
 export const downloadFailureReasonLabels: Record<DownloadFailureReasonValue, string> = {
     BlockedExecutable: 'Blocked executable',
@@ -68,6 +69,7 @@ export const downloadFailureReasonLabels: Record<DownloadFailureReasonValue, str
     ImportFailed: 'Import failed',
     NoCompatibleClient: 'No compatible client',
     ClientRejected: 'Client rejected',
+    InsufficientDestinationSpace: 'Insufficient destination space',
 };
 
 export interface ApiDownload {

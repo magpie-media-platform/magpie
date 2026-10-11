@@ -48,7 +48,6 @@ function releaseRows(release: ReleaseSummary): DetailRow[] {
         { label: 'Protocol', value: release.protocol },
         { label: 'Size', value: release.size && release.size > 0 ? formatFileSize(release.size) : null },
         { label: 'Published', value: release.publishDate ? formatDateTime(release.publishDate) : null },
-        { label: 'External id', value: release.externalId, mono: true },
         {
             label: 'Categories',
             value: release.categories && release.categories.length > 0 ? release.categories.join(', ') : null,
@@ -57,6 +56,7 @@ function releaseRows(release: ReleaseSummary): DetailRow[] {
             label: 'Languages',
             value: release.languages && release.languages.length > 0 ? release.languages.join(', ') : null,
         },
+        { label: 'External id', value: release.externalId, mono: true },
         { label: 'Release page', value: safeHttpUrl(release.infoUrl) },
     ].filter(hasValue);
 }
@@ -99,10 +99,12 @@ function propertyRows(properties?: string | null): DetailRow[] {
         return [];
     }
 
+    const text: DetailRow[] = [{ label: 'Properties', value: properties, mono: true, multiline: true }];
+
     try {
         const parsed: unknown = JSON.parse(properties);
         if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object') {
-            return [{ label: 'Properties', value: properties }];
+            return text;
         }
 
         return Object.entries(parsed)
@@ -111,10 +113,10 @@ function propertyRows(properties?: string | null): DetailRow[] {
                 key,
                 label: key,
                 value: value === null ? 'null' : typeof value === 'object' ? JSON.stringify(value) : String(value),
-            }))
-            .filter(hasValue);
+                mono: true,
+            }));
     } catch {
-        return [{ label: 'Properties', value: properties }];
+        return text;
     }
 }
 
@@ -124,6 +126,8 @@ export function ReleaseDetailSections({
     downloadLoading = false,
     clientName = '',
 }: ReleaseDetailSectionsProps) {
+    const properties = propertyRows(release.properties);
+
     return (
         <>
             <DetailsPanel variant="dialog" rows={releaseRows(release)} data-component="release-summary" />
@@ -149,8 +153,10 @@ export function ReleaseDetailSections({
             <DetailsPanel
                 variant="dialog"
                 title="Indexer properties"
-                rows={propertyRows(release.properties)}
-                data-component="release-indexer-properties"
+                rows={properties}
+                data-component={
+                    properties[0]?.key === undefined ? 'release-indexer-properties-text' : 'release-indexer-properties'
+                }
             />
         </>
     );

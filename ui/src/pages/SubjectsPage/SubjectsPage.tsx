@@ -4,7 +4,6 @@ import { WarningCircleIcon } from '@phosphor-icons/react';
 import { type PaginationState, type SortingState, type Updater } from '@tanstack/react-table';
 
 import { Badge } from '@/components/ui/Badge';
-import { Button } from '@/components/ui/Button';
 import { CdnPhosphorIcon } from '@/components/ui/CdnPhosphorIcon';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { MobileMediaCard } from '@/components/ui/MobileMediaCard';
@@ -344,11 +343,7 @@ export function SubjectsPage() {
                             icon={<WarningCircleIcon weight="duotone" />}
                             title={`Failed to load ${pageTitle.toLowerCase()}`}
                             description={getErrorMessage(error)}
-                            action={
-                                <Button variant="secondary" size="sm" onClick={() => refetch()}>
-                                    Retry
-                                </Button>
-                            }
+                            onRetry={refetch}
                         />
                     ) : (
                         <>

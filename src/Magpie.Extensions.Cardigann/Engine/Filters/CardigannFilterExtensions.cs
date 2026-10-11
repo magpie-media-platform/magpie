@@ -7,6 +7,8 @@ using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 
+using Magpie.Extensions.Cardigann.Engine.Templating;
+
 namespace Magpie.Extensions.Cardigann.Engine.Filters;
 
 internal static class CardigannFilterExtensions
@@ -17,6 +19,7 @@ internal static class CardigannFilterExtensions
         this string input,
         string filterName,
         object? args,
+        IReadOnlyDictionary<string, object?> variables,
         TimeProvider timeProvider)
     {
         var data = input ?? string.Empty;
@@ -41,13 +44,13 @@ internal static class CardigannFilterExtensions
                     return Regexp(data, ArgString(args));
 
                 case "re_replace":
-                    return ReReplace(data, ArgAt(args, 0), ArgAt(args, 1));
+                    return ReReplace(data, ArgAt(args, 0), ArgAt(args, 1)?.RenderCardigannTemplate(variables));
 
                 case "split":
                     return Split(data, ArgAt(args, 0), ArgAt(args, 1));
 
                 case "replace":
-                    return Replace(data, ArgAt(args, 0), ArgAt(args, 1));
+                    return Replace(data, ArgAt(args, 0), ArgAt(args, 1)?.RenderCardigannTemplate(variables));
 
                 case "replacechars":
                     return ReplaceChars(data, ArgAt(args, 0), ArgAt(args, 1));
@@ -56,10 +59,10 @@ internal static class CardigannFilterExtensions
                     return Trim(data, ArgString(args));
 
                 case "prepend":
-                    return (ArgString(args) ?? string.Empty) + data;
+                    return (ArgString(args)?.RenderCardigannTemplate(variables) ?? string.Empty) + data;
 
                 case "append":
-                    return data + (ArgString(args) ?? string.Empty);
+                    return data + (ArgString(args)?.RenderCardigannTemplate(variables) ?? string.Empty);
 
                 case "tolower":
                     return data.ToLowerInvariant();
@@ -504,9 +507,14 @@ internal static class CardigannFilterExtensions
             layout.Contains("h", StringComparison.Ordinal) ||
             layout.Contains("d", StringComparison.Ordinal);
         if (usesDateParts &&
-            DateTime.TryParseExact(date, layout, CultureInfo.InvariantCulture, DateTimeStyles.None, out var direct))
+            DateTime.TryParseExact(
+                date,
+                layout,
+                CultureInfo.InvariantCulture,
+                DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal,
+                out var direct))
         {
-            return DateTime.SpecifyKind(direct, DateTimeKind.Utc);
+            return direct;
         }
 
         var format = layout
@@ -542,7 +550,12 @@ internal static class CardigannFilterExtensions
             .Replace("-07:00", "zzz", StringComparison.Ordinal)
             .Replace("-07", "zz", StringComparison.Ordinal);
 
-        if (!DateTime.TryParseExact(date, format, CultureInfo.InvariantCulture, DateTimeStyles.None, out var parsed))
+        if (!DateTime.TryParseExact(
+            date,
+            format,
+            CultureInfo.InvariantCulture,
+            DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal,
+            out var parsed))
         {
             return null;
         }
@@ -552,7 +565,7 @@ internal static class CardigannFilterExtensions
             parsed = parsed.AddYears(-1);
         }
 
-        return DateTime.SpecifyKind(parsed, DateTimeKind.Utc);
+        return parsed;
     }
 
     private static string ToIso(DateTime value)

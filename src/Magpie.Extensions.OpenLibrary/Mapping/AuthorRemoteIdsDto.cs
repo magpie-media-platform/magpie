@@ -18,4 +18,13 @@ internal sealed record AuthorRemoteIdsDto
 
     [JsonPropertyName("amazon")]
     public string? Amazon { get; init; }
+
+    [JsonPropertyName("librarything")]
+    public string? LibraryThing { get; init; }
+
+    [JsonPropertyName("imdb")]
+    public string? Imdb { get; init; }
+
+    [JsonPropertyName("musicbrainz")]
+    public string? MusicBrainz { get; init; }
 }

@@ -11,6 +11,12 @@ import { clearAuthStorage } from '@/lib/tokenStorage';
 
 import { LoginPage } from './LoginPage';
 
+const instanceNameState = vi.hoisted(() => ({ name: 'Magpie' }));
+
+vi.mock('@/hooks/useInstanceName', () => ({
+    useInstanceName: () => instanceNameState.name,
+}));
+
 vi.mock('@/lib/authApi', async (importOriginal) => {
     const actual = await importOriginal<typeof import('@/lib/authApi')>();
     return {
@@ -51,11 +57,21 @@ function LocationProbe() {
 describe('LoginPage', () => {
     beforeEach(() => {
         vi.resetAllMocks();
+        instanceNameState.name = 'Magpie';
         clearAuthStorage();
     });
 
     afterEach(() => {
         vi.restoreAllMocks();
+    });
+
+    it('renders the instance name as the heading when the instance name is set', () => {
+        instanceNameState.name = 'Home Lab';
+
+        renderLoginPage();
+
+        expect(screen.getByRole('heading', { name: 'Home Lab' })).toBeInTheDocument();
+        expect(screen.queryByRole('heading', { name: 'Magpie' })).not.toBeInTheDocument();
     });
 
     it('renders the sign in form', () => {

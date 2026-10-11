@@ -3,7 +3,6 @@ using System.Threading;
 using System.Threading.Tasks;
 
 using Magpie.Models.Api;
-using Magpie.Models.Data;
 using Magpie.Sdk.Api;
 using Magpie.Sdk.Services;
 
@@ -26,7 +25,7 @@ internal sealed class IndexerSearchEndpointGroup : IApiEndpointGroup
             .ProducesProblem(StatusCodes.Status400BadRequest)
             .RequireAdmin();
 
-        builder.MapPost("{contentHierarchyItemId:guid}/match", MatchAsync)
+        builder.MapPost("{contentHierarchyItemId:guid}/match/{releaseId:guid}", MatchAsync)
             .WithName(nameof(MatchAsync))
             .Produces<Guid>()
             .ProducesProblem(StatusCodes.Status404NotFound)
@@ -51,13 +50,13 @@ internal sealed class IndexerSearchEndpointGroup : IApiEndpointGroup
         [FromServices] IIndexerService indexerService,
         AuthenticatedUser user,
         Guid contentHierarchyItemId,
-        Release request,
+        Guid releaseId,
         CancellationToken cancellationToken)
     {
-        var releaseId = await indexerService
-            .MatchAsync(contentHierarchyItemId, request, user.Id, cancellationToken)
+        var matchedReleaseId = await indexerService
+            .MatchAsync(contentHierarchyItemId, releaseId, user.Id, cancellationToken)
             .ConfigureAwait(false);
 
-        return releaseId is { } id ? Results.Ok(id) : Results.NotFound();
+        return matchedReleaseId is { } id ? Results.Ok(id) : Results.NotFound();
     }
 }

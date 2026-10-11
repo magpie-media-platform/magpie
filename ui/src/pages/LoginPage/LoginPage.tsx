@@ -8,6 +8,7 @@ import { Label } from '@/components/ui/Label';
 import { Logo } from '@/components/ui/Logo';
 import { useAuth } from '@/auth';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
+import { useInstanceName } from '@/hooks/useInstanceName';
 import { isApiError } from '@/lib/api';
 import { RouteLoadingState } from '@/router/RouteLoadingState';
 
@@ -47,6 +48,7 @@ function getRedirectTarget(from?: LoginFromLocation): string {
 
 export function LoginPage(): ReactNode {
     useDocumentTitle('Sign In');
+    const instanceName = useInstanceName();
 
     const { isAuthenticated, isLoading, login } = useAuth();
     const navigate = useNavigate();
@@ -95,7 +97,7 @@ export function LoginPage(): ReactNode {
             <div className="login-page__card">
                 <div className="login-page__brand">
                     <Logo size={48} variant="solid" />
-                    <h1 className="login-page__title">Magpie</h1>
+                    <h1 className="login-page__title">{instanceName}</h1>
                     <p className="login-page__subtitle">Sign in to continue</p>
                 </div>
 

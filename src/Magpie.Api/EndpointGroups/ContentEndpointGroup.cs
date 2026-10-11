@@ -97,6 +97,12 @@ internal sealed class ContentEndpointGroup : IApiEndpointGroup
             .ProducesProblem(StatusCodes.Status400BadRequest)
             .RequireManager();
 
+        builder.MapPost("bulk/delete-preview", PreviewBulkDeleteContentAsync)
+            .WithName(nameof(PreviewBulkDeleteContentAsync))
+            .Produces<IReadOnlyList<ContentDeleteFile>>()
+            .ProducesProblem(StatusCodes.Status400BadRequest)
+            .RequireManager();
+
         builder.MapPost("from-external-id", HydrateExternalContentAsync)
             .WithName(nameof(HydrateExternalContentAsync))
             .Produces<Guid>(StatusCodes.Status200OK)
@@ -394,6 +400,27 @@ internal sealed class ContentEndpointGroup : IApiEndpointGroup
             .ConfigureAwait(false);
 
         return Results.Ok(result);
+    }
+
+    internal async Task<IResult> PreviewBulkDeleteContentAsync(
+        [FromServices] IFilterService filterService,
+        [FromServices] IContentService contentService,
+        [FromBody] BulkContentDeleteRequest request,
+        CancellationToken cancellationToken)
+    {
+        var (filterCriteria, error) = ParseFilter(filterService, request.Filter);
+        if (error is not null)
+        {
+            return FilterParseProblem(error);
+        }
+
+        var action = new BulkAction<ContentFilterCriteria> { Ids = request.Ids, Filter = filterCriteria };
+
+        var files = await contentService
+            .PreviewBulkDeleteAsync(action, request.DeleteFromLibrary, cancellationToken)
+            .ConfigureAwait(false);
+
+        return Results.Ok(files);
     }
 
     [MagpieCommand("from-external-id", "POST", "from-external-id", "Create content from an external metadata id")]

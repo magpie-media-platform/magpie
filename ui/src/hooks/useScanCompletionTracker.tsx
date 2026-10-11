@@ -6,6 +6,7 @@ import { contentQueryKeys } from '@/hooks/useContent';
 import { isTerminalJobExecutionStatus, useJobExecution } from '@/hooks/useJobs';
 import { libraryImportCandidateQueryKeys, type PagedLibraryImportCandidates } from '@/hooks/useLibraryImportCandidates';
 import { useToast } from '@/hooks/ui/useToast';
+import { useInstanceName } from '@/hooks/useInstanceName';
 import { useQueryClient } from '@tanstack/react-query';
 
 interface TrackedScan {
@@ -104,6 +105,7 @@ interface ScanWatcherProps {
 }
 
 function ScanWatcher({ executionId, rootFolderName, beforeCount, onSettled }: ScanWatcherProps) {
+    const instanceName = useInstanceName();
     const { job } = useJobExecution(executionId);
     const { toast } = useToast();
     const navigate = useNavigate();
@@ -121,6 +123,7 @@ function ScanWatcher({ executionId, rootFolderName, beforeCount, onSettled }: Sc
 
         if (job.status === 'Completed') {
             void emitCompletionToast({
+                instanceName,
                 rootFolderName,
                 beforeCount,
                 toast,
@@ -133,18 +136,19 @@ function ScanWatcher({ executionId, rootFolderName, beforeCount, onSettled }: Sc
                 description:
                     job.status === 'Failed'
                         ? `The scan of "${rootFolderName}" did not complete.`
-                        : `Magpie canceled the scan of "${rootFolderName}".`,
+                        : `${instanceName} canceled the scan of "${rootFolderName}".`,
                 variant: job.status === 'Failed' ? 'error' : 'info',
             });
         }
 
         onSettled();
-    }, [job, rootFolderName, beforeCount, toast, navigate, queryClient, onSettled]);
+    }, [job, instanceName, rootFolderName, beforeCount, toast, navigate, queryClient, onSettled]);
 
     return null;
 }
 
 interface EmitCompletionToastArgs {
+    instanceName: string;
     rootFolderName: string;
     beforeCount: number | null;
     toast: ReturnType<typeof useToast>['toast'];
@@ -153,6 +157,7 @@ interface EmitCompletionToastArgs {
 }
 
 async function emitCompletionToast({
+    instanceName,
     rootFolderName,
     beforeCount,
     toast,
@@ -169,7 +174,7 @@ async function emitCompletionToast({
     if (beforeCount === null || afterCount === null) {
         toast({
             title: 'Scan complete',
-            description: `"${rootFolderName}" finished, but Magpie could not read the import queue.`,
+            description: `"${rootFolderName}" finished, but ${instanceName} could not read the import queue.`,
             variant: 'info',
             action: {
                 label: 'Open import',

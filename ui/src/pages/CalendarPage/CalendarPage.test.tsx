@@ -42,7 +42,6 @@ const mockEvents: CalendarEvent[] = [
         level: 'episode',
         levelLabel: 'Episode',
         fulfillment: 'missing',
-        monitoring: 'Monitored',
         effectiveMonitoring: 'Monitored',
     },
     {
@@ -56,7 +55,6 @@ const mockEvents: CalendarEvent[] = [
         level: 'episode',
         levelLabel: 'Episode',
         fulfillment: 'fulfilled',
-        monitoring: 'Monitored',
         effectiveMonitoring: 'Monitored',
     },
     {
@@ -69,7 +67,6 @@ const mockEvents: CalendarEvent[] = [
         level: 'movie',
         levelLabel: 'Movie',
         fulfillment: 'missing',
-        monitoring: 'Monitored',
         effectiveMonitoring: 'Monitored',
     },
 ];
@@ -990,6 +987,32 @@ describe('CalendarPage empty state', () => {
         await user.click(dayBtn!);
 
         expect(screen.getByText('Try a different date or check other views')).toBeInTheDocument();
+    });
+
+    it('shows an error with retry instead of the empty list when the calendar request fails', async () => {
+        // Arrange
+        const user = userEvent.setup();
+        mockUseCalendar.mockReturnValue({
+            events: [],
+            isLoading: false,
+            isFetching: false,
+            error: new Error('Server error'),
+            refetch: mockRefetch,
+        });
+        render(
+            <MemoryRouter initialEntries={['/calendar?view=list']}>
+                <CalendarPage />
+            </MemoryRouter>,
+            { wrapper: TooltipProvider },
+        );
+
+        // Act
+        await user.click(screen.getByRole('button', { name: 'Retry' }));
+
+        // Assert
+        expect(screen.getByText('Failed to load calendar events')).toBeInTheDocument();
+        expect(screen.queryByText('No upcoming events')).not.toBeInTheDocument();
+        expect(mockRefetch).toHaveBeenCalledTimes(1);
     });
 });
 

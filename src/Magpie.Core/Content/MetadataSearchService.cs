@@ -1830,6 +1830,7 @@ internal sealed class MetadataSearchService(
             OriginalTitle = primary.OriginalTitle,
             Overview = primary.Overview,
             ReleaseDate = primary.PublishDate,
+            ReleaseDatePrecision = primary.PublishDatePrecision,
             Year = primary.PublishDate?.Year,
             Duration = primary.Duration,
             Language = primary.Language,

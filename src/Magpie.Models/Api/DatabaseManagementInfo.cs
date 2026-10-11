@@ -26,4 +26,19 @@ public sealed record DatabaseManagementInfo
     /// The time of the last successful database optimization.
     /// </summary>
     public DateTime? LastOptimizedAt { get; init; } = default;
+
+    /// <summary>
+    /// The reason that the database login or the process cannot create a backup.
+    /// </summary>
+    public string? BackupDeniedReason { get; init; }
+
+    /// <summary>
+    /// The reason that the database login or the process cannot restore a backup.
+    /// </summary>
+    public string? RestoreDeniedReason { get; init; }
+
+    /// <summary>
+    /// The reason that the database login or the process cannot delete a backup.
+    /// </summary>
+    public string? DeleteDeniedReason { get; init; }
 }

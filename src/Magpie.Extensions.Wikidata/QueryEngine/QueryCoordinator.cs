@@ -439,26 +439,31 @@ internal sealed class QueryCoordinator : IQueryCoordinator, IDisposable
         var languageKey = EntityLanguageKey(context);
         try
         {
-            foreach (var qid in qids.Distinct(StringComparer.OrdinalIgnoreCase))
+            try
             {
-                var key = languageKey + "|" + qid.ToUpperInvariant();
-                var lease = _entities.Acquire(
-                    key,
-                    cancellationToken,
-                    out var owner,
-                    out var completedAtLookup,
-                    context.UpstreamRequestObserver);
-                provenanceObserver?.Invoke(Provenance(owner, completedAtLookup));
-                leases[qid] = lease;
-                if (owner)
+                foreach (var qid in qids.Distinct(StringComparer.OrdinalIgnoreCase))
                 {
-                    owners.Add(new EntityOwner(qid, lease));
+                    var key = languageKey + "|" + qid.ToUpperInvariant();
+                    var lease = _entities.Acquire(
+                        key,
+                        cancellationToken,
+                        out var owner,
+                        out var completedAtLookup,
+                        context.UpstreamRequestObserver);
+                    provenanceObserver?.Invoke(Provenance(owner, completedAtLookup));
+                    leases[qid] = lease;
+                    if (owner)
+                    {
+                        owners.Add(new EntityOwner(qid, lease));
+                    }
                 }
             }
-
-            if (owners.Count > 0)
+            finally
             {
-                _ = FillEntitiesAsync(owners, context);
+                if (owners.Count > 0)
+                {
+                    _ = FillEntitiesAsync(owners, context);
+                }
             }
 
             var results = new Dictionary<string, EntityDto>(StringComparer.OrdinalIgnoreCase);

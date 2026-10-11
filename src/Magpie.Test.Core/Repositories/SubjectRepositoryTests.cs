@@ -1,4 +1,5 @@
 using System;
+using System.Data.Common;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -21,6 +22,7 @@ using Magpie.Sdk.Services;
 
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
@@ -59,6 +61,7 @@ public sealed class SubjectRepositoryTests
     ];
 
     private MagpieDbContext _context = null!;
+    private Mock<DbCommandInterceptor> _interceptor = null!;
     private SqliteConnection _template = null!;
     private Mock<IEventBus> _eventBus = null!;
     private ISubjectRepository _subject = null!;
@@ -90,8 +93,10 @@ public sealed class SubjectRepositoryTests
         var connection = new SqliteConnection("Data Source=:memory:");
         connection.Open();
         _template.BackupDatabase(connection);
+        _interceptor = new Mock<DbCommandInterceptor> { CallBase = true };
         _context = new MagpieDbContext(new DbContextOptionsBuilder<MagpieDbContext>()
             .UseSqlite(connection, contextOwnsConnection: true)
+            .AddInterceptors(_interceptor.Object)
             .Options);
         _eventBus = new Mock<IEventBus>();
         _eventBus
@@ -2506,5 +2511,532 @@ public sealed class SubjectRepositoryTests
             It.Is<MagpieEvent>(e => e.Name == "subject.updated" &&
                 e.Context["subject.changedFields"] == "kind"),
             It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Test]
+    public async Task TryCreateAsync_ReturnsFalse_WhenTheSubjectIdExistsInsideATransaction()
+    {
+        // Arrange
+        _context.Subjects.Add(new Subject
+        {
+            Id = new Guid("aaaaaaaa-0000-0000-0000-000000000001"),
+            Kind = "person",
+            MetadataContainerId = _metadataContainerId
+        });
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.ChangeTracker.Clear();
+
+        // Act
+        var created = await _transactionManager.ExecuteWithTransactionAsync(token => _subject.TryCreateAsync(
+            new Subject
+            {
+                Id = new Guid("aaaaaaaa-0000-0000-0000-000000000001"),
+                Kind = "person",
+                MetadataContainer = new MetadataContainer { Id = new Guid("bbbbbbbb-0000-0000-0000-000000000001") }
+            },
+            null,
+            token)).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(created, Is.False);
+            Assert.That(await _context.Subjects.CountAsync().ConfigureAwait(false), Is.EqualTo(1));
+            Assert.That(
+                await _context.MetadataContainers
+                    .AnyAsync(container => container.Id == new Guid("bbbbbbbb-0000-0000-0000-000000000001"))
+                    .ConfigureAwait(false),
+                Is.False);
+        }
+    }
+
+    [TestCase("person", "tmdb", "tmdb", "1855369", new[] { 2 })]
+    [TestCase("person", "TMDb", "tmdbId", "1855369", new[] { 2 })]
+    [TestCase("person", "tmdb", "tmdb", "204484", new int[0])]
+    [TestCase("person", "tvmaze", "tvmaze", "1855369", new[] { 2 })]
+    [TestCase("label", "tmdb", "tmdb", "1855369", new int[0])]
+    public async Task FindDuplicatesAsync_ReturnsOnlySetsWithoutAClash_WhenSubjectsShareAnImdbId(
+        string kind,
+        string providerType,
+        string source,
+        string value,
+        int[] expectedSetSizes)
+    {
+        // Arrange
+        _context.Subjects.AddRange(
+            new Subject
+            {
+                Kind = "person",
+                MetadataContainer = new MetadataContainer
+                {
+                    Contributions =
+                    {
+                        new MetadataContribution
+                        {
+                            ProviderType = "tmdb",
+                            Title = "Isaiah John",
+                            ExternalIds =
+                            {
+                                new ExternalId { Source = "tmdb", Value = "1855369" },
+                                new ExternalId { Source = "imdb", Value = "nm8019585", Ordinal = 1 }
+                            }
+                        }
+                    }
+                }
+            },
+            new Subject
+            {
+                Kind = kind,
+                MetadataContainer = new MetadataContainer
+                {
+                    Contributions =
+                    {
+                        new MetadataContribution
+                        {
+                            ProviderType = providerType,
+                            Title = "Isaiah John",
+                            ExternalIds =
+                            {
+                                new ExternalId { Source = source, Value = value },
+                                new ExternalId { Source = "imdb", Value = "nm8019585", Ordinal = 1 }
+                            }
+                        }
+                    }
+                }
+            });
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        // Act
+        var result = await _subject.FindDuplicatesAsync().ConfigureAwait(false);
+
+        // Assert
+        Assert.That(result.Select(set => set.Count), Is.EqualTo(expectedSetSizes));
+    }
+
+    [Test]
+    public async Task FindDuplicatesAsync_ReturnsBothSubjects_WhenAWikidataContributionSharesTheTvmazeId()
+    {
+        // Arrange
+        _context.Subjects.AddRange(
+            new Subject
+            {
+                Id = new Guid("1c884415-9443-425c-b6b3-799209391842"),
+                Kind = "person",
+                MetadataContainer = new MetadataContainer
+                {
+                    Contributions =
+                    {
+                        new MetadataContribution
+                        {
+                            ProviderType = "tmdb",
+                            Title = "Ken Burns",
+                            ExternalIds =
+                            {
+                                new ExternalId { Source = "tmdb", Value = "204484" },
+                                new ExternalId { Source = "imdb", Value = "nm0122741", Ordinal = 1 },
+                                new ExternalId { Source = "wikidata", Value = "Q616886", Ordinal = 2 }
+                            }
+                        },
+                        new MetadataContribution
+                        {
+                            ProviderType = "wikidata",
+                            Title = "Ken Burns",
+                            ExternalIds =
+                            {
+                                new ExternalId { Source = "wikidata", Value = "Q616886" },
+                                new ExternalId { Source = "imdb", Value = "nm0122741", Ordinal = 1 },
+                                new ExternalId { Source = "tmdb", Value = "204484", Ordinal = 2 },
+                                new ExternalId { Source = "tvmaze", Value = "64989", Ordinal = 3 }
+                            }
+                        }
+                    }
+                }
+            },
+            new Subject
+            {
+                Id = new Guid("33471724-a502-4ea6-a033-1b3f55947630"),
+                Kind = "person",
+                MetadataContainer = new MetadataContainer
+                {
+                    Contributions =
+                    {
+                        new MetadataContribution
+                        {
+                            ProviderType = "tvmaze",
+                            Title = "Ken Burns",
+                            ExternalIds = { new ExternalId { Source = "tvmaze", Value = "64989" } }
+                        }
+                    }
+                }
+            });
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        // Act
+        var result = await _subject.FindDuplicatesAsync().ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result, Has.Count.EqualTo(1));
+            Assert.That(
+                result.SelectMany(set => set.Select(subject => subject.Id)),
+                Is.EquivalentTo(
+                [
+                    new Guid("1c884415-9443-425c-b6b3-799209391842"),
+                    new Guid("33471724-a502-4ea6-a033-1b3f55947630")
+                ]));
+        }
+    }
+
+    [TestCase("wikidata", "Q616886", new[] { 3 })]
+    [TestCase("tmdb", "1855369", new int[0])]
+    public async Task FindDuplicatesAsync_ReturnsTheChainUnlessASourceHasTwoValues_WhenSubjectsShareIdsInAChain(
+        string lastSource,
+        string lastValue,
+        int[] expectedSetSizes)
+    {
+        // Arrange
+        _context.Subjects.AddRange(
+            new Subject
+            {
+                Kind = "person",
+                MetadataContainer = new MetadataContainer
+                {
+                    Contributions =
+                    {
+                        new MetadataContribution
+                        {
+                            ProviderType = "tmdb",
+                            ExternalIds =
+                            {
+                                new ExternalId { Source = "tmdb", Value = "204484" },
+                                new ExternalId { Source = "imdb", Value = "nm0122741", Ordinal = 1 }
+                            }
+                        }
+                    }
+                }
+            },
+            new Subject
+            {
+                Kind = "person",
+                MetadataContainer = new MetadataContainer
+                {
+                    Contributions =
+                    {
+                        new MetadataContribution
+                        {
+                            ProviderType = "wikidata",
+                            ExternalIds =
+                            {
+                                new ExternalId { Source = "imdb", Value = "nm0122741" },
+                                new ExternalId { Source = "tvmaze", Value = "64989", Ordinal = 1 }
+                            }
+                        }
+                    }
+                }
+            },
+            new Subject
+            {
+                Kind = "person",
+                MetadataContainer = new MetadataContainer
+                {
+                    Contributions =
+                    {
+                        new MetadataContribution
+                        {
+                            ProviderType = "tvmaze",
+                            ExternalIds =
+                            {
+                                new ExternalId { Source = "tvmaze", Value = "64989" },
+                                new ExternalId { Source = lastSource, Value = lastValue, Ordinal = 1 }
+                            }
+                        }
+                    }
+                }
+            });
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        // Act
+        var result = await _subject.FindDuplicatesAsync().ConfigureAwait(false);
+
+        // Assert
+        Assert.That(result.Select(set => set.Count), Is.EqualTo(expectedSetSizes));
+    }
+
+    [TestCase("00000000002", new[] { 2 })]
+    [TestCase("00000000003", new int[0])]
+    public async Task FindDuplicatesAsync_ReturnsTheSetUnlessTheValuesClash_WhenASubjectHasTwoValuesOfOneSource(
+        string secondIpi,
+        int[] expectedSetSizes)
+    {
+        // Arrange
+        _context.Subjects.AddRange(
+            new Subject
+            {
+                Kind = "label",
+                MetadataContainer = new MetadataContainer
+                {
+                    Contributions =
+                    {
+                        new MetadataContribution
+                        {
+                            ProviderType = "musicbrainz",
+                            ExternalIds =
+                            {
+                                new ExternalId
+                                {
+                                    Source = "musicbrainz",
+                                    Value = "46f0f4cd-8aab-4b33-b698-f459faf64190"
+                                },
+                                new ExternalId { Source = "ipi", Value = "00000000001", Ordinal = 1 },
+                                new ExternalId { Source = "ipi", Value = "00000000002", Ordinal = 2 }
+                            }
+                        }
+                    }
+                }
+            },
+            new Subject
+            {
+                Kind = "label",
+                MetadataContainer = new MetadataContainer
+                {
+                    Contributions =
+                    {
+                        new MetadataContribution
+                        {
+                            ProviderType = "musicbrainz",
+                            ExternalIds =
+                            {
+                                new ExternalId
+                                {
+                                    Source = "musicbrainz",
+                                    Value = "46f0f4cd-8aab-4b33-b698-f459faf64190"
+                                },
+                                new ExternalId { Source = "ipi", Value = "00000000001", Ordinal = 1 },
+                                new ExternalId { Source = "ipi", Value = secondIpi, Ordinal = 2 }
+                            }
+                        }
+                    }
+                }
+            });
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        // Act
+        var result = await _subject.FindDuplicatesAsync().ConfigureAwait(false);
+
+        // Assert
+        Assert.That(result.Select(set => set.Count), Is.EqualTo(expectedSetSizes));
+    }
+
+    [TestCase("DELETE FROM content_subject WHERE Id = '00000000-0000-0000-0000-000000000001'", new[] { 2 })]
+    [TestCase("DELETE FROM content_subject WHERE Id <> '00000000-0000-0000-0000-000000000003'", new int[0])]
+    public async Task FindDuplicatesAsync_ReturnsOnlyTheRemainingSubjects_WhenSubjectsAreDeletedBetweenTheReads(
+        string deleteSql,
+        int[] expectedSetSizes)
+    {
+        // Arrange
+        _context.Subjects.AddRange(
+            new Subject
+            {
+                Id = new Guid("00000000-0000-0000-0000-000000000001"),
+                Kind = "person",
+                MetadataContainer = new MetadataContainer
+                {
+                    Contributions =
+                    {
+                        new MetadataContribution
+                        {
+                            ProviderType = "tmdb",
+                            ExternalIds = { new ExternalId { Source = "tmdb", Value = "1855369" } }
+                        }
+                    }
+                }
+            },
+            new Subject
+            {
+                Id = new Guid("00000000-0000-0000-0000-000000000002"),
+                Kind = "person",
+                MetadataContainer = new MetadataContainer
+                {
+                    Contributions =
+                    {
+                        new MetadataContribution
+                        {
+                            ProviderType = "tmdb",
+                            ExternalIds = { new ExternalId { Source = "tmdb", Value = "1855369" } }
+                        }
+                    }
+                }
+            },
+            new Subject
+            {
+                Id = new Guid("00000000-0000-0000-0000-000000000003"),
+                Kind = "person",
+                MetadataContainer = new MetadataContainer
+                {
+                    Contributions =
+                    {
+                        new MetadataContribution
+                        {
+                            ProviderType = "tmdb",
+                            ExternalIds = { new ExternalId { Source = "tmdb", Value = "1855369" } }
+                        }
+                    }
+                }
+            });
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _interceptor
+            .Setup(interceptor => interceptor.ReaderExecutingAsync(
+                It.Is<DbCommand>(command =>
+                    command.CommandText.Contains("FROM \"content_subject\"", StringComparison.Ordinal) &&
+                    command.CommandText.Contains(" IN (", StringComparison.Ordinal)),
+                It.IsAny<CommandEventData>(),
+                It.IsAny<InterceptionResult<DbDataReader>>(),
+                It.IsAny<CancellationToken>()))
+            .Callback((
+                DbCommand command,
+                CommandEventData _,
+                InterceptionResult<DbDataReader> _,
+                CancellationToken _) =>
+            {
+                using var delete = command.Connection!.CreateCommand();
+                delete.CommandText = deleteSql;
+                delete.ExecuteNonQuery();
+            })
+            .Returns((DbCommand _, CommandEventData _, InterceptionResult<DbDataReader> result, CancellationToken _) =>
+                ValueTask.FromResult(result));
+
+        // Act
+        var result = await _subject.FindDuplicatesAsync().ConfigureAwait(false);
+
+        // Assert
+        Assert.That(result.Select(set => set.Count), Is.EqualTo(expectedSetSizes));
+    }
+
+    [Test]
+    public async Task MergeAsync_MovesRelationshipsTagsAndContributions_WhenDuplicatesAreMerged()
+    {
+        // Arrange
+        var survivorContainer = new MetadataContainer
+        {
+            Id = new Guid("aaaaaaaa-0000-0000-0000-0000000000a1"),
+            Contributions =
+            {
+                new MetadataContribution
+                {
+                    Id = new Guid("dddddddd-0000-0000-0000-000000000001"),
+                    ProviderType = "tmdb"
+                }
+            }
+        };
+        var duplicateContainer = new MetadataContainer
+        {
+            Id = new Guid("aaaaaaaa-0000-0000-0000-0000000000a2"),
+            Contributions =
+            {
+                new MetadataContribution { ProviderType = "user", Title = "Isaiah" },
+                new MetadataContribution
+                {
+                    Id = new Guid("dddddddd-0000-0000-0000-000000000002"),
+                    ProviderType = "tmdb",
+                    Relationships =
+                    {
+                        new Relationship { Kind = "member", RelatedMetadataContainerId = _metadataContainerId }
+                    }
+                },
+                new MetadataContribution
+                {
+                    Id = new Guid("dddddddd-0000-0000-0000-000000000003"),
+                    ProviderType = "wikidata"
+                }
+            }
+        };
+        _context.Subjects.AddRange(
+            new Subject
+            {
+                Id = new Guid("aaaaaaaa-0000-0000-0000-000000000001"),
+                Kind = "person",
+                MetadataContainer = survivorContainer
+            },
+            new Subject
+            {
+                Id = new Guid("aaaaaaaa-0000-0000-0000-000000000002"),
+                Kind = "person",
+                MetadataContainer = duplicateContainer
+            });
+        _context.MetadataContributions.Add(new MetadataContribution
+        {
+            Id = new Guid("cccccccc-0000-0000-0000-000000000001"),
+            MetadataContainerId = _metadataContainerId,
+            ProviderType = "tmdb",
+            Relationships =
+            {
+                new Relationship
+                {
+                    Kind = "cast",
+                    Qualifier = "Lil Shad",
+                    RelatedMetadataContainerId = new Guid("aaaaaaaa-0000-0000-0000-0000000000a1")
+                },
+                new Relationship
+                {
+                    Kind = "cast",
+                    Qualifier = "Lil Shad",
+                    RelatedMetadataContainerId = new Guid("aaaaaaaa-0000-0000-0000-0000000000a2"),
+                    Ordinal = 1
+                },
+                new Relationship
+                {
+                    Kind = "guest-cast",
+                    RelatedMetadataContainerId = new Guid("aaaaaaaa-0000-0000-0000-0000000000a2"),
+                    Ordinal = 2
+                }
+            }
+        });
+        _context.Tags.Add(new Tag { Name = "followed", MetadataContainers = { duplicateContainer } });
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.ChangeTracker.Clear();
+
+        // Act
+        await _subject.MergeAsync(
+            new Guid("aaaaaaaa-0000-0000-0000-000000000001"),
+            [new Guid("aaaaaaaa-0000-0000-0000-000000000002")]).ConfigureAwait(false);
+
+        // Assert
+        var relationships = await _context.Relationships.AsNoTracking().ToListAsync().ConfigureAwait(false);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(
+                relationships.Select(relationship => (
+                    relationship.MetadataContributionId,
+                    relationship.Kind,
+                    relationship.RelatedMetadataContainerId)),
+                Is.EquivalentTo(new (Guid, string, Guid?)[]
+                {
+                    (
+                        new Guid("cccccccc-0000-0000-0000-000000000001"),
+                        "cast",
+                        new Guid("aaaaaaaa-0000-0000-0000-0000000000a1")),
+                    (
+                        new Guid("cccccccc-0000-0000-0000-000000000001"),
+                        "guest-cast",
+                        new Guid("aaaaaaaa-0000-0000-0000-0000000000a1")),
+                    (new Guid("dddddddd-0000-0000-0000-000000000001"), "member", _metadataContainerId)
+                }));
+            Assert.That(
+                await _context.Tags.AsNoTracking()
+                    .Where(tag => tag.Name == "followed")
+                    .SelectMany(tag => tag.MetadataContainers.Select(container => container.Id))
+                    .ToListAsync()
+                    .ConfigureAwait(false),
+                Does.Contain(new Guid("aaaaaaaa-0000-0000-0000-0000000000a1")));
+            Assert.That(
+                await _context.MetadataContributions.AsNoTracking()
+                    .Where(contribution =>
+                        contribution.MetadataContainerId == new Guid("aaaaaaaa-0000-0000-0000-0000000000a1"))
+                    .Select(contribution => contribution.ProviderType)
+                    .ToListAsync()
+                    .ConfigureAwait(false),
+                Is.EquivalentTo(["tmdb", "user", "wikidata"]));
+        }
     }
 }

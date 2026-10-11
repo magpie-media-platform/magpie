@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { mapUpcomingContent } from '@/hooks/dashboardTransforms';
 import type { ApiContentItemWithMetadata } from '@/lib/contentMapping';
@@ -218,8 +218,47 @@ describe('UpcomingContentWidget production mapping', () => {
 
         expect(within(monitoredItem as HTMLElement).getByLabelText('Monitored')).toBeInTheDocument();
         expect(within(monitoredItem as HTMLElement).getByText('Fulfilled')).toBeInTheDocument();
-        expect(within(inheritedItem as HTMLElement).getByLabelText('Unmonitored (inherited)')).toBeInTheDocument();
+        expect(within(inheritedItem as HTMLElement).getByLabelText('Unmonitored')).toBeInTheDocument();
         expect(within(inheritedItem as HTMLElement).getByText('Fulfilled')).toBeInTheDocument();
+    });
+});
+
+describe('UpcomingContentWidget publication dates', () => {
+    afterEach(() => {
+        vi.useRealTimers();
+        vi.unstubAllEnvs();
+    });
+
+    it('shows a midnight publication date on its calendar date without a time', () => {
+        // Arrange
+        vi.stubEnv('TZ', 'America/Los_Angeles');
+        vi.useFakeTimers({ toFake: ['Date'] });
+        vi.setSystemTime(new Date('2026-10-03T02:00:00Z'));
+        const apiItems: ApiContentItemWithMetadata[] = [
+            {
+                id: 'episode-49',
+                metadataContainerId: 'metadata-episode-49',
+                contentType: 'tv',
+                level: 'episode',
+                slug: 'episode-49',
+                name: 'Episode 49',
+                monitoring: null,
+                effectiveMonitoring: 'Monitored',
+                createdAt: '2026-01-01T00:00:00Z',
+                metadataContainer: {
+                    id: 'metadata-episode-49',
+                    contributions: [{ ordinal: 0, publishDate: '2026-10-02T00:00:00Z' }],
+                },
+            },
+        ];
+
+        // Act
+        renderWithRouter(<UpcomingContentWidget items={mapUpcomingContent(apiItems)} />);
+
+        // Assert
+        expect(document.querySelector('.upcoming-content-widget__item-date')).toHaveTextContent('Today');
+        expect(document.querySelector('.upcoming-content-widget__item-time')).not.toBeInTheDocument();
+        expect(screen.getByText('1 today')).toBeInTheDocument();
     });
 });
 

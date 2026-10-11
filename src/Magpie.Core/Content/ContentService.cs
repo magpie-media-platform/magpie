@@ -405,53 +405,7 @@ internal sealed class ContentService(
         var clientResidentDownloads = (IReadOnlyList<Download>)[];
         if (deleteFromLibrary)
         {
-            var roots = new Dictionary<Guid, ContentHierarchyItem>();
-            if (translated.Ids is not null)
-            {
-                foreach (var id in translated.Ids)
-                {
-                    var item = await contentHierarchyItemRepository.GetByIdAsync(id, cancellationToken)
-                        .ConfigureAwait(false);
-                    if (item is not null)
-                    {
-                        roots[item.Id] = item;
-                    }
-                }
-            }
-
-            if (translated.Filter is not null)
-            {
-                const int pageSize = 500;
-                for (var pageNumber = 1; ; pageNumber++)
-                {
-                    var page = await contentHierarchyItemRepository.QueryAsync(
-                        translated.Filter,
-                        new() { PageNumber = pageNumber, PageSize = pageSize },
-                        sort: null,
-                        cancellationToken).ConfigureAwait(false);
-                    var pageItems = page.Items.ToList();
-                    foreach (var item in pageItems)
-                    {
-                        roots[item.Id] = item;
-                    }
-
-                    if (pageNumber * pageSize >= page.TotalItems || pageItems.Count == 0)
-                    {
-                        break;
-                    }
-                }
-            }
-
-            var subtree = new Dictionary<Guid, ContentHierarchyItem>();
-            foreach (var root in roots.Values)
-            {
-                foreach (var item in await ListSubtreeAsync(root, cancellationToken).ConfigureAwait(false))
-                {
-                    subtree[item.Id] = item;
-                }
-            }
-
-            removableItems = [.. subtree.Values];
+            removableItems = await ListSelectedSubtreesAsync(translated, cancellationToken).ConfigureAwait(false);
             clientResidentDownloads = await ListClientResidentDownloadsAsync(removableItems, cancellationToken)
                 .ConfigureAwait(false);
         }
@@ -472,6 +426,32 @@ internal sealed class ContentService(
         }
 
         return result;
+    }
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<ContentDeleteFile>> PreviewBulkDeleteAsync(
+        BulkAction<ContentFilterCriteria> action,
+        bool deleteFromLibrary,
+        CancellationToken cancellationToken = default)
+    {
+        if (!deleteFromLibrary)
+        {
+            return [];
+        }
+
+        var translated = new BulkAction<ContentHierarchyItemCriteria>
+        {
+            Ids = action.Ids,
+            Filter = TranslateFilter(action.Filter),
+        };
+        var items = await ListSelectedSubtreesAsync(translated, cancellationToken).ConfigureAwait(false);
+
+        return
+        [
+            .. ListFilesRemovedWith(items)
+                .OrderBy(file => file.FilePath, StringComparer.OrdinalIgnoreCase)
+                .Select(file => new ContentDeleteFile { Path = file.FilePath, Size = file.FileSize })
+        ];
     }
 
     public Task<ContentStats> GetStatsAsync(CancellationToken cancellationToken = default)
@@ -593,6 +573,18 @@ internal sealed class ContentService(
         false => MonitoringMode.Unmonitored,
         null => null
     };
+
+    private static IEnumerable<MediaFile> ListFilesRemovedWith(IReadOnlyCollection<ContentHierarchyItem> items)
+    {
+        var removedContentItemIds = items
+            .Select(item => item.ContentItem?.Id)
+            .OfType<Guid>()
+            .ToHashSet();
+
+        return items
+            .SelectMany(item => item.ContentItem?.MediaFiles ?? [])
+            .Where(file => file.Coverage.All(coverage => removedContentItemIds.Contains(coverage.ContentItemId)));
+    }
 
     private ContentHierarchyItemCriteria BuildCriteria(ContentQuery query)
     {
@@ -743,6 +735,59 @@ internal sealed class ContentService(
         var raw = builder.ToString();
         raw = raw.Trim('-');
         return string.IsNullOrWhiteSpace(raw) ? "pending" : raw;
+    }
+
+    private async Task<IReadOnlyList<ContentHierarchyItem>> ListSelectedSubtreesAsync(
+        BulkAction<ContentHierarchyItemCriteria> action,
+        CancellationToken cancellationToken)
+    {
+        var roots = new Dictionary<Guid, ContentHierarchyItem>();
+        if (action.Ids is not null)
+        {
+            foreach (var id in action.Ids)
+            {
+                var item = await contentHierarchyItemRepository.GetByIdAsync(id, cancellationToken)
+                    .ConfigureAwait(false);
+                if (item is not null)
+                {
+                    roots[item.Id] = item;
+                }
+            }
+        }
+
+        if (action.Filter is not null)
+        {
+            const int pageSize = 500;
+            for (var pageNumber = 1; ; pageNumber++)
+            {
+                var page = await contentHierarchyItemRepository.QueryAsync(
+                    action.Filter,
+                    new() { PageNumber = pageNumber, PageSize = pageSize },
+                    sort: null,
+                    cancellationToken).ConfigureAwait(false);
+                var pageItems = page.Items.ToList();
+                foreach (var item in pageItems)
+                {
+                    roots[item.Id] = item;
+                }
+
+                if (pageNumber * pageSize >= page.TotalItems || pageItems.Count == 0)
+                {
+                    break;
+                }
+            }
+        }
+
+        var subtree = new Dictionary<Guid, ContentHierarchyItem>();
+        foreach (var root in roots.Values)
+        {
+            foreach (var item in await ListSubtreeAsync(root, cancellationToken).ConfigureAwait(false))
+            {
+                subtree[item.Id] = item;
+            }
+        }
+
+        return [.. subtree.Values];
     }
 
     private async Task<IReadOnlyList<ContentHierarchyItem>> ListSubtreeAsync(

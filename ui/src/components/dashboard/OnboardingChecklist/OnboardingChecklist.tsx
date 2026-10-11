@@ -15,6 +15,7 @@ import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { Card, CardBody, CardHeader } from '@/components/ui/Card';
 import type { OnboardingStep } from '@/hooks/useOnboardingStatus';
+import { useInstanceName } from '@/hooks/useInstanceName';
 
 import './OnboardingChecklist.css';
 
@@ -35,6 +36,7 @@ const SkeletonStep = () => (
 );
 
 const StepRow = ({ step }: { step: OnboardingStep }) => {
+    const instanceName = useInstanceName();
     const state = step.failed ? 'unknown' : step.done ? 'done' : 'todo';
 
     return (
@@ -63,7 +65,7 @@ const StepRow = ({ step }: { step: OnboardingStep }) => {
                     </span>
                 </span>
                 <span className="onboarding-checklist__step-reason">
-                    {step.failed ? 'Magpie could not check this step. It may already be done.' : step.reason}
+                    {step.failed ? `${instanceName} could not check this step. It may already be done.` : step.reason}
                 </span>
             </span>
             {!step.done && (
@@ -80,6 +82,7 @@ const StepRow = ({ step }: { step: OnboardingStep }) => {
 
 export const OnboardingChecklist = forwardRef<HTMLDivElement, OnboardingChecklistProps>(
     ({ steps, completedCount, onDismiss, className, ...props }, ref) => {
+        const instanceName = useInstanceName();
         const classes = ['onboarding-checklist', className].filter(Boolean).join(' ');
         const total = steps.length;
         const loading = total === 0;
@@ -91,7 +94,7 @@ export const OnboardingChecklist = forwardRef<HTMLDivElement, OnboardingChecklis
                         <CompassIcon weight="duotone" />
                     </span>
                     <div className="onboarding-checklist__header-text">
-                        <h2 className="onboarding-checklist__title">Finish setting up Magpie</h2>
+                        <h2 className="onboarding-checklist__title">Finish setting up {instanceName}</h2>
                         <p className="onboarding-checklist__subtitle">Complete these steps to automate your library.</p>
                     </div>
                     {!loading && (
@@ -132,8 +135,8 @@ export const OnboardingChecklist = forwardRef<HTMLDivElement, OnboardingChecklis
                     <section className="onboarding-checklist__overview" aria-label="How the pipeline works">
                         <h3 className="onboarding-checklist__overview-title">How it works once set up</h3>
                         <p className="onboarding-checklist__overview-text">
-                            Magpie watches your monitored content, searches your indexers for releases, grabs the best
-                            match to your download client, then imports the finished file into your library.
+                            {instanceName} watches your monitored content, searches your indexers for releases, grabs
+                            the best match to your download client, then imports the finished file into your library.
                         </p>
                         <ol className="onboarding-checklist__pipeline" aria-hidden="true">
                             <li className="onboarding-checklist__pipeline-step">

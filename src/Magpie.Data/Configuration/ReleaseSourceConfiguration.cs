@@ -19,6 +19,10 @@ internal sealed class ReleaseSourceConfiguration : IEntityTypeConfiguration<Rele
             .WithMany()
             .HasForeignKey(e => e.IndexerId)
             .OnDelete(DeleteBehavior.SetNull);
+        builder.HasOne<IndexerConnection>()
+            .WithMany()
+            .HasForeignKey(e => e.IndexerConnectionId)
+            .OnDelete(DeleteBehavior.SetNull);
         builder.HasIndex(e => e.ReleaseId);
         builder.HasIndex(e => new { e.ReleaseId, e.Key }).IsUnique();
     }

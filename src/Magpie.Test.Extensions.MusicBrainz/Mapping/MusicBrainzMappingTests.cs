@@ -352,6 +352,28 @@ public class MusicBrainzMappingTests
         }
     }
 
+    [TestCase("1975", TemporalPrecision.Year)]
+    [TestCase("1975-10", TemporalPrecision.Month)]
+    [TestCase("1975-10-31", TemporalPrecision.Day)]
+    public void ToCandidate_MapsReleaseDatePrecision_WhenFirstReleaseDateHasPrecision(
+        string firstReleaseDate,
+        TemporalPrecision expectedPrecision)
+    {
+        // Arrange
+        var recording = new RecordingDto
+        {
+            Id = "550e8400-e29b-41d4-a716-446655440000",
+            Title = "Bohemian Rhapsody",
+            FirstReleaseDate = firstReleaseDate
+        };
+
+        // Act
+        var candidate = recording.ToHit()!.ToCandidate();
+
+        // Assert
+        Assert.That(candidate.ReleaseDatePrecision, Is.EqualTo(expectedPrecision));
+    }
+
     [Test]
     public void ToHit_KeepsTheCreditName_WhenTheArtistCreditHasNoNestedArtist()
     {

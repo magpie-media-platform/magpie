@@ -1,5 +1,6 @@
 import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { Link, MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { ToastProvider, ToastViewport, Toast, ToastAction, ToastClose, ToastTitle, ToastDescription } from './Toast';
@@ -293,6 +294,66 @@ describe('ToastAction', () => {
         expect(action).toHaveClass('toast-action');
         expect(action).toHaveClass('custom-action');
     });
+
+    it('ToastAction_OpensTheLink_WhenATouchPressMovesRight', async () => {
+        // Arrange
+        const user = userEvent.setup();
+        render(
+            <MemoryRouter initialEntries={['/library/add']}>
+                <ToastProvider>
+                    <Routes>
+                        <Route
+                            path="/library/add"
+                            element={
+                                <Toast open>
+                                    <ToastTitle>Added to library</ToastTitle>
+                                    <ToastAction altText='View settings for "The Matrix"' asChild>
+                                        <Link to="/library/new-matrix-id">View settings</Link>
+                                    </ToastAction>
+                                </Toast>
+                            }
+                        />
+                        <Route path="/library/:contentId" element={<p>Content page</p>} />
+                    </Routes>
+                    <ToastViewport />
+                </ToastProvider>
+            </MemoryRouter>,
+        );
+        const link = await screen.findByRole('link', { name: 'View settings' });
+
+        // Act
+        await user.pointer([
+            { keys: '[TouchA>]', target: link, coords: { clientX: 100, clientY: 10 } },
+            { pointerName: 'TouchA', target: link, coords: { clientX: 112, clientY: 10 } },
+            { keys: '[/TouchA]', target: link },
+        ]);
+
+        // Assert
+        expect(await screen.findByText('Content page')).toBeInTheDocument();
+    });
+
+    it('ToastAction_DisablesTheLinkDrag_WhenTheActionIsALink', async () => {
+        // Arrange
+        render(
+            <MemoryRouter>
+                <ToastProvider>
+                    <Toast open>
+                        <ToastTitle>Added to library</ToastTitle>
+                        <ToastAction altText='View settings for "The Matrix"' asChild>
+                            <Link to="/library/new-matrix-id">View settings</Link>
+                        </ToastAction>
+                    </Toast>
+                    <ToastViewport />
+                </ToastProvider>
+            </MemoryRouter>,
+        );
+
+        // Act
+        const link = await screen.findByRole('link', { name: 'View settings' });
+
+        // Assert
+        expect(link).toHaveAttribute('draggable', 'false');
+    });
 });
 
 describe('ToastClose', () => {
@@ -310,6 +371,32 @@ describe('ToastClose', () => {
         const close = screen.getByRole('button', { name: 'Close' });
         expect(close).toHaveClass('toast-close');
         expect(close).toHaveClass('custom-close');
+    });
+
+    it('ToastClose_ClosesTheToast_WhenATouchPressMovesRight', async () => {
+        // Arrange
+        const user = userEvent.setup();
+        const handleOpenChange = vi.fn();
+        render(
+            <ToastProvider>
+                <Toast open onOpenChange={handleOpenChange}>
+                    <ToastTitle>Added to library</ToastTitle>
+                    <ToastClose />
+                </Toast>
+                <ToastViewport />
+            </ToastProvider>,
+        );
+        const close = screen.getByRole('button', { name: 'Close' });
+
+        // Act
+        await user.pointer([
+            { keys: '[TouchA>]', target: close, coords: { clientX: 100, clientY: 10 } },
+            { pointerName: 'TouchA', target: close, coords: { clientX: 112, clientY: 10 } },
+            { keys: '[/TouchA]', target: close },
+        ]);
+
+        // Assert
+        expect(handleOpenChange).toHaveBeenCalledWith(false);
     });
 });
 
@@ -908,6 +995,58 @@ describe('ToastList', () => {
         });
     });
 
+    it('Action_RendersLinkThatDismissesToast_WhenActionHasTo', async () => {
+        // Arrange
+        const user = userEvent.setup();
+        function ActionTrigger() {
+            const { toast } = useToast();
+            return (
+                <button
+                    data-testid="add-action"
+                    onClick={() =>
+                        toast({
+                            title: 'Added to library',
+                            variant: 'success',
+                            action: {
+                                label: 'View settings',
+                                altText: 'View settings for "The Matrix"',
+                                to: '/library/new-matrix-id',
+                            },
+                        })
+                    }
+                >
+                    Action
+                </button>
+            );
+        }
+
+        render(
+            <MemoryRouter>
+                <ToastProvider>
+                    <ToastStateProvider>
+                        <ActionTrigger />
+                        <ToastList />
+                        <ToastViewport />
+                    </ToastStateProvider>
+                </ToastProvider>
+            </MemoryRouter>,
+        );
+
+        await act(async () => {
+            screen.getByTestId('add-action').click();
+        });
+        const link = screen.getByRole('link', { name: 'View settings' });
+
+        // Act
+        await user.click(link);
+
+        // Assert
+        expect(link).toHaveAttribute('href', '/library/new-matrix-id');
+        await waitFor(() => {
+            expect(screen.queryByText('Added to library')).not.toBeInTheDocument();
+        });
+    });
+
     it('renders nothing when no toasts', () => {
         render(
             <ToastProvider>
@@ -1008,16 +1147,19 @@ describe('ToastList', () => {
         });
 
         const front = screen.getByText('Notice').closest('[data-component="toast"]') as HTMLElement;
-        expect(front).not.toHaveAttribute('inert');
-        expect(screen.getByText('Failed').closest('[data-component="toast"]')).toHaveAttribute('inert');
-        expect(screen.getByText('Saved').closest('[data-component="toast"]')).toHaveAttribute('inert');
+        expect(front).toHaveAttribute('aria-hidden', 'false');
+        expect(screen.getByText('Failed').closest('[data-component="toast"]')).toHaveAttribute('aria-hidden', 'true');
+        expect(screen.getByText('Saved').closest('[data-component="toast"]')).toHaveAttribute('aria-hidden', 'true');
 
         await user.click(within(front).getByRole('button', { name: 'Close' }));
 
         await waitFor(() => {
-            expect(screen.getByText('Failed').closest('[data-component="toast"]')).not.toHaveAttribute('inert');
+            expect(screen.getByText('Failed').closest('[data-component="toast"]')).toHaveAttribute(
+                'aria-hidden',
+                'false',
+            );
         });
-        expect(screen.getByText('Saved').closest('[data-component="toast"]')).toHaveAttribute('inert');
+        expect(screen.getByText('Saved').closest('[data-component="toast"]')).toHaveAttribute('aria-hidden', 'true');
     });
 
     it('conceals the toast behind the front toast at a width where the bottom navigation shows', async () => {
@@ -1039,8 +1181,39 @@ describe('ToastList', () => {
             screen.getByTestId('add-error').click();
         });
 
-        expect(screen.getByText('Saved').closest('[data-component="toast"]')).toHaveAttribute('inert');
-        expect(screen.getByText('Failed').closest('[data-component="toast"]')).not.toHaveAttribute('inert');
+        expect(screen.getByText('Saved').closest('[data-component="toast"]')).toHaveAttribute('aria-hidden', 'true');
+        expect(screen.getByText('Failed').closest('[data-component="toast"]')).toHaveAttribute('aria-hidden', 'false');
+    });
+
+    it('ToastList_KeepsAConcealedToastPressableAndOutOfTheTabOrder_WhenItIsBehindTheFrontToast', async () => {
+        // Arrange
+        vi.stubGlobal('innerWidth', 390);
+        render(
+            <ToastProvider>
+                <ToastStateProvider>
+                    <TestToastListTrigger />
+                    <ToastList />
+                    <ToastViewport />
+                </ToastStateProvider>
+            </ToastProvider>,
+        );
+
+        // Act
+        await act(async () => {
+            screen.getByTestId('add-success').click();
+        });
+        await act(async () => {
+            screen.getByTestId('add-error').click();
+        });
+
+        // Assert
+        const concealed = screen.getByText('Saved').closest<HTMLElement>('[data-component="toast"]');
+        const front = screen.getByText('Failed').closest<HTMLElement>('[data-component="toast"]');
+        expect(concealed).not.toHaveAttribute('inert');
+        expect(concealed).not.toHaveAttribute('tabindex');
+        expect(concealed?.onclick).toBeTypeOf('function');
+        expect(front).toHaveAttribute('tabindex', '0');
+        expect(front?.onclick).toBeNull();
     });
 
     it('keeps the dismiss timer of a toast concealed behind the front toast paused on the mobile stack', () => {
@@ -1102,7 +1275,7 @@ describe('ToastList', () => {
             screen.getByTestId('add-blocker').click();
         });
 
-        expect(screen.getByText('Timed').closest('[data-component="toast"]')).not.toHaveAttribute('inert');
+        expect(screen.getByText('Timed').closest('[data-component="toast"]')).toHaveAttribute('aria-hidden', 'false');
 
         act(() => {
             vi.advanceTimersByTime(5000);
@@ -1246,15 +1419,15 @@ describe('ToastList', () => {
 
         const blocker1 = screen.getAllByText('Blocker')[0].closest('[data-component="toast"]') as HTMLElement;
         act(() => {
-            within(blocker1).getByRole('button', { name: 'Close' }).click();
+            within(blocker1).getByRole('button', { name: 'Close', hidden: true }).click();
         });
         const blocker2 = screen.getAllByText('Blocker')[0].closest('[data-component="toast"]') as HTMLElement;
         act(() => {
-            within(blocker2).getByRole('button', { name: 'Close' }).click();
+            within(blocker2).getByRole('button', { name: 'Close', hidden: true }).click();
         });
         const blocker3 = screen.getAllByText('Blocker')[0].closest('[data-component="toast"]') as HTMLElement;
         act(() => {
-            within(blocker3).getByRole('button', { name: 'Close' }).click();
+            within(blocker3).getByRole('button', { name: 'Close', hidden: true }).click();
         });
 
         expect(screen.getByText('Timed').closest('[data-component="toast"]')).toHaveAttribute(

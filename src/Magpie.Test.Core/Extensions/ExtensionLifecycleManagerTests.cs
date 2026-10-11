@@ -26,7 +26,6 @@ public sealed class ExtensionLifecycleManagerTests
     private TestExtension _extension = null!;
     private Mock<IExtensionRepository> _repository = null!;
     private Mock<IFileSystem> _fileSystem = null!;
-    private ExtensionPatch? _appliedPatch;
     private Extension? _updatedRow;
     private IServiceScopeFactory _scopeFactory = null!;
     private IExtensionLifecycleManager _subject = null!;
@@ -35,19 +34,11 @@ public sealed class ExtensionLifecycleManagerTests
     public void SetUp()
     {
         _extension = new TestExtension();
-        _appliedPatch = null;
         _updatedRow = null;
         _repository = new Mock<IExtensionRepository>();
         _repository
             .Setup(candidate => candidate.ListAllAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync([]);
-        _repository
-            .Setup(candidate => candidate.PatchAsync(
-                It.IsAny<ExtensionPatch>(),
-                It.IsAny<Guid?>(),
-                It.IsAny<CancellationToken>()))
-            .Callback<ExtensionPatch, Guid?, CancellationToken>((patch, _, _) => _appliedPatch = patch)
-            .ReturnsAsync(true);
         _repository
             .Setup(candidate => candidate.UpdateAsync(
                 It.IsAny<Extension>(),
@@ -79,7 +70,6 @@ public sealed class ExtensionLifecycleManagerTests
         _scopeFactory = scopeFactory.Object;
         _subject = new ExtensionLifecycleManager(
             new ExtensionLoadContext([_extension], []),
-            Mock.Of<IEventBus>(),
             _scopeFactory,
             _repository.Object,
             _fileSystem.Object,
@@ -89,22 +79,21 @@ public sealed class ExtensionLifecycleManagerTests
     }
 
     [Test]
-    public async Task DispatchStartupHooksAsync_PatchesOnlyTheDisableFields_WhenAnExtensionFailsToLoad()
+    public async Task DispatchStartupHooksAsync_KeepsTheStoredEnablement_WhenAnExtensionFailsToLoad()
     {
         // Arrange
-        var extensionId = new Guid("11111111-1111-1111-1111-111111111111");
-        var partialRow = new Extension
+        var failedRow = new Extension
         {
-            Id = extensionId,
+            Id = new Guid("11111111-1111-1111-1111-111111111111"),
             PackageId = "Magpie.Extensions.Broken",
             Name = "Broken extension",
             Version = "1.0.0",
             FilePath = "broken.dll",
             AssemblyName = "Broken",
+            Enabled = true,
         };
         var subject = new ExtensionLifecycleManager(
-            new ExtensionLoadContext([], [partialRow]),
-            Mock.Of<IEventBus>(),
+            new ExtensionLoadContext([], [failedRow]),
             _scopeFactory,
             _repository.Object,
             _fileSystem.Object,
@@ -118,13 +107,12 @@ public sealed class ExtensionLifecycleManagerTests
         // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(_appliedPatch?.Id, Is.EqualTo(extensionId));
-            Assert.That(_appliedPatch?.Enabled?.Value, Is.False);
-            Assert.That(_appliedPatch?.DisabledReason?.Value, Is.EqualTo("The extension assembly failed to load."));
-            Assert.That(_appliedPatch?.NuGetId, Is.Null);
-            Assert.That(_appliedPatch?.PackageRepository, Is.Null);
-            Assert.That(_appliedPatch?.AutoUpgrade, Is.Null);
-            Assert.That(_appliedPatch?.LoadOrder, Is.Null);
+            _repository.Verify(
+                candidate => candidate.PatchAsync(
+                    It.IsAny<ExtensionPatch>(),
+                    It.IsAny<Guid?>(),
+                    It.IsAny<CancellationToken>()),
+                Times.Never);
             _repository.Verify(
                 candidate => candidate.UpdateAsync(
                     It.IsAny<Extension>(),
@@ -190,7 +178,6 @@ public sealed class ExtensionLifecycleManagerTests
         scopeFactory.Setup(factory => factory.CreateScope()).Returns(scope.Object);
         var subject = new ExtensionLifecycleManager(
             new ExtensionLoadContext([lifecycle.Object], []),
-            Mock.Of<IEventBus>(),
             scopeFactory.Object,
             repository.Object,
             _fileSystem.Object,

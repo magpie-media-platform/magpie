@@ -306,18 +306,20 @@ internal sealed class QueryExecutor(
         return externalSource.Length > 0;
     }
 
-    private string ScanKey(FetchPlanNode fetch, RequestContext context, string sourceKind)
+    private string ScanKey(FetchPlanNode fetch, RequestContext context, string sourceKind, string sourceSignature)
     {
         var language = context.Language.ToLowerInvariant();
         return string.Format(
             CultureInfo.InvariantCulture,
-            "{0}:{1}{2}:{3}{4}:{5}",
+            "{0}:{1}{2}:{3}{4}:{5}{6}:{7}",
             fetch.Fingerprint.Length,
             fetch.Fingerprint,
             language.Length,
             language,
             sourceKind.Length,
-            sourceKind);
+            sourceKind,
+            sourceSignature.Length,
+            sourceSignature);
     }
 
     private int DesiredRows(FilterPlanNode filter)
@@ -2002,7 +2004,11 @@ internal sealed class QueryExecutor(
                 sourceKind,
                 context.PlanNodeId?.ToString(CultureInfo.InvariantCulture) ?? "root")
             : sourceKind;
-        var state = cache.GetScanState(ScanKey(fetch, context, branchSourceKind));
+        var state = cache.GetScanState(ScanKey(
+            fetch,
+            context,
+            branchSourceKind,
+            ContinuedSourceSignature(fetch, context, genreIds, subjects, discover)));
         var searchTerms = discover ? [] : SearchTerms(fetch);
         var discoverSources = discover ? DiscoverSources(fetch, subjects, genreIds) : [];
         var sourceCount = discover ? discoverSources.Count : searchTerms.Count;

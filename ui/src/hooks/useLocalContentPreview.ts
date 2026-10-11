@@ -58,6 +58,7 @@ export async function fetchLocalContentPreview(
         originalTitle: metadata.originalTitle,
         overview: metadata.overview,
         releaseDate: metadata.publishDate,
+        releaseDatePrecision: metadata.publishDatePrecision,
         year: metadata.publishDate ? Number(metadata.publishDate.slice(0, 4)) || undefined : undefined,
         duration: metadata.duration,
         language: metadata.language,

@@ -3,6 +3,8 @@ import * as DialogPrimitive from '@radix-ui/react-dialog';
 import { XIcon } from '@phosphor-icons/react';
 
 import { OverlayBodyGuard } from '../OverlayBodyGuard';
+import { DismissToastsOnOpen } from '../Dialog/DismissToastsOnOpen';
+import { ignoreToastInteraction } from '../Dialog/ignoreToastInteraction';
 import { yieldEscapeToOpenCombobox } from '../Dialog/yieldEscapeToOpenCombobox';
 
 import './Sheet.css';
@@ -85,6 +87,7 @@ const SheetContent = forwardRef<ComponentRef<typeof DialogPrimitive.Content>, Sh
                     }}
                     onInteractOutside={(event) => {
                         onInteractOutside?.(event);
+                        ignoreToastInteraction(event);
                         if (event.defaultPrevented) {
                             return;
                         }
@@ -99,6 +102,7 @@ const SheetContent = forwardRef<ComponentRef<typeof DialogPrimitive.Content>, Sh
                     {...props}
                 >
                     <OverlayBodyGuard />
+                    <DismissToastsOnOpen />
                     {children}
                     {!hideCloseButton && (
                         <DialogPrimitive.Close className="overlay-close" aria-label="Close">

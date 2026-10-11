@@ -9,7 +9,6 @@ import {
     HardDrivesIcon,
     WarningCircleIcon,
     WrenchIcon,
-    DownloadSimpleIcon,
 } from '@phosphor-icons/react';
 
 import { Button } from '@/components/ui/Button';
@@ -31,6 +30,7 @@ import { useToast } from '@/components/ui/Toast';
 import { Tooltip } from '@/components/ui/Tooltip';
 import { Slot } from '@/components/ui/Slot';
 import { EmptyState } from '@/components/ui/EmptyState';
+import { DisabledTooltip } from '@/auth';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { useBackups, type BackupItem, type BackupType } from '@/hooks/useBackups';
 import { formatUtcDate, formatUtcDateTime } from '@/lib/dateFormatting';
@@ -65,7 +65,6 @@ export function BackupsPage() {
         isDeleting,
         restoreBackup,
         isRestoring,
-        downloadBackup,
         refetch,
     } = useBackups();
 
@@ -80,6 +79,7 @@ export function BackupsPage() {
 
     const totalSize = useMemo(() => apiBackups.reduce((sum, b) => sum + b.sizeBytes, 0), [apiBackups]);
     const canManageBackups = !isCapabilityLoading && backupRestoreSupported;
+    const backupDeniedReason = capabilities?.backupDeniedReason ?? undefined;
     const unsupportedReason = capabilities?.provider
         ? `Database backup and restore are not supported for ${capabilities.provider}.`
         : 'Database backup and restore are not supported for the configured provider.';
@@ -107,21 +107,6 @@ export function BackupsPage() {
         setBackupToRestore(backup);
         setRestoreDialogOpen(true);
     }, []);
-
-    const handleDownload = useCallback(
-        async (backup: BackupItem) => {
-            try {
-                await downloadBackup(backup.id);
-            } catch (err) {
-                toast({
-                    title: 'Download Failed',
-                    description: getErrorMessage(err),
-                    variant: 'error',
-                });
-            }
-        },
-        [downloadBackup, toast],
-    );
 
     const handleRestoreConfirm = useCallback(async () => {
         if (!backupToRestore) return;
@@ -189,10 +174,10 @@ export function BackupsPage() {
                 label: 'Create Backup',
                 icon: <CloudArrowUpIcon weight="bold" />,
                 onClick: handleCreateBackup,
-                disabled: isCreating,
+                disabled: isCreating || backupDeniedReason !== undefined,
             },
         ],
-        [handleCreateBackup, isCreating],
+        [handleCreateBackup, isCreating, backupDeniedReason],
     );
 
     const handleRefresh = useCallback(async () => {
@@ -205,22 +190,20 @@ export function BackupsPage() {
     if (error && apiBackups.length === 0) {
         return (
             <div className="backups-page" data-page="backups">
-                <PageHeader
-                    className="backups-page__header"
-                    title="Database"
-                    description={backupsDescription}
-                    icon={<DatabaseIcon weight="duotone" aria-hidden="true" data-testid="backups-page__icon" />}
-                />
-                <EmptyState
-                    icon={<WarningCircleIcon weight="duotone" />}
-                    title="Failed to load backups"
-                    description={getErrorMessage(error)}
-                    action={
-                        <Button variant="secondary" size="sm" onClick={() => refetch()}>
-                            Retry
-                        </Button>
-                    }
-                />
+                <PullToRefresh onRefresh={handleRefresh} className="backups-page__pull-to-refresh">
+                    <PageHeader
+                        className="backups-page__header"
+                        title="Database"
+                        description={backupsDescription}
+                        icon={<DatabaseIcon weight="duotone" aria-hidden="true" data-testid="backups-page__icon" />}
+                    />
+                    <EmptyState
+                        icon={<WarningCircleIcon weight="duotone" />}
+                        title="Failed to load backups"
+                        description={getErrorMessage(error)}
+                        onRetry={refetch}
+                    />
+                </PullToRefresh>
             </div>
         );
     }
@@ -228,17 +211,19 @@ export function BackupsPage() {
     if (!isCapabilityLoading && !backupRestoreSupported) {
         return (
             <div className="backups-page" data-page="backups">
-                <PageHeader
-                    className="backups-page__header"
-                    title="Database"
-                    description={backupsDescription}
-                    icon={<DatabaseIcon weight="duotone" aria-hidden="true" data-testid="backups-page__icon" />}
-                />
-                <EmptyState
-                    icon={<WarningCircleIcon weight="duotone" />}
-                    title="Database backups unavailable"
-                    description={unsupportedReason}
-                />
+                <PullToRefresh onRefresh={handleRefresh} className="backups-page__pull-to-refresh" disabled>
+                    <PageHeader
+                        className="backups-page__header"
+                        title="Database"
+                        description={backupsDescription}
+                        icon={<DatabaseIcon weight="duotone" aria-hidden="true" data-testid="backups-page__icon" />}
+                    />
+                    <EmptyState
+                        icon={<WarningCircleIcon weight="duotone" />}
+                        title="Database backups unavailable"
+                        description={unsupportedReason}
+                    />
+                </PullToRefresh>
             </div>
         );
     }
@@ -254,13 +239,16 @@ export function BackupsPage() {
                         icon={<DatabaseIcon weight="duotone" aria-hidden="true" data-testid="backups-page__icon" />}
                         actions={
                             canManageBackups ? (
-                                <>
+                                <DisabledTooltip
+                                    disabled={backupDeniedReason !== undefined}
+                                    message={backupDeniedReason ?? ''}
+                                >
                                     <Button
                                         variant="primary"
                                         size="sm"
                                         data-action="create-backup"
                                         onClick={handleCreateBackup}
-                                        disabled={isCreating}
+                                        disabled={isCreating || backupDeniedReason !== undefined}
                                         aria-label={isCreating ? 'Queueing...' : 'Create Backup'}
                                     >
                                         {isCreating ? (
@@ -276,7 +264,7 @@ export function BackupsPage() {
                                             {isCreating ? 'Queueing...' : 'Create Backup'}
                                         </span>
                                     </Button>
-                                </>
+                                </DisabledTooltip>
                             ) : undefined
                         }
                     />
@@ -288,9 +276,11 @@ export function BackupsPage() {
                                 className="backups-page__summary-icon"
                                 aria-hidden="true"
                             />
-                            <span className="backups-page__summary-label">Total Size</span>
-                            <span className="backups-page__summary-value" data-testid="backups-page__summary-value">
-                                {formatBackupSize(totalSize)}
+                            <span className="backups-page__summary-text">
+                                <span className="backups-page__summary-label">Total Size</span>
+                                <span className="backups-page__summary-value" data-testid="backups-page__summary-value">
+                                    {formatBackupSize(totalSize)}
+                                </span>
                             </span>
                         </div>
                         {capabilities?.optimizeSupported && (
@@ -300,14 +290,16 @@ export function BackupsPage() {
                                     className="backups-page__summary-icon"
                                     aria-hidden="true"
                                 />
-                                <span className="backups-page__summary-label">Scheduled Optimization</span>
-                                <span
-                                    className="backups-page__summary-value"
-                                    data-testid="backups-page__last-optimized"
-                                >
-                                    {capabilities.lastOptimizedAt
-                                        ? formatUtcDateTime(capabilities.lastOptimizedAt)
-                                        : 'Never'}
+                                <span className="backups-page__summary-text">
+                                    <span className="backups-page__summary-label">Last Optimized</span>
+                                    <span
+                                        className="backups-page__summary-value"
+                                        data-testid="backups-page__last-optimized"
+                                    >
+                                        {capabilities.lastOptimizedAt
+                                            ? formatUtcDateTime(capabilities.lastOptimizedAt)
+                                            : 'Never'}
+                                    </span>
                                 </span>
                             </div>
                         )}
@@ -323,14 +315,15 @@ export function BackupsPage() {
                             <EmptyState
                                 icon={<DatabaseIcon weight="duotone" />}
                                 title="No backups available"
-                                description="Create a backup to protect your data"
+                                description={backupDeniedReason ?? 'Create a backup to protect your data'}
                             />
                         ) : (
                             apiBackups.map((backup) => (
                                 <BackupRow
                                     key={backup.id}
                                     backup={backup}
-                                    onDownload={handleDownload}
+                                    restoreDeniedReason={capabilities?.restoreDeniedReason ?? undefined}
+                                    deleteDeniedReason={capabilities?.deleteDeniedReason ?? undefined}
                                     onRestore={handleRestoreClick}
                                     onDelete={handleDeleteClick}
                                 />
@@ -470,18 +463,47 @@ BackupsPage.displayName = 'BackupsPage';
 
 interface BackupRowProps {
     backup: BackupItem;
+    restoreDeniedReason?: string;
+    deleteDeniedReason?: string;
     onRestore: (backup: BackupItem) => void;
-    onDownload: (backup: BackupItem) => void;
     onDelete: (backup: BackupItem) => void;
 }
 
-function BackupRow({ backup, onRestore, onDownload, onDelete }: BackupRowProps) {
+function BackupRow({ backup, restoreDeniedReason, deleteDeniedReason, onRestore, onDelete }: BackupRowProps) {
     const deleteButtonClassName = [
         'backups-page__action-btn',
         'backups-page__action-btn--danger',
         'card-actions__btn',
         'card-actions__btn--danger',
     ].join(' ');
+    const restoreButton = (
+        <button
+            type="button"
+            className="backups-page__action-btn card-actions__btn"
+            data-testid="backups-page__action-btn"
+            onClick={() => onRestore(backup)}
+            disabled={restoreDeniedReason !== undefined}
+            aria-label={`Restore from ${backup.name}`}
+            data-action="restore"
+            data-target={backup.id}
+        >
+            <ClockCounterClockwiseIcon weight="bold" />
+        </button>
+    );
+    const deleteButton = (
+        <button
+            type="button"
+            className={deleteButtonClassName}
+            data-testid="backups-page__action-btn"
+            onClick={() => onDelete(backup)}
+            disabled={deleteDeniedReason !== undefined}
+            aria-label={`Delete ${backup.name}`}
+            data-action="delete"
+            data-target={backup.id}
+        >
+            <TrashIcon weight="bold" />
+        </button>
+    );
 
     return (
         <div className="backups-page__item list-item-card" role="listitem" data-backup-id={backup.id}>
@@ -512,45 +534,20 @@ function BackupRow({ backup, onRestore, onDownload, onDelete }: BackupRowProps) 
                     </div>
                 </div>
                 <div className="backups-page__item-actions card-actions">
-                    <Tooltip content="Download">
-                        <button
-                            type="button"
-                            className="backups-page__action-btn card-actions__btn"
-                            data-testid="backups-page__action-btn"
-                            onClick={() => onDownload(backup)}
-                            aria-label={`Download ${backup.name}`}
-                            data-action="download"
-                            data-target={backup.id}
-                        >
-                            <DownloadSimpleIcon weight="bold" />
-                        </button>
-                    </Tooltip>
-                    <Tooltip content="Restore">
-                        <button
-                            type="button"
-                            className="backups-page__action-btn card-actions__btn"
-                            data-testid="backups-page__action-btn"
-                            onClick={() => onRestore(backup)}
-                            aria-label={`Restore from ${backup.name}`}
-                            data-action="restore"
-                            data-target={backup.id}
-                        >
-                            <ClockCounterClockwiseIcon weight="bold" />
-                        </button>
-                    </Tooltip>
-                    <Tooltip content="Delete">
-                        <button
-                            type="button"
-                            className={deleteButtonClassName}
-                            data-testid="backups-page__action-btn"
-                            onClick={() => onDelete(backup)}
-                            aria-label={`Delete ${backup.name}`}
-                            data-action="delete"
-                            data-target={backup.id}
-                        >
-                            <TrashIcon weight="bold" />
-                        </button>
-                    </Tooltip>
+                    {restoreDeniedReason === undefined ? (
+                        <Tooltip content="Restore">{restoreButton}</Tooltip>
+                    ) : (
+                        <DisabledTooltip disabled message={restoreDeniedReason}>
+                            {restoreButton}
+                        </DisabledTooltip>
+                    )}
+                    {deleteDeniedReason === undefined ? (
+                        <Tooltip content="Delete">{deleteButton}</Tooltip>
+                    ) : (
+                        <DisabledTooltip disabled message={deleteDeniedReason}>
+                            {deleteButton}
+                        </DisabledTooltip>
+                    )}
                 </div>
             </div>
         </div>

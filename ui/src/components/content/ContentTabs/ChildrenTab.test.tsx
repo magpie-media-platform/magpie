@@ -44,7 +44,6 @@ describe('ChildrenTab controlled sorting stability', () => {
             id: 'child-1',
             title: 'Season 1',
             number: 1,
-            monitoring: 'Monitored',
             effectiveMonitoring: 'Monitored',
             fulfillment: 'fulfilled',
         },
@@ -72,6 +71,47 @@ describe('ChildrenTab controlled sorting stability', () => {
         // Assert
         expect(screen.queryByAltText('Season 1 artwork')).not.toBeInTheDocument();
         expect(document.querySelector('.children-tab__poster--placeholder')).toBeInTheDocument();
+    });
+
+    it('ChildrenTab_ShowsNoPosterPlaceholder_WhenChildHasNoArtworkInCardLayout', () => {
+        // Arrange
+        vi.stubGlobal('matchMedia', createMatchMedia(390));
+
+        // Act
+        render(
+            <TooltipProvider>
+                <MemoryRouter>
+                    <ChildrenTab items={items} parentId="content-1" />
+                </MemoryRouter>
+            </TooltipProvider>,
+        );
+
+        // Assert
+        expect(screen.getByRole('link', { name: /Season 1/ })).toBeInTheDocument();
+        expect(document.querySelector('.children-tab__poster')).not.toBeInTheDocument();
+    });
+
+    it('ChildrenTab_KeepsTitlesAligned_WhenSomeChildrenHaveArtworkInCardLayout', () => {
+        // Arrange
+        vi.stubGlobal('matchMedia', createMatchMedia(390));
+        const children = [
+            { ...items[0], posterUrl: '/season-1.jpg' },
+            { ...items[0], id: 'child-2', title: 'Season 2', number: 2 },
+        ];
+
+        // Act
+        render(
+            <TooltipProvider>
+                <MemoryRouter>
+                    <ChildrenTab items={children} parentId="content-1" />
+                </MemoryRouter>
+            </TooltipProvider>,
+        );
+
+        // Assert
+        expect(screen.getAllByAltText('Season 1 artwork')).toHaveLength(1);
+        expect(document.querySelectorAll('.children-tab__poster--spacer')).toHaveLength(1);
+        expect(document.querySelector('.children-tab__poster--placeholder')).not.toBeInTheDocument();
     });
 
     it('uses a singular primary-media file label in the card layout', () => {
@@ -128,7 +168,6 @@ describe('ChildrenTab card-layout pagination', () => {
         id: `child-${index + 1}`,
         title: `Episode ${index + 1}`,
         number: index + 1,
-        monitoring: 'Monitored',
         effectiveMonitoring: 'Monitored',
         fulfillment: 'fulfilled' as const,
     }));

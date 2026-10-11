@@ -4,6 +4,7 @@ using System.Linq;
 
 using Magpie.Extensions.Tv;
 using Magpie.Models.Data;
+using Magpie.Models.Enums;
 using Magpie.Models.Releases;
 using Magpie.Models.Signals;
 using Magpie.Sdk.Content;
@@ -61,7 +62,11 @@ public class TvContentTypeDefinitionProviderTests
             Level = childLevel,
             Name = "Provider title",
             Slug = "provider",
-            Ordinal = childOrdinal
+            Ordinal = childOrdinal,
+            MetadataContainer = new()
+            {
+                Contributions = { new() { ProviderType = "test", SequenceNumber = childOrdinal } }
+            }
         };
         var parsed = _subject.Parse(path, out _)!;
 
@@ -93,7 +98,7 @@ public class TvContentTypeDefinitionProviderTests
         "/media/Show/Season 2/Show.S02E55E56.mkv",
         new[] { "00000000-0000-0000-0000-000000000055", "00000000-0000-0000-0000-000000000056" })]
     [TestCase("/media/Show/Season 1/Show.S01E35.mkv", new[] { "00000000-0000-0000-0000-000000000035" })]
-    public void ResolveFileChildren_ReturnsEveryEpisodeInOrdinalOrder_WhenTheFileNamesEpisodes(
+    public void ResolveFileChildren_ReturnsEveryEpisodeInSequenceOrder_WhenTheFileNamesEpisodes(
         string path,
         string[] expected)
     {
@@ -108,7 +113,8 @@ public class TvContentTypeDefinitionProviderTests
                 Level = "episode",
                 Name = "E56",
                 Slug = "e56",
-                Ordinal = 56
+                Ordinal = 56,
+                MetadataContainer = new() { Contributions = { new() { ProviderType = "test", SequenceNumber = 56 } } }
             },
             new()
             {
@@ -117,7 +123,8 @@ public class TvContentTypeDefinitionProviderTests
                 Level = "episode",
                 Name = "E36",
                 Slug = "e36",
-                Ordinal = 36
+                Ordinal = 36,
+                MetadataContainer = new() { Contributions = { new() { ProviderType = "test", SequenceNumber = 36 } } }
             },
             new()
             {
@@ -126,7 +133,8 @@ public class TvContentTypeDefinitionProviderTests
                 Level = "episode",
                 Name = "E34",
                 Slug = "e34",
-                Ordinal = 34
+                Ordinal = 34,
+                MetadataContainer = new() { Contributions = { new() { ProviderType = "test", SequenceNumber = 34 } } }
             },
             new()
             {
@@ -135,7 +143,8 @@ public class TvContentTypeDefinitionProviderTests
                 Level = "episode",
                 Name = "E55",
                 Slug = "e55",
-                Ordinal = 55
+                Ordinal = 55,
+                MetadataContainer = new() { Contributions = { new() { ProviderType = "test", SequenceNumber = 55 } } }
             },
             new()
             {
@@ -144,7 +153,8 @@ public class TvContentTypeDefinitionProviderTests
                 Level = "episode",
                 Name = "E35",
                 Slug = "e35",
-                Ordinal = 35
+                Ordinal = 35,
+                MetadataContainer = new() { Contributions = { new() { ProviderType = "test", SequenceNumber = 35 } } }
             }
         ];
         var parsed = _subject.Parse(path, out _)!;
@@ -164,8 +174,24 @@ public class TvContentTypeDefinitionProviderTests
         var parent = new ContentHierarchyItem { ContentType = "tv", Level = "season", Name = "Season", Slug = "s" };
         ContentHierarchyItem[] children =
         [
-            new() { ContentType = "tv", Level = "episode", Name = "E34", Slug = "e34", Ordinal = 34 },
-            new() { ContentType = "tv", Level = "episode", Name = "E35", Slug = "e35", Ordinal = 35 }
+            new()
+            {
+                ContentType = "tv",
+                Level = "episode",
+                Name = "E34",
+                Slug = "e34",
+                Ordinal = 34,
+                MetadataContainer = new() { Contributions = { new() { ProviderType = "test", SequenceNumber = 34 } } }
+            },
+            new()
+            {
+                ContentType = "tv",
+                Level = "episode",
+                Name = "E35",
+                Slug = "e35",
+                Ordinal = 35,
+                MetadataContainer = new() { Contributions = { new() { ProviderType = "test", SequenceNumber = 35 } } }
+            }
         ];
         var parsed = _subject.Parse("/media/Show/Season 1/Show.S01E34-E36.mkv", out _)!;
 
@@ -189,7 +215,8 @@ public class TvContentTypeDefinitionProviderTests
             Level = "season",
             Name = "Season 1",
             Slug = "one",
-            Ordinal = 1
+            Ordinal = 1,
+            MetadataContainer = new() { Contributions = { new() { ProviderType = "test", SequenceNumber = 1 } } }
         };
         var second = first with { Id = Guid.NewGuid(), Slug = "duplicate" };
         ContentHierarchyItem[] children = duplicate ? [first, second] : [];
@@ -209,8 +236,24 @@ public class TvContentTypeDefinitionProviderTests
         ContentHierarchyItem[] ancestors =
         [
             new() { ContentType = "tv", Level = "show", Slug = "example", Name = "Example", MetadataContainer = new() },
-            new() { ContentType = "tv", Level = "season", Slug = "season-1", Name = "Season 1", Ordinal = 1 },
-            new() { ContentType = "tv", Level = "episode", Slug = "pilot", Name = "Pilot", Ordinal = 2 }
+            new()
+            {
+                ContentType = "tv",
+                Level = "season",
+                Slug = "season-1",
+                Name = "Season 1",
+                Ordinal = 1,
+                MetadataContainer = new() { Contributions = { new() { ProviderType = "test", SequenceNumber = 1 } } }
+            },
+            new()
+            {
+                ContentType = "tv",
+                Level = "episode",
+                Slug = "pilot",
+                Name = "Pilot",
+                Ordinal = 2,
+                MetadataContainer = new() { Contributions = { new() { ProviderType = "test", SequenceNumber = 2 } } }
+            }
         ];
         ancestors[0].MetadataContainer!.Contributions.Add(
             new() { ProviderType = "test", PublishDate = new(2020, 1, 1) });
@@ -230,8 +273,24 @@ public class TvContentTypeDefinitionProviderTests
         ContentHierarchyItem[] ancestors =
         [
             new() { ContentType = "tv", Level = "show", Slug = "example", Name = "Example", MetadataContainer = new() },
-            new() { ContentType = "tv", Level = "season", Slug = "season-1", Name = "Season 1", Ordinal = 1 },
-            new() { ContentType = "tv", Level = "episode", Slug = "pilot", Name = "Pilot", Ordinal = 2 }
+            new()
+            {
+                ContentType = "tv",
+                Level = "season",
+                Slug = "season-1",
+                Name = "Season 1",
+                Ordinal = 1,
+                MetadataContainer = new() { Contributions = { new() { ProviderType = "test", SequenceNumber = 1 } } }
+            },
+            new()
+            {
+                ContentType = "tv",
+                Level = "episode",
+                Slug = "pilot",
+                Name = "Pilot",
+                Ordinal = 2,
+                MetadataContainer = new() { Contributions = { new() { ProviderType = "test", SequenceNumber = 2 } } }
+            }
         ];
         ancestors[0].MetadataContainer!.Contributions.Add(
             new() { ProviderType = "test", PublishDate = new(2020, 1, 1) });
@@ -379,6 +438,7 @@ public class TvContentTypeDefinitionProviderTests
             ProviderType = "test",
             Ordinal = 0,
             Title = "Season " + seasonNumber,
+            SequenceNumber = seasonNumber,
         });
         var episodeContainer = new MetadataContainer();
         episodeContainer.Contributions.Add(new MetadataContribution
@@ -386,6 +446,7 @@ public class TvContentTypeDefinitionProviderTests
             ProviderType = "test",
             Ordinal = 0,
             Title = "Rollercoaster",
+            SequenceNumber = episodeNumber,
         });
         var show = new ContentHierarchyItem
         {
@@ -440,6 +501,7 @@ public class TvContentTypeDefinitionProviderTests
             Metadata = new Dictionary<Guid, MaterializedMetadata>
             {
                 [showId] = new() { Title = "Phineas and Ferb" },
+                [seasonId] = new(),
                 [episodeId] = new()
                 {
                     Title = "Rollercoaster",
@@ -464,6 +526,50 @@ public class TvContentTypeDefinitionProviderTests
 
         // Assert
         Assert.That(result, Is.EqualTo(expected));
+    }
+
+    [Test]
+    public void IsMatch_ReturnsConfident_WhenMergedMetadataDisagreesWithTheItemSequenceNumber()
+    {
+        // Arrange
+        var show = new ContentHierarchyItem
+        {
+            Id = Guid.NewGuid(),
+            ContentType = "tv",
+            Level = "show",
+            Slug = "show",
+            Name = "Show",
+        };
+        var season = new ContentHierarchyItem
+        {
+            Id = Guid.NewGuid(),
+            ParentId = show.Id,
+            ContentType = "tv",
+            Level = "season",
+            Slug = "season-1",
+            Name = "Season 1",
+            MetadataContainer = new() { Contributions = { new() { ProviderType = "test", SequenceNumber = 1 } } },
+        };
+        var target = new ContentTarget
+        {
+            Item = season,
+            Lineage = [season, show],
+            Metadata = new Dictionary<Guid, MaterializedMetadata>
+            {
+                [show.Id] = new() { Title = "Show" },
+                [season.Id] = new() { SequenceNumber = 2 },
+            },
+        };
+
+        // Act
+        var result = _subject.IsMatch(
+            target,
+            [],
+            new Release { Protocol = "torrent", Title = "Show.S01.1080p-GRP" },
+            []);
+
+        // Assert
+        Assert.That(result, Is.EqualTo(ReleaseMatchResult.Confident));
     }
 
     [TestCase("Blue Box (Season 1)", ReleaseMatchResult.Indeterminate)]
@@ -499,6 +605,7 @@ public class TvContentTypeDefinitionProviderTests
             Slug = "series-1",
             Name = "Series 1",
             Ordinal = 1,
+            MetadataContainer = new() { Contributions = { new() { ProviderType = "test", SequenceNumber = 1 } } },
         };
         var target = new ContentTarget
         {
@@ -512,6 +619,44 @@ public class TvContentTypeDefinitionProviderTests
                     PublishDate = new DateTime(2018, 10, 1),
                     AlternateTexts = [new AlternateText { Kind = "Title", Text = "Blue" }],
                 },
+                [seasonId] = new(),
+            },
+        };
+
+        // Act
+        var result = _subject.IsMatch(target, [], new Release { Protocol = "torrent", Title = releaseTitle }, []);
+
+        // Assert
+        Assert.That(result, Is.EqualTo(expected));
+    }
+
+    [TestCase("1923", 2022, "1923.S01E01.1080p.WEB-DL", ReleaseMatchResult.Confident)]
+    [TestCase("1883", 2021, "1883.S01E01.1080p.WEB-DL", ReleaseMatchResult.Confident)]
+    [TestCase("1923", 2022, "1923.2022.S01E01.1080p.WEB-DL", ReleaseMatchResult.Confident)]
+    [TestCase("1923", 2022, "1923.2019.S01E01.1080p.WEB-DL", ReleaseMatchResult.NoMatch)]
+    [TestCase("1923", 2022, "1883.S01E01.1080p.WEB-DL", ReleaseMatchResult.NoMatch)]
+    public void IsMatch_ReturnsExpectedMatch_WhenShowTitleIsAYear(
+        string showTitle,
+        int firstAiredYear,
+        string releaseTitle,
+        ReleaseMatchResult expected)
+    {
+        // Arrange
+        var show = new ContentHierarchyItem
+        {
+            Id = Guid.NewGuid(),
+            ContentType = "tv",
+            Level = "show",
+            Slug = showTitle,
+            Name = showTitle,
+        };
+        var target = new ContentTarget
+        {
+            Item = show,
+            Lineage = [show],
+            Metadata = new Dictionary<Guid, MaterializedMetadata>
+            {
+                [show.Id] = new() { Title = showTitle, PublishDate = new DateTime(firstAiredYear, 1, 1) },
             },
         };
 
@@ -521,6 +666,106 @@ public class TvContentTypeDefinitionProviderTests
             [],
             new Release { Protocol = "torrent", Title = releaseTitle },
             []);
+
+        // Assert
+        Assert.That(result, Is.EqualTo(expected));
+    }
+
+    [TestCase(
+        "S01E01 - Pilot.mkv",
+        "9100a6da-c8ff-40a8-8df6-6d7f490576ca",
+        ReleaseScopeStatus.Matched,
+        ReleaseMatchResult.Confident)]
+    [TestCase(
+        "S01E01 - Pilot.mkv",
+        "eb21b76b-2de5-4d2b-9222-d6290a35da4f",
+        ReleaseScopeStatus.Matched,
+        ReleaseMatchResult.Confident)]
+    [TestCase(
+        "1x01 - Pilot.mkv",
+        "9100a6da-c8ff-40a8-8df6-6d7f490576ca",
+        ReleaseScopeStatus.Matched,
+        ReleaseMatchResult.Confident)]
+    [TestCase(
+        "S01E02 - Second.mkv",
+        "9100a6da-c8ff-40a8-8df6-6d7f490576ca",
+        ReleaseScopeStatus.Matched,
+        ReleaseMatchResult.NoMatch)]
+    [TestCase(
+        "S01E01 - Pilot.mkv",
+        "4a792e2d-9fcc-492e-913c-339139aa1b0d",
+        ReleaseScopeStatus.Matched,
+        ReleaseMatchResult.NoMatch)]
+    [TestCase(
+        "S01E01 - Pilot.mkv",
+        "9100a6da-c8ff-40a8-8df6-6d7f490576ca",
+        ReleaseScopeStatus.Unmatched,
+        ReleaseMatchResult.NoMatch)]
+    [TestCase(
+        "Other.Show.S01E01.mkv",
+        "9100a6da-c8ff-40a8-8df6-6d7f490576ca",
+        ReleaseScopeStatus.Matched,
+        ReleaseMatchResult.NoMatch)]
+    public void IsMatch_ReturnsExpectedMatch_WhenFileNameHasNoShowTitle(
+        string releaseTitle,
+        string scopeItemId,
+        ReleaseScopeStatus scopeStatus,
+        ReleaseMatchResult expected)
+    {
+        // Arrange
+        var show = new ContentHierarchyItem
+        {
+            Id = Guid.Parse("eb21b76b-2de5-4d2b-9222-d6290a35da4f"),
+            ContentType = "tv",
+            Level = "show",
+            Slug = "show",
+            Name = "Show",
+        };
+        var season = new ContentHierarchyItem
+        {
+            Id = Guid.Parse("9100a6da-c8ff-40a8-8df6-6d7f490576ca"),
+            ParentId = show.Id,
+            ContentType = "tv",
+            Level = "season",
+            Slug = "season-1",
+            Name = "Season 1",
+            Ordinal = 1,
+            MetadataContainer = new() { Contributions = { new() { ProviderType = "test", SequenceNumber = 1 } } },
+        };
+        var episode = new ContentHierarchyItem
+        {
+            Id = Guid.NewGuid(),
+            ParentId = season.Id,
+            ContentType = "tv",
+            Level = "episode",
+            Slug = "pilot",
+            Name = "Pilot",
+            Ordinal = 1,
+            MetadataContainer = new() { Contributions = { new() { ProviderType = "test", SequenceNumber = 1 } } },
+        };
+        var target = new ContentTarget
+        {
+            Item = episode,
+            Lineage = [episode, season, show],
+            Metadata = new Dictionary<Guid, MaterializedMetadata>
+            {
+                [show.Id] = new() { Title = "Show" },
+                [season.Id] = new(),
+                [episode.Id] = new() { Title = "Pilot" },
+            },
+        };
+        var release = new Release
+        {
+            Protocol = "torrent",
+            Title = releaseTitle,
+            Scope =
+            {
+                new ReleaseScope { ContentHierarchyItemId = Guid.Parse(scopeItemId), Status = scopeStatus },
+            },
+        };
+
+        // Act
+        var result = _subject.IsMatch(target, [], release, []);
 
         // Assert
         Assert.That(result, Is.EqualTo(expected));
@@ -570,6 +815,7 @@ public class TvContentTypeDefinitionProviderTests
             Slug = "season-1",
             Name = "Season 1",
             Ordinal = 1,
+            MetadataContainer = new() { Contributions = { new() { ProviderType = "test", SequenceNumber = 1 } } },
         };
         var episode = new ContentHierarchyItem
         {
@@ -580,6 +826,7 @@ public class TvContentTypeDefinitionProviderTests
             Slug = "ice-chair",
             Name = "Ice Chair",
             Ordinal = 40,
+            MetadataContainer = new() { Contributions = { new() { ProviderType = "test", SequenceNumber = 40 } } },
         };
         var target = new ContentTarget
         {
@@ -642,6 +889,7 @@ public class TvContentTypeDefinitionProviderTests
             Slug = "season-1",
             Name = "Season 1",
             Ordinal = 1,
+            MetadataContainer = new() { Contributions = { new() { ProviderType = "test", SequenceNumber = 1 } } },
         };
         var target = new ContentTarget
         {
@@ -654,6 +902,7 @@ public class TvContentTypeDefinitionProviderTests
                     Title = targetTitle,
                     PublishDate = new DateTime(targetYear, 1, 1),
                 },
+                [seasonId] = new(),
             },
         };
 

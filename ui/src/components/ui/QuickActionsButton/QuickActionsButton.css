@@ -23,6 +23,11 @@
         }
     }
 
+    .quick-actions-button__fab--labelled {
+        width: auto;
+        padding-inline: var(--space-lg);
+    }
+
     .quick-actions-button__sheet {
         padding-bottom: env(safe-area-inset-bottom, var(--space-md));
     }
@@ -148,6 +153,7 @@
             .page-header__actions
             :is(
                 [data-action='create-backup'],
+                :has(> [data-action='create-backup']),
                 [data-action='add-client'],
                 [data-action='add-server'],
                 [data-action='add-filter'],
@@ -155,7 +161,8 @@
                 [data-action='add-wishlist'],
                 [data-action='add-folder'],
                 [data-action='add-rule'],
-                [data-action='add-mapping']
+                [data-action='add-mapping'],
+                [data-action='purge-activity-log']
             ) {
             display: none;
         }
@@ -164,7 +171,6 @@
             bottom: calc(var(--space-lg) + var(--bottom-nav-height) + env(safe-area-inset-bottom, 0px));
         }
 
-        /* The bottom navigation already sits outside the main area, so only the button and its offset need room. */
         .app-shell__main-wrapper:has(.quick-actions-button__fab) {
             padding-bottom: max(var(--fab-clearance), var(--mobile-selection-bar-clearance, 0px));
         }

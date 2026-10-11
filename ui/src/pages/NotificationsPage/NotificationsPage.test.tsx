@@ -104,6 +104,7 @@ beforeEach(() => {
 
 afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
 });
 
 function TestWrapper({ children, role = Role.Admin }: { children: ReactNode; role?: Role }) {
@@ -166,6 +167,7 @@ describe('NotificationsPage', () => {
     });
 
     it('keeps the selection toggle on the list toolbar line', async () => {
+        vi.stubGlobal('innerWidth', 390);
         render(
             <TestWrapper>
                 <NotificationsPage />

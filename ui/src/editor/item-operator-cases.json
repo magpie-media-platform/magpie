@@ -148,5 +148,25 @@
         "type": "Guid",
         "operator": "!null",
         "query": "relationships has (relatedMetadataContainerId !null)"
+    },
+    {
+        "type": "MonitoringMode",
+        "operator": "=",
+        "query": "subtree has (monitoring = Monitored)"
+    },
+    {
+        "type": "MonitoringMode",
+        "operator": "!=",
+        "query": "subtree has (monitoring != Unmonitored)"
+    },
+    {
+        "type": "FulfillmentStatus",
+        "operator": "=",
+        "query": "subtree has (fulfillment = Missing)"
+    },
+    {
+        "type": "FulfillmentStatus",
+        "operator": "!=",
+        "query": "subtree has (fulfillment != Fulfilled)"
     }
 ]

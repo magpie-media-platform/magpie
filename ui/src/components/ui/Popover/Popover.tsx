@@ -13,6 +13,8 @@ const Popover = PopoverPrimitive.Root;
 
 const PopoverTrigger = PopoverPrimitive.Trigger;
 
+const PopoverAnchor = PopoverPrimitive.Anchor;
+
 const PopoverContent = forwardRef<ComponentRef<typeof PopoverPrimitive.Content>, PopoverContentProps>(
     ({ className, align = 'center', sideOffset = 4, ...props }, ref) => {
         const classes = ['popover-content', className].filter(Boolean).join(' ');
@@ -34,6 +36,6 @@ const PopoverContent = forwardRef<ComponentRef<typeof PopoverPrimitive.Content>,
 
 PopoverContent.displayName = 'PopoverContent';
 
-export { Popover, PopoverTrigger, PopoverContent };
+export { Popover, PopoverAnchor, PopoverTrigger, PopoverContent };
 
 export default Popover;

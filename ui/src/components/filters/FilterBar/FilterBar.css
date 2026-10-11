@@ -1,8 +1,4 @@
 @layer components {
-    .filter-bar__sync-hint {
-        grid-column: 1 / -1;
-    }
-
     .filter-bar .monitoring-toggle__segments {
         align-items: stretch;
         min-height: 32px;
@@ -12,9 +8,9 @@
         }
     }
 
-    .filter-bar .monitoring-toggle__option {
-        flex: 1;
-        justify-content: center;
+    .filter-bar .monitoring-toggle__group {
+        flex: 1 1 0;
+        min-width: max-content;
     }
 
     .filter-bar {
@@ -169,7 +165,8 @@
     .filter-bar__query-text {
         font-family: var(--font-mono);
         color: var(--accent-secondary);
-        overflow-wrap: break-word;
+        min-width: 0;
+        overflow-wrap: anywhere;
     }
 
     @media (max-width: 767px) {

@@ -58,6 +58,29 @@ public interface IRecoverableDatabaseManagementProvider : IDatabaseManagementPro
     /// </summary>
     /// <param name="backupId">The id of the backup to locate</param>
     /// <param name="cancellationToken">The token that cancels the operation</param>
-    /// <returns>The absolute path to the backup file, or null when the backup does not exist</returns>
+    /// <returns>
+    /// The absolute path to the backup file on the machine that keeps it, or null when the backup does not exist
+    /// </returns>
     Task<string?> GetBackupFilePathAsync(string backupId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Gets the reason that the database login or the process cannot create a backup.
+    /// </summary>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
+    /// <returns>The reason, or null when the database login and the process can create a backup</returns>
+    Task<string?> GetBackupDeniedReasonAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Gets the reason that the database login or the process cannot restore a backup.
+    /// </summary>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
+    /// <returns>The reason, or null when the database login and the process can restore a backup</returns>
+    Task<string?> GetRestoreDeniedReasonAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Gets the reason that the database login or the process cannot delete a backup.
+    /// </summary>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
+    /// <returns>The reason, or null when the database login and the process can delete a backup</returns>
+    Task<string?> GetDeleteDeniedReasonAsync(CancellationToken cancellationToken = default);
 }

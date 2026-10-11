@@ -57,6 +57,40 @@ public sealed class JobExecutionRepositoryTests
     private ITransactionManager _transactionManager = null!;
     private Guid _userId;
 
+    private static IEnumerable<TestCaseData> RefreshScopes()
+    {
+        yield return new TestCaseData(
+            new Dictionary<string, string> { ["event.context.content.hierarchyItemId"] = "item-b" },
+            new Dictionary<string, string> { ["event.context.content.hierarchyItemId"] = "item-c" },
+            null,
+            "Original reason",
+            1).SetArgDisplayNames("item-b", "item-c");
+        yield return new TestCaseData(
+            new Dictionary<string, string> { ["event.context.content.hierarchyItemId"] = "item-b" },
+            new Dictionary<string, string> { ["event.context.content.hierarchyItemId"] = "item-b" },
+            "item-b",
+            "Updated reason",
+            0).SetArgDisplayNames("item-b", "item-b");
+        yield return new TestCaseData(
+            new Dictionary<string, string> { ["event.context.content.hierarchyItemId"] = "item-b" },
+            new Dictionary<string, string>(),
+            null,
+            "Original reason",
+            1).SetArgDisplayNames("item-b", "absent");
+        yield return new TestCaseData(
+            new Dictionary<string, string>(),
+            new Dictionary<string, string> { ["event.context.content.hierarchyItemId"] = "item-c" },
+            null,
+            "Original reason",
+            0).SetArgDisplayNames("absent", "item-c");
+        yield return new TestCaseData(
+            new Dictionary<string, string> { ["event.context.content.hierarchyItemId"] = "" },
+            new Dictionary<string, string> { ["event.context.content.hierarchyItemId"] = "item-c" },
+            "",
+            "Original reason",
+            0).SetArgDisplayNames("empty", "item-c");
+    }
+
     [Test]
     public async Task TryDeferRunningAsync_PreservesAttemptAndDelaysClaims_WhenUpstreamThrottles()
     {
@@ -263,34 +297,38 @@ public sealed class JobExecutionRepositoryTests
         string expectedReason, string incomingTarget)
     {
         // Arrange
-        var original = await _subject.CreateAsync(new JobExecution
-        {
-            JobType = "ReleaseDownloadItem",
-            Status = JobExecutionStatus.Queued,
-            LockPartition = "release=1",
-            NotBeforeAt = Now.UtcDateTime.AddMinutes(10),
-            StatusMessage = "Original reason",
-            Parameters = new Dictionary<string, string>
+        var original = await _subject.CreateAsync(
+            new JobExecution
             {
-                ["capacityDeferredAt"] = "original-guard",
-                ["contentHierarchyItemId"] = "target"
-            }
-        }, null).ConfigureAwait(false);
+                JobType = "ReleaseDownloadItem",
+                Status = JobExecutionStatus.Queued,
+                LockPartition = "release=1",
+                NotBeforeAt = Now.UtcDateTime.AddMinutes(10),
+                StatusMessage = "Original reason",
+                Parameters = new Dictionary<string, string>
+                {
+                    ["retryContext"] = "original-context",
+                    ["contentHierarchyItemId"] = "target"
+                }
+            },
+            null).ConfigureAwait(false);
 
         // Act
-        var coalesced = await _subject.CreateAsync(new JobExecution
-        {
-            JobType = "ReleaseDownloadItem",
-            Status = JobExecutionStatus.Queued,
-            LockPartition = "release=1",
-            NotBeforeAt = Now.UtcDateTime.AddMinutes(20),
-            StatusMessage = incomingReason,
-            Parameters = new Dictionary<string, string>
+        var coalesced = await _subject.CreateAsync(
+            new JobExecution
             {
-                ["capacityDeferredAt"] = "must-not-replace",
-                ["contentHierarchyItemId"] = incomingTarget
-            }
-        }, null).ConfigureAwait(false);
+                JobType = "ReleaseDownloadItem",
+                Status = JobExecutionStatus.Queued,
+                LockPartition = "release=1",
+                NotBeforeAt = Now.UtcDateTime.AddMinutes(20),
+                StatusMessage = incomingReason,
+                Parameters = new Dictionary<string, string>
+                {
+                    ["retryContext"] = "must-not-replace",
+                    ["contentHierarchyItemId"] = incomingTarget
+                }
+            },
+            null).ConfigureAwait(false);
         _context.ChangeTracker.Clear();
         var persisted = await _subject.GetByIdAsync(original.Id).ConfigureAwait(false);
 
@@ -301,7 +339,7 @@ public sealed class JobExecutionRepositoryTests
             Assert.That(persisted!.StatusMessage, Is.EqualTo(expectedReason));
             Assert.That(persisted.Status, Is.EqualTo(JobExecutionStatus.Queued));
             Assert.That(persisted.NotBeforeAt, Is.EqualTo(new DateTime(2026, 7, 17, 12, 10, 0, DateTimeKind.Utc)));
-            Assert.That(persisted.Parameters["capacityDeferredAt"], Is.EqualTo("original-guard"));
+            Assert.That(persisted.Parameters["retryContext"], Is.EqualTo("original-context"));
             Assert.That(await _context.JobExecutions.CountAsync().ConfigureAwait(false), Is.EqualTo(1));
         }
     }
@@ -400,6 +438,61 @@ public sealed class JobExecutionRepositoryTests
         {
             Assert.That(coalesced.Id, Is.EqualTo(original.Id));
             Assert.That(persisted!.Parameters.GetValueOrDefault("contentHierarchyItemId"), Is.EqualTo(expectedTarget));
+            Assert.That(
+                await _context.AuditRecords
+                    .Where(record => record.Operation == "Coalesce")
+                    .Select(record => record.Detail)
+                    .ToListAsync()
+                    .ConfigureAwait(false),
+                Has.Exactly(expectedWidenings).EndsWith("; removed contentHierarchyItemId"));
+        }
+    }
+
+    [TestCaseSource(nameof(RefreshScopes))]
+    public async Task CreateAsync_KeepsTheEventTargetOnlyForTheSameItem_WhenARefreshCoalescesOntoAQueuedRefresh(
+        Dictionary<string, string> queuedContext,
+        Dictionary<string, string> incomingContext,
+        string? expectedTarget,
+        string expectedReason,
+        int expectedWidenings)
+    {
+        // Arrange
+        var original = await _subject.CreateAsync(
+            new JobExecution
+            {
+                JobType = "MediaServerRefresh",
+                Status = JobExecutionStatus.Queued,
+                ExecutionMode = JobExecutionMode.Queue,
+                LockPartition = "type:MediaServerRefresh",
+                StatusMessage = "Original reason",
+                TriggerContext = queuedContext
+            },
+            null).ConfigureAwait(false);
+
+        // Act
+        var coalesced = await _subject.CreateAsync(
+            new JobExecution
+            {
+                JobType = "MediaServerRefresh",
+                Status = JobExecutionStatus.Queued,
+                ExecutionMode = JobExecutionMode.Queue,
+                LockPartition = "type:MediaServerRefresh",
+                StatusMessage = "Updated reason",
+                TriggerContext = incomingContext
+            },
+            null).ConfigureAwait(false);
+        _context.ChangeTracker.Clear();
+        var persisted = await _subject.GetByIdAsync(original.Id).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(coalesced.Id, Is.EqualTo(original.Id));
+            Assert.That(
+                persisted!.TriggerContext.GetValueOrDefault("event.context.content.hierarchyItemId"),
+                Is.EqualTo(expectedTarget));
+            Assert.That(persisted.StatusMessage, Is.EqualTo(expectedReason));
+            Assert.That(await _context.JobExecutions.CountAsync().ConfigureAwait(false), Is.EqualTo(1));
             Assert.That(
                 await _context.AuditRecords
                     .Where(record => record.Operation == "Coalesce")

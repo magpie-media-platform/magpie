@@ -8,9 +8,7 @@ using System.Threading.Tasks;
 
 using Magpie.Abstractions;
 using Magpie.Abstractions.Repositories;
-using Magpie.Core.Events;
 using Magpie.Models;
-using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Sdk.Extensions;
 using Magpie.Sdk.Services;
@@ -22,7 +20,6 @@ namespace Magpie.Core.Extensions;
 
 internal sealed class ExtensionLifecycleManager(
     ExtensionLoadContext loadContext,
-    IEventBus eventBus,
     IServiceScopeFactory scopeFactory,
     IExtensionRepository repository,
     IFileSystem fileSystem,
@@ -57,8 +54,6 @@ internal sealed class ExtensionLifecycleManager(
 
     public async Task DispatchStartupHooksAsync(CancellationToken cancellationToken = default)
     {
-        await DisableFailedExtensionsAsync(cancellationToken).ConfigureAwait(false);
-
         if (!loadContext.Loaded.Any(extension => extension is IExtensionLifecycle))
         {
             return;
@@ -183,54 +178,6 @@ internal sealed class ExtensionLifecycleManager(
         var match = loadContext.Loaded.FirstOrDefault(candidate =>
             candidate is IExtensionLifecycle && Matches(candidate, extension, fileSystem));
         await InvokeLoadedHookAsync(match, hook, hookName).ConfigureAwait(false);
-    }
-
-    private async Task DisableFailedExtensionsAsync(CancellationToken cancellationToken)
-    {
-        if (loadContext.Failed.Count == 0)
-        {
-            return;
-        }
-
-        const string reason = "The extension assembly failed to load.";
-
-        foreach (var extension in loadContext.Failed)
-        {
-            try
-            {
-                var disabled = await repository.PatchAsync(
-                    new ExtensionPatch
-                    {
-                        Id = extension.Id,
-                        Enabled = new() { Value = false },
-                        DisabledReason = new() { Value = reason }
-                    },
-                    modifiedByUserId: null,
-                    cancellationToken).ConfigureAwait(false);
-                if (!disabled)
-                {
-                    continue;
-                }
-
-                await eventBus.PublishAsync(
-                    ExtensionEventBuilder.BuildExtensionDisabledEvent(extension.Id, reason),
-                    cancellationToken)
-                    .ConfigureAwait(false);
-                logger.LogWarning(
-                    "The lifecycle manager disabled extension {PackageId} ({ExtensionId}) after a load failure",
-                    extension.PackageId,
-                    extension.Id);
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                logger.LogError(
-                    ex,
-                    "The lifecycle manager failed to disable extension {PackageId} ({ExtensionId}) " +
-                    "after a load failure",
-                    extension.PackageId,
-                    extension.Id);
-            }
-        }
     }
 
     private async Task InvokeLoadedHookAsync(

@@ -1,5 +1,12 @@
 import { useRef, type ComponentType } from 'react';
-import { CrosshairIcon, EyeIcon, EyeSlashIcon, TreeViewIcon, FunnelIcon, type IconProps } from '@phosphor-icons/react';
+import {
+    FlagCheckeredIcon,
+    EyeIcon,
+    EyeSlashIcon,
+    TreeViewIcon,
+    FunnelIcon,
+    type IconProps,
+} from '@phosphor-icons/react';
 
 import { Tooltip } from '@/components/ui/Tooltip';
 import type { MonitoringMode } from '@/types';
@@ -90,8 +97,8 @@ const SHOTGUN_OPTIONS: MonitoringOption[] = [
         value: 'Shotgun',
         key: 'shotgun',
         label: 'Shotgun',
-        icon: CrosshairIcon,
-        tooltip: 'Grab every acceptable release and keep the first successful import',
+        icon: FlagCheckeredIcon,
+        tooltip: 'Grab everything at once, keep the first to finish',
     },
 ];
 
@@ -126,7 +133,7 @@ export function MonitoringToggle<T extends MonitoringValue = boolean | null>({
                             value: 'Shotgun' as const,
                             key: 'shotgun',
                             label: 'Shotgun',
-                            icon: CrosshairIcon,
+                            icon: FlagCheckeredIcon,
                             tooltip: 'Show content that uses Shotgun mode',
                         },
                     ]
@@ -134,6 +141,48 @@ export function MonitoringToggle<T extends MonitoringValue = boolean | null>({
               { value: null, key: 'any', label: 'Any', icon: FunnelIcon, tooltip: 'Do not restrict monitoring' },
           ]
         : (shotgun ? SHOTGUN_OPTIONS : OPTIONS).filter((option) => inherit || option.value !== null);
+    const isGrouped = shotgun && (filter || inherit);
+    const firstGroupSize = filter ? 2 : 1;
+
+    const renderOption = ({ value: optionValue, key, label, icon: Icon, tooltip }: MonitoringOption, index: number) => {
+        const isActive = value === optionValue;
+        return (
+            <Tooltip key={key} content={tooltip}>
+                <button
+                    ref={(node) => {
+                        optionRefs.current[index] = node;
+                    }}
+                    type="button"
+                    role="radio"
+                    aria-checked={isActive}
+                    tabIndex={isActive ? 0 : -1}
+                    onKeyDown={(event) => {
+                        const direction =
+                            event.key === 'ArrowRight' || event.key === 'ArrowDown'
+                                ? 1
+                                : event.key === 'ArrowLeft' || event.key === 'ArrowUp'
+                                  ? -1
+                                  : 0;
+                        if (!direction) return;
+                        event.preventDefault();
+                        const next = (index + direction + options.length) % options.length;
+                        onChange(options[next].value as T);
+                        optionRefs.current[next]?.focus();
+                    }}
+                    aria-label={`${label}: ${tooltip}`}
+                    className="monitoring-toggle__option"
+                    data-state={isActive ? 'active' : 'inactive'}
+                    data-value={key}
+                    data-testid={testIdPrefix ? `${testIdPrefix}__option-${key}` : undefined}
+                    onClick={() => onChange(optionValue as T)}
+                    disabled={disabled}
+                >
+                    <Icon weight="bold" aria-hidden="true" />
+                    <span>{label}</span>
+                </button>
+            </Tooltip>
+        );
+    };
 
     return (
         <div
@@ -147,45 +196,18 @@ export function MonitoringToggle<T extends MonitoringValue = boolean | null>({
             data-field={dataField}
             data-testid={testIdPrefix ? `${testIdPrefix}__toggle` : undefined}
         >
-            {options.map(({ value: optionValue, key, label, icon: Icon, tooltip }, index) => {
-                const isActive = value === optionValue;
-                return (
-                    <Tooltip key={key} content={tooltip}>
-                        <button
-                            ref={(node) => {
-                                optionRefs.current[index] = node;
-                            }}
-                            type="button"
-                            role="radio"
-                            aria-checked={isActive}
-                            tabIndex={isActive ? 0 : -1}
-                            onKeyDown={(event) => {
-                                const direction =
-                                    event.key === 'ArrowRight' || event.key === 'ArrowDown'
-                                        ? 1
-                                        : event.key === 'ArrowLeft' || event.key === 'ArrowUp'
-                                          ? -1
-                                          : 0;
-                                if (!direction) return;
-                                event.preventDefault();
-                                const next = (index + direction + options.length) % options.length;
-                                onChange(options[next].value as T);
-                                optionRefs.current[next]?.focus();
-                            }}
-                            aria-label={`${label}: ${tooltip}`}
-                            className="monitoring-toggle__option"
-                            data-state={isActive ? 'active' : 'inactive'}
-                            data-value={key}
-                            data-testid={testIdPrefix ? `${testIdPrefix}__option-${key}` : undefined}
-                            onClick={() => onChange(optionValue as T)}
-                            disabled={disabled}
-                        >
-                            <Icon weight="bold" aria-hidden="true" />
-                            <span>{label}</span>
-                        </button>
-                    </Tooltip>
-                );
-            })}
+            {isGrouped ? (
+                <>
+                    <div className="monitoring-toggle__group">{options.slice(0, firstGroupSize).map(renderOption)}</div>
+                    <div className="monitoring-toggle__group">
+                        {options
+                            .slice(firstGroupSize)
+                            .map((option, index) => renderOption(option, firstGroupSize + index))}
+                    </div>
+                </>
+            ) : (
+                options.map(renderOption)
+            )}
         </div>
     );
 }

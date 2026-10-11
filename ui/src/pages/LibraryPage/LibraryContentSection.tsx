@@ -17,6 +17,7 @@ import type { BulkSelection } from '@/hooks/useBulkSelection';
 import { isValidationError, getErrorMessage } from '@/lib/errors';
 import type { ContentListItem } from '@/types';
 
+import { LibraryAlphabetRail } from './LibraryAlphabetRail';
 import { LibraryGalleryTile } from './LibraryGalleryTile';
 import { LibraryGalleryToolbar } from './LibraryGalleryToolbar';
 import { LibraryMobileCard } from './LibraryMobileCard';
@@ -33,6 +34,7 @@ const LIBRARY_SORT_OPTIONS: MobileListSortOption[] = [
 
 interface LibraryContentSectionProps {
     isLoading: boolean;
+    isPlaceholderData: boolean;
     contentTypeValidationPending: boolean;
     error: unknown;
     onRetry: () => void;
@@ -46,6 +48,8 @@ interface LibraryContentSectionProps {
     onPaginationChange: (updater: Updater<PaginationState>) => void;
     headerFilters: ContentHeaderFilters;
     headerFilterHandlers: ContentHeaderFilterHandlers;
+    titlePrefix: string;
+    onTitlePrefixChange: (prefix: string) => void;
     hasBulkActions: boolean;
     selection: BulkSelection;
     selectionMode: boolean;
@@ -64,6 +68,7 @@ interface LibraryContentSectionProps {
 
 export function LibraryContentSection({
     isLoading,
+    isPlaceholderData,
     contentTypeValidationPending,
     error,
     onRetry,
@@ -77,6 +82,8 @@ export function LibraryContentSection({
     onPaginationChange,
     headerFilters,
     headerFilterHandlers,
+    titlePrefix,
+    onTitlePrefixChange,
     hasBulkActions,
     selection,
     selectionMode,
@@ -124,7 +131,7 @@ export function LibraryContentSection({
     );
 
     return (
-        <section className="library-page__content" aria-label="Content list">
+        <section className="library-page__content" aria-label="Content list" aria-busy={isPlaceholderData || undefined}>
             {isLoading || contentTypeValidationPending ? (
                 <div className="library-page__loading" data-testid="library-page__loading">
                     <Skeleton className="library-page__skeleton" />
@@ -149,11 +156,7 @@ export function LibraryContentSection({
                     <EmptyState
                         icon={<WarningCircleIcon weight="duotone" />}
                         title="Failed to load content"
-                        action={
-                            <Button variant="secondary" size="sm" onClick={onRetry}>
-                                Retry
-                            </Button>
-                        }
+                        onRetry={onRetry}
                         size="sm"
                     />
                 )
@@ -173,27 +176,33 @@ export function LibraryContentSection({
                                 : undefined
                         }
                     />
-                    {contentItems.length === 0 ? (
-                        emptyState
-                    ) : (
-                        <ul className="library-page__gallery-grid" role="list" aria-label="Content gallery">
-                            {contentItems.map((item) => (
-                                <li key={item.id} className="library-page__gallery-cell">
-                                    <LibraryGalleryTile
-                                        item={item}
-                                        selectionMode={hasBulkActions && selectionMode}
-                                        selected={hasBulkActions ? selection.isRowChecked(item.id) : undefined}
-                                        onToggle={
-                                            hasBulkActions
-                                                ? () => selection.toggleRow(item.id, !selection.isRowChecked(item.id))
-                                                : undefined
-                                        }
-                                        onLongPress={hasBulkActions ? () => onBeginCardSelection(item.id) : undefined}
-                                    />
-                                </li>
-                            ))}
-                        </ul>
-                    )}
+                    <div className="library-page__gallery-body">
+                        {contentItems.length === 0 ? (
+                            <div className="library-page__gallery-empty">{emptyState}</div>
+                        ) : (
+                            <ul className="library-page__gallery-grid" role="list" aria-label="Content gallery">
+                                {contentItems.map((item) => (
+                                    <li key={item.id} className="library-page__gallery-cell">
+                                        <LibraryGalleryTile
+                                            item={item}
+                                            selectionMode={hasBulkActions && selectionMode}
+                                            selected={hasBulkActions ? selection.isRowChecked(item.id) : undefined}
+                                            onToggle={
+                                                hasBulkActions
+                                                    ? () =>
+                                                          selection.toggleRow(item.id, !selection.isRowChecked(item.id))
+                                                    : undefined
+                                            }
+                                            onLongPress={
+                                                hasBulkActions ? () => onBeginCardSelection(item.id) : undefined
+                                            }
+                                        />
+                                    </li>
+                                ))}
+                            </ul>
+                        )}
+                        <LibraryAlphabetRail titlePrefix={titlePrefix} onTitlePrefixChange={onTitlePrefixChange} />
+                    </div>
                     {pageCount > 1 && (
                         <Pager
                             className="library-page__gallery-pager"

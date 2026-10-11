@@ -116,7 +116,7 @@ describe('LibraryGalleryTile', () => {
         mockUseLibraryTypes.mockReturnValue({ contentTypes: [] });
     });
 
-    it('shows explicit unmonitored and fulfillment states separately', () => {
+    it('shows unmonitored and fulfillment states separately', () => {
         // Arrange
         const item: ContentListItem = {
             id: 'movie-1',
@@ -139,32 +139,6 @@ describe('LibraryGalleryTile', () => {
 
         // Assert
         expect(screen.getByLabelText('Unmonitored')).toBeInTheDocument();
-        expect(screen.getByText('Partial')).toBeInTheDocument();
-    });
-
-    it('marks an inherited unmonitored item as inherited instead of an explicit choice', () => {
-        // Arrange
-        const item: ContentListItem = {
-            id: 'movie-3',
-            title: 'A Third Movie',
-            level: 'movie',
-            levelLabel: 'Movie',
-            contentType: 'movie',
-            monitoring: null,
-            effectiveMonitoring: 'Unmonitored',
-            fulfillment: 'partial',
-        };
-
-        // Act
-        render(
-            <Wrapper>
-                <LibraryGalleryTile item={item} selectionMode={false} />
-            </Wrapper>,
-            { wrapper: TooltipProvider },
-        );
-
-        // Assert
-        expect(screen.getByLabelText('Unmonitored (inherited)')).toBeInTheDocument();
         expect(screen.getByText('Partial')).toBeInTheDocument();
     });
 

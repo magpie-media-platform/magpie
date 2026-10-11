@@ -64,10 +64,10 @@ test.describe.serial('Journey 1: day one: unbox the instance', () => {
             const database = await new ApiClient().get<{ initialized: boolean; provider: string }>(
                 '/api/system/setup/db-status',
             );
-            expect(database).toEqual({ initialized: true, provider: 'SQLite' });
+            expect(database).toEqual({ initialized: true, provider: integrationEnvironment.databaseProvider });
         });
 
-        await test.step('claim the administrator account and reach the metadata step', async () => {
+        await test.step('claim the administrator account and reach the extensions step', async () => {
             await page.goto('/setup');
             await expect(page.locator('[data-page="setup"]')).toHaveAttribute('data-current-step', 'admin');
 
@@ -75,8 +75,8 @@ test.describe.serial('Journey 1: day one: unbox the instance', () => {
             await page.locator('[data-field="password"]').fill(ADMIN_PASSWORD);
             await page.locator('[data-field="confirm-password"]').fill(ADMIN_PASSWORD);
             await page.locator('[data-action="create-admin"]').click();
-            await expect(page.locator('[data-page="setup"]')).toHaveAttribute('data-current-step', 'metadata');
-            await expect(page.locator('[data-step="metadata"]')).toBeVisible();
+            await expect(page.locator('[data-page="setup"]')).toHaveAttribute('data-current-step', 'extensions');
+            await expect(page.locator('[data-step="extensions"]')).toBeVisible();
         });
 
         await test.step('restart the host mid-wizard and resume at the same step', async () => {
@@ -89,7 +89,8 @@ test.describe.serial('Journey 1: day one: unbox the instance', () => {
                 requiresAdminClaim: false,
             });
             await page.goto('/setup');
-            await expect(page.locator('[data-page="setup"]')).toHaveAttribute('data-current-step', 'metadata');
+            await expect(page.locator('[data-page="setup"]')).toHaveAttribute('data-current-step', 'extensions');
+            await page.locator('[data-action="continue-extensions"]').click();
             await expect(page.locator('[data-step="metadata"]')).toBeVisible();
         });
 

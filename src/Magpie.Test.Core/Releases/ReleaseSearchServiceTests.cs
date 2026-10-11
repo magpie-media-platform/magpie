@@ -231,7 +231,7 @@ public sealed class ReleaseSearchServiceTests
                 It.IsAny<Release>(),
                 It.IsAny<Guid?>(),
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync((Release release, Guid? _, CancellationToken _) => release);
+            .ReturnsAsync((Release release, Guid? _, CancellationToken _) => release with { Id = Guid.NewGuid() });
         _releaseRepository
             .Setup(r => r.MarkObservedAsync(It.IsAny<IReadOnlyCollection<Guid>>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(0);
@@ -2045,6 +2045,54 @@ public sealed class ReleaseSearchServiceTests
                 It.IsAny<Guid>(),
                 It.IsAny<CancellationToken>()),
             Times.Never);
+    }
+
+    [Test]
+    public async Task SearchAsync_Searches_WhenADeferredSearchIsQueuedAndTheSearchIsForced()
+    {
+        // Arrange
+        _jobExecutions
+            .Setup(repository => repository.QueryAsync(
+                It.Is<JobExecutionQuery>(query =>
+                    query.JobType == "ReleaseSearchItem" &&
+                    query.Statuses != null &&
+                    query.Statuses.Contains(JobExecutionStatus.Queued)),
+                It.IsAny<PagingParameter>(),
+                It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<JobExecution>
+            {
+                Items =
+                [
+                    new JobExecution
+                    {
+                        Id = Guid.NewGuid(),
+                        JobType = "ReleaseSearchItem",
+                        Scope = JobScope.Content,
+                        Status = JobExecutionStatus.Queued,
+                        CreatedAt = DateTime.UtcNow.AddMinutes(-5),
+                        NotBeforeAt = DateTime.UtcNow.AddMinutes(30),
+                        Parameters = new Dictionary<string, string>
+                        {
+                            ["contentHierarchyItemId"] = _contentHierarchyItemId.ToString("D"),
+                        },
+                    },
+                ],
+            });
+
+        // Act
+        await _subject.SearchAsync(
+            _contentHierarchyItemId,
+            _userId,
+            correlationId: null,
+            currentExecutionId: null,
+            progress: null,
+            force: true).ConfigureAwait(false);
+
+        // Assert
+        _contentHierarchyItems.Verify(
+            repository => repository.GetByIdAsync(_contentHierarchyItemId, It.IsAny<CancellationToken>()),
+            Times.AtLeastOnce);
     }
 
     [Test]
@@ -5562,6 +5610,51 @@ public sealed class ReleaseSearchServiceTests
         }
     }
 
+    [Test]
+    public async Task SearchInteractiveResultAsync_ReturnsTheStoredReleaseId_WhenTheCandidateIsAlreadyStored()
+    {
+        // Arrange
+        var storedReleaseId = Guid.Parse("0e0d6a41-5e44-4f5f-9a51-7a2f6b0c0008");
+        _indexers.Setup(repository => repository.ListAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync([new Indexer { Id = _indexerId, ProviderType = "test-indexer", Name = "Test Indexer" }]);
+        _indexerConnections.Setup(repository => repository.ListAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync([
+                new IndexerConnection { Id = _connectionId, IndexerId = _indexerId, Name = "Test", Enabled = true },
+            ]);
+        _indexerIntegration.Setup(integration => integration.SearchAsync(
+                It.IsAny<ReleaseSearchRequest>(),
+                It.IsAny<IReadOnlyDictionary<string, string>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync([new Release { Title = "Pilot", Protocol = "torrent", ExternalId = "stored" }]);
+        _releaseRepository
+            .Setup(r => r.UpdateAsync(
+                It.Is<Release>(release => release.ExternalId == "stored"),
+                null,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync((Release release, Guid? _, CancellationToken _) =>
+            {
+                release.Id = storedReleaseId;
+                return true;
+            });
+
+        // Act
+        var result = await _subject.SearchInteractiveResultAsync(_contentHierarchyItemId).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(
+                result!.Candidates.Select(candidate => candidate.Release.Id),
+                Is.EqualTo([Guid.Parse("0e0d6a41-5e44-4f5f-9a51-7a2f6b0c0008")]));
+            _releaseRepository.Verify(
+                r => r.MarkObservedAsync(
+                    It.Is<IReadOnlyCollection<Guid>>(ids =>
+                        ids.SequenceEqual(new[] { Guid.Parse("0e0d6a41-5e44-4f5f-9a51-7a2f6b0c0008") })),
+                    It.IsAny<CancellationToken>()),
+                Times.Once);
+        }
+    }
+
     [TestCase(false, 0)]
     [TestCase(true, 1)]
     public async Task SearchInteractiveResultAsync_ReportsIncompleteWithAvailableRows_WhenAnIndexerThrottles(
@@ -6402,12 +6495,8 @@ public sealed class ReleaseSearchServiceTests
                 new DownloadClient { Id = Guid.NewGuid(), Name = "Client", ProviderType = "test", Enabled = true }
             ]);
         _releaseRepository
-            .Setup(r => r.UpdateAsync(It.IsAny<Release>(), _userId, It.IsAny<CancellationToken>()))
-            .ReturnsAsync((Release release, Guid? _, CancellationToken _) =>
-            {
-                release.Id = releaseId;
-                return true;
-            });
+            .Setup(r => r.GetByIdAsync(releaseId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Release { Id = releaseId, Title = "Pilot", Protocol = "torrent" });
         _jobExecutions
             .Setup(r => r.QueryAsync(
                 It.Is<JobExecutionQuery>(query => query.JobType == "ReleaseDownloadItem"),
@@ -6432,8 +6521,7 @@ public sealed class ReleaseSearchServiceTests
             });
 
         // Act
-        var outcome = await _subject.GrabInteractiveAsync(
-            _contentHierarchyItemId, new Release { Title = "Pilot", Protocol = "torrent" }, _userId)
+        var outcome = await _subject.GrabInteractiveAsync(_contentHierarchyItemId, releaseId, _userId)
             .ConfigureAwait(false);
 
         // Assert
@@ -6461,12 +6549,8 @@ public sealed class ReleaseSearchServiceTests
                 new DownloadClient { Id = Guid.NewGuid(), Name = "Client", ProviderType = "test", Enabled = true }
             ]);
         _releaseRepository
-            .Setup(r => r.UpdateAsync(It.IsAny<Release>(), _userId, It.IsAny<CancellationToken>()))
-            .ReturnsAsync((Release release, Guid? _, CancellationToken _) =>
-            {
-                release.Id = releaseId;
-                return true;
-            });
+            .Setup(r => r.GetByIdAsync(releaseId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Release { Id = releaseId, Title = "Pilot", Protocol = "torrent" });
         _jobManager
             .Setup(m => m.ExecuteAsync(It.IsAny<JobEnqueueRequest>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(executionId);
@@ -6483,8 +6567,7 @@ public sealed class ReleaseSearchServiceTests
             });
 
         // Act
-        var outcome = await _subject.GrabInteractiveAsync(
-            _contentHierarchyItemId, new Release { Title = "Pilot", Protocol = "torrent" }, _userId)
+        var outcome = await _subject.GrabInteractiveAsync(_contentHierarchyItemId, releaseId, _userId)
             .ConfigureAwait(false);
 
         // Assert
@@ -6496,48 +6579,31 @@ public sealed class ReleaseSearchServiceTests
     }
 
     [Test]
-    public async Task GrabInteractiveAsync_StoresTheIdentityKeysOfThePostedRelease_WhenTheBodyCarriesThem()
+    public async Task GrabInteractiveAsync_ReturnsInvalidRelease_WhenTheReleaseIsNotStored()
     {
         // Arrange
-        var body = """
-            {"title":"Pilot","protocol":"torrent",
-            "identityKeys":[{"authority":"btih","value":"0123456789abcdef0123456789abcdef01234567","ordinal":0}]}
-            """;
-        var release = JsonSerializer.Deserialize<Release>(body, _bindingOptions)!;
-        _hierarchyItem.EffectiveQualityTierListId = Guid.NewGuid();
-        _hierarchyItem.ContentItem = new ContentItem { Id = _contentItemId };
-        _downloadClients
-            .Setup(r => r.ListAllAsync(It.IsAny<CancellationToken>()))
-            .ReturnsAsync(
-            [
-                new DownloadClient { Id = Guid.NewGuid(), Name = "Client", ProviderType = "test", Enabled = true }
-            ]);
-        _releaseRepository
-            .Setup(r => r.UpdateAsync(It.IsAny<Release>(), _userId, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(true);
-        _jobManager
-            .Setup(m => m.ExecuteAsync(It.IsAny<JobEnqueueRequest>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Guid.NewGuid());
+        var releaseId = Guid.Parse("0e0d6a41-5e44-4f5f-9a51-7a2f6b0c0007");
 
         // Act
-        await _subject.GrabInteractiveAsync(_contentHierarchyItemId, release, _userId).ConfigureAwait(false);
+        var outcome = await _subject.GrabInteractiveAsync(_contentHierarchyItemId, releaseId, _userId)
+            .ConfigureAwait(false);
 
         // Assert
-        _releaseRepository.Verify(
-            r => r.UpdateAsync(
-                It.Is<Release>(stored => stored.IdentityKeys.Any(key =>
-                    key.Authority == "btih" && key.Value == "0123456789abcdef0123456789abcdef01234567")),
-                _userId,
-                It.IsAny<CancellationToken>()),
-            Times.Once);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(outcome.Status, Is.EqualTo(InteractiveReleaseGrabResult.InvalidRelease));
+            Assert.That(outcome.Detail, Is.EqualTo("Release 0e0d6a41-5e44-4f5f-9a51-7a2f6b0c0007 does not exist."));
+            _jobManager.Verify(
+                m => m.ExecuteAsync(It.IsAny<JobEnqueueRequest>(), It.IsAny<CancellationToken>()),
+                Times.Never);
+        }
     }
 
     [Test]
-    public async Task GrabInteractiveAsync_StoresNoIdentityKeysOrExternalIds_WhenTheBodyPostsThemAsNull()
+    public async Task GrabInteractiveAsync_WritesNoReleaseAndQueuesTheStoredRelease_WhenTheGrabNamesItsId()
     {
         // Arrange
-        var body = """{"title":"Pilot","protocol":"torrent","identityKeys":null,"externalIds":null}""";
-        var release = JsonSerializer.Deserialize<Release>(body, _bindingOptions)!;
+        var releaseId = Guid.Parse("0e0d6a41-5e44-4f5f-9a51-7a2f6b0c0009");
         _hierarchyItem.EffectiveQualityTierListId = Guid.NewGuid();
         _hierarchyItem.ContentItem = new ContentItem { Id = _contentItemId };
         _downloadClients
@@ -6547,66 +6613,34 @@ public sealed class ReleaseSearchServiceTests
                 new DownloadClient { Id = Guid.NewGuid(), Name = "Client", ProviderType = "test", Enabled = true }
             ]);
         _releaseRepository
-            .Setup(r => r.UpdateAsync(It.IsAny<Release>(), _userId, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(true);
-        _jobManager
-            .Setup(m => m.ExecuteAsync(It.IsAny<JobEnqueueRequest>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Guid.NewGuid());
+            .Setup(r => r.GetByIdAsync(releaseId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Release
+            {
+                Id = releaseId,
+                Title = "Pilot",
+                Protocol = "torrent",
+                InfoUrl = new Uri("https://tracker.test/download.php?id=7"),
+            });
 
         // Act
-        await _subject.GrabInteractiveAsync(_contentHierarchyItemId, release, _userId).ConfigureAwait(false);
+        await _subject.GrabInteractiveAsync(_contentHierarchyItemId, releaseId, _userId).ConfigureAwait(false);
 
         // Assert
-        _releaseRepository.Verify(
-            r => r.UpdateAsync(
-                It.Is<Release>(stored => stored.IdentityKeys.Count == 0 && stored.ExternalIds.Count == 0),
-                _userId,
-                It.IsAny<CancellationToken>()),
-            Times.Once);
-    }
-
-    [Test]
-    public async Task GrabInteractiveAsync_KeepsTheExternalIdsButNotTheSourcesOrRelations_WhenTheBodyCarriesThem()
-    {
-        // Arrange
-        var body = """
-            {"title":"Pilot","protocol":"torrent",
-            "externalIds":[{"source":"imdb","value":"tt0000001","ordinal":0}],
-            "sources":[{"key":"","protocol":"torrent","title":"Pilot","externalId":"indexer-release-1"}],
-            "downloads":[{"title":"Injected","externalId":"injected"}],
-            "scope":[{"releaseId":"00000000-0000-0000-0000-000000000000",
-            "contentHierarchyItemId":"7b1e4c2a-3f5d-4e6b-8a9c-0d1e2f3a4b5c"}]}
-            """;
-        var release = JsonSerializer.Deserialize<Release>(body, _bindingOptions)!;
-        _hierarchyItem.EffectiveQualityTierListId = Guid.NewGuid();
-        _hierarchyItem.ContentItem = new ContentItem { Id = _contentItemId };
-        _downloadClients
-            .Setup(r => r.ListAllAsync(It.IsAny<CancellationToken>()))
-            .ReturnsAsync(
-            [
-                new DownloadClient { Id = Guid.NewGuid(), Name = "Client", ProviderType = "test", Enabled = true }
-            ]);
-        _releaseRepository
-            .Setup(r => r.UpdateAsync(It.IsAny<Release>(), _userId, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(true);
-        _jobManager
-            .Setup(m => m.ExecuteAsync(It.IsAny<JobEnqueueRequest>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Guid.NewGuid());
-
-        // Act
-        await _subject.GrabInteractiveAsync(_contentHierarchyItemId, release, _userId).ConfigureAwait(false);
-
-        // Assert
-        _releaseRepository.Verify(
-            r => r.UpdateAsync(
-                It.Is<Release>(stored =>
-                    stored.ExternalIds.Any(id => id.Source == "imdb" && id.Value == "tt0000001") &&
-                    stored.Sources.Count == 0 &&
-                    stored.Downloads.Count == 0 &&
-                    stored.Scope.Count == 0),
-                _userId,
-                It.IsAny<CancellationToken>()),
-            Times.Once);
+        using (Assert.EnterMultipleScope())
+        {
+            _releaseRepository.Verify(
+                r => r.UpdateAsync(It.IsAny<Release>(), It.IsAny<Guid?>(), It.IsAny<CancellationToken>()),
+                Times.Never);
+            _releaseRepository.Verify(
+                r => r.CreateAsync(It.IsAny<Release>(), It.IsAny<Guid?>(), It.IsAny<CancellationToken>()),
+                Times.Never);
+            _jobManager.Verify(
+                m => m.ExecuteAsync(
+                    It.Is<JobEnqueueRequest>(request =>
+                        request.Parameters!["releaseId"] == "0e0d6a41-5e44-4f5f-9a51-7a2f6b0c0009"),
+                    It.IsAny<CancellationToken>()),
+                Times.Once);
+        }
     }
 
     [Test]
@@ -6624,12 +6658,8 @@ public sealed class ReleaseSearchServiceTests
                 new DownloadClient { Id = Guid.NewGuid(), Name = "Client", ProviderType = "test", Enabled = true }
             ]);
         _releaseRepository
-            .Setup(r => r.UpdateAsync(It.IsAny<Release>(), _userId, It.IsAny<CancellationToken>()))
-            .ReturnsAsync((Release release, Guid? _, CancellationToken _) =>
-            {
-                release.Id = releaseId;
-                return true;
-            });
+            .Setup(r => r.GetByIdAsync(releaseId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Release { Id = releaseId, Title = "Pilot", Protocol = "torrent" });
         _jobManager
             .Setup(m => m.ExecuteAsync(
                 It.Is<JobEnqueueRequest>(request =>
@@ -6643,8 +6673,7 @@ public sealed class ReleaseSearchServiceTests
             .ReturnsAsync(executionId);
 
         // Act
-        var outcome = await _subject.GrabInteractiveAsync(
-            _contentHierarchyItemId, new Release { Title = "Pilot", Protocol = "torrent" }, _userId)
+        var outcome = await _subject.GrabInteractiveAsync(_contentHierarchyItemId, releaseId, _userId)
             .ConfigureAwait(false);
 
         // Assert
@@ -6669,12 +6698,8 @@ public sealed class ReleaseSearchServiceTests
                 new DownloadClient { Id = Guid.NewGuid(), Name = "Client", ProviderType = "test", Enabled = true }
             ]);
         _releaseRepository
-            .Setup(r => r.UpdateAsync(It.IsAny<Release>(), _userId, It.IsAny<CancellationToken>()))
-            .ReturnsAsync((Release release, Guid? _, CancellationToken _) =>
-            {
-                release.Id = releaseId;
-                return true;
-            });
+            .Setup(r => r.GetByIdAsync(releaseId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Release { Id = releaseId, Title = "Pilot", Protocol = "torrent" });
         _downloadRepository
             .Setup(repository => repository.QueryAsync(
                 It.Is<DownloadQuery>(query => query.ReleaseId == releaseId),
@@ -6697,9 +6722,7 @@ public sealed class ReleaseSearchServiceTests
             });
 
         // Act
-        await _subject.GrabInteractiveAsync(
-            _contentHierarchyItemId, new Release { Title = "Show.S01.1080p", Protocol = "torrent" }, _userId)
-            .ConfigureAwait(false);
+        await _subject.GrabInteractiveAsync(_contentHierarchyItemId, releaseId, _userId).ConfigureAwait(false);
 
         // Assert
         _releaseScopeRepository.Verify(repository => repository.CreateAsync(
@@ -6714,6 +6737,7 @@ public sealed class ReleaseSearchServiceTests
     public async Task GrabInteractiveAsync_ObtainsTheContentItemThroughTheContentService_WhenTheItemHasNone()
     {
         // Arrange
+        var releaseId = Guid.NewGuid();
         _hierarchyItem.EffectiveQualityTierListId = Guid.NewGuid();
         _hierarchyItem.ContentItem = null;
         _downloadClients
@@ -6723,16 +6747,14 @@ public sealed class ReleaseSearchServiceTests
                 new DownloadClient { Id = Guid.NewGuid(), Name = "Client", ProviderType = "test", Enabled = true }
             ]);
         _releaseRepository
-            .Setup(r => r.UpdateAsync(It.IsAny<Release>(), _userId, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(true);
+            .Setup(r => r.GetByIdAsync(releaseId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Release { Id = releaseId, Title = "Pilot", Protocol = "torrent" });
         _jobManager
             .Setup(m => m.ExecuteAsync(It.IsAny<JobEnqueueRequest>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(Guid.NewGuid());
 
         // Act
-        await _subject.GrabInteractiveAsync(
-            _contentHierarchyItemId, new Release { Title = "Pilot", Protocol = "torrent" }, _userId)
-            .ConfigureAwait(false);
+        await _subject.GrabInteractiveAsync(_contentHierarchyItemId, releaseId, _userId).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())

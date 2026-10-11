@@ -89,30 +89,6 @@ describe('AdminClaimStep', () => {
         });
     });
 
-    it('shows a single recoverable error when async auto-skip fails', async () => {
-        const user = userEvent.setup();
-        const onAdvance = vi.fn().mockRejectedValueOnce(new ApiError(500, 'Could not load extension settings'));
-        vi.mocked(setupApiModule.fetchSetupStatus).mockResolvedValue({
-            isRequired: true,
-            isComplete: false,
-            requiresAdminClaim: false,
-        });
-
-        renderStep(onAdvance, { id: 'user-1', username: 'admin', role: Role.Admin });
-
-        expect(await screen.findByTestId('setup-error')).toHaveTextContent(/setup failed to continue/i);
-        expect(onAdvance).toHaveBeenCalledTimes(1);
-        expect(vi.mocked(setupApiModule.createSetupAdmin)).not.toHaveBeenCalled();
-
-        onAdvance.mockResolvedValueOnce(undefined);
-        await user.click(screen.getByRole('button', { name: /continue setup/i }));
-
-        await waitFor(() => {
-            expect(onAdvance).toHaveBeenCalledTimes(2);
-        });
-        expect(vi.mocked(setupApiModule.createSetupAdmin)).not.toHaveBeenCalled();
-    });
-
     it('claims the admin and advances on success', async () => {
         const onAdvance = vi.fn();
         const user = userEvent.setup();

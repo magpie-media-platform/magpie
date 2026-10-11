@@ -200,14 +200,9 @@ internal sealed class EntityResolver(IWikidataClient client, IQueryCoordinator c
             new ExternalSource(Constants.TvdbSource, Constants.TvdbEpisodePropertyId)
         ],
         EntityKind.Person =>
-        [
-            new ExternalSource(Constants.TmdbSource, Constants.TmdbPersonPropertyId),
-            new ExternalSource(Constants.ImdbSource, Constants.ImdbPropertyId)
-        ],
+            [.. Constants.PersonExternalIds.Select(id => new ExternalSource(id.Source, id.PropertyId))],
         EntityKind.Studio =>
-        [
-            new ExternalSource(Constants.TmdbSource, Constants.TmdbCompanyPropertyId)
-        ],
+            [.. Constants.StudioExternalIds.Select(id => new ExternalSource(id.Source, id.PropertyId))],
         _ => []
     };
 

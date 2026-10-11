@@ -210,7 +210,6 @@ internal sealed class LibraryImportCandidateRepository(
         {
             var targetIds = query.ContentHierarchyItemIds as Guid[] ?? [.. query.ContentHierarchyItemIds];
 
-            // One collection parameter keeps a large subtree under the SQL Server parameter limit.
             matches = matches.Where(m => m.ContentHierarchyItemId != null &&
                 EF.Parameter(targetIds).Contains(m.ContentHierarchyItemId.Value));
         }

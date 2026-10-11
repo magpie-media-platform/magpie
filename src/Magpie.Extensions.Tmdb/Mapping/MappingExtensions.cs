@@ -1052,6 +1052,16 @@ internal static class MappingExtensions
             Ordinal = 0
         });
         AddPayloadExternalIds(contribution, dto.ExternalIds);
+        if (dto.ExternalIds?.TvrageId is > 0 and var tvrageId)
+        {
+            contribution.ExternalIds.Add(new ExternalId
+            {
+                Source = "tvrage",
+                Value = tvrageId.ToString(CultureInfo.InvariantCulture),
+                Ordinal = contribution.ExternalIds.Count
+            });
+        }
+
         contribution.AddSelfReferences("person", idString, dto.ExternalIds?.ImdbId, "name");
         contribution.AddSocialReferences(dto.ExternalIds);
 

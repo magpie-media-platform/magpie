@@ -160,7 +160,7 @@ public class SubjectMetadataProviderTests
                 KnownForDepartment = "Acting",
                 ProfilePath = "/profile.jpg",
                 AlsoKnownAs = ["Ed Norton"],
-                ExternalIds = new ExternalIdsDto { ImdbId = "nm0001570", WikidataId = "Q170572" }
+                ExternalIds = new ExternalIdsDto { ImdbId = "nm0001570", WikidataId = "Q170572", TvrageId = 7360 }
             });
         var subject = new Subject { Id = new Guid("55555555-5555-5555-5555-555555555555"), Kind = "person" };
         var existing = new MetadataContribution { ProviderType = Constants.ProviderType };
@@ -181,7 +181,7 @@ public class SubjectMetadataProviderTests
             Assert.That(contribution.DeathDate, Is.Null);
             Assert.That(
                 contribution.ExternalIds.Select(externalId => externalId.Source),
-                Is.EqualTo(["tmdb", "imdb", "wikidata"]));
+                Is.EqualTo(["tmdb", "imdb", "wikidata", "tvrage"]));
             Assert.That(contribution.Images.Single().Type, Is.EqualTo("profile"));
             Assert.That(
                 contribution.Images.Single().Url.ToString(),

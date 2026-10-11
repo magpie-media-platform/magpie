@@ -1,9 +1,9 @@
 using System;
 using System.Collections.Generic;
-using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 
+using Magpie.Abstractions;
 using Magpie.Abstractions.Database;
 using Magpie.Abstractions.Repositories;
 using Magpie.Core.Events;
@@ -22,24 +22,26 @@ internal sealed class DatabaseManagementService(
 {
     public async Task<DatabaseManagementInfo> GetInfo(CancellationToken cancellationToken = default)
     {
-        return dbManagementProvider switch
+        var optimizing = dbManagementProvider as IOptimizingDatabaseManagementProvider;
+        var recoverable = dbManagementProvider as IRecoverableDatabaseManagementProvider;
+
+        return new()
         {
-            IOptimizingDatabaseManagementProvider o => new()
-            {
-                Provider = dbManagementProvider.Provider,
-                OptimizeSupported = true,
-                LastOptimizedAt = await o.GetLastOptimizedAsync(cancellationToken).ConfigureAwait(false),
-                BackupRestoreSupported = o is IRecoverableDatabaseManagementProvider
-            },
-            IRecoverableDatabaseManagementProvider r => new()
-            {
-                Provider = dbManagementProvider.Provider,
-                BackupRestoreSupported = true,
-            },
-            _ => new()
-            {
-                Provider = dbManagementProvider.Provider
-            }
+            Provider = dbManagementProvider.Provider,
+            OptimizeSupported = optimizing is not null,
+            LastOptimizedAt = optimizing is null
+                ? null
+                : await optimizing.GetLastOptimizedAsync(cancellationToken).ConfigureAwait(false),
+            BackupRestoreSupported = recoverable is not null,
+            BackupDeniedReason = recoverable is null
+                ? null
+                : await recoverable.GetBackupDeniedReasonAsync(cancellationToken).ConfigureAwait(false),
+            RestoreDeniedReason = recoverable is null
+                ? null
+                : await recoverable.GetRestoreDeniedReasonAsync(cancellationToken).ConfigureAwait(false),
+            DeleteDeniedReason = recoverable is null
+                ? null
+                : await recoverable.GetDeleteDeniedReasonAsync(cancellationToken).ConfigureAwait(false)
         };
     }
 
@@ -85,22 +87,6 @@ internal sealed class DatabaseManagementService(
         return deleted;
     }
 
-    public async Task<Stream?> OpenBackupAsync(string backupId, CancellationToken cancellationToken = default)
-    {
-        if (dbManagementProvider is not IRecoverableDatabaseManagementProvider recoverable)
-        {
-            return null;
-        }
-
-        var filePath = await recoverable.GetBackupFilePathAsync(backupId, cancellationToken).ConfigureAwait(false);
-        if (filePath is null || !File.Exists(filePath))
-        {
-            return null;
-        }
-
-        return File.OpenRead(filePath);
-    }
-
     public async Task<bool> RestoreBackupAsync(
         string backupId,
         Guid callerUserId,
@@ -109,6 +95,12 @@ internal sealed class DatabaseManagementService(
         if (dbManagementProvider is not IRecoverableDatabaseManagementProvider recoverable)
         {
             return false;
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!system.GetInfo().RestartSupported)
+        {
+            throw new MagpieShutdownException("The host is not supervised.");
         }
 
         if (!await recoverable.StageRestoreAsync(backupId, cancellationToken).ConfigureAwait(false))

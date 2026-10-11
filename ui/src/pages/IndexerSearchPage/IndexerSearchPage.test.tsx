@@ -571,7 +571,7 @@ describe('IndexerSearchPage', () => {
         await waitFor(() => expect(within(rows[0]).getByText('Queued')).toBeInTheDocument());
         expect(within(rows[1]).getByRole('button', { name: 'Grab' })).toBeInTheDocument();
         expect(
-            vi.mocked(apiPost).mock.calls.filter(([path]) => path === '/interactive-search/content-1/grab'),
+            vi.mocked(apiPost).mock.calls.filter(([path]) => path.startsWith('/interactive-search/content-1/grab/')),
         ).toHaveLength(1);
     });
 
@@ -642,7 +642,7 @@ describe('IndexerSearchPage', () => {
         expect(within(shiftedRow).getByText('Queued')).toBeInTheDocument();
         expect(within(shiftedRow).queryByRole('button', { name: 'Grab' })).not.toBeInTheDocument();
         expect(
-            vi.mocked(apiPost).mock.calls.filter(([path]) => path === '/interactive-search/content-1/grab'),
+            vi.mocked(apiPost).mock.calls.filter(([path]) => path.startsWith('/interactive-search/content-1/grab/')),
         ).toHaveLength(1);
     });
 
@@ -719,7 +719,7 @@ describe('IndexerSearchPage', () => {
         expect(within(refreshedRow).getByText('Queued')).toBeInTheDocument();
         expect(within(refreshedRow).queryByRole('button', { name: 'Grab' })).not.toBeInTheDocument();
         expect(
-            vi.mocked(apiPost).mock.calls.filter(([path]) => path === '/interactive-search/content-1/grab'),
+            vi.mocked(apiPost).mock.calls.filter(([path]) => path.startsWith('/interactive-search/content-1/grab/')),
         ).toHaveLength(1);
     });
 

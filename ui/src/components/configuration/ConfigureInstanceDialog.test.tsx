@@ -189,3 +189,44 @@ describe('ConfigureInstanceDialog editing', () => {
         });
     });
 });
+
+describe('ConfigureInstanceDialog settings schema request', () => {
+    beforeEach(() => {
+        vi.clearAllMocks();
+    });
+
+    it('shows a loading state and disables Add while the settings schema loads', async () => {
+        // Arrange
+        mockApiGet.mockReturnValue(new Promise(() => {}));
+
+        // Act
+        render(
+            <TestWrapper>
+                <Harness />
+            </TestWrapper>,
+        );
+
+        // Assert
+        expect(await screen.findAllByRole('status', { name: 'Loading' })).toHaveLength(3);
+        expect(screen.queryByText(/needs no additional configuration/)).not.toBeInTheDocument();
+        expect(screen.getByRole('button', { name: /^add$/i })).toBeDisabled();
+    });
+
+    it('shows an error with retry and disables Add when the settings schema request fails', async () => {
+        // Arrange
+        mockApiGet.mockRejectedValue(new Error('Server error'));
+
+        // Act
+        render(
+            <TestWrapper>
+                <Harness />
+            </TestWrapper>,
+        );
+
+        // Assert
+        expect(await screen.findByText('Failed to load settings')).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+        expect(screen.queryByText(/needs no additional configuration/)).not.toBeInTheDocument();
+        expect(screen.getByRole('button', { name: /^add$/i })).toBeDisabled();
+    });
+});

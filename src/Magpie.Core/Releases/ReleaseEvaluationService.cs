@@ -755,11 +755,36 @@ internal sealed class ReleaseEvaluationService(
             contexts.Add(await CreateEvaluationContextAsync(leaf.Id, cancellationToken).ConfigureAwait(false));
         }
 
+        var scopedRelease = new Release
+        {
+            Id = release.Id,
+            IndexerId = release.IndexerId,
+            Protocol = release.Protocol,
+            ExternalId = release.ExternalId,
+            Title = release.Title,
+            PublishDate = release.PublishDate,
+            Size = release.Size,
+            InfoUrl = release.InfoUrl,
+            Categories = release.Categories,
+            Languages = release.Languages,
+            Properties = release.Properties,
+            ExternalIds = release.ExternalIds,
+            IdentityKeys = release.IdentityKeys,
+            Scope =
+            {
+                new()
+                {
+                    ReleaseId = release.Id,
+                    ContentHierarchyItemId = parent.Id,
+                    Status = ReleaseScopeStatus.Matched,
+                },
+            },
+        };
         var assignments = new List<ReleaseFileAssignment>(files.Count);
         foreach (var file in files)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var leafId = ResolveLeaf(release with { Title = file.FileName }, contexts, cancellationToken);
+            var leafId = ResolveLeaf(scopedRelease with { Title = file.FileName }, contexts, cancellationToken);
             assignments.Add(new() { FileKey = file.Key, LeafContentHierarchyItemId = leafId });
         }
 

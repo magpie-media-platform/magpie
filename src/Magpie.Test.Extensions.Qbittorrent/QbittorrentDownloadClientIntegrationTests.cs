@@ -13,6 +13,7 @@ using Magpie.Models.Data;
 using Magpie.Models.Enums;
 using Magpie.Models.Integrations;
 using Magpie.Sdk.Integrations;
+using Magpie.Sdk.Services;
 
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -54,6 +55,7 @@ public class QbittorrentDownloadClientIntegrationTests
 
     private Mock<IQbittorrentClient> _client = null!;
     private Mock<IHttpClientFactory> _httpClientFactory = null!;
+    private Mock<IIndexerService> _indexerService = null!;
     private MockHttpMessageHandler _torrentHandler = null!;
     private HttpClient _torrentHttp = null!;
     private IDownloadClientIntegration _integration = null!;
@@ -63,6 +65,7 @@ public class QbittorrentDownloadClientIntegrationTests
     {
         _client = new Mock<IQbittorrentClient>(MockBehavior.Strict);
         _httpClientFactory = new Mock<IHttpClientFactory>(MockBehavior.Strict);
+        _indexerService = new Mock<IIndexerService>(MockBehavior.Strict);
         _torrentHandler = new MockHttpMessageHandler();
         _torrentHttp = new HttpClient(_torrentHandler, disposeHandler: false);
         _httpClientFactory
@@ -71,7 +74,8 @@ public class QbittorrentDownloadClientIntegrationTests
         _integration = new QbittorrentDownloadClientIntegration(
             NullLogger<QbittorrentDownloadClientIntegration>.Instance,
             _client.Object,
-            _httpClientFactory.Object);
+            _httpClientFactory.Object,
+            _indexerService.Object);
     }
 
     [TearDown]
@@ -553,6 +557,135 @@ public class QbittorrentDownloadClientIntegrationTests
         }
 
         _torrentHandler.VerifyNoOutstandingExpectation();
+    }
+
+    [Test]
+    public async Task DownloadReleaseAsync_AddsTheIndexerPayload_WhenTheIndexerConnectionFetchesThePayload()
+    {
+        // Arrange
+        byte[]? suppliedBytes = null;
+        _torrentHandler.When(HttpMethod.Get, "https://tracker.example/download.php?id=7")
+            .Respond("text/html", "<html><body><input type=\"password\"/></body></html>");
+        _client.Setup(client => client.AddTorrentFileAsync(
+                It.IsAny<QbittorrentSettings>(),
+                It.IsAny<byte[]>(),
+                It.IsAny<string>(),
+                It.IsAny<string?>(),
+                It.IsAny<CancellationToken>()))
+            .Callback<QbittorrentSettings, byte[], string, string?, CancellationToken>(
+                (_, bytes, _, _, _) => suppliedBytes = bytes)
+            .Returns(Task.CompletedTask);
+        var release = new Release
+        {
+            Title = "Login Tracker Release",
+            Protocol = "torrent",
+            InfoUrl = new Uri("https://tracker.example/download.php?id=7"),
+        };
+        _indexerService
+            .Setup(service => service.FetchPayloadAsync(
+                Guid.Parse("0e0d6a41-5e44-4f5f-9a51-7a2f6b0c0001"),
+                new Uri("https://tracker.example/download.php?id=7"),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new ByteArrayContent(TorrentBytes),
+            });
+        var context = new ReleaseGrabContext
+        {
+            IndexerConnectionId = Guid.Parse("0e0d6a41-5e44-4f5f-9a51-7a2f6b0c0001"),
+        };
+
+        // Act
+        var result = await _integration.DownloadReleaseAsync(release, context, AnonymousSettings, default)
+            .ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.ExternalId, Is.EqualTo(TorrentInfoHash));
+            Assert.That(suppliedBytes, Is.EqualTo(TorrentBytes));
+        }
+    }
+
+    [Test]
+    public async Task DownloadReleaseAsync_FetchesTheTorrentUrl_WhenThePayloadNeedsNoSession()
+    {
+        // Arrange
+        _torrentHandler.Expect(HttpMethod.Get, "https://tracker.example/download/file.torrent")
+            .Respond(HttpStatusCode.OK, _ => new ByteArrayContent(TorrentBytes));
+        _client.Setup(client => client.AddTorrentFileAsync(
+                It.IsAny<QbittorrentSettings>(),
+                It.IsAny<byte[]>(),
+                It.IsAny<string>(),
+                It.IsAny<string?>(),
+                It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+        var release = new Release
+        {
+            Title = "Public Tracker Release",
+            Protocol = "torrent",
+            InfoUrl = new Uri("https://tracker.example/download/file.torrent"),
+        };
+        _indexerService
+            .Setup(service => service.FetchPayloadAsync(
+                Guid.Parse("0e0d6a41-5e44-4f5f-9a51-7a2f6b0c0001"),
+                new Uri("https://tracker.example/download/file.torrent"),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync((HttpResponseMessage?)null);
+        var context = new ReleaseGrabContext
+        {
+            IndexerConnectionId = Guid.Parse("0e0d6a41-5e44-4f5f-9a51-7a2f6b0c0001"),
+        };
+
+        // Act
+        var result = await _integration.DownloadReleaseAsync(release, context, AnonymousSettings, default)
+            .ConfigureAwait(false);
+
+        // Assert
+        Assert.That(result.ExternalId, Is.EqualTo(TorrentInfoHash));
+        _torrentHandler.VerifyNoOutstandingExpectation();
+    }
+
+    [Test]
+    public async Task DownloadReleaseAsync_ExistingTorrent_WhenDuplicateTorrentFileIsRejected()
+    {
+        // Arrange
+        _torrentHandler.Expect(HttpMethod.Get, "https://tracker.example/download/file.torrent")
+            .Respond(HttpStatusCode.OK, _ => new ByteArrayContent(TorrentBytes));
+        _client.Setup(client => client.AddTorrentFileAsync(
+                It.IsAny<QbittorrentSettings>(),
+                It.IsAny<byte[]>(),
+                It.IsAny<string>(),
+                It.IsAny<string?>(),
+                It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new QbittorrentAddRejectedException("duplicate", "Fails."));
+        _client.Setup(client => client.GetTorrentInfoAsync(
+                It.IsAny<QbittorrentSettings>(),
+                It.Is<IReadOnlyCollection<string>>(hashes => hashes.Contains(TorrentInfoHash)),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(
+            [
+                new TorrentInfo { Hash = TorrentInfoHash, State = "error", ContentPath = "C:\\downloads\\release" }
+            ]);
+        var release = new Release
+        {
+            Title = "Duplicate Torrent File",
+            Protocol = "torrent",
+            InfoUrl = new Uri("https://tracker.example/download/file.torrent")
+        };
+
+        // Act
+        var result = await _integration.DownloadReleaseAsync(release, AnonymousSettings, default)
+            .ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.ExternalId, Is.EqualTo(TorrentInfoHash));
+            Assert.That(result.Status, Is.EqualTo(DownloadStatus.Grabbed));
+            Assert.That(result.StatusReason, Is.Null);
+            Assert.That(result.OutputPath, Is.EqualTo("C:\\downloads\\release"));
+        }
     }
 
     [Test]

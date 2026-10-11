@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 
+using Magpie.Models.Filtering;
+
 namespace Magpie.Models.Api;
 
 /// <summary>
@@ -42,6 +44,11 @@ public sealed record ContentPreview
     /// The release date of the content.
     /// </summary>
     public DateTime? ReleaseDate { get; init; }
+
+    /// <summary>
+    /// The calendar precision of <see cref="ReleaseDate"/>.
+    /// </summary>
+    public TemporalPrecision? ReleaseDatePrecision { get; init; }
 
     /// <summary>
     /// The release year of the content.

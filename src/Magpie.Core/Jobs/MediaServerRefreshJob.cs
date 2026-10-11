@@ -46,6 +46,7 @@ internal sealed class MediaServerRefreshJob(
         FailurePolicy = JobFailurePolicy.Retry,
         SupportedTriggerModes = [JobTriggerMode.Manual, JobTriggerMode.Schedule, JobTriggerMode.Event],
         ConcurrencyScope = ConcurrencyScope.PerType,
+        CoalesceWideningFields = [MagpieJobs.Parameters.ContentHierarchyItemId],
         LockPartitionEventContextKeys = new Dictionary<string, string>
         {
             [MagpieJobs.Parameters.ContentHierarchyItemId] = MagpieEvents.Keys.ContentHierarchyItemId

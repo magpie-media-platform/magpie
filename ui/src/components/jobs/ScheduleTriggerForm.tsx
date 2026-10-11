@@ -16,6 +16,7 @@ import { Tooltip } from '@/components/ui/Tooltip';
 import { UnsavedChangesDialog } from '@/components/ui/UnsavedChangesDialog';
 import { ExternalChangeConflictWarning, StaleSaveConfirmationDialog } from '@/components/ui/ExternalChangeConflict';
 import type { JobParameterDefinition } from '@/hooks/useJobs';
+import { useInstanceName } from '@/hooks/useInstanceName';
 
 import { cronPresets, describeCron, describeCronUtc } from './cronDescription';
 import { JobParameterFieldset } from './JobParameterFieldset';
@@ -123,6 +124,7 @@ export function ScheduleTriggerForm({
     onSubmit,
     isSubmitting = false,
 }: ScheduleTriggerFormProps): ReactNode {
+    const instanceName = useInstanceName();
     const isEditing = !!initialValues?.id;
 
     const [values, setValues] = useState<ScheduleTriggerFormValues>(() => normalizeInitialValues(initialValues));
@@ -366,7 +368,7 @@ export function ScheduleTriggerForm({
                     </SheetTitle>
                     <SheetDescription>
                         {readOnly
-                            ? 'This trigger is managed by Magpie and cannot be edited.'
+                            ? `This trigger is managed by ${instanceName} and cannot be edited.`
                             : isEditing
                               ? 'Update the schedule trigger configuration.'
                               : 'Configure a new schedule trigger to run a job automatically.'}
@@ -401,8 +403,8 @@ export function ScheduleTriggerForm({
                             >
                                 <LockSimpleIcon weight="regular" aria-hidden="true" />
                                 <span>
-                                    This trigger is managed by Magpie. Its schedule, parameters, and enabled state
-                                    cannot be changed.
+                                    This trigger is managed by {instanceName}. Its schedule, parameters, and enabled
+                                    state cannot be changed.
                                 </span>
                             </div>
                         )}

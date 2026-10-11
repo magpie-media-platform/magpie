@@ -96,7 +96,6 @@ export async function clearAuditRecords(slug: string): Promise<void> {
     await rm(target, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
 }
 
-// The mock plugins append audit files with no product signal, so a quiet folder is the only end-of-write marker.
 async function waitForFolderToQuiesce(target: string): Promise<void> {
     let previous: string | undefined;
     await until(

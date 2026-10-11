@@ -1,4 +1,4 @@
-import { useId, type ReactNode, type RefObject } from 'react';
+import { useEffect, useId, useState, type ReactNode, type RefObject } from 'react';
 import { TrashIcon } from '@phosphor-icons/react';
 
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '../Dialog';
@@ -47,6 +47,11 @@ export interface DeleteConfirmDialogProps {
 
     confirmIcon?: ReactNode;
 
+    confirmDisabled?: boolean;
+
+    /** Content between the toggle and the buttons. */
+    children?: ReactNode;
+
     /** Where focus goes when the dialog closes. Without it, the dialog keeps its default focus behaviour. */
     returnFocusRef?: RefObject<HTMLElement | null>;
 
@@ -54,23 +59,26 @@ export interface DeleteConfirmDialogProps {
     fallbackFocusRef?: RefObject<HTMLElement | null>;
 }
 
-export function DeleteConfirmDialog({
-    open,
-    onConfirm,
-    onCancel,
-    itemName,
-    itemType,
-    description,
-    isDeleting = false,
-    extraToggle,
-    title,
-    confirmVariant = 'destructive',
-    confirmLabel = 'Delete',
-    confirmBusyLabel = 'Deleting...',
-    confirmIcon,
-    returnFocusRef,
-    fallbackFocusRef,
-}: DeleteConfirmDialogProps) {
+export function DeleteConfirmDialog(props: DeleteConfirmDialogProps) {
+    const { open, onConfirm, onCancel, returnFocusRef, fallbackFocusRef } = props;
+    const [lastOpenProps, setLastOpenProps] = useState(props);
+    useEffect(() => {
+        if (open) setLastOpenProps(props);
+    }, [open, props]);
+    const {
+        itemName,
+        itemType,
+        description,
+        isDeleting = false,
+        extraToggle,
+        title,
+        confirmVariant = 'destructive',
+        confirmLabel = 'Delete',
+        confirmBusyLabel = 'Deleting...',
+        confirmIcon,
+        confirmDisabled = false,
+        children,
+    } = open ? props : lastOpenProps;
     const toggleId = useId();
     return (
         <Dialog
@@ -111,6 +119,7 @@ export function DeleteConfirmDialog({
                         </DisabledTooltip>
                     </div>
                 )}
+                {children}
                 <DialogFooter>
                     <Button variant="ghost" onClick={onCancel} disabled={isDeleting} data-action="cancel" autoFocus>
                         Cancel
@@ -119,6 +128,7 @@ export function DeleteConfirmDialog({
                         variant={confirmVariant}
                         onClick={onConfirm}
                         loading={isDeleting}
+                        disabled={confirmDisabled}
                         data-action="confirm-delete"
                     >
                         {confirmIcon ?? <TrashIcon weight="bold" aria-hidden="true" />}

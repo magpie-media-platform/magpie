@@ -45,11 +45,21 @@ interface TextFilterProps extends BaseProps {
     placeholder?: string;
 }
 
+export interface DateRangeValue {
+    preset: string;
+    from: string;
+    to: string;
+}
+
+export const BETWEEN_DATES_PRESET: FacetOption = { value: 'between', label: 'Between dates' };
+
 interface DateRangeFilterProps extends BaseProps {
     type: 'dateRange';
     from: string;
     to: string;
-    onChange: (range: { from: string; to: string }) => void;
+    preset?: string;
+    presets?: FacetOption[];
+    onChange: (range: DateRangeValue) => void;
 }
 
 interface NumberRangeFilterProps extends BaseProps {
@@ -197,17 +207,26 @@ function TextBody({ value, onChange, placeholder, label, onClose }: TextFilterPr
     );
 }
 
-function DateRangeBody({ from, to, onChange, label, onClose }: DateRangeFilterProps & { onClose: () => void }) {
+function DateRangeBody({
+    from,
+    to,
+    preset = '',
+    presets,
+    onChange,
+    label,
+    onClose,
+}: DateRangeFilterProps & { onClose: () => void }) {
     const inputId = useId();
+    const [mode, setMode] = useState(preset);
     const [draftFrom, setDraftFrom] = useState(from);
     const [draftTo, setDraftTo] = useState(to);
 
     const apply = useCallback(() => {
-        onChange({ from: draftFrom, to: draftTo });
+        onChange({ preset: mode, from: draftFrom, to: draftTo });
         onClose();
-    }, [draftFrom, draftTo, onChange, onClose]);
+    }, [mode, draftFrom, draftTo, onChange, onClose]);
 
-    return (
+    const form = (
         <form
             className="column-header-filter__form"
             onSubmit={(event) => {
@@ -238,7 +257,7 @@ function DateRangeBody({ from, to, onChange, label, onClose }: DateRangeFilterPr
                     onClick={() => {
                         setDraftFrom('');
                         setDraftTo('');
-                        onChange({ from: '', to: '' });
+                        onChange({ preset: '', from: '', to: '' });
                         onClose();
                     }}
                 >
@@ -250,6 +269,40 @@ function DateRangeBody({ from, to, onChange, label, onClose }: DateRangeFilterPr
                 </Button>
             </div>
         </form>
+    );
+
+    if (!presets) {
+        return form;
+    }
+
+    return (
+        <>
+            <DropdownMenuLabel>{label}</DropdownMenuLabel>
+            <DropdownMenuSeparator />
+            <DropdownMenuRadioGroup
+                value={mode || FACET_ANY}
+                onValueChange={(next) => {
+                    if (next === BETWEEN_DATES_PRESET.value) {
+                        setMode(next);
+                        return;
+                    }
+                    onChange({ preset: next === FACET_ANY ? '' : next, from: '', to: '' });
+                    onClose();
+                }}
+            >
+                <DropdownMenuRadioItem value={FACET_ANY}>Any</DropdownMenuRadioItem>
+                {[...presets, BETWEEN_DATES_PRESET].map((option) => (
+                    <DropdownMenuRadioItem
+                        key={option.value}
+                        value={option.value}
+                        onSelect={option.value === BETWEEN_DATES_PRESET.value ? (e) => e.preventDefault() : undefined}
+                    >
+                        {option.label}
+                    </DropdownMenuRadioItem>
+                ))}
+            </DropdownMenuRadioGroup>
+            {mode === BETWEEN_DATES_PRESET.value && form}
+        </>
     );
 }
 

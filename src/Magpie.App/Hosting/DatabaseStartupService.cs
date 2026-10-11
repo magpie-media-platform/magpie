@@ -32,7 +32,11 @@ internal sealed class DatabaseStartupService(
             await context.Database.MigrateAsync(cancellationToken).ConfigureAwait(false);
 
             await scope.ServiceProvider.GetRequiredService<IExtensionRepository>()
-                .RegisterLoadedExtensionsAsync(loadedExtensions.Discovered, loadedExtensions.Loaded, cancellationToken)
+                .RegisterLoadedExtensionsAsync(
+                    loadedExtensions.Discovered,
+                    loadedExtensions.Loaded,
+                    loadedExtensions.PackageVersions,
+                    cancellationToken)
                 .ConfigureAwait(false);
             if (loadedExtensions.Discovered.Count > 0)
             {

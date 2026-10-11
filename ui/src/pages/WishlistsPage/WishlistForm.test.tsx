@@ -177,6 +177,19 @@ describe('WishlistForm', () => {
         expect(screen.getByText(/Matching content is added to the library either way/)).toBeInTheDocument();
     });
 
+    it.each([
+        ['add', undefined, true],
+        ['edit', baseInitialValues, true],
+        ['read-only', baseInitialValues, false],
+    ])('renders no description under the title in %s mode', (_mode, initialValues, canEdit) => {
+        // Arrange
+        // Act
+        renderForm({ initialValues, canEdit });
+
+        // Assert
+        expect(document.querySelector('.sheet-description')).not.toBeInTheDocument();
+    });
+
     it('makes the create filter read-only while the create request is pending', () => {
         renderForm({ isSubmitting: true });
 

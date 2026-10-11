@@ -990,9 +990,13 @@ describe('FileTypesPage mime registry sort toolbar (card layout)', () => {
 
         // Assert
         expect(within(section).getByRole('combobox', { name: 'Sort by field' })).toHaveTextContent('MIME type');
+        expect(within(section).getByRole('button', { name: 'Sort descending' })).toHaveAttribute(
+            'aria-pressed',
+            'true',
+        );
         expect(within(section).getByRole('button', { name: 'Sort ascending' })).toHaveAttribute(
-            'data-direction',
-            'desc',
+            'aria-pressed',
+            'false',
         );
     });
 

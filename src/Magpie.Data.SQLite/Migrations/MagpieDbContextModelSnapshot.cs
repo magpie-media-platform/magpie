@@ -195,8 +195,6 @@ namespace Magpie.Data.SQLite.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("Category");
-
                     b.HasIndex("CorrelationId");
 
                     b.HasIndex("EntityId");
@@ -205,9 +203,7 @@ namespace Magpie.Data.SQLite.Migrations
 
                     b.HasIndex("JobExecutionId");
 
-                    b.HasIndex("Timestamp");
-
-                    b.HasIndex("UserId");
+                    b.HasIndex("Timestamp", "Id", "Category", "UserId");
 
                     b.ToTable("system_audit", (string)null);
                 });
@@ -416,13 +412,13 @@ namespace Magpie.Data.SQLite.Migrations
                     b.HasIndex("MetadataContainerId")
                         .IsUnique();
 
-                    b.HasIndex("ParentId");
-
                     b.HasIndex("QualityTierListId");
 
                     b.HasIndex("RootFolderId");
 
                     b.HasIndex("ContentType", "Level");
+
+                    b.HasIndex("ParentId", "EffectiveMonitoring");
 
                     b.HasIndex("ContentType", "Level", "Slug")
                         .IsUnique()
@@ -1441,6 +1437,8 @@ namespace Magpie.Data.SQLite.Migrations
 
                     b.HasIndex("ParentExecutionId", "CreatedAt");
 
+                    b.HasIndex("CompletedAt", "Id", "CreatedByUserId");
+
                     b.HasIndex("JobType", "CreatedAt", "Id")
                         .IsDescending(false, true, false);
 
@@ -2283,6 +2281,9 @@ namespace Magpie.Data.SQLite.Migrations
                     b.Property<string>("ExternalId")
                         .HasColumnType("TEXT");
 
+                    b.Property<Guid?>("IndexerConnectionId")
+                        .HasColumnType("TEXT");
+
                     b.Property<Guid?>("IndexerId")
                         .HasColumnType("TEXT");
 
@@ -2322,6 +2323,8 @@ namespace Magpie.Data.SQLite.Migrations
                         .HasColumnType("TEXT");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("IndexerConnectionId");
 
                     b.HasIndex("IndexerId");
 
@@ -3293,6 +3296,11 @@ namespace Magpie.Data.SQLite.Migrations
 
             modelBuilder.Entity("Magpie.Models.Data.ReleaseSource", b =>
                 {
+                    b.HasOne("Magpie.Models.Data.IndexerConnection", null)
+                        .WithMany()
+                        .HasForeignKey("IndexerConnectionId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
                     b.HasOne("Magpie.Models.Data.Indexer", null)
                         .WithMany()
                         .HasForeignKey("IndexerId")

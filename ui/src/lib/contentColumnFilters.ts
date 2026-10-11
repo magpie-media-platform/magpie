@@ -1,7 +1,7 @@
 import type { ContentFilterSelection } from './contentFilterOptions';
 import { escapeQueryString, monitoringClause, parseMonitoringClause, unescapeQueryString } from './simpleFilterQuery';
 
-type ContentFilterField = 'monitoring' | 'fulfillment' | 'title' | 'publishDateFrom' | 'publishDateTo';
+type ContentFilterField = 'monitoring' | 'fulfillment' | 'title' | 'titlePrefix' | 'publishDateFrom' | 'publishDateTo';
 
 type ClassifiedContentFilterField = ContentFilterField | 'contentType' | 'level';
 
@@ -17,6 +17,7 @@ const LEVEL_RE = /^level\s*=\s*"((?:\\.|[^"\\])*)"$/i;
 const FULFILLMENT_RE =
     /^fulfillment\s*=\s*(?:"(Missing|Partial|Upgradable|Fulfilled|FulfilledExternally)"|(Missing|Partial|Upgradable|Fulfilled|FulfilledExternally))$/i;
 const TITLE_RE = /^title\s+contains\s+"((?:\\.|[^"\\])*)"$/i;
+const TITLE_PREFIX_RE = /^title\s+startswith\s+"((?:\\.|[^"\\])*)"$/i;
 const PUBLISH_FROM_RE = /^publishDate\s*>=\s*"(\d{4}-\d{2}-\d{2})"$/i;
 const PUBLISH_TO_RE = /^publishDate\s*<=\s*"(\d{4}-\d{2}-\d{2})"$/i;
 
@@ -49,6 +50,11 @@ function classify(clause: string): Predicate {
     const title = trimmed.match(TITLE_RE);
     if (title) {
         return { field: 'title', raw: trimmed, value: unescapeQueryString(title[1]) };
+    }
+
+    const titlePrefix = trimmed.match(TITLE_PREFIX_RE);
+    if (titlePrefix) {
+        return { field: 'titlePrefix', raw: trimmed, value: unescapeQueryString(titlePrefix[1]) };
     }
 
     const from = trimmed.match(PUBLISH_FROM_RE);
@@ -154,6 +160,8 @@ function serializeClause(field: ClassifiedContentFilterField, value: string): st
             return `fulfillment = ${value}`;
         case 'title':
             return `title contains "${quoted}"`;
+        case 'titlePrefix':
+            return `title startswith "${quoted}"`;
         case 'publishDateFrom':
             return `publishDate >= "${quoted}"`;
         case 'publishDateTo':

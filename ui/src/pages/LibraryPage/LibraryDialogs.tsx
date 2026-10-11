@@ -1,3 +1,4 @@
+import type { UseQueryResult } from '@tanstack/react-query';
 import { FolderOpenIcon, RankingIcon } from '@phosphor-icons/react';
 
 import {
@@ -9,7 +10,9 @@ import {
 import { BulkValuePicker, type BulkValuePickerOption } from '@/components/ui/BulkValuePicker';
 import { DeleteConfirmDialog } from '@/components/ui/DeleteConfirmDialog/DeleteConfirmDialog';
 import { SaveFilterDialog } from '@/components/ui/SaveFilterDialog';
+import { ContentDeleteFiles } from '@/components/content/ContentDeleteFiles';
 import { ContentLineageTitle } from '@/components/content/ContentLineageTitle';
+import type { ContentDeleteFile } from '@/types/contentMetadata';
 
 import type { SavedFilterReference } from './libraryPageConstants';
 
@@ -52,6 +55,7 @@ interface LibraryDialogsProps {
     onCancelBulkDelete: () => void;
     bulkDeleteFiles: boolean;
     onBulkDeleteFilesChange: (checked: boolean) => void;
+    bulkDeletePreview: UseQueryResult<ContentDeleteFile[]>;
     isDeleting: boolean;
 }
 
@@ -90,6 +94,7 @@ export function LibraryDialogs({
     onCancelBulkDelete,
     bulkDeleteFiles,
     onBulkDeleteFilesChange,
+    bulkDeletePreview,
     isDeleting,
 }: LibraryDialogsProps) {
     const selectedItemsLabel = `${selectedCount} item${selectedCount === 1 ? '' : 's'}`;
@@ -184,7 +189,10 @@ export function LibraryDialogs({
                     checked: bulkDeleteFiles,
                     onChange: onBulkDeleteFilesChange,
                 }}
-            />
+                confirmDisabled={bulkDeleteFiles && (bulkDeletePreview.isLoading || bulkDeletePreview.isError)}
+            >
+                {bulkDeleteFiles && <ContentDeleteFiles preview={bulkDeletePreview} />}
+            </DeleteConfirmDialog>
         </>
     );
 }

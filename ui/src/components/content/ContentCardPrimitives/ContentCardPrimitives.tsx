@@ -8,9 +8,12 @@ import { useLongPress } from '@/hooks/ui/useLongPress';
 import { useLibraryTypes, useTypeIconName } from '@/hooks/useLibraryTypes';
 import { isUnrecognizedContentLevel, resolveContentTypeLabel } from '@/lib/contentTypeDisplay';
 import { getFulfillmentBadge } from '@/types/content';
+import type { TemporalPrecision } from '@/types/contentMetadata';
 import type { FulfillmentStatus, MonitoringMode } from '@/types';
 
 const brokenImageGlyph = <ImageBrokenIcon weight="thin" />;
+
+const CROPPED_ARTWORK_MAX_RATIO = 0.8;
 
 export interface ContentPosterProps {
     posterUrl?: string | null;
@@ -34,9 +37,11 @@ export function ContentPoster({
     ...imageProps
 }: ContentPosterProps) {
     const [posterFailed, setPosterFailed] = useState(false);
+    const [posterUncropped, setPosterUncropped] = useState(false);
 
     useEffect(() => {
         setPosterFailed(false);
+        setPosterUncropped(false);
     }, [posterUrl]);
 
     if (posterUrl && !posterFailed) {
@@ -47,6 +52,13 @@ export function ContentPoster({
                 alt={alt ?? `${title ?? 'Content'} artwork`}
                 className={className}
                 loading={loading}
+                data-artwork={posterUncropped ? 'uncropped' : undefined}
+                onLoad={({ currentTarget }) =>
+                    setPosterUncropped(
+                        currentTarget.naturalHeight > 0 &&
+                            currentTarget.naturalWidth / currentTarget.naturalHeight > CROPPED_ARTWORK_MAX_RATIO,
+                    )
+                }
                 onError={() => setPosterFailed(true)}
             />
         );
@@ -80,7 +92,6 @@ export function ContentTypeBadge({ level, levelLabel, contentType }: ContentType
 }
 
 export interface ContentMonitoringIndicatorProps {
-    monitoring: MonitoringMode | null;
     effectiveMonitoring: MonitoringMode;
     className: string;
     activeClassName?: string;
@@ -90,17 +101,11 @@ export interface ContentMonitoringIndicatorProps {
     dataMonitoring?: string;
 }
 
-/** Returns the full monitoring state as text, for example "Monitored (inherited)". */
-export function monitoringStateLabel(monitoring: MonitoringMode | null, effectiveMonitoring: MonitoringMode) {
-    return monitoring === null ? `${effectiveMonitoring} (inherited)` : effectiveMonitoring;
-}
-
 /**
  * Shows the monitoring state as an icon: an eye, a struck-through eye, or a checkered flag for Shotgun. A tooltip and
- * the accessible name give the full state. A long press opens the tooltip on touch devices, which have no hover.
+ * the accessible name give the monitoring state. A long press opens the tooltip on touch devices, which have no hover.
  */
 export function ContentMonitoringIndicator({
-    monitoring,
     effectiveMonitoring,
     className,
     activeClassName,
@@ -112,35 +117,32 @@ export function ContentMonitoringIndicator({
     const longPress = useLongPress({ onLongPress: () => setOpen(true) });
     const isMonitored = effectiveMonitoring !== 'Unmonitored';
     const isShotgun = effectiveMonitoring === 'Shotgun';
-    const label = monitoringStateLabel(monitoring, effectiveMonitoring);
     const Icon = !isMonitored ? EyeSlashIcon : isShotgun ? FlagCheckeredIcon : EyeIcon;
     const classes = [className, isMonitored ? activeClassName : inactiveClassName].filter(Boolean).join(' ');
 
     return (
-        <Tooltip content={label} open={open} onOpenChange={setOpen}>
+        <Tooltip content={effectiveMonitoring} open={open} onOpenChange={setOpen}>
             <span
                 className={classes}
                 role="img"
-                aria-label={label}
+                aria-label={effectiveMonitoring}
                 data-monitoring={dataMonitoring}
                 data-shotgun={isShotgun ? 'true' : undefined}
                 {...longPress.handlers}
                 onPointerDown={(event) => {
-                    // A press on the icon opens its tooltip; it does not start a long press on the card around it.
                     event.stopPropagation();
                     longPress.handlers.onPointerDown(event);
                 }}
                 onClick={(event: MouseEvent) => {
                     longPress.consumeClick(event);
                 }}
-                // A long press opens the tooltip, not the browser menu or the link preview.
                 onContextMenu={(event) => event.preventDefault()}
                 style={{ WebkitTouchCallout: 'none', userSelect: 'none' }}
             >
                 <Icon weight={isMonitored ? 'fill' : 'regular'} aria-hidden="true" />
                 {labelClassName && (
                     <span className={labelClassName} aria-hidden="true">
-                        {label}
+                        {effectiveMonitoring}
                     </span>
                 )}
             </span>
@@ -151,6 +153,8 @@ export function ContentMonitoringIndicator({
 interface ContentFulfillmentBadgeProps {
     fulfillment: FulfillmentStatus;
     importPending?: boolean;
+    publishDate?: string;
+    publishDatePrecision?: TemporalPrecision;
     size?: BadgeSize;
     className?: string;
 }
@@ -158,10 +162,12 @@ interface ContentFulfillmentBadgeProps {
 export function ContentFulfillmentBadge({
     fulfillment,
     importPending,
+    publishDate,
+    publishDatePrecision,
     size = 'sm',
     className,
 }: ContentFulfillmentBadgeProps) {
-    const badge = getFulfillmentBadge(fulfillment, importPending);
+    const badge = getFulfillmentBadge(fulfillment, { importPending, publishDate, publishDatePrecision });
 
     return (
         <Badge variant={badge.variant} size={size} className={className} dot>

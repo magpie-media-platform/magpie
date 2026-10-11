@@ -36,6 +36,7 @@ import {
     type ParsedSignalBag,
 } from '@/hooks/useLibraryImportCandidates';
 import type { LibraryImportCandidateGroup } from '@/hooks/useLibraryImportCandidateGroups';
+import { useInstanceName } from '@/hooks/useInstanceName';
 import { isApiError } from '@/lib/api';
 import { candidateSearchErrorMessage } from '@/lib/errors';
 import { escapeQueryString } from '@/lib/simpleFilterQuery';
@@ -121,9 +122,13 @@ interface ManualMatchDialogProps {
     target: ManualMatchTarget | null;
     onClose: () => void;
     onMatched: () => void;
+
+    /** Skips the success toast, for a caller that shows the new match itself. */
+    suppressSuccessToast?: boolean;
 }
 
-export function ManualMatchDialog({ target, onClose, onMatched }: ManualMatchDialogProps) {
+export function ManualMatchDialog({ target, onClose, onMatched, suppressSuccessToast }: ManualMatchDialogProps) {
+    const instanceName = useInstanceName();
     const { toast } = useToast();
     const candidateSearch = useProviderMetadataCandidateSearch();
     const setCandidateMatch = useSetLibraryImportMatch();
@@ -247,14 +252,16 @@ export function ManualMatchDialog({ target, onClose, onMatched }: ManualMatchDia
                         ...matchFields,
                     });
                 }
-                toast({
-                    title: 'Match set',
-                    description:
-                        target.kind === 'candidate'
-                            ? `"${candidate.title?.trim() || 'Untitled'}" is now matched to this file.`
-                            : `"${candidate.title?.trim() || 'Untitled'}" is now matched to every candidate in this group. Import it when ready.`,
-                    variant: 'success',
-                });
+                if (!suppressSuccessToast) {
+                    toast({
+                        title: 'Match set',
+                        description:
+                            target.kind === 'candidate'
+                                ? `"${candidate.title?.trim() || 'Untitled'}" is now matched to this file.`
+                                : `"${candidate.title?.trim() || 'Untitled'}" is now matched to every candidate in this group. Import it when ready.`,
+                        variant: 'success',
+                    });
+                }
                 onMatched();
                 onClose();
             } catch (error) {
@@ -263,21 +270,21 @@ export function ManualMatchDialog({ target, onClose, onMatched }: ManualMatchDia
                         title: target.kind === 'group' ? 'Group is gone' : 'File is gone',
                         description:
                             target.kind === 'group'
-                                ? 'The queue was out of date. Magpie refreshed it and removed this group.'
-                                : 'The queue was out of date. Magpie refreshed it and removed this file.',
+                                ? `The queue was out of date. ${instanceName} refreshed it and removed this group.`
+                                : `The queue was out of date. ${instanceName} refreshed it and removed this file.`,
                         variant: 'error',
                     });
                     onClose();
                 } else if (isApiError(error) && error.status === 400) {
                     toast({
                         title: 'Failed to set match',
-                        description: 'This result is missing the identifiers Magpie needs. Pick a different result.',
+                        description: `This result is missing the identifiers ${instanceName} needs. Pick a different result.`,
                         variant: 'error',
                     });
                 } else {
                     toast({
                         title: 'Failed to set match',
-                        description: 'Magpie could not set the match. Please try again.',
+                        description: `${instanceName} could not set the match. Please try again.`,
                         variant: 'error',
                     });
                 }
@@ -285,7 +292,7 @@ export function ManualMatchDialog({ target, onClose, onMatched }: ManualMatchDia
                 setMatchingKey(null);
             }
         },
-        [target, setCandidateMatch, setGroupMatch, toast, onMatched, onClose],
+        [target, setCandidateMatch, setGroupMatch, toast, onMatched, onClose, instanceName, suppressSuccessToast],
     );
 
     const contentTypeLabel = useMemo(() => {

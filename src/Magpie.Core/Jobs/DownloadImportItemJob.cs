@@ -1223,7 +1223,6 @@ internal sealed class DownloadImportItemJob(
                 Math.Min(prior.Available, destination.AvailableBytes));
         }
 
-        // Without identities, use an upper bound for each destination; never assume separate allocation pools.
         if (hasUnknownVolume)
         {
             return RootFolderService.CapacityWaitingReason(totalRequired, minimumAvailable);
@@ -2537,7 +2536,6 @@ internal sealed class DownloadImportItemJob(
             await StoreCapacityRecoveryAsync(downloadId, recovery, userId, cancellationToken).ConfigureAwait(false);
         }
 
-        // Restore replacements only after every payload is safe and every destination is clear.
         if (recovery.Files.Count == 0)
         {
             for (var i = recovery.Backups.Count - 1; i >= 0; i--)
@@ -3471,7 +3469,6 @@ internal sealed class DownloadImportItemJob(
             }
             catch (NotSupportedException)
             {
-                // Older extension file systems do not expose filesystem observations.
             }
 
             probes[filePath] = new(

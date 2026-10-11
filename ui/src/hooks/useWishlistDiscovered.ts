@@ -4,6 +4,7 @@ import { apiGet, buildUrl } from '@/lib/api';
 import { useInvalidateQueriesOnEvents } from '@/hooks/useInvalidateQueriesOnEvents';
 import { POLLING_INTERVALS } from '@/lib/queryClient';
 import { queryErrorOrNull } from '@/lib/utils';
+import type { TemporalPrecision } from '@/types/contentMetadata';
 import type { PagedList } from '@/types/paging';
 
 type WishlistDiscoveredItemStatus = 'Missing' | 'Found';
@@ -24,6 +25,8 @@ export interface WishlistDiscoveredRow {
     posterUrl: string | null;
 
     publishDate: string | null;
+
+    publishDatePrecision: TemporalPrecision | null;
 
     addedAt: string | null;
 

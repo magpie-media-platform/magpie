@@ -3,7 +3,6 @@ using System.Threading;
 using System.Threading.Tasks;
 
 using Magpie.Models.Api;
-using Magpie.Models.Data;
 using Magpie.Sdk.Api;
 using Magpie.Sdk.Releases;
 using Magpie.Sdk.Services;
@@ -30,7 +29,7 @@ internal sealed class InteractiveSearchEndpointGroup : IApiEndpointGroup
             .ProducesProblem(StatusCodes.Status404NotFound)
             .RequireRequester();
 
-        builder.MapPost("{contentHierarchyItemId:guid}/grab", GrabAsync)
+        builder.MapPost("{contentHierarchyItemId:guid}/grab/{releaseId:guid}", GrabAsync)
             .WithName(nameof(GrabAsync))
             .Produces<Guid>(StatusCodes.Status202Accepted)
             .ProducesProblem(StatusCodes.Status400BadRequest)
@@ -55,17 +54,17 @@ internal sealed class InteractiveSearchEndpointGroup : IApiEndpointGroup
         [FromServices] IReleaseSearchService releaseSearchService,
         AuthenticatedUser user,
         Guid contentHierarchyItemId,
-        Release request,
+        Guid releaseId,
         CancellationToken cancellationToken)
     {
         var result = await releaseSearchService
-            .GrabInteractiveAsync(contentHierarchyItemId, request, user.Id, cancellationToken)
+            .GrabInteractiveAsync(contentHierarchyItemId, releaseId, user.Id, cancellationToken)
             .ConfigureAwait(false);
 
         return result.Status switch
         {
             InteractiveReleaseGrabResult.Accepted =>
-                Results.Accepted($"/api/{Name}/{contentHierarchyItemId}/grab", result.ExecutionId),
+                Results.Accepted($"/api/{Name}/{contentHierarchyItemId}/grab/{releaseId}", result.ExecutionId),
             InteractiveReleaseGrabResult.ContentNotFound => Results.NotFound(),
             InteractiveReleaseGrabResult.NoDownloadClient => Results.Problem(
                 detail: result.Detail,

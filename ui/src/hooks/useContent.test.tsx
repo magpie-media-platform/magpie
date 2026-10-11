@@ -254,6 +254,58 @@ describe('useContent hooks', () => {
             expect(result.current.data?.items[0]?.title).toBe('Latest title');
         });
 
+        it.each([
+            {
+                name: 'useContentList_ReturnsPreviousResults_WhenKeepPreviousDataIsTrueAndTheFilterChanges',
+                keepPreviousData: true,
+                first: { contentType: 'tv', filter: 'first' },
+                next: { contentType: 'tv', filter: 'next' },
+                isLoading: false,
+                title: 'Breaking Bad',
+            },
+            {
+                name: 'useContentList_ReturnsLoading_WhenKeepPreviousDataIsFalse',
+                keepPreviousData: false,
+                first: { contentType: 'tv', filter: 'first' },
+                next: { contentType: 'tv', filter: 'next' },
+                isLoading: true,
+                title: undefined,
+            },
+            {
+                name: 'useContentList_ReturnsLoading_WhenKeepPreviousDataIsTrueAndTheContentTypeChanges',
+                keepPreviousData: true,
+                first: { contentType: 'tv' },
+                next: { contentType: 'movies' },
+                isLoading: true,
+                title: undefined,
+            },
+            {
+                name: 'useContentList_ReturnsLoading_WhenKeepPreviousDataIsTrueAndTheLevelChanges',
+                keepPreviousData: true,
+                first: { contentType: 'tv', level: 'show' },
+                next: { contentType: 'tv', level: 'series' },
+                isLoading: true,
+                title: undefined,
+            },
+        ])('$name', async ({ keepPreviousData, first, next, isLoading, title }) => {
+            // Arrange
+            vi.mocked(api.apiGet)
+                .mockResolvedValueOnce(mockPagedResponse)
+                .mockReturnValue(new Promise(() => {}));
+            const { result, rerender } = renderHook(({ params }) => useContentList(params, { keepPreviousData }), {
+                initialProps: { params: first },
+                wrapper: createWrapper(queryClient),
+            });
+            await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+            // Act
+            rerender({ params: next });
+
+            // Assert
+            expect(result.current.isLoading).toBe(isLoading);
+            expect(result.current.data?.items[0]?.title).toBe(title);
+        });
+
         it('refetches a filtered list exactly once when matching content is created before metadata exists', async () => {
             const newContentId = '44444444-4444-4444-4444-444444444444';
             const emptyResponse = { items: [], pageNumber: 1, pageSize: 25, totalItems: 0 };
@@ -482,7 +534,6 @@ describe('useContent hooks', () => {
         });
 
         it('keeps each ancestor query on its own id when refetched after an inheritance walk', async () => {
-            // The app keeps walked ancestor queries cached; with gcTime 0 they are rebuilt and the refetch boundary is lost.
             queryClient.setQueryDefaults(contentQueryKeys.all, { gcTime: 300_000 });
             const track = {
                 ...mockContentItem,

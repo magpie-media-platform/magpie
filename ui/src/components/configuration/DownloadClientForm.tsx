@@ -14,6 +14,7 @@ import { useExternalChangeConflict } from '@/hooks/useExternalChangeConflict';
 import { useDownloadClientProviderTypes } from '@/hooks/useProviderTypes';
 import { secretsConfiguredForEdit, useDownloadClientSchema } from '@/hooks/useProviderSchema';
 import type { IntegrationSettingsTestRequest } from '@/hooks/useTestConnection';
+import { useInstanceName } from '@/hooks/useInstanceName';
 
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
@@ -75,6 +76,7 @@ export function DownloadClientForm({
     isTesting = false,
     returnFocusRef,
 }: DownloadClientFormProps): ReactNode {
+    const instanceName = useInstanceName();
     const [errors, setErrors] = useState<Record<string, string>>({});
     const [showStaleSaveDialog, setShowStaleSaveDialog] = useState(false);
 
@@ -222,7 +224,7 @@ export function DownloadClientForm({
                     <SheetDescription>
                         {isEditing
                             ? 'Update the download client configuration.'
-                            : 'Download client that receives releases from Magpie.'}
+                            : `Download client that receives releases from ${instanceName}.`}
                     </SheetDescription>
                 </SheetHeader>
 
@@ -302,7 +304,7 @@ export function DownloadClientForm({
                             <p className="download-client-form__help">
                                 {noProvidersAvailable && !isEditing
                                     ? 'No download client integrations are registered. Install an extension that provides one.'
-                                    : 'Magpie sends downloads through this integration.'}
+                                    : `${instanceName} sends downloads through this integration.`}
                             </p>
                         </div>
 

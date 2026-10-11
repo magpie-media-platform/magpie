@@ -25,12 +25,12 @@ function mapToCalendarEvent(item: ApiContentItemWithMetadata): CalendarEvent | n
         title: fields.title,
         subtitle: fields.subtitle,
         date: fields.date,
+        datePrecision: fields.datePrecision,
         posterUrl: fields.posterUrl,
         contentType: fields.contentType,
         level: fields.level,
         levelLabel: fields.levelLabel,
         fulfillment: fields.fulfillment,
-        monitoring: item.monitoring,
         effectiveMonitoring: item.effectiveMonitoring,
     };
 }

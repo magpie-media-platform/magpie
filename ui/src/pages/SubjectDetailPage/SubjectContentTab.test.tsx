@@ -192,7 +192,8 @@ describe('SubjectContentTab mobile', () => {
         const toolbar = document.querySelector('[data-component="mobile-list-toolbar"]');
         expect(toolbar).toBeInTheDocument();
         expect(toolbar?.querySelector('[data-sort="field"]')).toBeInTheDocument();
-        expect(toolbar?.querySelector('[data-sort="direction"]')).toBeInTheDocument();
+        expect(toolbar?.querySelector('[data-sort="ascending"]')).toBeInTheDocument();
+        expect(toolbar?.querySelector('[data-sort="descending"]')).toBeInTheDocument();
 
         expect(screen.queryByRole('grid')).not.toBeInTheDocument();
         expect(document.querySelector('[data-content-id="c1"]')).toBeInTheDocument();
@@ -215,7 +216,7 @@ describe('SubjectContentTab mobile', () => {
         // Assert
         const badge = screen.getByText('Fulfilled');
         expect(badge.closest('.mobile-media-card__meta')).not.toBeNull();
-        expect(screen.getByLabelText('Unmonitored (inherited)')).toBeInTheDocument();
+        expect(screen.getByLabelText('Unmonitored')).toBeInTheDocument();
         expect(screen.getByText('External')).toBeInTheDocument();
     });
 });

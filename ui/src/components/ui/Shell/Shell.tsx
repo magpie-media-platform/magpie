@@ -12,6 +12,7 @@ import {
 import { useLocation } from 'react-router-dom';
 
 import { useMediaQuery } from '@/hooks/ui/useMediaQuery';
+import { useMergedRef } from '@/hooks/ui/useMergedRef';
 
 import './Shell.css';
 
@@ -104,6 +105,7 @@ const ShellHeader = forwardRef<HTMLDivElement, ShellHeaderProps>(
     ({ className, classPrefix = 'shell', ...props }, ref) => {
         const classes = [`${classPrefix}__header`, className].filter(Boolean).join(' ');
         const innerRef = useRef<HTMLDivElement>(null);
+        const headerRef = useMergedRef(innerRef, ref);
 
         useEffect(() => {
             const el = innerRef.current;
@@ -125,21 +127,7 @@ const ShellHeader = forwardRef<HTMLDivElement, ShellHeaderProps>(
             return () => observer.disconnect();
         }, [classPrefix]);
 
-        return (
-            <div
-                ref={(node) => {
-                    (innerRef as React.RefObject<HTMLDivElement | null>).current = node;
-                    if (typeof ref === 'function') {
-                        ref(node);
-                    } else if (ref) {
-                        (ref as React.RefObject<HTMLDivElement | null>).current = node;
-                    }
-                }}
-                className={classes}
-                data-component={`${classPrefix}-header`}
-                {...props}
-            />
-        );
+        return <div ref={headerRef} className={classes} data-component={`${classPrefix}-header`} {...props} />;
     },
 );
 
@@ -167,6 +155,7 @@ const ShellSidebar = forwardRef<HTMLElement, ShellSidebarProps>(
         const { pathname } = useLocation();
         const classes = [`${classPrefix}__sidebar`, className].filter(Boolean).join(' ');
         const navRef = useRef<HTMLElement | null>(null);
+        const setNavRef = useMergedRef(navRef, ref);
         const invocationTargetRef = useRef<HTMLElement | null>(null);
         const isMobile = useMediaQuery('(max-width: 767px)');
 
@@ -186,7 +175,6 @@ const ShellSidebar = forwardRef<HTMLElement, ShellSidebarProps>(
 
             invocationTargetRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
             const shell = nav.closest<HTMLElement>(`[data-component="${classPrefix}"]`);
-            // The header is not in this list: it holds the toggle that closes this drawer.
             const background = shell
                 ? Array.from(
                       shell.querySelectorAll<HTMLElement>(
@@ -237,14 +225,7 @@ const ShellSidebar = forwardRef<HTMLElement, ShellSidebarProps>(
                     aria-hidden="true"
                 />
                 <nav
-                    ref={(node) => {
-                        navRef.current = node;
-                        if (typeof ref === 'function') {
-                            ref(node);
-                        } else if (ref) {
-                            ref.current = node;
-                        }
-                    }}
+                    ref={setNavRef}
                     className={classes}
                     data-component={`${classPrefix}-sidebar`}
                     id={navId}

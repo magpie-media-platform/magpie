@@ -7,7 +7,6 @@
         background-color: var(--bg-primary);
     }
 
-    /* Standalone WebKit under-reports 100dvh, and standalone has no browser chrome, so 100vh is exact. */
     @media (display-mode: standalone) {
         .app-shell {
             height: 100vh;
@@ -91,7 +90,6 @@
         }
     }
 
-    /* The same standalone 100dvh under-report as the shell height above. */
     @media (max-width: 767px) and (display-mode: standalone) {
         .app-shell__sidebar {
             height: calc(100vh - var(--header-height));

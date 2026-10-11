@@ -1,8 +1,10 @@
 using System.Linq;
 using System.Text.Json;
 
+using Magpie.Extensions.OpenLibrary;
 using Magpie.Extensions.OpenLibrary.Mapping;
 using Magpie.Extensions.OpenLibrary.QueryEngine;
+using Magpie.Models.Filtering;
 
 using NUnit.Framework;
 
@@ -223,6 +225,30 @@ public sealed class MappingExtensionsTests
 
         // Assert
         Assert.That(key, Is.EqualTo(expected));
+    }
+
+    [TestCase(null, TemporalPrecision.Year)]
+    [TestCase("October 1975", TemporalPrecision.Month)]
+    [TestCase("October 1, 1975", TemporalPrecision.Day)]
+    public void ToMetadataSearchCandidate_MapsReleaseDatePrecision_WhenPublishDateHasPrecision(
+        string? publishDate,
+        TemporalPrecision expectedPrecision)
+    {
+        // Arrange
+        var hit = new WorkHit
+        {
+            WorkOlid = "OL1W",
+            Title = "Dune",
+            Authors = [],
+            FirstPublishYear = 1975,
+            PublishDates = publishDate is null ? [] : [publishDate]
+        };
+
+        // Act
+        var candidate = hit.ToMetadataSearchCandidate(new() { ContentTypeSlug = "books", BookLevelSlug = "book" }, "");
+
+        // Assert
+        Assert.That(candidate.ReleaseDatePrecision, Is.EqualTo(expectedPrecision));
     }
 
     [Test]

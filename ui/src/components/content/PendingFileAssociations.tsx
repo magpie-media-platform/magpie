@@ -4,6 +4,8 @@ import { type ColumnDef } from '@tanstack/react-table';
 
 import { Button } from '@/components/ui/Button';
 import { DataTable } from '@/components/ui/DataTable';
+import { LoadErrorAlert } from '@/components/ui/LoadErrorAlert';
+import { Skeleton } from '@/components/ui/Skeleton';
 import { useToast } from '@/components/ui/Toast';
 import type { LibraryImportCandidate } from '@/hooks/useLibraryImportCandidates';
 import {
@@ -11,7 +13,6 @@ import {
     usePendingFileAssociations,
     useRejectLibraryImportCandidates,
 } from '@/hooks/usePendingFileAssociations';
-import { useStartRootFolderContentDiscovery } from '@/hooks/useStartRootFolderContentDiscovery';
 import { MatchCell } from '@/components/content/MatchCell';
 
 import './PendingFileAssociations.css';
@@ -50,26 +51,16 @@ export function PendingFilesIndicator({ contentHierarchyItemId, onOpen }: Pendin
 interface PendingFileAssociationsProps {
     contentHierarchyItemId: string;
 
-    rootFolderId: string | null | undefined;
-
-    title: string;
-
     canManage: boolean;
 }
 
-export function PendingFileAssociations({
-    contentHierarchyItemId,
-    rootFolderId,
-    title,
-    canManage,
-}: PendingFileAssociationsProps) {
+export function PendingFileAssociations({ contentHierarchyItemId, canManage }: PendingFileAssociationsProps) {
     const { toast } = useToast();
-    const { data, isSuccess } = usePendingFileAssociations(contentHierarchyItemId);
+    const { data, isSuccess, error, refetch } = usePendingFileAssociations(contentHierarchyItemId);
     const items = useMemo(() => data ?? [], [data]);
     const [actingIds, setActingIds] = useState<Set<string>>(() => new Set());
     const { mutateAsync: associateFiles } = useAssociatePendingFiles();
     const { mutateAsync: rejectCandidates } = useRejectLibraryImportCandidates();
-    const discoveryMutation = useStartRootFolderContentDiscovery();
     const acceptableIds = useMemo(
         () => items.filter((candidate) => !isInFlight(candidate)).map((candidate) => candidate.id),
         [items],
@@ -137,29 +128,6 @@ export function PendingFileAssociations({
             }),
         [act, rejectCandidates, toast],
     );
-
-    const handleDiscover = useCallback(() => {
-        if (!rootFolderId) {
-            return;
-        }
-        discoveryMutation.mutate(
-            { rootFolderId, contentHierarchyItemId, rootFolderName: title },
-            {
-                onSuccess: () =>
-                    toast({
-                        title: 'Scan queued',
-                        description: `Magpie is looking for missing files of "${title}".`,
-                        variant: 'info',
-                    }),
-                onError: () =>
-                    toast({
-                        title: 'Scan failed',
-                        description: 'Failed to start the scan for missing files. Please try again.',
-                        variant: 'error',
-                    }),
-            },
-        );
-    }, [contentHierarchyItemId, discoveryMutation, rootFolderId, title, toast]);
 
     const columns: ColumnDef<LibraryImportCandidate>[] = useMemo(
         () => [
@@ -245,35 +213,8 @@ export function PendingFileAssociations({
 
     const getRowId = useCallback((candidate: LibraryImportCandidate) => candidate.id, []);
 
-    const discoverButton = canManage && (
-        <Button
-            variant={items.length > 0 ? 'secondary' : 'ghost'}
-            size="sm"
-            onClick={handleDiscover}
-            loading={discoveryMutation.isStarting}
-            disabled={!rootFolderId || discoveryMutation.isStarting}
-            data-action="discover"
-        >
-            <FileMagnifyingGlassIcon weight="bold" aria-hidden="true" />
-            Find missing files
-        </Button>
-    );
-
-    // When the query confirms that nothing is pending, the panel is one line: the state and the scan action. While it
-    // loads or after an error, the full panel shows, because nothing is known about pending files yet.
     if (isSuccess && items.length === 0) {
-        return (
-            <section
-                className="pending-file-associations pending-file-associations--empty"
-                aria-labelledby="pending-file-associations-title"
-                data-component="pending-file-associations"
-            >
-                <h3 id="pending-file-associations-title" className="pending-file-associations__title">
-                    No pending files
-                </h3>
-                {discoverButton}
-            </section>
-        );
+        return null;
     }
 
     return (
@@ -283,43 +224,42 @@ export function PendingFileAssociations({
             data-component="pending-file-associations"
         >
             <div className="pending-file-associations__header">
-                <div className="pending-file-associations__heading">
-                    <h3 id="pending-file-associations-title" className="pending-file-associations__title">
-                        Pending files
-                    </h3>
+                <h3 id="pending-file-associations-title" className="pending-file-associations__title">
+                    Pending files
+                </h3>
+                {canManage && acceptableIds.length > 1 && (
+                    <Button
+                        variant="primary"
+                        size="sm"
+                        onClick={() => void handleAccept(acceptableIds)}
+                        disabled={acceptableIds.some((id) => actingIds.has(id))}
+                        data-action="accept-all"
+                    >
+                        <CheckIcon weight="bold" aria-hidden="true" />
+                        Accept all ({acceptableIds.length})
+                    </Button>
+                )}
+            </div>
+            {items.length > 0 ? (
+                <>
                     <p className="pending-file-associations__help">
                         Discovered files that match this item or its descendants. Accepting links a file where it is. It
                         does not copy, move, or rename it.
                     </p>
-                </div>
-                {canManage && (
-                    <div className="pending-file-associations__actions">
-                        {discoverButton}
-                        {acceptableIds.length > 1 && (
-                            <Button
-                                variant="primary"
-                                size="sm"
-                                onClick={() => void handleAccept(acceptableIds)}
-                                disabled={acceptableIds.some((id) => actingIds.has(id))}
-                                data-action="accept-all"
-                            >
-                                <CheckIcon weight="bold" aria-hidden="true" />
-                                Accept all ({acceptableIds.length})
-                            </Button>
-                        )}
-                    </div>
-                )}
-            </div>
-            {items.length > 0 && (
-                <DataTable<LibraryImportCandidate>
-                    columns={columns}
-                    data={items}
-                    size="sm"
-                    enableSorting={false}
-                    getRowId={getRowId}
-                    data-table="pending-file-associations"
-                    aria-label="Pending files"
-                />
+                    <DataTable<LibraryImportCandidate>
+                        columns={columns}
+                        data={items}
+                        size="sm"
+                        enableSorting={false}
+                        getRowId={getRowId}
+                        data-table="pending-file-associations"
+                        aria-label="Pending files"
+                    />
+                </>
+            ) : error ? (
+                <LoadErrorAlert onRetry={() => void refetch()} />
+            ) : (
+                <Skeleton height={48} />
             )}
         </section>
     );

@@ -26,6 +26,10 @@
         gap: var(--space-xs);
     }
 
+    .wishlist-form__field .monitoring-toggle__segments {
+        align-self: flex-start;
+    }
+
     .wishlist-form__field--toggle {
         gap: var(--space-xs);
         padding-top: var(--space-sm);

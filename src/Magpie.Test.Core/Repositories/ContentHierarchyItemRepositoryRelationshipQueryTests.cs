@@ -39,6 +39,153 @@ public sealed class ContentHierarchyItemRepositoryRelationshipQueryTests
     private IContentHierarchyItemRepository _subject = null!;
     private Guid _metadataContainerId;
 
+    public static IEnumerable<TestCaseData> RollupCases()
+    {
+        yield return new TestCaseData(
+            new ContentHierarchyItemCriteria
+            {
+                RootLevelOnly = true,
+                Metadata = new()
+                {
+                    And =
+                    [
+                        new()
+                        {
+                            Relationships = new()
+                            {
+                                Some =
+                                [
+                                    [
+                                        new()
+                                        {
+                                            RelatedMetadataContainerId = new()
+                                            {
+                                                And =
+                                                [
+                                                    new()
+                                                    {
+                                                        Operator = CriteriaValueOperator.Equals,
+                                                        Value = new Guid("aaaaaaaa-0000-0000-0000-0000000000a1")
+                                                    }
+                                                ]
+                                            }
+                                        }
+                                    ]
+                                ]
+                            }
+                        }
+                    ]
+                }
+            },
+            new[] { "The Simpsons", "The Civil War" }).SetArgDisplayNames("top level");
+        yield return new TestCaseData(
+            new ContentHierarchyItemCriteria
+            {
+                Metadata = new()
+                {
+                    And =
+                    [
+                        new()
+                        {
+                            Relationships = new()
+                            {
+                                Some =
+                                [
+                                    [
+                                        new()
+                                        {
+                                            RelatedMetadataContainerId = new()
+                                            {
+                                                And =
+                                                [
+                                                    new()
+                                                    {
+                                                        Operator = CriteriaValueOperator.Equals,
+                                                        Value = new Guid("aaaaaaaa-0000-0000-0000-0000000000a1")
+                                                    }
+                                                ]
+                                            }
+                                        }
+                                    ]
+                                ]
+                            }
+                        }
+                    ]
+                }
+            },
+            new[] { "Bart the General", "Moaning Lisa", "The Civil War" }).SetArgDisplayNames("all levels");
+        yield return new TestCaseData(
+            new ContentHierarchyItemCriteria
+            {
+                RootLevelOnly = true,
+                Metadata = new()
+                {
+                    And =
+                    [
+                        new()
+                        {
+                            Relationships = new()
+                            {
+                                None =
+                                [
+                                    new()
+                                    {
+                                        RelatedMetadataContainerId = new()
+                                        {
+                                            And =
+                                            [
+                                                new()
+                                                {
+                                                    Operator = CriteriaValueOperator.Equals,
+                                                    Value = new Guid("aaaaaaaa-0000-0000-0000-0000000000a1")
+                                                }
+                                            ]
+                                        }
+                                    }
+                                ]
+                            }
+                        }
+                    ]
+                }
+            },
+            new[] { "Futurama" }).SetArgDisplayNames("top level without");
+        yield return new TestCaseData(
+            new ContentHierarchyItemCriteria
+            {
+                Metadata = new()
+                {
+                    And =
+                    [
+                        new()
+                        {
+                            Relationships = new()
+                            {
+                                None =
+                                [
+                                    new()
+                                    {
+                                        RelatedMetadataContainerId = new()
+                                        {
+                                            And =
+                                            [
+                                                new()
+                                                {
+                                                    Operator = CriteriaValueOperator.Equals,
+                                                    Value = new Guid("aaaaaaaa-0000-0000-0000-0000000000a1")
+                                                }
+                                            ]
+                                        }
+                                    }
+                                ]
+                            }
+                        }
+                    ]
+                }
+            },
+            new[] { "The Simpsons", "Season 1", "Bart the Genius", "Futurama" })
+            .SetArgDisplayNames("all levels without");
+    }
+
     [OneTimeSetUp]
     public void CreateTemplate()
     {
@@ -365,6 +512,270 @@ public sealed class ContentHierarchyItemRepositoryRelationshipQueryTests
             Assert.That(items[0].Id, Is.EqualTo(scopedItem.Id));
             Assert.That(items[0].Name, Is.EqualTo("Super Troopers"));
         }
+    }
+
+    [TestCaseSource(nameof(RollupCases))]
+    public async Task QueryAsync_RollsRelationshipsUpOnlyForRootLevelQueries_WhenADescendantIsRelated(
+        ContentHierarchyItemCriteria criteria,
+        string[] expectedNames)
+    {
+        // Arrange
+        _context.Subjects.Add(new Subject
+        {
+            Kind = "person",
+            MetadataContainer = new MetadataContainer { Id = new Guid("aaaaaaaa-0000-0000-0000-0000000000a1") }
+        });
+        _context.ContentHierarchyItems.AddRange(
+            new ContentHierarchyItem
+            {
+                Id = new Guid("bbbbbbbb-0000-0000-0000-000000000001"),
+                ContentType = "tv",
+                Level = "show",
+                Slug = "the-simpsons",
+                Name = "The Simpsons",
+                MetadataContainer = new MetadataContainer()
+            },
+            new ContentHierarchyItem
+            {
+                Id = new Guid("bbbbbbbb-0000-0000-0000-000000000002"),
+                ParentId = new Guid("bbbbbbbb-0000-0000-0000-000000000001"),
+                ContentType = "tv",
+                Level = "season",
+                Slug = "season-1",
+                Name = "Season 1",
+                MetadataContainer = new MetadataContainer()
+            },
+            new ContentHierarchyItem
+            {
+                ParentId = new Guid("bbbbbbbb-0000-0000-0000-000000000002"),
+                ContentType = "tv",
+                Level = "episode",
+                Slug = "bart-the-general",
+                Name = "Bart the General",
+                MetadataContainer = new MetadataContainer
+                {
+                    Contributions =
+                    {
+                        new MetadataContribution
+                        {
+                            ProviderType = "tvmaze",
+                            Relationships =
+                            {
+                                new Relationship
+                                {
+                                    Kind = "guest-cast",
+                                    RelatedMetadataContainerId = new Guid("aaaaaaaa-0000-0000-0000-0000000000a1")
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            new ContentHierarchyItem
+            {
+                ParentId = new Guid("bbbbbbbb-0000-0000-0000-000000000002"),
+                ContentType = "tv",
+                Level = "episode",
+                Slug = "moaning-lisa",
+                Name = "Moaning Lisa",
+                MetadataContainer = new MetadataContainer
+                {
+                    Contributions =
+                    {
+                        new MetadataContribution
+                        {
+                            ProviderType = "tvmaze",
+                            Relationships =
+                            {
+                                new Relationship
+                                {
+                                    Kind = "guest-cast",
+                                    RelatedMetadataContainerId = new Guid("aaaaaaaa-0000-0000-0000-0000000000a1")
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            new ContentHierarchyItem
+            {
+                ParentId = new Guid("bbbbbbbb-0000-0000-0000-000000000002"),
+                ContentType = "tv",
+                Level = "episode",
+                Slug = "bart-the-genius",
+                Name = "Bart the Genius",
+                MetadataContainer = new MetadataContainer()
+            },
+            new ContentHierarchyItem
+            {
+                ContentType = "tv",
+                Level = "show",
+                Slug = "the-civil-war",
+                Name = "The Civil War",
+                MetadataContainer = new MetadataContainer
+                {
+                    Contributions =
+                    {
+                        new MetadataContribution
+                        {
+                            ProviderType = "tmdb",
+                            Relationships =
+                            {
+                                new Relationship
+                                {
+                                    Kind = "director",
+                                    RelatedMetadataContainerId = new Guid("aaaaaaaa-0000-0000-0000-0000000000a1")
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            new ContentHierarchyItem
+            {
+                ContentType = "tv",
+                Level = "show",
+                Slug = "futurama",
+                Name = "Futurama",
+                MetadataContainer = new MetadataContainer()
+            });
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        // Act
+        var result = await _subject.QueryAsync(criteria, new() { PageNumber = 1, PageSize = 25 }, null)
+            .ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.Items.Select(item => item.Name), Is.EquivalentTo(expectedNames));
+            Assert.That(result.TotalItems, Is.EqualTo(expectedNames.Length));
+        }
+    }
+
+    [Test]
+    [CancelAfter(10_000)]
+    public async Task QueryAsync_StopsTheRollup_WhenParentIdsFormACycle(CancellationToken cancellationToken)
+    {
+        // Arrange
+        _context.Subjects.Add(new Subject
+        {
+            Kind = "person",
+            MetadataContainer = new MetadataContainer { Id = new Guid("aaaaaaaa-0000-0000-0000-0000000000a1") }
+        });
+        _context.ContentHierarchyItems.AddRange(
+            new ContentHierarchyItem
+            {
+                Id = new Guid("bbbbbbbb-0000-0000-0000-000000000001"),
+                ContentType = "tv",
+                Level = "show",
+                Slug = "loop-a",
+                Name = "Loop A",
+                MetadataContainer = new MetadataContainer
+                {
+                    Contributions =
+                    {
+                        new MetadataContribution
+                        {
+                            ProviderType = "tvmaze",
+                            Relationships =
+                            {
+                                new Relationship
+                                {
+                                    Kind = "guest-cast",
+                                    RelatedMetadataContainerId = new Guid("aaaaaaaa-0000-0000-0000-0000000000a1")
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            new ContentHierarchyItem
+            {
+                Id = new Guid("bbbbbbbb-0000-0000-0000-000000000002"),
+                ParentId = new Guid("bbbbbbbb-0000-0000-0000-000000000001"),
+                ContentType = "tv",
+                Level = "season",
+                Slug = "loop-b",
+                Name = "Loop B",
+                MetadataContainer = new MetadataContainer()
+            },
+            new ContentHierarchyItem
+            {
+                ContentType = "tv",
+                Level = "show",
+                Slug = "the-civil-war",
+                Name = "The Civil War",
+                MetadataContainer = new MetadataContainer
+                {
+                    Contributions =
+                    {
+                        new MetadataContribution
+                        {
+                            ProviderType = "tmdb",
+                            Relationships =
+                            {
+                                new Relationship
+                                {
+                                    Kind = "director",
+                                    RelatedMetadataContainerId = new Guid("aaaaaaaa-0000-0000-0000-0000000000a1")
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+        await _context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+        await _context.ContentHierarchyItems
+            .Where(item => item.Id == new Guid("bbbbbbbb-0000-0000-0000-000000000001"))
+            .ExecuteUpdateAsync(
+                setters => setters.SetProperty(item => item.ParentId, new Guid("bbbbbbbb-0000-0000-0000-000000000002")),
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        // Act
+        var result = await _subject.QueryAsync(
+            new ContentHierarchyItemCriteria
+            {
+                RootLevelOnly = true,
+                Metadata = new()
+                {
+                    And =
+                    [
+                        new()
+                        {
+                            Relationships = new()
+                            {
+                                Some =
+                                [
+                                    [
+                                        new()
+                                        {
+                                            RelatedMetadataContainerId = new()
+                                            {
+                                                And =
+                                                [
+                                                    new()
+                                                    {
+                                                        Operator = CriteriaValueOperator.Equals,
+                                                        Value = new Guid("aaaaaaaa-0000-0000-0000-0000000000a1")
+                                                    }
+                                                ]
+                                            }
+                                        }
+                                    ]
+                                ]
+                            }
+                        }
+                    ]
+                }
+            },
+            new() { PageNumber = 1, PageSize = 25 },
+            null,
+            cancellationToken).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(result.Items.Select(item => item.Name), Is.EqualTo(["The Civil War"]));
     }
 
     [Test]

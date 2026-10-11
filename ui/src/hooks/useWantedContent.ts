@@ -32,7 +32,12 @@ const WANTED_CHANGE_EVENTS = [
 ] as const;
 const WANTED_FAIL_OPEN_EVENTS = ['content.hierarchyItem.created', 'download.created'] as const;
 
-export const WANTED_CONTAINER_FILTER = 'Fulfillment in (Missing, Partial)';
+export const WANTED_CONTAINER_FILTER =
+    'Fulfillment in (Missing, Partial) and ' +
+    '(subtree has (monitoring != Unmonitored and fulfillment = Missing) ' +
+    'or subtree has (monitoring != Unmonitored and fulfillment = Partial))';
+
+const MONITORED_SUBTREE_FILTER = 'subtree has (monitoring != Unmonitored)';
 
 interface WantedResult {
     items: ApiContentHierarchyItem[];
@@ -112,9 +117,9 @@ export async function hasContentChildren(parentId: string): Promise<boolean> {
     return result.totalItems > 0;
 }
 
-/** Loads every effectively monitored direct child through the public content query. */
+/** Loads every direct child that is effectively monitored or has an effectively monitored descendant. */
 export async function fetchWantedChildren(parentId: string): Promise<ContentListItem[]> {
-    const result = await fetchAllContent({ parentId, monitoring: true });
+    const result = await fetchAllContent({ parentId, filter: MONITORED_SUBTREE_FILTER });
     return dedupe(result.items).map(mapToContentListItem);
 }
 
@@ -124,7 +129,6 @@ export function useWantedContent(parentId?: string, filter = ''): UseWantedConte
         queryFn: () =>
             fetchAllContent({
                 ...wantedScope(parentId),
-                monitoring: true,
                 filter: filter.trim() ? `${WANTED_CONTAINER_FILTER} and (${filter})` : WANTED_CONTAINER_FILTER,
             }),
         staleTime: POLLING_INTERVALS.slow / 2,

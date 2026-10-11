@@ -262,6 +262,29 @@ internal sealed class RootFolderRepository(
         }
     }
 
+    /// <inheritdoc />
+    public async Task<IReadOnlyDictionary<Guid, long>> GetContentSizesAsync(
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            return await (
+                from file in context.MediaFiles.AsNoTracking()
+                join item in context.ContentItems.AsNoTracking() on file.ContentItemId equals item.Id
+                join node in context.ContentHierarchyItems.AsNoTracking()
+                    on item.ContentHierarchyItemId equals node.Id
+                group file.FileSize by node.EffectiveRootFolderId into sizes
+                select new { RootFolderId = sizes.Key, Bytes = sizes.Sum() })
+                .ToDictionaryAsync(row => row.RootFolderId, row => row.Bytes, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "The root folder repository failed to total the media file sizes.");
+            throw;
+        }
+    }
+
     public async Task<RootFolder> CreateAsync(
         RootFolder model,
         Guid? createdByUserId,

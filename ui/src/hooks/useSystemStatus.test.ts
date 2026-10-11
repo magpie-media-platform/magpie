@@ -62,6 +62,7 @@ describe('useSystemStatus', () => {
                             totalBytes: 1000000000000,
                             freeBytes: 500000000000,
                             usedBytes: 500000000000,
+                            contentBytes: 300000000000,
                         },
                         {
                             id: 'rf-2',
@@ -70,11 +71,9 @@ describe('useSystemStatus', () => {
                             totalBytes: 2000000000000,
                             freeBytes: 1500000000000,
                             usedBytes: 500000000000,
+                            contentBytes: 0,
                         },
                     ],
-                    totalBytes: 3000000000000,
-                    freeBytes: 2000000000000,
-                    usedBytes: 1000000000000,
                 });
             }
             return Promise.reject(new Error(`Unknown endpoint: ${path}`));
@@ -106,11 +105,10 @@ describe('useSystemStatus', () => {
         expect(result.current.diskSpace[0].totalBytes).toBe(1000000000000);
         expect(result.current.diskSpace[0].freeBytes).toBe(500000000000);
         expect(result.current.diskSpace[0].usedBytes).toBe(500000000000);
+        expect(result.current.diskSpace[0].contentBytes).toBe(300000000000);
         expect(result.current.diskSpace[1].name).toBe('TV Shows');
         expect(result.current.diskSpace[1].totalBytes).toBe(2000000000000);
-        expect(result.current.diskSpaceTotals.totalBytes).toBe(3000000000000);
-        expect(result.current.diskSpaceTotals.freeBytes).toBe(2000000000000);
-        expect(result.current.diskSpaceTotals.usedBytes).toBe(1000000000000);
+        expect(result.current.diskSpace[1].contentBytes).toBe(0);
         expect(mockApiGet).toHaveBeenCalledTimes(2);
         expect(mockApiGet).not.toHaveBeenCalledWith('/system/health', expect.anything());
     });
@@ -212,11 +210,9 @@ describe('useDiskSpace', () => {
                     totalBytes: 1000000000000,
                     freeBytes: 750000000000,
                     usedBytes: 250000000000,
+                    contentBytes: 200000000000,
                 },
             ],
-            totalBytes: 1000000000000,
-            freeBytes: 750000000000,
-            usedBytes: 250000000000,
         });
     });
 
@@ -235,11 +231,7 @@ describe('useDiskSpace', () => {
             usedBytes: 250000000000,
             freeBytes: 750000000000,
             totalBytes: 1000000000000,
-        });
-        expect(result.current.totals).toEqual({
-            usedBytes: 250000000000,
-            freeBytes: 750000000000,
-            totalBytes: 1000000000000,
+            contentBytes: 200000000000,
         });
         expect(mockApiGet).toHaveBeenCalledTimes(1);
         expect(mockApiGet).toHaveBeenCalledWith('/system/disk-space');

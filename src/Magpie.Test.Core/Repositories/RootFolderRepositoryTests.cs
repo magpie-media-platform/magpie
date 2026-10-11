@@ -151,6 +151,124 @@ public sealed class RootFolderRepositoryTests
     }
 
     [Test]
+    public async Task GetContentSizesAsync_ReturnsTotalFileSizeOfEachRootFolder_WhenItemsHaveFiles()
+    {
+        // Arrange
+        var firstRoot = new RootFolder
+        {
+            Id = Guid.NewGuid(),
+            Name = "First",
+            Path = "/media/first",
+            ContentType = _contentType,
+            CreatedAt = DateTime.UtcNow,
+            CreatedByUserId = _userId
+        };
+        var secondRoot = new RootFolder
+        {
+            Id = Guid.NewGuid(),
+            Name = "Second",
+            Path = "/media/second",
+            ContentType = _contentType,
+            CreatedAt = DateTime.UtcNow,
+            CreatedByUserId = _userId
+        };
+        var emptyRoot = new RootFolder
+        {
+            Name = "Empty",
+            Path = "/media/empty",
+            ContentType = _contentType,
+            CreatedAt = DateTime.UtcNow,
+            CreatedByUserId = _userId
+        };
+        var coveredItemId = Guid.NewGuid();
+        var firstItem = new ContentHierarchyItem
+        {
+            MetadataContainer = new() { CreatedAt = DateTime.UtcNow },
+            ContentType = _contentType,
+            Level = "movie",
+            Slug = "first-film",
+            Name = "First film",
+            EffectiveRootFolderId = firstRoot.Id,
+            CreatedAt = DateTime.UtcNow,
+            ContentItem = new()
+            {
+                CreatedAt = DateTime.UtcNow,
+                MediaFiles =
+                {
+                    new()
+                    {
+                        FileKind = "Video",
+                        FilePath = "/media/first/film.mkv",
+                        PathKey = "/MEDIA/FIRST/FILM.MKV",
+                        FileSize = 100,
+                        CreatedAt = DateTime.UtcNow
+                    },
+                    new()
+                    {
+                        FileKind = "Subtitle",
+                        FilePath = "/media/first/film.srt",
+                        PathKey = "/MEDIA/FIRST/FILM.SRT",
+                        FileSize = 50,
+                        CreatedAt = DateTime.UtcNow,
+                        Coverage = { new() { ContentItemId = coveredItemId } }
+                    }
+                }
+            }
+        };
+        var coveredItem = new ContentHierarchyItem
+        {
+            MetadataContainer = new() { CreatedAt = DateTime.UtcNow },
+            ContentType = _contentType,
+            Level = "movie",
+            Slug = "covered-film",
+            Name = "Covered film",
+            EffectiveRootFolderId = firstRoot.Id,
+            CreatedAt = DateTime.UtcNow,
+            ContentItem = new() { Id = coveredItemId, CreatedAt = DateTime.UtcNow }
+        };
+        var secondItem = new ContentHierarchyItem
+        {
+            MetadataContainer = new() { CreatedAt = DateTime.UtcNow },
+            ContentType = _contentType,
+            Level = "movie",
+            Slug = "second-film",
+            Name = "Second film",
+            EffectiveRootFolderId = secondRoot.Id,
+            CreatedAt = DateTime.UtcNow,
+            ContentItem = new()
+            {
+                CreatedAt = DateTime.UtcNow,
+                MediaFiles =
+                {
+                    new()
+                    {
+                        FileKind = "Video",
+                        FilePath = "/media/second/film.mkv",
+                        PathKey = "/MEDIA/SECOND/FILM.MKV",
+                        FileSize = 7,
+                        CreatedAt = DateTime.UtcNow
+                    }
+                }
+            }
+        };
+        _context.RootFolders.AddRange(firstRoot, secondRoot, emptyRoot);
+        _context.ContentHierarchyItems.AddRange(firstItem, coveredItem, secondItem);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        // Act
+        var result = await _subject.GetContentSizesAsync().ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result, Has.Count.EqualTo(2));
+            Assert.That(result[firstRoot.Id], Is.EqualTo(150));
+            Assert.That(result[secondRoot.Id], Is.EqualTo(7));
+            Assert.That(result.ContainsKey(emptyRoot.Id), Is.False);
+        }
+    }
+
+    [Test]
     public async Task ListAllAsync_ReturnsAllRootFolders_WhenFoldersExist()
     {
         // Arrange

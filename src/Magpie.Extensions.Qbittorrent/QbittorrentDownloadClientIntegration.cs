@@ -13,6 +13,7 @@ using Magpie.Models.Data;
 using Magpie.Models.Enums;
 using Magpie.Models.Integrations;
 using Magpie.Sdk.Integrations;
+using Magpie.Sdk.Services;
 
 using Microsoft.Extensions.Logging;
 
@@ -23,7 +24,8 @@ namespace Magpie.Extensions.Qbittorrent;
 internal sealed class QbittorrentDownloadClientIntegration(
     ILogger<QbittorrentDownloadClientIntegration> logger,
     IQbittorrentClient client,
-    IHttpClientFactory httpClientFactory) :
+    IHttpClientFactory httpClientFactory,
+    IIndexerService indexerService) :
     IDownloadClientIntegration,
     IPausableDownloadClient,
     IResumableDownloadClient,
@@ -134,7 +136,7 @@ internal sealed class QbittorrentDownloadClientIntegration(
         return null;
     }
 
-    private static DownloadInfo ProjectDuplicateMagnet(string externalId, TorrentInfo torrent)
+    private static DownloadInfo ProjectDuplicate(string externalId, TorrentInfo torrent)
     {
         var info = ProjectTorrent(externalId, torrent);
         return info.Status is DownloadStatus.Failed
@@ -252,7 +254,7 @@ internal sealed class QbittorrentDownloadClientIntegration(
                     .ConfigureAwait(false);
                 if (existing is not null)
                 {
-                    return ProjectDuplicateMagnet(magnetHash, existing);
+                    return ProjectDuplicate(magnetHash, existing);
                 }
 
                 throw;
@@ -285,7 +287,10 @@ internal sealed class QbittorrentDownloadClientIntegration(
                 $"Release {release.Title} InfoUrl scheme {release.InfoUrl.Scheme} is not supported.");
         }
 
-        var (torrentBytes, contentType) = await DefaultDownloadTorrentBytesAsync(release.InfoUrl, cancellationToken)
+        var (torrentBytes, contentType) = await DefaultDownloadTorrentBytesAsync(
+            release.InfoUrl,
+            context,
+            cancellationToken)
             .ConfigureAwait(false);
 
         var fileName = InferTorrentFileName(release.InfoUrl);
@@ -299,8 +304,22 @@ internal sealed class QbittorrentDownloadClientIntegration(
             throw RejectInvalidTorrent(torrentBytes, contentType, 200);
         }
 
-        await _client.AddTorrentFileAsync(parsed, torrentBytes, fileName, tags, cancellationToken)
-            .ConfigureAwait(false);
+        try
+        {
+            await _client.AddTorrentFileAsync(parsed, torrentBytes, fileName, tags, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (QbittorrentAddRejectedException ex) when (resolvedHash is not null && ex.IsFailsBody)
+        {
+            var existing = await FindTorrentByHashAsync(_client, parsed, resolvedHash, cancellationToken)
+                .ConfigureAwait(false);
+            if (existing is not null)
+            {
+                return ProjectDuplicate(resolvedHash, existing);
+            }
+
+            throw;
+        }
 
         if (resolvedHash is null)
         {
@@ -365,10 +384,14 @@ internal sealed class QbittorrentDownloadClientIntegration(
 
     private async Task<(byte[] Bytes, string? ContentType)> DefaultDownloadTorrentBytesAsync(
         Uri torrentUrl,
+        ReleaseGrabContext context,
         CancellationToken cancellationToken)
     {
         using var client = httpClientFactory.CreateClient(TorrentFileHttpClientName);
-        using var response = await client.GetAsync(torrentUrl, cancellationToken)
+        var payload = context.IndexerConnectionId is { } connectionId
+            ? await indexerService.FetchPayloadAsync(connectionId, torrentUrl, cancellationToken).ConfigureAwait(false)
+            : null;
+        using var response = payload ?? await client.GetAsync(torrentUrl, cancellationToken)
             .ConfigureAwait(false);
         var contentType = response.Content.Headers.ContentType?.MediaType;
         var bytes = await response.Content.ReadAsByteArrayAsync().ConfigureAwait(false);

@@ -21,6 +21,7 @@ import { Tooltip } from '@/components/ui/Tooltip';
 import { useAuth, Role } from '@/auth';
 import { useApiKeys, useAllApiKeys } from '@/hooks/useApiKeys';
 import { useUsers } from '@/hooks/useUsers';
+import { useInstanceName } from '@/hooks/useInstanceName';
 import { formatRelativeTime } from '@/lib/formatTime';
 import { formatShortDate } from '@/lib/dateFormatting';
 import { getErrorMessage } from '@/lib/errors';
@@ -46,6 +47,7 @@ interface ApiKeyManagementProps {
 }
 
 export function ApiKeyManagement({ scope, onScopeChange }: ApiKeyManagementProps) {
+    const instanceName = useInstanceName();
     const { user: authUser, hasRole } = useAuth();
     const authUserId = authUser?.id;
     const canViewAll = hasRole(Role.Admin);
@@ -153,7 +155,7 @@ export function ApiKeyManagement({ scope, onScopeChange }: ApiKeyManagementProps
             }
             toast({
                 title: 'API key deleted',
-                description: `Magpie deleted ${deletingApiKey.name}.`,
+                description: `${instanceName} deleted ${deletingApiKey.name}.`,
                 variant: 'success',
             });
         } catch {
@@ -166,7 +168,7 @@ export function ApiKeyManagement({ scope, onScopeChange }: ApiKeyManagementProps
             setIsDeleting(false);
             setDeletingApiKey(null);
         }
-    }, [deletingApiKey, isViewingOwnKeys, authUserId, deleteMyApiKey, deleteAnyApiKey, toast]);
+    }, [deletingApiKey, isViewingOwnKeys, authUserId, deleteMyApiKey, deleteAnyApiKey, toast, instanceName]);
 
     const handleCancelDeleteApiKey = useCallback(() => {
         setDeletingApiKey(null);
@@ -207,7 +209,9 @@ export function ApiKeyManagement({ scope, onScopeChange }: ApiKeyManagementProps
                         icon={<KeyIcon weight="duotone" />}
                         title="No API keys"
                         description={
-                            isViewingOwnKeys ? 'An API key lets another application use Magpie.' : 'No API keys exist.'
+                            isViewingOwnKeys
+                                ? `An API key lets another application use ${instanceName}.`
+                                : 'No API keys exist.'
                         }
                     />
                 ) : (

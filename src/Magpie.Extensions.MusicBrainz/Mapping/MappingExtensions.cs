@@ -155,6 +155,7 @@ internal static class MappingExtensions
             Language = hit.RepresentativeLanguage,
             Year = hit.FirstReleaseDate?.Value.Year,
             ReleaseDate = hit.FirstReleaseDate?.Value,
+            ReleaseDatePrecision = hit.FirstReleaseDate?.Precision,
             Overview = hit.Disambiguation.NullIfBlank() ?? hit.ArtistCredit,
             ThumbnailUrl = thumbnailUrl,
             SubjectReferences = references

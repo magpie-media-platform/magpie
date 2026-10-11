@@ -254,7 +254,6 @@ internal sealed class RootFolderContentImportItemJob(
         {
             if (context.Parameters.ContainsKey(MagpieJobs.Parameters.MetadataRefreshEndedItemId))
             {
-                // An importing candidate keeps its item, so only a resumed import that stopped waiting loses it.
                 await libraryImportCandidateRepository
                     .TryUpdateTargetAsync(candidateId, null, context.ManualTriggerUserId, CancellationToken.None)
                     .ConfigureAwait(false);

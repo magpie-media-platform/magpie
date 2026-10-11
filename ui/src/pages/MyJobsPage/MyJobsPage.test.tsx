@@ -484,7 +484,7 @@ describe('MyJobsPage Executions tab', () => {
             job: linked,
             isLoading: false,
             error: null,
-        } as unknown as ReturnType<typeof useJobExecution>);
+        });
 
         render(
             <TestWrapper initialRoute="/?job=exec-2">
@@ -832,6 +832,33 @@ describe('MyJobsPage executions empty state', () => {
         );
 
         expect(screen.queryByText(/Run a job to see your execution history/)).not.toBeInTheDocument();
+    });
+
+    it('shows an error with retry instead of the empty state when the job history request fails', async () => {
+        // Arrange
+        const user = userEvent.setup();
+        const refetch = vi.fn();
+        mockUseJobs.mockReturnValue({
+            jobs: [],
+            pagination: null,
+            runJob: vi.fn(),
+            isLoading: false,
+            error: new Error('Server error'),
+            refetch,
+        });
+        render(
+            <TestWrapper role={Role.Requester}>
+                <MyJobsPage />
+            </TestWrapper>,
+        );
+
+        // Act
+        await user.click(screen.getByRole('button', { name: 'Retry' }));
+
+        // Assert
+        expect(screen.getByText('Failed to load job history')).toBeInTheDocument();
+        expect(screen.queryByText('No job history found')).not.toBeInTheDocument();
+        expect(refetch).toHaveBeenCalledTimes(1);
     });
 });
 
@@ -1304,4 +1331,44 @@ describe('MyJobsPage phone actions button', () => {
 
         expect(document.querySelector('.quick-actions-button__fab')).toHaveAttribute('aria-label', label);
     });
+});
+
+describe('MyJobsPage trigger request failure', () => {
+    it.each([
+        ['Scheduled Jobs', 'Failed to load schedule triggers', 'No schedule triggers', 1, 0],
+        ['Event Triggers', 'Failed to load event triggers', 'No event triggers', 0, 1],
+    ])(
+        'shows an error with retry instead of the empty state when the %s request fails',
+        async (tab, failedTitle, emptyTitle, scheduleRetries, eventRetries) => {
+            // Arrange
+            const user = userEvent.setup();
+            const refetchSchedules = vi.fn();
+            const refetchEvents = vi.fn();
+            mockUseScheduleTriggers.mockReturnValue({
+                ...scheduleTriggersReturn([]),
+                error: new Error('Server error'),
+                refetch: refetchSchedules,
+            });
+            mockUseEventTriggers.mockReturnValue({
+                ...eventTriggersReturn([]),
+                error: new Error('Server error'),
+                refetch: refetchEvents,
+            });
+            render(
+                <TestWrapper role={Role.Requester}>
+                    <MyJobsPage />
+                </TestWrapper>,
+            );
+            await user.click(screen.getByRole('tab', { name: tab }));
+
+            // Act
+            await user.click(screen.getByRole('button', { name: 'Retry' }));
+
+            // Assert
+            expect(screen.getByText(failedTitle)).toBeInTheDocument();
+            expect(screen.queryByText(emptyTitle)).not.toBeInTheDocument();
+            expect(refetchSchedules).toHaveBeenCalledTimes(scheduleRetries);
+            expect(refetchEvents).toHaveBeenCalledTimes(eventRetries);
+        },
+    );
 });

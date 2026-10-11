@@ -33,6 +33,7 @@ import { useQualityTierLists, type ApiQualityTierList, type QualityTierListPatch
 import { useTags } from '@/hooks/useTags';
 import { useToggle } from '@/hooks/useToggle';
 import { useUrlTableState } from '@/hooks/useUrlTableState';
+import { useInstanceName } from '@/hooks/useInstanceName';
 import { tagsPatch } from '@/lib/tagsPatch';
 import { TierListForm, type TierListFormValues } from './TierListForm';
 
@@ -67,6 +68,7 @@ function mapTierListToDisplay(apiTierList: ApiQualityTierList): TierListDisplay 
 }
 
 export function QualityTiersPage() {
+    const instanceName = useInstanceName();
     useDocumentTitle('Quality Tiers');
     const { hasRole } = useAuth();
     const canManage = hasRole(Role.Manager);
@@ -416,7 +418,7 @@ export function QualityTiersPage() {
                 <PageHeader
                     className="quality-tiers-page__header"
                     title="Quality Tiers"
-                    description="Ordered quality preferences that determine which releases Magpie grabs and when files are upgraded."
+                    description={`Ordered quality preferences that determine which releases ${instanceName} grabs and when files are upgraded.`}
                     icon={<SlidersHorizontalIcon weight="duotone" aria-hidden="true" />}
                     actions={
                         canManage && (
@@ -450,7 +452,7 @@ export function QualityTiersPage() {
                     <EmptyState
                         icon={<WarningCircleIcon weight="duotone" />}
                         title="Failed to load the tier lists."
-                        action={<Button onClick={() => void refetch()}>Retry</Button>}
+                        onRetry={refetch}
                     />
                 ) : tierLists.length === 0 ? (
                     <EmptyState
@@ -492,6 +494,7 @@ export function QualityTiersPage() {
                             onPageRowIdsChange={setPageRowIds}
                             aria-label="Quality tiers"
                             emptyState={<EmptyState title="No tier lists match the filters" size="sm" />}
+                            keepHeaderWhenEmpty={filters.name !== '' || filters.mime !== ''}
                             mobileSelectionActive={canManage ? selection.selectionMode : undefined}
                             mobileSelectionOverlay={{
                                 isSelected: (tierList) => selection.isRowChecked(tierList.id),

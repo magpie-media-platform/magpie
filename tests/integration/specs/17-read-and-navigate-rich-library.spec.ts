@@ -135,7 +135,7 @@ test.describe.serial('Journey 17: read and navigate a populated library', () => 
             await page.goto('/filters');
             const filterRow = page.locator(`[data-filter-id="${filter.id}"]`);
             await expect(filterRow).toContainText('Rich movies');
-            await filterRow.getByRole('button', { name: 'View Rich movies in Library' }).click();
+            await filterRow.getByRole('button', { name: 'Apply Rich movies to Library' }).click();
             await expect(page.getByTestId('library-page__applied-saved-filter')).toContainText('Rich movies');
             await expect(page.getByRole('grid').locator(`[data-row-id="${ids.movie}"]`)).toBeVisible();
 

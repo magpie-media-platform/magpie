@@ -196,11 +196,7 @@ export const NuGetFeedsSection = forwardRef<NuGetFeedsSectionHandle>(function Nu
                     icon={<WarningCircleIcon weight="duotone" />}
                     title="Failed to load feeds"
                     description={getErrorMessage(error)}
-                    action={
-                        <Button variant="secondary" size="sm" onClick={() => refetch()}>
-                            Retry
-                        </Button>
-                    }
+                    onRetry={refetch}
                 />
             ) : sources.length === 0 ? (
                 <EmptyState

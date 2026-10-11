@@ -22,6 +22,8 @@ import {
 } from '@phosphor-icons/react';
 
 import { Role, useAuth } from '@/auth';
+import { DismissToastsOnOpen } from '../Dialog/DismissToastsOnOpen';
+import { ignoreToastInteraction } from '../Dialog/ignoreToastInteraction';
 import './CommandPalette.css';
 
 interface Command {
@@ -273,7 +275,9 @@ export function CommandPalette() {
                         invocationTargetRef.current?.focus();
                         invocationTargetRef.current = null;
                     }}
+                    onInteractOutside={ignoreToastInteraction}
                 >
+                    <DismissToastsOnOpen />
                     <DialogPrimitive.Title className="sr-only">Command palette</DialogPrimitive.Title>
                     <DialogPrimitive.Description className="sr-only">
                         Search pages and settings, then select a result to navigate.

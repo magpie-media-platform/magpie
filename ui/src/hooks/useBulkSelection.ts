@@ -122,7 +122,6 @@ export function useBulkSelection({
     const selectedCount = allPages ? Math.max(0, totalCount - excludedCount) : Object.keys(picks).length;
     const pageSelectedCount = pageRowIds.reduce((count, id) => (isRowChecked(id) ? count + 1 : count), 0);
     const hasSelection = selectedCount > 0;
-    // Selection mode is a card-layout control; a selection made in the table layout shows there as selection mode.
     const isCardLayout = useCardLayout();
     const selectionMode = selectionModeRequested || (isCardLayout && hasSelection);
 

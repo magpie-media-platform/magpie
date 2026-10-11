@@ -11,7 +11,7 @@ vi.mock('@/lib/api', () => {
         apiPatch: vi.fn(),
     };
 });
-import { apiFetchResponse, apiGet, apiPost, apiPatch } from '@/lib/api';
+import { apiFetchResponse, apiGet, apiPost } from '@/lib/api';
 import { RestartRequiredProvider, useRestartRequired } from '@/components/ui/RestartRequiredBanner';
 import {
     useExtensionManagement,
@@ -60,7 +60,6 @@ function createWrapper() {
 describe('useExtensionManagement', () => {
     const mockApiGet = vi.mocked(apiGet);
     const mockApiPost = vi.mocked(apiPost);
-    const mockApiPatch = vi.mocked(apiPatch);
 
     beforeEach(() => {
         vi.clearAllMocks();
@@ -326,66 +325,10 @@ describe('useExtensionManagement', () => {
             });
         });
     });
-
-    describe('patch via setAutoUpgrade', () => {
-        it('should call the patch endpoint with autoUpgrade wrapped in a value object', async () => {
-            mockApiGet.mockResolvedValue([makeExtensionListItem(mockExtension)]);
-            mockApiPatch.mockResolvedValue(undefined);
-
-            const { result } = renderHook(() => useExtensionManagement(), {
-                wrapper: createWrapper(),
-            });
-
-            await waitFor(() => {
-                expect(result.current.isLoading).toBe(false);
-            });
-
-            await act(async () => {
-                await result.current.setAutoUpgrade('ext-1', true);
-            });
-
-            expect(mockApiPatch).toHaveBeenCalledWith('/extensions/ext-1', { autoUpgrade: { value: true } });
-        });
-
-        it('should set isPatching while the mutation is pending', async () => {
-            mockApiGet.mockResolvedValue([makeExtensionListItem(mockExtension)]);
-
-            let resolvePatch: (value: void) => void;
-            const patchPromise = new Promise<void>((resolve) => {
-                resolvePatch = resolve;
-            });
-            mockApiPatch.mockReturnValue(patchPromise);
-
-            const { result } = renderHook(() => useExtensionManagement(), {
-                wrapper: createWrapper(),
-            });
-
-            await waitFor(() => {
-                expect(result.current.isLoading).toBe(false);
-            });
-
-            act(() => {
-                void result.current.setAutoUpgrade('ext-1', false);
-            });
-
-            await waitFor(() => {
-                expect(result.current.isPatching).toBe(true);
-            });
-
-            act(() => {
-                resolvePatch!();
-            });
-
-            await waitFor(() => {
-                expect(result.current.isPatching).toBe(false);
-            });
-        });
-    });
 });
 
 describe('useExtensionActions', () => {
     const mockApiPost = vi.mocked(apiPost);
-    const mockApiPatch = vi.mocked(apiPatch);
 
     beforeEach(() => {
         vi.clearAllMocks();
@@ -393,20 +336,6 @@ describe('useExtensionActions', () => {
 
     afterEach(() => {
         vi.restoreAllMocks();
-    });
-
-    it('should patch extension settings', async () => {
-        mockApiPatch.mockResolvedValue(undefined);
-
-        const { result } = renderHook(() => useExtensionActions(), {
-            wrapper: createWrapper(),
-        });
-
-        await act(async () => {
-            await result.current.patchExtension('ext-1', { autoUpgrade: { value: true } });
-        });
-
-        expect(mockApiPatch).toHaveBeenCalledWith('/extensions/ext-1', { autoUpgrade: { value: true } });
     });
 
     it('installs an extension and surfaces the restart-required hint', async () => {

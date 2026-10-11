@@ -1,4 +1,4 @@
-const OFFLINE_CACHE = 'magpie-offline-v1';
+const OFFLINE_CACHE = 'magpie-offline-v2';
 const OFFLINE_URL = new URL('offline.html', self.location.href).pathname;
 const API_PREFIX = new URL('api/', self.location.href).pathname;
 

@@ -35,10 +35,16 @@ export interface QuickActionsButtonProps extends Omit<ComponentPropsWithoutRef<'
 
     /** Extra content shown in the sheet below the actions, for example extension-provided controls. */
     sheetContent?: ReactNode;
+
+    /** Shows the label on the button. Applies only for a single action without sheetContent. */
+    showLabel?: boolean;
 }
 
 export const QuickActionsButton = forwardRef<HTMLDivElement, QuickActionsButtonProps>(
-    ({ actions, title = 'Quick Actions', visible = true, triggerRef, sheetContent, className, ...props }, ref) => {
+    (
+        { actions, title = 'Quick Actions', visible = true, triggerRef, sheetContent, showLabel, className, ...props },
+        ref,
+    ) => {
         const [open, setOpen] = useState(false);
         const descriptionIdPrefix = useId();
 
@@ -62,13 +68,18 @@ export const QuickActionsButton = forwardRef<HTMLDivElement, QuickActionsButtonP
                         ref={triggerRef}
                         variant="primary"
                         size="lg"
-                        className="quick-actions-button__fab"
-                        aria-label={action.label}
+                        className={
+                            showLabel
+                                ? 'quick-actions-button__fab quick-actions-button__fab--labelled'
+                                : 'quick-actions-button__fab'
+                        }
+                        aria-label={showLabel ? undefined : action.label}
                         data-action={action.id}
                         disabled={action.disabled}
                         onClick={action.onClick}
                     >
                         <span aria-hidden="true">{action.icon}</span>
+                        {showLabel && action.label}
                     </Button>
                 </div>
             );

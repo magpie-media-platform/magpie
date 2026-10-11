@@ -125,6 +125,7 @@ internal static class MappingExtensions
         string languagePreference,
         bool projectAnyLanguage = false)
     {
+        var published = hit.RefinedPublishTemporal();
         return new MetadataSearchCandidate
         {
             ProviderType = Constants.ProviderType,
@@ -134,7 +135,8 @@ internal static class MappingExtensions
             Level = hierarchy.BookLevelSlug,
             Title = hit.Title,
             Year = hit.FirstPublishYear,
-            ReleaseDate = RefinedPublishDate(hit),
+            ReleaseDate = published?.Value,
+            ReleaseDatePrecision = published?.Precision,
             Overview = hit.Description ?? AuthorOverview(hit.Authors),
             Language = PreferredLanguage(hit.Languages, languagePreference, projectAnyLanguage),
             ThumbnailUrl = CoverUri(hit, "M"),
@@ -178,7 +180,10 @@ internal static class MappingExtensions
             (Constants.ViafSource, author.RemoteIds?.Viaf),
             (Constants.IsniSource, author.RemoteIds?.Isni),
             (Constants.GoodreadsSource, author.RemoteIds?.Goodreads),
-            (Constants.AmazonSource, author.RemoteIds?.Amazon)
+            (Constants.AmazonSource, author.RemoteIds?.Amazon),
+            (Constants.LibraryThingSource, author.RemoteIds?.LibraryThing),
+            (Constants.ImdbSource, author.RemoteIds?.Imdb),
+            (Constants.MusicBrainzSource, author.RemoteIds?.MusicBrainz)
         })
         {
             var identifier = value?.Trim();
@@ -448,7 +453,6 @@ internal static class MappingExtensions
         IReadOnlyList<string>? names,
         IReadOnlyList<string>? keys)
     {
-        // Open Library sorts and deduplicates key arrays apart from name arrays, so positions do not pair them.
         var knownKeys = new HashSet<string>(
             (keys ?? []).Where(key => !string.IsNullOrWhiteSpace(key)).Select(key => key.Trim()),
             StringComparer.Ordinal);
@@ -727,11 +731,6 @@ internal static class MappingExtensions
 
         var names = string.Join(", ", authors.Select(author => author.Name));
         return string.Format(CultureInfo.InvariantCulture, "By {0}.", names);
-    }
-
-    private static DateTime? RefinedPublishDate(this WorkHit hit)
-    {
-        return RefinedPublishTemporal(hit)?.Value;
     }
 
     internal static TemporalValue? RefinedPublishTemporal(this WorkHit hit)

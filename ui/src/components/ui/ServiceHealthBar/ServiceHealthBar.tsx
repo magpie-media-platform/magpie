@@ -1,9 +1,7 @@
 import { type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
-import { ArrowCounterClockwiseIcon, WarningCircleIcon } from '@phosphor-icons/react';
 
-import { Alert } from '@/components/ui/Alert';
-import { Button } from '@/components/ui/Button';
+import { LoadErrorAlert } from '@/components/ui/LoadErrorAlert';
 import type { HealthStatusCounts, HealthStatus } from '@/components/ui/HealthCard';
 
 import './ServiceHealthBar.css';
@@ -106,14 +104,7 @@ export function ServiceHealthBar({ services, loading = false, error = null, onRe
                         <SkeletonSegment />
                     </>
                 ) : error ? (
-                    <Alert variant="error" icon={<WarningCircleIcon weight="duotone" />} title="Failed to load">
-                        {onRetry && (
-                            <Button variant="ghost" size="sm" onClick={onRetry}>
-                                <ArrowCounterClockwiseIcon weight="bold" aria-hidden="true" />
-                                Try again
-                            </Button>
-                        )}
-                    </Alert>
+                    <LoadErrorAlert onRetry={onRetry} />
                 ) : (
                     services.map((service) => {
                         const isEmpty = totalCount(service.counts) === 0;

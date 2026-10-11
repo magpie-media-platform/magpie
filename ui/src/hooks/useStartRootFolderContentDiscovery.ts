@@ -19,7 +19,6 @@ async function startRootFolderContentDiscovery({
     rootFolderId,
     contentHierarchyItemId,
 }: StartRootFolderContentDiscoveryVariables): Promise<StartRootFolderContentDiscoveryResult> {
-    // Immediate mode holds the HTTP request open for the full scan, so a large root folder times out.
     const request: RunJobRequest = {
         jobType: 'RootFolderContentDiscovery',
         mode: 'Queue',

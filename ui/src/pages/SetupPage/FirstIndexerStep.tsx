@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/Button';
 import { useToast } from '@/components/ui/Toast';
 import { countConfiguredIndexerInstances, useIndexers } from '@/hooks/useIndexers';
 import { useIndexerProviderTypes } from '@/hooks/useProviderTypes';
+import { useInstanceName } from '@/hooks/useInstanceName';
 import { IndexerForm, type IndexerFormValues } from '@/components/configuration/IndexerForm';
 import { AvailableCatalog } from '@/components/configuration/AvailableCatalog';
 
@@ -16,6 +17,7 @@ interface FirstIndexerStepProps {
 }
 
 export function FirstIndexerStep({ onAdvance }: FirstIndexerStepProps): ReactNode {
+    const instanceName = useInstanceName();
     const { toast } = useToast();
     const { createIndexer, isCreatingIndexer, indexers, isLoadingIndexers } = useIndexers();
     const { types: providerTypes, isLoading: isLoadingProviderTypes } = useIndexerProviderTypes();
@@ -33,7 +35,7 @@ export function FirstIndexerStep({ onAdvance }: FirstIndexerStepProps): ReactNod
                 });
                 toast({
                     title: 'Indexer created',
-                    description: `Magpie created ${values.name}.`,
+                    description: `${instanceName} created ${values.name}.`,
                     variant: 'success',
                 });
                 markAdded();
@@ -46,7 +48,7 @@ export function FirstIndexerStep({ onAdvance }: FirstIndexerStepProps): ReactNod
                 throw error;
             }
         },
-        [createIndexer, markAdded, toast],
+        [createIndexer, markAdded, toast, instanceName],
     );
 
     const hasDirectProviders = providerTypes.length > 0;

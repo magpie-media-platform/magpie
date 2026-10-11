@@ -22,7 +22,6 @@ export async function withAuthSessionLock<T>(scope: string, action: (signal: Abo
         return navigator.locks.request(`magpie-auth:${scope}`, () => action(controller.signal));
     }
 
-    // IndexedDB transactions also coordinate tabs on HTTP origins where Web Locks are unavailable.
     const db = await openDatabase();
     return new Promise<T>((resolve, reject) => {
         const transaction = db.transaction(STORE_NAME, 'readwrite');
@@ -60,7 +59,6 @@ export async function withAuthSessionLock<T>(scope: string, action: (signal: Abo
                         },
                     );
                 }
-                // Keep the transaction exclusive until the response has applied its cookies.
                 if (!finished) keepAlive();
             };
         };

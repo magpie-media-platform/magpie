@@ -91,6 +91,7 @@ internal sealed class CandidateMappingExtensionsTests
             Assert.That(hit.EndDate?.Precision, Is.EqualTo(expectedPrecision));
             Assert.That(candidate.Year, Is.EqualTo(1999));
             Assert.That(candidate.ReleaseDate, Is.EqualTo(expected));
+            Assert.That(candidate.ReleaseDatePrecision, Is.EqualTo(expectedPrecision));
         }
     }
 
@@ -263,6 +264,38 @@ internal sealed class CandidateMappingExtensionsTests
     }
 
     [Test]
+    public void ToMetadataSearchCandidate_UsesContributionPrecision_WhenContributionHasPublishDate()
+    {
+        // Arrange
+        var contribution = new MetadataContribution
+        {
+            ProviderType = Constants.ProviderType,
+            PublishDate = new DateTime(1999, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+            PublishDatePrecision = TemporalPrecision.Year
+        };
+        contribution.ExternalIds.Add(new() { Source = Constants.ProviderType, Value = "Q12345" });
+        var seed = new MetadataSearchCandidate
+        {
+            ProviderType = "seed-provider",
+            ExternalIdSource = "seed-source",
+            ExternalId = "seed-id",
+            ContentType = "seed-content",
+            ReleaseDate = new DateTime(2001, 2, 3, 0, 0, 0, DateTimeKind.Utc),
+            ReleaseDatePrecision = TemporalPrecision.Day
+        };
+
+        // Act
+        var result = contribution.ToMetadataSearchCandidate(seed, EntityKind.Movie);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result!.ReleaseDate, Is.EqualTo(new DateTime(1999, 1, 1, 0, 0, 0, DateTimeKind.Utc)));
+            Assert.That(result.ReleaseDatePrecision, Is.EqualTo(TemporalPrecision.Year));
+        }
+    }
+
+    [Test]
     public void ToMetadataSearchCandidate_PreservesSeedFields_WhenContributionFieldsAreBlank()
     {
         // Arrange
@@ -289,6 +322,7 @@ internal sealed class CandidateMappingExtensionsTests
             Title = "Seed title",
             Year = 2001,
             ReleaseDate = new DateTime(2001, 2, 3, 0, 0, 0, DateTimeKind.Utc),
+            ReleaseDatePrecision = TemporalPrecision.Month,
             Overview = "Seed overview",
             Language = "en",
             ThumbnailUrl = new Uri("https://example.com/seed.jpg"),
@@ -325,6 +359,7 @@ internal sealed class CandidateMappingExtensionsTests
                 result.ReleaseDate,
                 Is.EqualTo(
                     new DateTime(2001, 2, 3, 0, 0, 0, DateTimeKind.Utc)));
+            Assert.That(result.ReleaseDatePrecision, Is.EqualTo(TemporalPrecision.Month));
             Assert.That(result.Overview, Is.EqualTo("Seed overview"));
             Assert.That(result.Language, Is.EqualTo("en"));
             Assert.That(result.ThumbnailUrl, Is.EqualTo(new Uri("https://example.com/seed.jpg")));

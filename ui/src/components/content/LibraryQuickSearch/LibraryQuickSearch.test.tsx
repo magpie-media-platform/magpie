@@ -62,6 +62,7 @@ const EPISODE = {
 type TitleSearch = (filter: string, signal: AbortSignal) => Promise<unknown[]>;
 
 let titleSearch: TitleSearch;
+let totalItems: number | undefined;
 
 function LocationProbe() {
     const location = useLocation();
@@ -77,6 +78,7 @@ describe('LibraryQuickSearch', () => {
     beforeEach(() => {
         vi.mocked(apiGet).mockReset();
         titleSearch = () => Promise.resolve([SHOW, EPISODE]);
+        totalItems = undefined;
         vi.mocked(apiGet).mockImplementation((path: string, options?: { signal?: AbortSignal | null }) => {
             if (path.startsWith('/content?')) {
                 const filter = new URLSearchParams(path.split('?')[1]).get('filter') ?? '';
@@ -84,7 +86,7 @@ describe('LibraryQuickSearch', () => {
                     items,
                     pageNumber: 1,
                     pageSize: 8,
-                    totalItems: items.length,
+                    totalItems: totalItems ?? items.length,
                 }));
             }
             if (path.endsWith('/metadata')) return Promise.resolve({ title: 'Preview of Darkness Falls' });
@@ -122,7 +124,7 @@ describe('LibraryQuickSearch', () => {
         const user = userEvent.setup();
 
         // Act
-        await user.click(screen.getByRole('button', { name: 'Search library' }));
+        await user.click(screen.getByRole('button', { name: 'Search' }));
 
         // Assert
         expect(screen.getByRole('dialog', { name: 'Search library' })).toBeInTheDocument();
@@ -161,7 +163,7 @@ describe('LibraryQuickSearch', () => {
 
         // Act
         const user = userEvent.setup();
-        await user.click(screen.getByRole('button', { name: 'Search library' }));
+        await user.click(screen.getByRole('button', { name: 'Search' }));
         await user.type(screen.getByRole('combobox', { name: 'Library title' }), 'dark');
 
         // Assert
@@ -205,7 +207,7 @@ describe('LibraryQuickSearch', () => {
 
         // Act
         const user = userEvent.setup();
-        await user.click(screen.getByRole('button', { name: 'Search library' }));
+        await user.click(screen.getByRole('button', { name: 'Search' }));
         await user.type(screen.getByRole('combobox', { name: 'Library title' }), 'dark');
 
         // Assert
@@ -250,7 +252,7 @@ describe('LibraryQuickSearch', () => {
             </QueryClientProvider>,
         );
         const user = userEvent.setup();
-        await user.click(screen.getByRole('button', { name: 'Search library' }));
+        await user.click(screen.getByRole('button', { name: 'Search' }));
         await user.type(screen.getByRole('combobox', { name: 'Library title' }), 'dark');
         await waitFor(() => expect(pending.has('title contains "dark"')).toBe(true));
 
@@ -299,7 +301,7 @@ describe('LibraryQuickSearch', () => {
             </QueryClientProvider>,
         );
         const user = userEvent.setup();
-        await user.click(screen.getByRole('button', { name: 'Search library' }));
+        await user.click(screen.getByRole('button', { name: 'Search' }));
         await user.type(screen.getByRole('combobox', { name: 'Library title' }), 'dark');
         await waitFor(() => expect(signal).toBeDefined());
 
@@ -309,7 +311,7 @@ describe('LibraryQuickSearch', () => {
         // Assert
         await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
         expect(signal!.aborted).toBe(true);
-        expect(screen.getByRole('button', { name: 'Search library' })).toHaveFocus();
+        expect(screen.getByRole('button', { name: 'Search' })).toHaveFocus();
         expect(screen.getByTestId('location')).toHaveTextContent('/downloads|null');
     });
 
@@ -341,7 +343,7 @@ describe('LibraryQuickSearch', () => {
             </QueryClientProvider>,
         );
         const user = userEvent.setup();
-        await user.click(screen.getByRole('button', { name: 'Search library' }));
+        await user.click(screen.getByRole('button', { name: 'Search' }));
         await user.type(screen.getByRole('combobox', { name: 'Library title' }), 'dark');
         const input = screen.getByRole('combobox', { name: 'Library title' });
         await screen.findByRole('option', { name: /Darkness Falls/ });
@@ -360,7 +362,7 @@ describe('LibraryQuickSearch', () => {
 
         // Assert
         await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
-        expect(screen.getByRole('button', { name: 'Search library' })).toHaveFocus();
+        expect(screen.getByRole('button', { name: 'Search' })).toHaveFocus();
     });
 
     it('shows a failed search as an error, not as an empty result', async () => {
@@ -394,7 +396,7 @@ describe('LibraryQuickSearch', () => {
 
         // Act
         const user = userEvent.setup();
-        await user.click(screen.getByRole('button', { name: 'Search library' }));
+        await user.click(screen.getByRole('button', { name: 'Search' }));
         await user.type(screen.getByRole('combobox', { name: 'Library title' }), 'dark');
 
         // Assert
@@ -434,7 +436,7 @@ describe('LibraryQuickSearch', () => {
 
         // Act
         const user = userEvent.setup();
-        await user.click(screen.getByRole('button', { name: 'Search library' }));
+        await user.click(screen.getByRole('button', { name: 'Search' }));
         await user.type(screen.getByRole('combobox', { name: 'Library title' }), 'zzz');
 
         // Assert
@@ -470,7 +472,7 @@ describe('LibraryQuickSearch', () => {
             </QueryClientProvider>,
         );
         const user = userEvent.setup();
-        await user.click(screen.getByRole('button', { name: 'Search library' }));
+        await user.click(screen.getByRole('button', { name: 'Search' }));
         await user.type(screen.getByRole('combobox', { name: 'Library title' }), 'dark');
         await screen.findByRole('option', { name: /Darkness Falls/ });
 
@@ -523,7 +525,7 @@ describe('LibraryQuickSearch', () => {
             </QueryClientProvider>,
         );
         const user = userEvent.setup();
-        await user.click(screen.getByRole('button', { name: 'Search library' }));
+        await user.click(screen.getByRole('button', { name: 'Search' }));
         await user.type(screen.getByRole('combobox', { name: 'Library title' }), 'dark');
         await screen.findByRole('option', { name: /Darkness Falls/ });
 
@@ -563,7 +565,7 @@ describe('LibraryQuickSearch', () => {
             </QueryClientProvider>,
         );
         const user = userEvent.setup();
-        await user.click(screen.getByRole('button', { name: 'Search library' }));
+        await user.click(screen.getByRole('button', { name: 'Search' }));
         await user.type(screen.getByRole('combobox', { name: 'Library title' }), 'dark');
         const result = await screen.findByRole('option', { name: /Darkness Falls/ });
 
@@ -577,7 +579,128 @@ describe('LibraryQuickSearch', () => {
         expect(screen.getByRole('dialog', { name: 'Search library' })).toBeInTheDocument();
     });
 
-    it('links all library results to the same title scope at every level', async () => {
+    it('links More In Library to the same title scope at every level when more matches exist', async () => {
+        // Arrange
+        totalItems = 9;
+        render(
+            <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+                <MemoryRouter initialEntries={['/downloads']}>
+                    <AuthProvider
+                        initialUser={{ id: 'user-1', username: 'user', role: Role.Admin }}
+                        initialPermissions={testEffectivePermissions(Role.Admin)}
+                    >
+                        <TooltipProvider>
+                            <Routes>
+                                <Route
+                                    path="*"
+                                    element={
+                                        <>
+                                            <LibraryQuickSearch />
+                                            <CommandPalette />
+                                            <LocationProbe />
+                                        </>
+                                    }
+                                />
+                            </Routes>
+                        </TooltipProvider>
+                    </AuthProvider>
+                </MemoryRouter>
+            </QueryClientProvider>,
+        );
+
+        // Act
+        const user = userEvent.setup();
+        await user.click(screen.getByRole('button', { name: 'Search' }));
+        await user.type(screen.getByRole('combobox', { name: 'Library title' }), 'dark "city"');
+
+        // Assert
+        expect(await screen.findByRole('link', { name: 'More In Library' })).toHaveAttribute(
+            'href',
+            '/library/all?filter=title+contains+%22dark+%5C%22city%5C%22%22&levels=all',
+        );
+    });
+
+    it('hides More In Library when every match is already shown', async () => {
+        // Arrange
+        totalItems = 2;
+        render(
+            <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+                <MemoryRouter initialEntries={['/downloads']}>
+                    <AuthProvider
+                        initialUser={{ id: 'user-1', username: 'user', role: Role.Admin }}
+                        initialPermissions={testEffectivePermissions(Role.Admin)}
+                    >
+                        <TooltipProvider>
+                            <Routes>
+                                <Route
+                                    path="*"
+                                    element={
+                                        <>
+                                            <LibraryQuickSearch />
+                                            <CommandPalette />
+                                            <LocationProbe />
+                                        </>
+                                    }
+                                />
+                            </Routes>
+                        </TooltipProvider>
+                    </AuthProvider>
+                </MemoryRouter>
+            </QueryClientProvider>,
+        );
+
+        // Act
+        const user = userEvent.setup();
+        await user.click(screen.getByRole('button', { name: 'Search' }));
+        await user.type(screen.getByRole('combobox', { name: 'Library title' }), 'dark');
+        await screen.findByRole('option', { name: /Darkness Falls/ });
+
+        // Assert
+        expect(screen.queryByRole('link', { name: 'More In Library' })).not.toBeInTheDocument();
+        expect(screen.getByRole('link', { name: 'Add New Content' })).toBeInTheDocument();
+    });
+
+    it('hides More In Library while the changed title has not settled', async () => {
+        // Arrange
+        totalItems = 9;
+        render(
+            <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+                <MemoryRouter initialEntries={['/downloads']}>
+                    <AuthProvider
+                        initialUser={{ id: 'user-1', username: 'user', role: Role.Admin }}
+                        initialPermissions={testEffectivePermissions(Role.Admin)}
+                    >
+                        <TooltipProvider>
+                            <Routes>
+                                <Route
+                                    path="*"
+                                    element={
+                                        <>
+                                            <LibraryQuickSearch />
+                                            <CommandPalette />
+                                            <LocationProbe />
+                                        </>
+                                    }
+                                />
+                            </Routes>
+                        </TooltipProvider>
+                    </AuthProvider>
+                </MemoryRouter>
+            </QueryClientProvider>,
+        );
+        const user = userEvent.setup();
+        await user.click(screen.getByRole('button', { name: 'Search' }));
+        await user.type(screen.getByRole('combobox', { name: 'Library title' }), 'dark');
+        await screen.findByRole('link', { name: 'More In Library' });
+
+        // Act
+        await user.type(screen.getByRole('combobox', { name: 'Library title' }), 'x');
+
+        // Assert
+        expect(screen.queryByRole('link', { name: 'More In Library' })).not.toBeInTheDocument();
+    });
+
+    it('shows neither the scope text nor the footer strip', async () => {
         // Arrange
         render(
             <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
@@ -607,14 +730,15 @@ describe('LibraryQuickSearch', () => {
 
         // Act
         const user = userEvent.setup();
-        await user.click(screen.getByRole('button', { name: 'Search library' }));
-        await user.type(screen.getByRole('combobox', { name: 'Library title' }), 'dark "city"');
+        await user.click(screen.getByRole('button', { name: 'Search' }));
+        await user.type(screen.getByRole('combobox', { name: 'Library title' }), 'dark');
+        await screen.findByRole('option', { name: /Darkness Falls/ });
 
         // Assert
-        expect(screen.getByRole('link', { name: 'All library results' })).toHaveAttribute(
-            'href',
-            '/library/all?filter=title+contains+%22dark+%5C%22city%5C%22%22&levels=all',
-        );
+        const dialog = screen.getByRole('dialog', { name: 'Search library' });
+        expect(within(dialog).queryByText('Searches titles at every level of the library.')).not.toBeInTheDocument();
+        expect(within(dialog).queryByText('Providers are searched only on request')).not.toBeInTheDocument();
+        expect(dialog.lastElementChild).toHaveClass('library-quick-search__actions');
     });
 
     it.each([
@@ -651,11 +775,11 @@ describe('LibraryQuickSearch', () => {
 
         // Act
         const user = userEvent.setup();
-        await user.click(screen.getByRole('button', { name: 'Search library' }));
+        await user.click(screen.getByRole('button', { name: 'Search' }));
         await user.type(screen.getByRole('combobox', { name: 'Library title' }), 'dark');
 
         // Assert
-        expect(screen.getByRole(providerActionRole, { name: 'Search providers' }).hasAttribute('disabled')).toBe(
+        expect(screen.getByRole(providerActionRole, { name: 'Add New Content' }).hasAttribute('disabled')).toBe(
             disabled,
         );
     });
@@ -688,13 +812,13 @@ describe('LibraryQuickSearch', () => {
             </QueryClientProvider>,
         );
         const user = userEvent.setup();
-        await user.click(screen.getByRole('button', { name: 'Search library' }));
+        await user.click(screen.getByRole('button', { name: 'Search' }));
         await user.type(screen.getByRole('combobox', { name: 'Library title' }), 'dark');
         await screen.findByRole('option', { name: /Darkness Falls/ });
         expect(vi.mocked(apiGet).mock.calls.some(([path]) => path.includes('content-search'))).toBe(false);
 
         // Act
-        await user.click(screen.getByRole('link', { name: 'Search providers' }));
+        await user.click(screen.getByRole('link', { name: 'Add New Content' }));
 
         // Assert
         expect(screen.getByTestId('location')).toHaveTextContent(
@@ -733,7 +857,7 @@ describe('LibraryQuickSearch', () => {
 
         // Act
         const user = userEvent.setup();
-        await user.click(screen.getByRole('button', { name: 'Search library' }));
+        await user.click(screen.getByRole('button', { name: 'Search' }));
         await user.type(screen.getByRole('combobox', { name: 'Library title' }), 'dark');
 
         // Assert
@@ -794,6 +918,21 @@ describe('LibraryQuickSearch', () => {
         expect(shortViewport).toMatch(
             /\.library-quick-search__top \{[^}]*padding: calc\(var\(--space-sm\) \+ env\(safe-area-inset-top, 0\)\)[^}]*--overlay-close-top: calc\(var\(--space-sm\) \+ env\(safe-area-inset-top, 0\)\);/,
         );
+    });
+
+    it('keeps every result row at the height of its text and scrolls the list instead', () => {
+        // Arrange
+        const css = readFileSync(
+            resolve(process.cwd(), 'src/components/content/LibraryQuickSearch/LibraryQuickSearch.css'),
+            'utf8',
+        );
+
+        // Act
+        const regular = css.slice(0, css.indexOf('@media'));
+
+        // Assert
+        expect(regular).toMatch(/\.library-quick-search__results \{[^}]*min-height: 0;[^}]*overflow-y: auto;/);
+        expect(regular).toMatch(/\.library-quick-search__result \{[^}]*flex-shrink: 0;/);
     });
 
     it('keeps the phone header action a 44px square', () => {

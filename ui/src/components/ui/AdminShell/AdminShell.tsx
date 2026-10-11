@@ -9,6 +9,7 @@ import {
     GaugeIcon,
     GearIcon,
     HardDrivesIcon,
+    PulseIcon,
     PuzzlePieceIcon,
     ShieldWarningIcon,
     ShapesIcon,
@@ -28,7 +29,7 @@ import { LibraryQuickSearch } from '@/components/content/LibraryQuickSearch';
 import { useMediaQuery } from '@/hooks/ui/useMediaQuery';
 import { useIsActive } from '@/lib/routes';
 
-function AdminHeader() {
+function AdminHeader({ instanceName }: { instanceName: string }) {
     const { toggleSidebar, sidebarOpen, sidebarCollapsed } = useShell();
     const isDesktopSidebar = useMediaQuery('(min-width: 768px)');
     const sidebarExpanded = isDesktopSidebar ? !sidebarCollapsed : sidebarOpen;
@@ -38,7 +39,7 @@ function AdminHeader() {
             brand={
                 <Link to="/admin">
                     <GearIcon size={26} weight="duotone" aria-hidden="true" />
-                    <span>Magpie</span>
+                    <span>{instanceName}</span>
                 </Link>
             }
             status={<LiveUpdateStatus />}
@@ -79,6 +80,14 @@ function AdminSidebar() {
                         onClick={closeSidebar}
                     >
                         System Jobs
+                    </SidebarItem>
+                    <SidebarItem
+                        to="/admin/activity"
+                        icon={<PulseIcon weight="duotone" />}
+                        active={isActive('/admin/activity')}
+                        onClick={closeSidebar}
+                    >
+                        Activity Log
                     </SidebarItem>
                     <SidebarItem
                         to="/admin/users"

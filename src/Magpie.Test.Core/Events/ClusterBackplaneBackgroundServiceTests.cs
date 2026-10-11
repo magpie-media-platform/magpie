@@ -31,6 +31,7 @@ public sealed class ClusterBackplaneBackgroundServiceTests
 
     private TaskCompletionSource _broadcastMarker = null!;
     private TaskCompletionSource _publishMarker = null!;
+    private TaskCompletionSource _peerListenerReady = null!;
     private Subject<MagpieEvent> _peerEvents = null!;
     private Mock<IClusterBackplane> _backplane = null!;
     private Mock<IObserver<MagpieEvent>> _observer = null!;
@@ -42,6 +43,7 @@ public sealed class ClusterBackplaneBackgroundServiceTests
     {
         _broadcastMarker = new(TaskCreationOptions.RunContinuationsAsynchronously);
         _publishMarker = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        _peerListenerReady = new(TaskCreationOptions.RunContinuationsAsynchronously);
         _peerEvents = new();
         var migrationState = new DatabaseMigrationState();
         migrationState.Complete();
@@ -58,7 +60,12 @@ public sealed class ClusterBackplaneBackgroundServiceTests
         _backplane = new Mock<IClusterBackplane>();
         _backplane
             .Setup(backplane => backplane.CreateListener())
-            .Returns(() => new EventListener(_peerEvents, null));
+            .Returns(() =>
+            {
+                var listener = new EventListener(_peerEvents, null);
+                _peerListenerReady.TrySetResult();
+                return listener;
+            });
         _backplane
             .Setup(backplane => backplane.BroadcastEventAsync(
                 It.Is<MagpieEvent>(magpieEvent => magpieEvent.Id == MarkerEventId),
@@ -153,6 +160,7 @@ public sealed class ClusterBackplaneBackgroundServiceTests
         // Arrange
         using var subscription = _eventBus.Events.Subscribe(_observer.Object);
         await _subject.StartAsync(CancellationToken.None).ConfigureAwait(false);
+        await _peerListenerReady.Task.WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
 
         // Act
         _peerEvents.OnNext(new MagpieEvent(
@@ -183,6 +191,7 @@ public sealed class ClusterBackplaneBackgroundServiceTests
         // Arrange
         using var subscription = _eventBus.Events.Subscribe(_observer.Object);
         await _subject.StartAsync(CancellationToken.None).ConfigureAwait(false);
+        await _peerListenerReady.Task.WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
 
         // Act
         _peerEvents.OnNext(new MagpieEvent(

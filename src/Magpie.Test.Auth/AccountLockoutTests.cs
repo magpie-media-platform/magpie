@@ -150,7 +150,11 @@ public class AccountLockoutTests
             .Setup(s => s.VerifyPasswordAsync(user, "bad-password", It.IsAny<CancellationToken>()))
             .ReturnsAsync(false);
         _userRepository
-            .Setup(r => r.RecordFailedLoginAsync(user.Id, It.IsAny<DateTime?>(), It.IsAny<CancellationToken>()))
+            .Setup(r => r.RecordFailedLoginAsync(
+                user.Id,
+                It.IsAny<int>(),
+                It.IsAny<DateTime>(),
+                It.IsAny<CancellationToken>()))
             .ReturnsAsync(new FailedLoginResult(1, null));
 
         // Act
@@ -165,7 +169,13 @@ public class AccountLockoutTests
         }
 
         _userRepository.Verify(r => r.ResetLockoutAsync(user.Id, null, It.IsAny<CancellationToken>()), Times.Once);
-        _userRepository.Verify(r => r.RecordFailedLoginAsync(user.Id, null, It.IsAny<CancellationToken>()), Times.Once);
+        _userRepository.Verify(
+            r => r.RecordFailedLoginAsync(
+                user.Id,
+                3,
+                new DateTime(2026, 9, 9, 12, 5, 0, DateTimeKind.Utc),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
     }
 
     [Test]
@@ -190,7 +200,11 @@ public class AccountLockoutTests
             .Setup(s => s.VerifyPasswordAsync(user, "bad-password", It.IsAny<CancellationToken>()))
             .ReturnsAsync(false);
         _userRepository
-            .Setup(r => r.RecordFailedLoginAsync(user.Id, It.IsAny<DateTime?>(), It.IsAny<CancellationToken>()))
+            .Setup(r => r.RecordFailedLoginAsync(
+                user.Id,
+                It.IsAny<int>(),
+                It.IsAny<DateTime>(),
+                It.IsAny<CancellationToken>()))
             .ReturnsAsync(new FailedLoginResult(2, null));
 
         // Act
@@ -198,11 +212,17 @@ public class AccountLockoutTests
 
         // Assert
         Assert.That(result, Is.Null);
-        _userRepository.Verify(r => r.RecordFailedLoginAsync(user.Id, null, It.IsAny<CancellationToken>()), Times.Once);
+        _userRepository.Verify(
+            r => r.RecordFailedLoginAsync(
+                user.Id,
+                3,
+                new DateTime(2026, 9, 9, 12, 5, 0, DateTimeKind.Utc),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
     }
 
     [Test]
-    public async Task VerifyCredentials_PassesLockUntilToRepo_WhenAtThreshold()
+    public async Task VerifyCredentials_PassesTheLimitWithEveryFailure_WhenFailuresArriveConcurrently()
     {
         // Arrange
         var user = new User
@@ -214,26 +234,39 @@ public class AccountLockoutTests
             Role = Role.Viewer,
             PasswordHash = "hash",
             PasswordSalt = "salt",
-            FailedLoginAttempts = 2,
+            FailedLoginAttempts = 0,
             CreatedAt = DateTime.UtcNow
         };
+        var verification = new TaskCompletionSource<bool>();
         _userService.Setup(s => s.GetAuthenticationUserAsync("alice", It.IsAny<CancellationToken>()))
             .ReturnsAsync(user);
         _userService
             .Setup(s => s.VerifyPasswordAsync(user, "bad-password", It.IsAny<CancellationToken>()))
-            .ReturnsAsync(false);
-
-        DateTime? capturedLockUntil = null;
+            .Returns(verification.Task);
         _userRepository
-            .Setup(r => r.RecordFailedLoginAsync(user.Id, It.IsAny<DateTime?>(), It.IsAny<CancellationToken>()))
-            .Callback<Guid, DateTime?, CancellationToken>((_, lockUntil, _) => capturedLockUntil = lockUntil)
+            .Setup(r => r.RecordFailedLoginAsync(
+                user.Id,
+                It.IsAny<int>(),
+                It.IsAny<DateTime>(),
+                It.IsAny<CancellationToken>()))
             .ReturnsAsync(new FailedLoginResult(3, new DateTime(2026, 9, 9, 12, 5, 0, DateTimeKind.Utc)));
 
         // Act
-        await _subject.VerifyCredentialsAsync("alice", "bad-password").ConfigureAwait(false);
+        var first = _subject.VerifyCredentialsAsync("alice", "bad-password");
+        var second = _subject.VerifyCredentialsAsync("alice", "bad-password");
+        var third = _subject.VerifyCredentialsAsync("alice", "bad-password");
+        verification.SetResult(false);
+        var results = await Task.WhenAll(first, second, third).ConfigureAwait(false);
 
         // Assert
-        Assert.That(capturedLockUntil, Is.EqualTo(new DateTime(2026, 9, 9, 12, 5, 0, DateTimeKind.Utc)));
+        Assert.That(results, Is.All.Null);
+        _userRepository.Verify(
+            r => r.RecordFailedLoginAsync(
+                user.Id,
+                3,
+                new DateTime(2026, 9, 9, 12, 5, 0, DateTimeKind.Utc),
+                It.IsAny<CancellationToken>()),
+            Times.Exactly(3));
     }
 
     [Test]

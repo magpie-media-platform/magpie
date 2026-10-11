@@ -33,6 +33,10 @@ export interface AuthContextValue extends AuthState {
 
     hasRole: (minRole: Role) => boolean;
 
+    permissionsFailed: boolean;
+
+    retryPermissions: () => void;
+
     signOut: () => Promise<void>;
 
     login: (username: string, password: string) => Promise<void>;
@@ -45,6 +49,8 @@ const defaultContextValue: AuthContextValue = {
     hasPermission: () => false,
     getRequiredRole: () => undefined,
     hasRole: () => false,
+    permissionsFailed: false,
+    retryPermissions: () => {},
     signOut: async () => {},
     login: async () => {},
 };
@@ -95,7 +101,6 @@ export function AuthProvider({
     const queryClient = useQueryClient();
     const clearSessionCache = useCallback(() => {
         queryClient.clear();
-        // Removed queries cannot update their existing observers; bind a fresh session subtree.
         setCacheRevision((revision) => revision + 1);
     }, [queryClient]);
 
@@ -153,6 +158,9 @@ export function AuthProvider({
         () => (permissionsQuery.data ? permissionCatalogFromEffective(permissionsQuery.data) : null),
         [permissionsQuery.data],
     );
+    const permissionsFailed = permissionsQuery.isLoadingError;
+    const { refetch: refetchPermissions } = permissionsQuery;
+    const retryPermissions = useCallback(() => void refetchPermissions(), [refetchPermissions]);
 
     const performRefresh = useCallback(async function refresh() {
         if (!hasStoredSession()) return;
@@ -360,11 +368,12 @@ export function AuthProvider({
 
     const checkPermission = useCallback(
         (permission: Permission): boolean => {
-            if (!effectiveUser || !permissionCatalog) return false;
+            if (!effectiveUser) return false;
+            if (!permissionCatalog) return permissionsFailed;
             const requiredRole = permissionCatalog[permission];
             return requiredRole !== undefined && effectiveUser.role >= requiredRole;
         },
-        [effectiveUser, permissionCatalog],
+        [effectiveUser, permissionCatalog, permissionsFailed],
     );
 
     const getRequiredRole = useCallback(
@@ -417,10 +426,23 @@ export function AuthProvider({
             hasPermission: checkPermission,
             getRequiredRole,
             hasRole: checkRole,
+            permissionsFailed,
+            retryPermissions,
             signOut,
             login,
         }),
-        [isLoading, isAuthenticated, effectiveUser, checkPermission, getRequiredRole, checkRole, signOut, login],
+        [
+            isLoading,
+            isAuthenticated,
+            effectiveUser,
+            checkPermission,
+            getRequiredRole,
+            checkRole,
+            permissionsFailed,
+            retryPermissions,
+            signOut,
+            login,
+        ],
     );
 
     return (

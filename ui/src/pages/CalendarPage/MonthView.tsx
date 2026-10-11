@@ -66,16 +66,18 @@ export function MonthView({ currentDate, getEventsForDate, onDayClick }: MonthVi
                                                     title: evt.title,
                                                 }}
                                                 fallback={{ contentType: evt.contentType, level: evt.level }}
+                                                stacked
                                             />
                                             <span className="calendar-page__day-event-statuses">
                                                 <ContentMonitoringIndicator
-                                                    monitoring={evt.monitoring}
                                                     effectiveMonitoring={evt.effectiveMonitoring}
                                                     className="calendar-page__day-event-monitoring"
                                                     activeClassName="calendar-page__day-event-monitoring--active"
                                                 />
                                                 <ContentFulfillmentBadge
                                                     fulfillment={evt.fulfillment}
+                                                    publishDate={evt.date}
+                                                    publishDatePrecision={evt.datePrecision}
                                                     className="calendar-page__day-event-badge"
                                                 />
                                             </span>

@@ -355,7 +355,12 @@ public sealed class DownloadServiceTests
 
         // Act
         await service
-            .GrabAsync(release, source, source.Settings, contentType: "type-a", cancellationToken: default)
+            .GrabAsync(
+                release,
+                source,
+                source.Settings,
+                new ReleaseGrabContext { ContentType = "type-a" },
+                cancellationToken: default)
             .ConfigureAwait(false);
 
         // Assert

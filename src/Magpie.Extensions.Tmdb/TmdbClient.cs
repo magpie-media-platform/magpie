@@ -16,7 +16,10 @@ using Microsoft.Extensions.Logging;
 
 namespace Magpie.Extensions.Tmdb;
 
-internal sealed class TmdbClient(IHttpClientFactory httpClientFactory, ILogger<TmdbClient> logger) : ITmdbClient
+internal sealed class TmdbClient(
+    IHttpClientFactory httpClientFactory,
+    TimeProvider timeProvider,
+    ILogger<TmdbClient> logger) : ITmdbClient
 {
     public const string HttpClientName = "magpie.tmdb";
 
@@ -231,7 +234,9 @@ internal sealed class TmdbClient(IHttpClientFactory httpClientFactory, ILogger<T
 
             response.EnsureSuccessStatusCode();
 
-            var body = await ReadBoundedAsync(response, MaximumResponseBytes(profile), cancellationToken)
+            using var timeout = timeProvider.CreateCancellationTokenSource(http.Timeout);
+            using var reading = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeout.Token);
+            var body = await ReadBoundedAsync(response, MaximumResponseBytes(profile), reading.Token)
                 .ConfigureAwait(false);
             if (string.IsNullOrWhiteSpace(body))
             {

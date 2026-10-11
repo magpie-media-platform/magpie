@@ -64,6 +64,7 @@
 
     .interactive-search__table {
         min-width: 0;
+        container-type: inline-size;
     }
 
     .interactive-search[data-layout='table'] {
@@ -72,8 +73,30 @@
         }
 
         & .interactive-search__table .data-table__table {
-            table-layout: fixed;
             width: 100%;
+        }
+
+        & .interactive-search__table .data-table__header-cell[data-column='match'],
+        & .interactive-search__table .data-table__cell[data-column='match'],
+        & .interactive-search__table .data-table__header-cell[data-column='status'],
+        & .interactive-search__table .data-table__cell[data-column='status'] {
+            width: 1%;
+            white-space: nowrap;
+        }
+
+        @container (max-width: 780px) {
+            & .data-table__header-cell[data-column='match'],
+            & .data-table__cell[data-column='match'],
+            & .data-table__header-cell[data-column='status'],
+            & .data-table__cell[data-column='status'] {
+                padding-inline: var(--space-xs);
+            }
+
+            & .data-table__cell[data-column='status'] .badge {
+                flex-wrap: wrap;
+                white-space: normal;
+                overflow-wrap: normal;
+            }
         }
 
         & .interactive-search__table .data-table__cell,
@@ -81,15 +104,17 @@
             overflow: hidden;
             text-overflow: ellipsis;
         }
+
+        & .interactive-search__table .data-table__cell {
+            overflow-wrap: anywhere;
+        }
     }
 
     .interactive-search__title {
         display: block;
         min-width: 0;
         max-width: 100%;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
+        overflow-wrap: anywhere;
         padding: 0;
         border: 0;
         background: none;
@@ -135,28 +160,41 @@
     }
 
     .interactive-search[data-layout='card'] {
-        & .interactive-search__table .data-table__cell[data-column='title'] {
-            flex: 1 1 0;
-            min-width: 0;
-            order: 0;
+        & .interactive-search__table .data-table__row {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            align-items: start;
+            column-gap: var(--space-md);
+
+            @media (min-width: 768px) {
+                grid-template-columns: repeat(4, minmax(0, 1fr));
+            }
         }
 
-        & .interactive-search__table .data-table__cell[data-column='title'] .interactive-search__title {
-            flex: 1 1 auto;
-            text-align: right;
+        & .interactive-search__table .data-table__cell {
+            grid-column: 1 / -1;
+            padding-inline: 0;
         }
 
-        & .interactive-search__table .data-table__cell[data-column='action'] {
-            order: 1;
+        & .interactive-search__table .data-table__cell:not([data-mobile-role='actions']) {
+            padding-block: 0;
         }
 
-        &
-            .interactive-search__table
-            .data-table__cell:not([data-column='title'], [data-column='action'], [data-column='status']) {
-            order: 2;
+        & .interactive-search__table .data-table__cell[data-column='title']::before {
+            content: none;
         }
 
-        & .interactive-search__table .data-table__cell[data-column='status']:empty {
+        & .interactive-search__table .data-table__cell[data-mobile-role='field']:not([data-column='title']) {
+            grid-column: auto;
+            flex-direction: column;
+            align-items: flex-start;
+            justify-content: flex-start;
+            gap: var(--space-2xs);
+            overflow-wrap: anywhere;
+        }
+
+        & .interactive-search__table .data-table__cell[data-column='status']:empty,
+        & .interactive-search__table .data-table__cell[data-mobile-role='actions']:empty {
             display: none;
         }
 

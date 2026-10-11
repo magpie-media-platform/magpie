@@ -152,16 +152,11 @@ public sealed class ContentMetadataRefreshItemJobTests
                 It.IsAny<IReadOnlyCollection<Guid>>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync([]);
         _subjectRepository
-            .Setup(repository => repository.CreateAsync(
+            .Setup(repository => repository.TryCreateAsync(
                 It.IsAny<Subject>(),
                 It.IsAny<Guid?>(),
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync((Subject subject, Guid? _, CancellationToken _) => new Subject
-            {
-                Id = Guid.NewGuid(),
-                Kind = subject.Kind,
-                MetadataContainerId = Guid.NewGuid()
-            });
+            .ReturnsAsync(true);
         _subjectRepository
             .Setup(repository => repository.QueryAsync(
                 It.IsAny<SubjectQuery>(),
@@ -289,7 +284,7 @@ public sealed class ContentMetadataRefreshItemJobTests
                     It.IsAny<CancellationToken>()),
                 Times.Once);
             _subjectRepository.Verify(
-                repository => repository.CreateAsync(
+                repository => repository.TryCreateAsync(
                     It.IsAny<Subject>(),
                     It.IsAny<Guid?>(),
                     It.IsAny<CancellationToken>()),
@@ -400,7 +395,7 @@ public sealed class ContentMetadataRefreshItemJobTests
         using (Assert.EnterMultipleScope())
         {
             _subjectRepository.Verify(
-                repository => repository.CreateAsync(
+                repository => repository.TryCreateAsync(
                     It.IsAny<Subject>(),
                     It.IsAny<Guid?>(),
                     It.IsAny<CancellationToken>()),
@@ -569,7 +564,7 @@ public sealed class ContentMetadataRefreshItemJobTests
         using (Assert.EnterMultipleScope())
         {
             _subjectRepository.Verify(
-                repository => repository.CreateAsync(
+                repository => repository.TryCreateAsync(
                     It.IsAny<Subject>(),
                     It.IsAny<Guid?>(),
                     It.IsAny<CancellationToken>()),
@@ -680,7 +675,7 @@ public sealed class ContentMetadataRefreshItemJobTests
 
         // Assert
         _subjectRepository.Verify(
-            repository => repository.CreateAsync(
+            repository => repository.TryCreateAsync(
                 It.IsAny<Subject>(),
                 It.IsAny<Guid?>(),
                 It.IsAny<CancellationToken>()),
@@ -784,7 +779,7 @@ public sealed class ContentMetadataRefreshItemJobTests
         using (Assert.EnterMultipleScope())
         {
             _subjectRepository.Verify(
-                repository => repository.CreateAsync(
+                repository => repository.TryCreateAsync(
                     It.IsAny<Subject>(),
                     It.IsAny<Guid?>(),
                     It.IsAny<CancellationToken>()),
@@ -914,7 +909,7 @@ public sealed class ContentMetadataRefreshItemJobTests
         using (Assert.EnterMultipleScope())
         {
             _subjectRepository.Verify(
-                repository => repository.CreateAsync(
+                repository => repository.TryCreateAsync(
                     It.IsAny<Subject>(),
                     It.IsAny<Guid?>(),
                     It.IsAny<CancellationToken>()),
@@ -1022,7 +1017,7 @@ public sealed class ContentMetadataRefreshItemJobTests
 
         // Assert
         _subjectRepository.Verify(
-            repository => repository.CreateAsync(
+            repository => repository.TryCreateAsync(
                 It.IsAny<Subject>(),
                 It.IsAny<Guid?>(),
                 It.IsAny<CancellationToken>()),
@@ -1110,7 +1105,7 @@ public sealed class ContentMetadataRefreshItemJobTests
         using (Assert.EnterMultipleScope())
         {
             _subjectRepository.Verify(
-                repository => repository.CreateAsync(
+                repository => repository.TryCreateAsync(
                     It.IsAny<Subject>(),
                     It.IsAny<Guid?>(),
                     It.IsAny<CancellationToken>()),

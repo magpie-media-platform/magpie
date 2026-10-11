@@ -18,6 +18,7 @@ import { useBulkSelection } from '@/hooks/useBulkSelection';
 import { useIndexers, type IndexerFeedItem } from '@/hooks/useIndexers';
 import { useToggle } from '@/hooks/useToggle';
 import { useUrlTableState } from '@/hooks/useUrlTableState';
+import { useInstanceName } from '@/hooks/useInstanceName';
 import { getErrorMessage } from '@/lib/errors';
 import { formatRelativeTime } from '@/lib/formatTime';
 
@@ -45,6 +46,7 @@ function toIndexerFeedFormValues(feed: IndexerFeedItem): IndexerFeedFormValues {
 }
 
 export function FeedsManagement() {
+    const instanceName = useInstanceName();
     const [formOpen, , openForm, closeForm] = useToggle();
     const [editingFeed, setEditingFeed] = useState<IndexerFeedFormValues | null>(null);
     const [deletingFeed, setDeletingFeed] = useState<IndexerFeedItem | null>(null);
@@ -105,7 +107,7 @@ export function FeedsManagement() {
                 await apiSyncFeed(feed.id);
                 toast({
                     title: 'Sync started',
-                    description: `Magpie queued a sync for "${feed.name}".`,
+                    description: `${instanceName} queued a sync for "${feed.name}".`,
                     variant: 'success',
                 });
             } catch (error) {
@@ -116,7 +118,7 @@ export function FeedsManagement() {
                 });
             }
         },
-        [apiSyncFeed, toast],
+        [apiSyncFeed, toast, instanceName],
     );
 
     const handleAdd = useCallback(() => {
@@ -142,7 +144,7 @@ export function FeedsManagement() {
             await apiDeleteFeed(deletingFeed.id);
             toast({
                 title: 'Feed deleted',
-                description: `Magpie removed "${deletingFeed.name}".`,
+                description: `${instanceName} removed "${deletingFeed.name}".`,
                 variant: 'success',
             });
         } catch (error) {
@@ -155,7 +157,7 @@ export function FeedsManagement() {
             setIsDeleting(false);
             setDeletingFeed(null);
         }
-    }, [deletingFeed, apiDeleteFeed, toast]);
+    }, [deletingFeed, apiDeleteFeed, toast, instanceName]);
 
     const handleCancelDelete = useCallback(() => {
         setDeletingFeed(null);
@@ -208,7 +210,7 @@ export function FeedsManagement() {
                     });
                     toast({
                         title: 'Feed updated',
-                        description: `Magpie updated ${values.name}.`,
+                        description: `${instanceName} updated ${values.name}.`,
                         variant: 'success',
                     });
                 } else {
@@ -221,7 +223,7 @@ export function FeedsManagement() {
                     });
                     toast({
                         title: 'Feed created',
-                        description: `Magpie added ${values.name}.`,
+                        description: `${instanceName} added ${values.name}.`,
                         variant: 'success',
                     });
                 }
@@ -235,7 +237,7 @@ export function FeedsManagement() {
                 throw error;
             }
         },
-        [apiCreateFeed, apiUpdateFeed, toast, closeForm],
+        [apiCreateFeed, apiUpdateFeed, toast, closeForm, instanceName],
     );
 
     const addActions: QuickAction[] = useMemo(

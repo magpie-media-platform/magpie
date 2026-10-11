@@ -36,8 +36,7 @@ public sealed class MagpieCommandManifestGenerator : IIncrementalGenerator
         IReadOnlyList<ParameterDescriptor> pathParameters,
         IReadOnlyList<ParameterDescriptor> queryParameters,
         BodyKind bodyKind,
-        string? fileFieldName,
-        bool blobResult)
+        string? fileFieldName)
     {
         public IMethodSymbol MethodSymbol { get; } = methodSymbol;
 
@@ -60,8 +59,6 @@ public sealed class MagpieCommandManifestGenerator : IIncrementalGenerator
         public BodyKind BodyKind { get; } = bodyKind;
 
         public string? FileFieldName { get; } = fileFieldName;
-
-        public bool BlobResult { get; } = blobResult;
     }
 
     private sealed class ParameterDescriptor(string name, string cliName, bool isCollection)
@@ -142,7 +139,6 @@ public sealed class MagpieCommandManifestGenerator : IIncrementalGenerator
     private const string AuthenticatedUserName = "Magpie.Sdk.Api.AuthenticatedUser";
     private const string CommandAttributeName = "Magpie.Api.MagpieCommandAttribute";
     private const string CommandGroupAttributeName = "Magpie.Api.MagpieCommandGroupAttribute";
-    private const string BlobResultAttributeName = "Magpie.Api.MagpieBlobCommandResultAttribute";
     private const string FromBodyAttributeName = "Microsoft.AspNetCore.Mvc.FromBodyAttribute";
     private const string FromFormAttributeName = "Microsoft.AspNetCore.Mvc.FromFormAttribute";
     private const string FromQueryAttributeName = "Microsoft.AspNetCore.Mvc.FromQueryAttribute";
@@ -357,8 +353,7 @@ public sealed class MagpieCommandManifestGenerator : IIncrementalGenerator
             pathParameters,
             queryParameters,
             bodyKind,
-            fileFieldName,
-            HasAttribute(method, BlobResultAttributeName));
+            fileFieldName);
         return true;
     }
 
@@ -650,7 +645,7 @@ public sealed class MagpieCommandManifestGenerator : IIncrementalGenerator
 
     private static bool IsReservedOption(string optionName)
     {
-        return optionName is "--api-key" or "--data" or "--file" or "--json" or "--output" or "--url";
+        return optionName is "--api-key" or "--data" or "--file" or "--json" or "--url";
     }
 
     private static string ToOptionName(string name)
@@ -729,8 +724,7 @@ public sealed class MagpieCommandManifestGenerator : IIncrementalGenerator
         AppendParameters(builder, entry.QueryParameters, "QueryParameters");
         builder.AppendLine(",");
         builder.AppendLine("            MagpieCommandBodyKind." + entry.BodyKind + ",");
-        builder.AppendLine("            " + ToNullableLiteral(entry.FileFieldName) + ",");
-        builder.AppendLine("            BlobResult: " + ToBoolean(entry.BlobResult));
+        builder.AppendLine("            " + ToNullableLiteral(entry.FileFieldName));
         builder.Append("        )");
         builder.AppendLine(isLast ? string.Empty : ",");
     }

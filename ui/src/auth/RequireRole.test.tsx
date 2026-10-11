@@ -1,11 +1,17 @@
-import { render, screen } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { render, screen, waitFor } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { AuthTestProvider as AuthProvider } from '@/test/AuthTestProvider';
+import { AuthProvider as CatalogAuthProvider } from './AuthContext';
 import { RequireRole } from './RequireRole';
 import { Role } from './types';
 
 describe('RequireRole', () => {
+    afterEach(() => {
+        vi.unstubAllGlobals();
+    });
+
     it('renders children when user meets role requirement', () => {
         const user = { id: '1', username: 'manager', role: Role.Manager };
 
@@ -76,6 +82,36 @@ describe('RequireRole', () => {
         );
 
         expect(screen.queryByText('Protected content') !== null).toBe(shown);
+    });
+
+    it.each([
+        {
+            name: 'hides a permission-gated control while the permission request loads',
+            fetch: () => new Promise<Response>(() => {}),
+            shown: false,
+        },
+        {
+            name: 'shows a permission-gated control when the permission request fails',
+            fetch: () => Promise.resolve(new Response(null, { status: 500 })),
+            shown: true,
+        },
+    ])('$name', async ({ fetch, shown }) => {
+        // Arrange
+        vi.stubGlobal('fetch', fetch);
+
+        // Act
+        render(
+            <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+                <CatalogAuthProvider initialUser={{ id: '1', username: 'viewer', role: Role.Viewer }}>
+                    <RequireRole permission="content.add">
+                        <span>Protected content</span>
+                    </RequireRole>
+                </CatalogAuthProvider>
+            </QueryClientProvider>,
+        );
+
+        // Assert
+        await waitFor(() => expect(screen.queryByText('Protected content') !== null).toBe(shown));
     });
 
     it('renders nothing when user is not authenticated', () => {

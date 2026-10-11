@@ -17,6 +17,7 @@ using Magpie.Sdk.Configuration;
 using Magpie.Sdk.Integrations;
 using Magpie.Sdk.Services;
 
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 
 using Moq;
@@ -47,7 +48,8 @@ public sealed class SettingsServiceValidationTests
             [],
             [],
             NullLogger<SettingsService>.Instance,
-            Mock.Of<IExtensionRepository>());
+            Mock.Of<IExtensionRepository>(),
+            Mock.Of<IServiceScopeFactory>());
     }
 
     [Test]
@@ -616,7 +618,8 @@ public sealed class SettingsServiceValidationTests
             [provider],
             [],
             NullLogger<SettingsService>.Instance,
-            extensionRepository.Object);
+            extensionRepository.Object,
+            Mock.Of<IServiceScopeFactory>());
 
         // Act
         var result = await subject.ListGroupsAsync().ConfigureAwait(false);
@@ -683,6 +686,10 @@ public sealed class SettingsServiceValidationTests
                     AssemblyName = "Magpie.Test.Core"
                 }
             ]);
+        using var services = new ServiceCollection()
+            .AddSingleton(settingsRepository.Object)
+            .AddSingleton(extensionRepository.Object)
+            .BuildServiceProvider();
         var subject = new SettingsService(
             settingsRepository.Object,
             _hierarchy.Object,
@@ -690,7 +697,8 @@ public sealed class SettingsServiceValidationTests
             [provider],
             [],
             NullLogger<SettingsService>.Instance,
-            extensionRepository.Object);
+            extensionRepository.Object,
+            services.GetRequiredService<IServiceScopeFactory>());
 
         // Act
         var result = await subject.GetExtensionGroupAsync(loadedId, groupName).ConfigureAwait(false);
@@ -760,7 +768,8 @@ public sealed class SettingsServiceValidationTests
             [provider],
             [],
             NullLogger<SettingsService>.Instance,
-            extensionRepository.Object);
+            extensionRepository.Object,
+            Mock.Of<IServiceScopeFactory>());
 
         // Act
         var result = await subject.PatchExtensionGroupAsync(
@@ -837,7 +846,8 @@ public sealed class SettingsServiceValidationTests
             [provider],
             [tester.Object],
             NullLogger<SettingsService>.Instance,
-            extensionRepository.Object);
+            extensionRepository.Object,
+            Mock.Of<IServiceScopeFactory>());
 
         // Act
         var result = await subject.TestGroupAsync(
@@ -904,7 +914,8 @@ public sealed class SettingsServiceValidationTests
             [provider],
             testers,
             NullLogger<SettingsService>.Instance,
-            extensionRepository.Object);
+            extensionRepository.Object,
+            Mock.Of<IServiceScopeFactory>());
 
         // Act
         var result = await subject.ListGroupsAsync().ConfigureAwait(false);
@@ -960,7 +971,8 @@ public sealed class SettingsServiceValidationTests
             [provider],
             [],
             NullLogger<SettingsService>.Instance,
-            extensionRepository.Object);
+            extensionRepository.Object,
+            Mock.Of<IServiceScopeFactory>());
 
         // Act
         var result = await subject.ListGroupsAsync().ConfigureAwait(false);
@@ -1011,6 +1023,10 @@ public sealed class SettingsServiceValidationTests
         tester.SetupGet(value => value.ExtensionId).Returns(definitionId);
         tester.SetupGet(value => value.SettingsGroupName).Returns(groupName);
         IExtensionConfigurationTester[] testers = [tester.Object];
+        using var services = new ServiceCollection()
+            .AddSingleton(settingsRepository.Object)
+            .AddSingleton(extensionRepository.Object)
+            .BuildServiceProvider();
         var subject = new SettingsService(
             settingsRepository.Object,
             _hierarchy.Object,
@@ -1018,7 +1034,8 @@ public sealed class SettingsServiceValidationTests
             [provider],
             testers,
             NullLogger<SettingsService>.Instance,
-            extensionRepository.Object);
+            extensionRepository.Object,
+            services.GetRequiredService<IServiceScopeFactory>());
 
         // Act
         var detail = await subject.GetExtensionGroupAsync(loadedId, groupName).ConfigureAwait(false);
@@ -1065,6 +1082,10 @@ public sealed class SettingsServiceValidationTests
                     AssemblyName = "Magpie.Test.Core"
                 }
             ]);
+        using var services = new ServiceCollection()
+            .AddSingleton(settingsRepository.Object)
+            .AddSingleton(extensionRepository.Object)
+            .BuildServiceProvider();
         var subject = new SettingsService(
             settingsRepository.Object,
             _hierarchy.Object,
@@ -1072,7 +1093,8 @@ public sealed class SettingsServiceValidationTests
             [provider],
             [],
             NullLogger<SettingsService>.Instance,
-            extensionRepository.Object);
+            extensionRepository.Object,
+            services.GetRequiredService<IServiceScopeFactory>());
 
         // Act
         var detail = await subject.GetExtensionGroupAsync(loadedId, groupName).ConfigureAwait(false);
@@ -1093,8 +1115,15 @@ public sealed class SettingsServiceValidationTests
         repository.Setup(store => store.PatchAsync(
                 It.IsAny<SettingsGroupPatch>(), It.IsAny<Guid?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(true);
-        var subject = new SettingsService(repository.Object, _hierarchy.Object, _transactionManager.Object,
-            [], [], NullLogger<SettingsService>.Instance, Mock.Of<IExtensionRepository>());
+        var subject = new SettingsService(
+            repository.Object,
+            _hierarchy.Object,
+            _transactionManager.Object,
+            [],
+            [],
+            NullLogger<SettingsService>.Instance,
+            Mock.Of<IExtensionRepository>(),
+            Mock.Of<IServiceScopeFactory>());
         var patch = new SettingsGroupPatch
         {
             Name = group,
@@ -1127,8 +1156,15 @@ public sealed class SettingsServiceValidationTests
         repository.Setup(store => store.PatchAsync(
                 It.IsAny<SettingsGroupPatch>(), It.IsAny<Guid?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(true);
-        var subject = new SettingsService(repository.Object, _hierarchy.Object, _transactionManager.Object,
-            [], [], NullLogger<SettingsService>.Instance, Mock.Of<IExtensionRepository>());
+        var subject = new SettingsService(
+            repository.Object,
+            _hierarchy.Object,
+            _transactionManager.Object,
+            [],
+            [],
+            NullLogger<SettingsService>.Instance,
+            Mock.Of<IExtensionRepository>(),
+            Mock.Of<IServiceScopeFactory>());
         var patch = new SettingsGroupPatch
         {
             Name = "monitoring",
@@ -1150,6 +1186,51 @@ public sealed class SettingsServiceValidationTests
             Times.Once);
         _hierarchy.Verify(store => store.RecomputeAllEffectiveValuesAsync(It.IsAny<CancellationToken>()),
             Times.Never);
+    }
+
+    [TestCase("Home Lab", "Home Lab")]
+    [TestCase("  Home Lab  ", "Home Lab")]
+    [TestCase("", "Magpie")]
+    [TestCase("   ", "Magpie")]
+    public async Task GetInstanceNameAsync_ReturnsTrimmedNameOrDefault_WhenInstanceNameSettingExists(
+        string storedName,
+        string expectedName)
+    {
+        // Arrange
+        var repository = new Mock<ISettingsRepository>();
+        repository.Setup(store => store.GetByIdAsync(
+                new SettingsGroupLookupKey(null, "general"),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new SettingsGroup
+            {
+                Name = "general",
+                Settings = { new Setting { Key = "instanceName", Value = storedName } }
+            });
+        var subject = new SettingsService(
+            repository.Object,
+            _hierarchy.Object,
+            _transactionManager.Object,
+            [],
+            [],
+            NullLogger<SettingsService>.Instance,
+            Mock.Of<IExtensionRepository>(),
+            Mock.Of<IServiceScopeFactory>());
+
+        // Act
+        var name = await subject.GetInstanceNameAsync().ConfigureAwait(false);
+
+        // Assert
+        Assert.That(name, Is.EqualTo(expectedName));
+    }
+
+    [Test]
+    public async Task GetInstanceNameAsync_ReturnsMagpie_WhenGeneralGroupIsMissing()
+    {
+        // Act
+        var name = await _subject.GetInstanceNameAsync().ConfigureAwait(false);
+
+        // Assert
+        Assert.That(name, Is.EqualTo("Magpie"));
     }
 
     private sealed class TestSettingsSchemaProvider : IExtensionSettingsSchemaProvider

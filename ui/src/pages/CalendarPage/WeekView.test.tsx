@@ -46,7 +46,6 @@ function makeEvent(id: string, title: string): CalendarEvent {
         contentType: 'tv',
         level: 'episode',
         fulfillment: 'missing',
-        monitoring: 'Monitored',
         effectiveMonitoring: 'Monitored',
     };
 }
@@ -141,14 +140,13 @@ describe('WeekView', () => {
 
     it('shows monitoring and fulfillment separately in the actual compact week path', () => {
         // Arrange
-        const inheritedEvent = {
-            ...makeEvent('1', 'Inherited external release'),
-            monitoring: null,
+        const unmonitoredEvent = {
+            ...makeEvent('1', 'Unmonitored external release'),
             effectiveMonitoring: 'Unmonitored' as const,
             fulfillment: 'fulfilledExternally' as const,
         };
         const monitoredEvent = {
-            ...makeEvent('2', 'Explicit monitored release'),
+            ...makeEvent('2', 'Monitored fulfilled release'),
             fulfillment: 'fulfilled' as const,
         };
 
@@ -156,21 +154,21 @@ describe('WeekView', () => {
         render(
             <WeekView
                 {...defaultProps}
-                getEventsForDate={(date) => (date.getDay() === 1 ? [inheritedEvent, monitoredEvent] : [])}
+                getEventsForDate={(date) => (date.getDay() === 1 ? [unmonitoredEvent, monitoredEvent] : [])}
             />,
             { wrapper: TooltipProvider },
         );
 
         // Assert
-        const inheritedCard = screen
-            .getByText('Inherited external release', { selector: '.content-lineage-title__segment--leaf' })
+        const unmonitoredCard = screen
+            .getByText('Unmonitored external release', { selector: '.content-lineage-title__segment--leaf' })
             .closest('[data-testid="calendar-page__event-card"]');
         const monitoredCard = screen
-            .getByText('Explicit monitored release', { selector: '.content-lineage-title__segment--leaf' })
+            .getByText('Monitored fulfilled release', { selector: '.content-lineage-title__segment--leaf' })
             .closest('[data-testid="calendar-page__event-card"]');
 
-        expect(within(inheritedCard as HTMLElement).getByLabelText('Unmonitored (inherited)')).toBeInTheDocument();
-        expect(within(inheritedCard as HTMLElement).getByText('External')).toBeInTheDocument();
+        expect(within(unmonitoredCard as HTMLElement).getByLabelText('Unmonitored')).toBeInTheDocument();
+        expect(within(unmonitoredCard as HTMLElement).getByText('External')).toBeInTheDocument();
         expect(within(monitoredCard as HTMLElement).getByLabelText('Monitored')).toBeInTheDocument();
         expect(within(monitoredCard as HTMLElement).getByText('Fulfilled')).toBeInTheDocument();
     });

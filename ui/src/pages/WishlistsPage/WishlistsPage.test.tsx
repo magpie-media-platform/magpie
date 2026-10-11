@@ -2149,6 +2149,46 @@ describe('WishlistsPage edit seeds the criteria builder from the wishlist respon
         });
         expect(screen.queryByText('Add filter criteria to monitor this wishlist')).not.toBeInTheDocument();
     });
+
+    it('waits for the wishlist tags before opening the edit form and keeps them on save', async () => {
+        // Arrange
+        const user = userEvent.setup();
+        const mockApiPatch = vi.mocked(apiPatch);
+        mockApiPatch.mockResolvedValue(undefined);
+        let resolveEntityTags: (tags: { id: string; name: string }[]) => void = () => {};
+        const defaultApiGet = mockApiGet.getMockImplementation() as typeof apiGet;
+        mockApiGet.mockImplementation((url: string) =>
+            url.includes('entityId=')
+                ? new Promise((resolve) => {
+                      resolveEntityTags = resolve;
+                  })
+                : defaultApiGet(url),
+        );
+        render(
+            <TestWrapper role={Role.Admin} userId="user-1">
+                <WishlistsPage />
+            </TestWrapper>,
+        );
+        await waitFor(() => {
+            expect(document.querySelector('[data-wishlist-id="wl-seed"] [data-action="edit"]')).toBeInTheDocument();
+        });
+
+        // Act
+        await user.click(document.querySelector('[data-wishlist-id="wl-seed"] [data-action="edit"]') as HTMLElement);
+
+        // Assert
+        expect(screen.queryByText('Edit Wishlist')).not.toBeInTheDocument();
+
+        // Act
+        resolveEntityTags([{ id: 'tag-a', name: 'alpha' }]);
+        await screen.findByText('Edit Wishlist');
+        await user.type(screen.getByLabelText(/name/i), ' updated');
+        await user.click(document.querySelector('[data-action="save"]') as HTMLElement);
+
+        // Assert
+        await waitFor(() => expect(mockApiPatch).toHaveBeenCalled());
+        expect(mockApiPatch.mock.calls[0][1]).not.toHaveProperty('tags');
+    });
 });
 
 describe('WishlistsPage row criteria query', () => {

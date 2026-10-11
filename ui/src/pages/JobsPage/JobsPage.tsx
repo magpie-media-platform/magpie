@@ -1,6 +1,12 @@
 import { useMemo, useCallback, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { ClockCountdownIcon, ClockCounterClockwiseIcon, CalendarBlankIcon, LightningIcon } from '@phosphor-icons/react';
+import {
+    ClockCountdownIcon,
+    ClockCounterClockwiseIcon,
+    CalendarBlankIcon,
+    LightningIcon,
+    WarningCircleIcon,
+} from '@phosphor-icons/react';
 
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/Tabs';
 import { Button } from '@/components/ui/Button';
@@ -119,7 +125,7 @@ export function JobsPage() {
 
     const [runDialogOpen, setRunDialogOpen] = useState(false);
 
-    const { specs } = useJobSpecs();
+    const { specs, isLoading: specsLoading, error: specsError } = useJobSpecs();
 
     const executionQueryParams: JobExecutionQueryParams = useMemo(() => {
         const params: JobExecutionQueryParams = {
@@ -140,7 +146,14 @@ export function JobsPage() {
         return params;
     }, [rootsOnly, correlationId, page, executionFilters.template, executionFilters.status]);
 
-    const { jobs, pagination, isLoading: isLoadingJobs, runJob, refetch: refetchJobs } = useJobs(executionQueryParams);
+    const {
+        jobs,
+        pagination,
+        isLoading: isLoadingJobs,
+        error: jobsError,
+        runJob,
+        refetch: refetchJobs,
+    } = useJobs(executionQueryParams);
     const isSingleJob = linkedJobId !== null;
     const { job: linkedJob, isLoading: isLoadingLinkedJob } = useJobExecution(linkedJobId ?? '', isSingleJob);
     const displayedJobs = isSingleJob ? (linkedJob ? [linkedJob] : []) : jobs;
@@ -299,11 +312,8 @@ export function JobsPage() {
     }, [refetchJobs, refetchSched, refetchEvent]);
 
     const runButtonDisabled = !canRunJobs || !hasRunnableJobs;
-    const runButtonMessage = !canRunJobs
-        ? 'Requires Manager role'
-        : !hasRunnableJobs
-          ? 'No on-demand jobs are available to run'
-          : undefined;
+    const runButtonReasonKnown = !specsLoading && (!canRunJobs || !specsError);
+    const runButtonMessage = !canRunJobs ? 'Requires Manager role' : 'No on-demand jobs are available to run';
 
     const tabActions: QuickAction[] =
         activeTab === 'executions'
@@ -407,7 +417,10 @@ export function JobsPage() {
                                 />
                                 <span>Show top level only</span>
                             </label>
-                            <DisabledTooltip minRole={Role.Manager} message={runButtonMessage}>
+                            <DisabledTooltip
+                                disabled={runButtonDisabled && runButtonReasonKnown}
+                                message={runButtonMessage}
+                            >
                                 <Button
                                     variant="primary"
                                     size="sm"
@@ -438,6 +451,12 @@ export function JobsPage() {
                         )}
                         {(isSingleJob ? isLoadingLinkedJob : isLoadingJobs) ? (
                             loadingState
+                        ) : !isSingleJob && jobsError && jobs.length === 0 ? (
+                            <EmptyState
+                                icon={<WarningCircleIcon weight="duotone" />}
+                                title="Failed to load job history"
+                                onRetry={refetchJobs}
+                            />
                         ) : displayedJobs.length === 0 ? (
                             <EmptyState
                                 icon={<ClockCounterClockwiseIcon weight="duotone" />}
@@ -491,17 +510,25 @@ export function JobsPage() {
                         )}
 
                         {schedCrud.isLoading && loadingState}
-                        {!schedCrud.isLoading && totalSchedules === 0 && (
-                            <EmptyState
-                                icon={<CalendarBlankIcon weight="duotone" />}
-                                title="No schedule triggers"
-                                description={
-                                    canManageTriggers
-                                        ? 'Create a schedule to run a job automatically.'
-                                        : 'Schedule triggers will appear here when configured.'
-                                }
-                            />
-                        )}
+                        {!schedCrud.isLoading &&
+                            totalSchedules === 0 &&
+                            (schedCrud.error ? (
+                                <EmptyState
+                                    icon={<WarningCircleIcon weight="duotone" />}
+                                    title="Failed to load schedule triggers"
+                                    onRetry={schedCrud.refetch}
+                                />
+                            ) : (
+                                <EmptyState
+                                    icon={<CalendarBlankIcon weight="duotone" />}
+                                    title="No schedule triggers"
+                                    description={
+                                        canManageTriggers
+                                            ? 'Create a schedule to run a job automatically.'
+                                            : 'Schedule triggers will appear here when configured.'
+                                    }
+                                />
+                            ))}
                         <div className="jobs-page__list" role="list" aria-label="Schedule triggers">
                             <ScheduleTriggersTab
                                 crud={schedCrud}
@@ -529,17 +556,25 @@ export function JobsPage() {
                         )}
 
                         {eventCrud.isLoading && loadingState}
-                        {!eventCrud.isLoading && totalEvents === 0 && (
-                            <EmptyState
-                                icon={<LightningIcon weight="duotone" />}
-                                title="No event triggers"
-                                description={
-                                    canManageTriggers
-                                        ? 'Create an event trigger to run a job when events occur.'
-                                        : 'Event triggers will appear here when configured.'
-                                }
-                            />
-                        )}
+                        {!eventCrud.isLoading &&
+                            totalEvents === 0 &&
+                            (eventCrud.error ? (
+                                <EmptyState
+                                    icon={<WarningCircleIcon weight="duotone" />}
+                                    title="Failed to load event triggers"
+                                    onRetry={eventCrud.refetch}
+                                />
+                            ) : (
+                                <EmptyState
+                                    icon={<LightningIcon weight="duotone" />}
+                                    title="No event triggers"
+                                    description={
+                                        canManageTriggers
+                                            ? 'Create an event trigger to run a job when events occur.'
+                                            : 'Event triggers will appear here when configured.'
+                                    }
+                                />
+                            ))}
                         <div className="jobs-page__list" role="list" aria-label="Event triggers">
                             <EventTriggersTab
                                 crud={eventCrud}

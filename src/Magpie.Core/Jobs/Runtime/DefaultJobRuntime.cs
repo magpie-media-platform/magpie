@@ -144,7 +144,12 @@ internal sealed class DefaultJobRuntime(
             cancellationToken,
             _shutdownSignal.Cancellation.Token);
         var runningEntry = new RunningExecution(jobCts);
-        _running[executionId] = runningEntry;
+        if (!_running.TryAdd(executionId, runningEntry))
+        {
+            jobCts.Dispose();
+            return;
+        }
+
         _shutdownSignal.Outstanding[executionId] =
             new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -314,7 +319,6 @@ internal sealed class DefaultJobRuntime(
             }
             else if (runningEntry.LeaseLost)
             {
-                // Another node owns the execution now, so this run writes nothing for it.
                 const string reason = "Lost the execution lease to another node";
                 outcome = OutcomeFailed;
                 activity?.SetStatus(ActivityStatusCode.Error, reason);
@@ -599,7 +603,6 @@ internal sealed class DefaultJobRuntime(
             }
             catch (Exception ex)
             {
-                // A failed write says nothing about ownership, so the job keeps running.
                 _logger.LogWarning(
                     ex,
                     "The runtime failed to update heartbeat for execution {ExecutionId}",

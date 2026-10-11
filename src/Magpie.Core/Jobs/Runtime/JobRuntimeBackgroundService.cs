@@ -612,6 +612,7 @@ internal sealed class JobRuntimeBackgroundService(
     {
         logger.LogDebug("The stale job execution cleanup started");
 
+        var firstSleep = jobRuntimeOptions.RunningStaleCutoff;
         while (!stoppingToken.IsCancellationRequested)
         {
             try
@@ -631,7 +632,8 @@ internal sealed class JobRuntimeBackgroundService(
                 jobRuntimeOptions.ClusteredStaleJobCleanupInterval < jobRuntimeOptions.StaleJobCleanupInterval
                 ? jobRuntimeOptions.ClusteredStaleJobCleanupInterval
                 : jobRuntimeOptions.StaleJobCleanupInterval;
-            await SleepAsync(interval, stoppingToken).ConfigureAwait(false);
+            await SleepAsync(firstSleep < interval ? firstSleep : interval, stoppingToken).ConfigureAwait(false);
+            firstSleep = interval;
         }
     }
 

@@ -1,13 +1,15 @@
 import { useEffect } from 'react';
 
-const BASE_TITLE = 'Magpie';
+import { useInstanceName } from '@/hooks/useInstanceName';
 
 export function useDocumentTitle(title?: string): void {
+    const instanceName = useInstanceName();
+
     useEffect(() => {
-        document.title = title ? `${title} - ${BASE_TITLE}` : BASE_TITLE;
+        document.title = title ? `${title} - ${instanceName}` : instanceName;
 
         return () => {
-            document.title = BASE_TITLE;
+            document.title = instanceName;
         };
-    }, [title]);
+    }, [title, instanceName]);
 }

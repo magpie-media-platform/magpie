@@ -1,6 +1,6 @@
 import { render, screen, within, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { afterEach, describe, expect, it, vi, beforeEach } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
@@ -168,6 +168,10 @@ function dataRows() {
 
 beforeEach(() => {
     vi.clearAllMocks();
+});
+
+afterEach(() => {
+    vi.unstubAllGlobals();
 });
 
 describe('IndexersPage structure', () => {
@@ -509,6 +513,7 @@ describe('Configured tab (mobile card collapse)', () => {
     });
 
     it('clears any selection made while exiting selection mode', async () => {
+        vi.stubGlobal('innerWidth', 390);
         const user = userEvent.setup();
         render(
             <TestWrapper>

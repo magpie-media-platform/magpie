@@ -1,9 +1,13 @@
-import { forwardRef, type ComponentPropsWithoutRef, type ReactNode } from 'react';
+import { forwardRef, useState, type ComponentPropsWithoutRef, type ReactNode } from 'react';
 import { SidebarSimpleIcon } from '@phosphor-icons/react';
+
+import { useFit } from '@/hooks/ui/useFit';
 
 import { Button } from '../Button';
 
 import './Header.css';
+
+const BRAND_FITS = ['full', 'nologo', 'small', 'wrap'];
 
 export interface HeaderProps extends ComponentPropsWithoutRef<'header'> {
     brand?: ReactNode;
@@ -40,11 +44,13 @@ const Header = forwardRef<HTMLElement, HeaderProps>(
         ref,
     ) => {
         const classes = ['header', className].filter(Boolean).join(' ');
+        const [start, setStart] = useState<HTMLElement | null>(null);
+        useFit(start, BRAND_FITS);
 
         return (
             <header ref={ref} className={classes} data-component="header" {...props}>
                 <div className="header__container">
-                    <div className="header__start">
+                    <div ref={setStart} className="header__start">
                         {onSidebarToggle && (
                             <Button
                                 variant="ghost"

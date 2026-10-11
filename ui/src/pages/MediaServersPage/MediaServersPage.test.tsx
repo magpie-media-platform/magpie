@@ -1,6 +1,6 @@
 import { render, screen, within, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { afterEach, describe, expect, it, vi, beforeEach } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
 import type { ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -149,6 +149,10 @@ describe('MediaServersPage', () => {
         vi.mocked(useMediaServers).mockReturnValue(createMockHookReturn());
     });
 
+    afterEach(() => {
+        vi.unstubAllGlobals();
+    });
+
     it('renders with correct data-page attribute', () => {
         render(<MediaServersPage />, { wrapper: createWrapper() });
 
@@ -162,6 +166,7 @@ describe('MediaServersPage', () => {
     });
 
     it('keeps the selection toggle on the list toolbar line', () => {
+        vi.stubGlobal('innerWidth', 390);
         render(<MediaServersPage />, { wrapper: createWrapper() });
 
         const toggle = screen.getByRole('button', { name: 'Select', pressed: false });

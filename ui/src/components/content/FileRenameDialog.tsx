@@ -133,7 +133,7 @@ export function FileRenameDialog({
                     <DialogDescription>
                         {filePath
                             ? 'Association links the existing file. Renaming is a separate optional operation.'
-                            : 'Review descendant files. Content folders are not renamed. Valid files can proceed when other files fail.'}
+                            : 'Content folders are not renamed. Valid files can proceed when other files fail.'}
                     </DialogDescription>
                 </DialogHeader>
                 <DialogBody>

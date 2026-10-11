@@ -93,7 +93,7 @@ public record Extension
     public string? PackageRepository { get; set; }
 
     /// <summary>
-    /// Whether the extension upgrades automatically.
+    /// The stored automatic-upgrade flag, which Magpie does not use.
     /// </summary>
     public bool AutoUpgrade { get; set; }
 

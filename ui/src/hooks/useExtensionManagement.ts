@@ -1,7 +1,7 @@
 import type { ScalarPatch } from '@/types/patch';
 import { EXTENSION_CATALOG_EVENTS } from '@/lib/extensionCatalogEvents';
 import { useMemo } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 
 import { apiFetchResponse, apiGet, apiPatch, apiPost } from '@/lib/api';
 import { POLLING_INTERVALS } from '@/lib/queryClient';
@@ -76,8 +76,6 @@ export interface ExtensionItem {
 
     targetABI?: string | null;
 
-    autoUpgrade: boolean;
-
     filePath: string;
 
     loadOrder: number;
@@ -96,6 +94,7 @@ export interface ExtensionItem {
 const extensionQueryKeys = {
     all: ['extensions'] as const,
     list: () => ['extensions', 'list'] as const,
+    search: (query: string) => ['extensions', 'search', query] as const,
 };
 
 function transformExtension(ext: ApiExtension): ExtensionItem {
@@ -107,7 +106,6 @@ function transformExtension(ext: ApiExtension): ExtensionItem {
         enabled: ext.enabled,
         managed: ext.managed,
         nuGetId: ext.nuGetId,
-        autoUpgrade: ext.autoUpgrade,
         filePath: ext.filePath,
         loadOrder: ext.loadOrder,
         packageRepository: ext.packageRepository,
@@ -150,7 +148,6 @@ async function disableExtension(id: string): Promise<ApiExtension> {
 }
 
 interface ExtensionPatch {
-    autoUpgrade?: ScalarPatch<boolean>;
     nuGetId?: ScalarPatch<string | null>;
     packageRepository?: ScalarPatch<string | null>;
     loadOrder?: ScalarPatch<number>;
@@ -214,13 +211,6 @@ export function useExtensionManagement() {
         },
     });
 
-    const patchMutation = useMutation({
-        mutationFn: ({ id, patch }: { id: string; patch: ExtensionPatch }) => patchExtension(id, patch),
-        onSuccess: () => {
-            void queryClient.invalidateQueries({ queryKey: extensionQueryKeys.list() });
-        },
-    });
-
     const reorderMutation = useMutation({
         mutationFn: persistExtensionOrder,
         onSettled: () => {
@@ -242,10 +232,6 @@ export function useExtensionManagement() {
         } else {
             return disableMutation.mutateAsync(id);
         }
-    };
-
-    const setAutoUpgrade = async (id: string, autoUpgrade: boolean): Promise<void> => {
-        return patchMutation.mutateAsync({ id, patch: { autoUpgrade: { value: autoUpgrade } } });
     };
 
     const reorderExtensions = async (orderedIds: string[]): Promise<void> => {
@@ -291,8 +277,6 @@ export function useExtensionManagement() {
 
         toggleEnabled,
         isToggling: enableMutation.isPending || disableMutation.isPending,
-        setAutoUpgrade,
-        isPatching: patchMutation.isPending,
         reorderExtensions,
         isMoving: reorderMutation.isPending,
 
@@ -317,8 +301,11 @@ export function useExtension(id: string | undefined) {
         return match ? transformExtension(match) : null;
     }, [id, listQuery.data]);
 
+    const updateInfo = listQuery.data?.updateInfo.find((info) => info.extensionId === id) ?? null;
+
     return {
         extension,
+        updateInfo,
         isLoading: listQuery.isLoading,
         error: queryErrorOrNull(listQuery),
         refetch: listQuery.refetch,
@@ -354,6 +341,25 @@ export function useExtensionVersions(extensionPackageId: string | undefined) {
     }, [extensionPackageId, extensionsQuery.data]);
 
     return { versions, isLoading: extensionsQuery.isLoading };
+}
+
+export interface ExtensionSearchResult {
+    id: string;
+
+    version: string;
+
+    title?: string | null;
+
+    description?: string | null;
+}
+
+export function useExtensionSearch(query: string, enabled: boolean) {
+    return useQuery({
+        queryKey: extensionQueryKeys.search(query),
+        queryFn: () => apiGet<ExtensionSearchResult[]>(`/extensions/search?q=${encodeURIComponent(query)}`),
+        enabled,
+        placeholderData: keepPreviousData,
+    });
 }
 
 interface InstallExtensionInput {
@@ -441,13 +447,6 @@ export function useExtensionActions() {
         },
     });
 
-    const patchMutation = useMutation({
-        mutationFn: ({ id, patch }: { id: string; patch: ExtensionPatch }) => patchExtension(id, patch),
-        onSuccess: () => {
-            void queryClient.invalidateQueries({ queryKey: extensionQueryKeys.list() });
-        },
-    });
-
     const installExtension = async (input: InstallExtensionInput): Promise<InstallExtensionResult> => {
         const response = await installMutation.mutateAsync(input);
         if (response.restartRequired) {
@@ -495,8 +494,5 @@ export function useExtensionActions() {
         checkUpdates: checkUpdatesMutation.mutateAsync,
         isCheckingUpdates: checkUpdatesMutation.isPending,
         latestUpdateInfo: checkUpdatesMutation.data ?? null,
-
-        patchExtension: (id: string, patch: ExtensionPatch) => patchMutation.mutateAsync({ id, patch }),
-        isPatching: patchMutation.isPending,
     };
 }

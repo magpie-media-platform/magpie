@@ -50,6 +50,7 @@ public sealed class MetadataSearchServiceTests
             Title = "Fight Club",
             Overview = "A ticking-time-bomb insomniac.",
             PublishDate = new DateTime(1999, 10, 15, 0, 0, 0, DateTimeKind.Utc),
+            PublishDatePrecision = TemporalPrecision.Day,
             Duration = TimeSpan.FromMinutes(139),
             Language = "en",
         };
@@ -3156,6 +3157,7 @@ public sealed class MetadataSearchServiceTests
             Assert.That(preview.Overview, Is.EqualTo("A ticking-time-bomb insomniac."));
             Assert.That(preview.Year, Is.EqualTo(1999));
             Assert.That(preview.ReleaseDate, Is.Not.Null);
+            Assert.That(preview.ReleaseDatePrecision, Is.EqualTo(TemporalPrecision.Day));
             Assert.That(preview.Duration, Is.EqualTo(TimeSpan.FromMinutes(139)));
             Assert.That(preview.Language, Is.EqualTo("en"));
 

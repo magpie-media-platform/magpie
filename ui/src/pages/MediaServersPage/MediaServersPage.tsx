@@ -592,11 +592,7 @@ export function MediaServersPage() {
         <EmptyState
             icon={<WarningCircleIcon weight="duotone" />}
             title="Failed to load media servers"
-            action={
-                <Button variant="secondary" size="sm" onClick={() => refetch()}>
-                    Retry
-                </Button>
-            }
+            onRetry={refetch}
         />
     );
 

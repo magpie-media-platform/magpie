@@ -23,7 +23,6 @@ internal sealed class ApiGeneratedCommand : Command
     private readonly Option<string>? _jsonOption;
     private readonly Option<string>? _dataOption;
     private readonly Option<string>? _fileOption;
-    private readonly Option<string>? _blobOutputOption;
     private readonly CommandTransportOptionSet _transportOptions;
     private readonly Func<CancellationToken, Task<WebApplication>> _localAppFactory;
 
@@ -51,15 +50,6 @@ internal sealed class ApiGeneratedCommand : Command
         {
             _fileOption = new("--file") { Description = "File to upload.", Required = true };
             Options.Add(_fileOption);
-        }
-
-        if (entry.BlobResult)
-        {
-            _blobOutputOption = new("--output", "-o")
-            {
-                Description = "File path to write the result to; defaults to the server-suggested file name."
-            };
-            Options.Add(_blobOutputOption);
         }
 
         _transportOptions.AddTo(this);
@@ -94,8 +84,6 @@ internal sealed class ApiGeneratedCommand : Command
             return await httpRequest.ExecuteAsync(
                 _transportOptions.Bind(parseResult),
                 _localAppFactory,
-                _blobOutputOption is not null,
-                _blobOutputOption is null ? null : parseResult.GetValue(_blobOutputOption),
                 output,
                 error,
                 cancellationToken).ConfigureAwait(false);

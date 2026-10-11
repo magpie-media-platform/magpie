@@ -74,15 +74,17 @@ export function useLibraryContent({
     const {
         data: contentResult,
         isLoading,
+        isPlaceholderData,
         error,
         refetch,
     } = useContentList(queryParams, {
         enabled: contentListEnabled && !isRestoringFilter,
+        keepPreviousData: true,
     });
 
     const pageRowIds = useMemo(
-        () => (isRestoringFilter ? [] : (contentResult?.items ?? []).map((item) => item.id)),
-        [contentResult?.items, isRestoringFilter],
+        () => (isRestoringFilter || isPlaceholderData ? [] : (contentResult?.items ?? []).map((item) => item.id)),
+        [contentResult?.items, isRestoringFilter, isPlaceholderData],
     );
     const totalItems = isRestoringFilter ? 0 : (contentResult?.totalItems ?? 0);
     const contentItems: ContentListItem[] = isRestoringFilter ? [] : (contentResult?.items ?? []);
@@ -111,6 +113,7 @@ export function useLibraryContent({
         pageRowIds,
         bulkFilter,
         isLoading,
+        isPlaceholderData,
         error,
         refetch,
         handleRefresh,

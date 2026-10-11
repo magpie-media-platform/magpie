@@ -124,9 +124,10 @@ public static class MagpieSeedingExtensions
         IReadOnlyList<EventTrigger> eventTriggers,
         CancellationToken cancellationToken)
     {
-        if (!await context.Set<User>()
+        var firstSeed = !await context.Set<User>()
             .AnyAsync(user => user.Id == SystemUserId, cancellationToken)
-            .ConfigureAwait(false))
+            .ConfigureAwait(false);
+        if (firstSeed)
         {
             context.Set<User>().Add(new()
             {
@@ -145,6 +146,24 @@ public static class MagpieSeedingExtensions
         {
             context.Set<ScheduleTrigger>().AddRange(scheduleTriggers);
         }
+
+        await context.Set<ScheduleTrigger>()
+            .Where(trigger => trigger.JobType == "PruneOrphanedSubjects")
+            .ExecuteUpdateAsync(
+                setters => setters
+                    .SetProperty(trigger => trigger.JobType, "SubjectMaintenance")
+                    .SetProperty(
+                        trigger => trigger.Name,
+                        trigger => trigger.Name == "Orphaned subject pruning schedule"
+                            ? "Subject maintenance schedule"
+                            : trigger.Name),
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        await context.Set<DiagnosticFinding>()
+            .Where(finding => finding.DiagnosticCheckId == "core.content.duplicate-subject")
+            .ExecuteDeleteAsync(cancellationToken)
+            .ConfigureAwait(false);
 
         if (!await context.Set<EventTrigger>().AnyAsync(cancellationToken).ConfigureAwait(false))
         {
@@ -243,7 +262,10 @@ public static class MagpieSeedingExtensions
             context.Set<ExtensionActivationState>().Add(new() { Id = 1, Generation = 0 });
         }
 
-        await SeedQualityTierCatalogAsync(context, cancellationToken).ConfigureAwait(false);
+        if (firstSeed)
+        {
+            await SeedQualityTierCatalogAsync(context, cancellationToken).ConfigureAwait(false);
+        }
 
         await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
     }
@@ -253,14 +275,6 @@ public static class MagpieSeedingExtensions
         CancellationToken cancellationToken)
     {
         var catalog = BuildQualityTierCatalog();
-        var catalogListIds = catalog.Select(list => list.Id).ToArray();
-        var existingListIds = await context.Set<QualityTierList>()
-            .Where(list => catalogListIds.Contains(list.Id))
-            .Select(list => list.Id)
-            .ToHashSetAsync(cancellationToken)
-            .ConfigureAwait(false);
-        existingListIds.UnionWith(context.Set<QualityTierList>().Local.Select(list => list.Id));
-
         var catalogTierIds = catalog
             .SelectMany(list => list.QualityTierRanks)
             .Select(rank => rank.QualityTierId)
@@ -277,11 +291,7 @@ public static class MagpieSeedingExtensions
         {
             var ranks = list.QualityTierRanks.ToArray();
             list.QualityTierRanks.Clear();
-            var insertList = existingListIds.Add(list.Id);
-            if (insertList)
-            {
-                context.Set<QualityTierList>().Add(list);
-            }
+            context.Set<QualityTierList>().Add(list);
 
             foreach (var rank in ranks)
             {
@@ -289,19 +299,11 @@ public static class MagpieSeedingExtensions
                 var tier = rank.QualityTier ??
                     throw new InvalidOperationException("The quality tier catalog rank has no quality tier.");
                 rank.QualityTier = null;
-                if (!insertList)
+                if (existingTierIds.Add(tier.Id))
                 {
-                    continue;
+                    context.Set<QualityTier>().Add(tier);
                 }
 
-                if (!existingTierIds.Add(tier.Id))
-                {
-                    tier.Id = Guid.NewGuid();
-                    rank.QualityTierId = tier.Id;
-                    existingTierIds.Add(tier.Id);
-                }
-
-                context.Set<QualityTier>().Add(tier);
                 context.Set<QualityTierListRank>().Add(rank);
             }
         }

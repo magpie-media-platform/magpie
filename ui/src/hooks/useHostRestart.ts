@@ -4,6 +4,7 @@ import { useQueryClient } from '@tanstack/react-query';
 
 import { useEventStream } from '@/hooks/useEventStream';
 import { useSystemInfo } from '@/hooks/useSystemStatus';
+import { useInstanceName } from '@/hooks/useInstanceName';
 import { apiGet, apiPost, isApiError } from '@/lib/api';
 
 interface ApiHealthResponse {
@@ -56,6 +57,7 @@ async function probeRestartedHost(baselineStartedAt: string | null): Promise<Hos
 }
 
 export function useHostRestart() {
+    const instanceName = useInstanceName();
     const navigate = useNavigate();
     const queryClient = useQueryClient();
 
@@ -76,17 +78,17 @@ export function useHostRestart() {
             }
 
             if (outcome === 'failed') {
-                setError('Magpie could not start. Check the host log for the cause.');
+                setError(`${instanceName} could not start. Check the host log for the cause.`);
                 setPhase('error');
                 return;
             }
 
             if (Date.now() > reconnectDeadline.current) {
-                setError('Magpie did not come back online. Read the host log.');
+                setError(`${instanceName} did not come back online. Read the host log.`);
                 setPhase('error');
             }
         });
-    }, []);
+    }, [instanceName]);
 
     useEventStream(checkRecovered, {
         eventName: 'stream.reconnected',

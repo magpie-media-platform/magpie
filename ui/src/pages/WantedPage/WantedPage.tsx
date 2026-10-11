@@ -5,7 +5,7 @@ import { MagnifyingGlassIcon, TargetIcon, WarningCircleIcon } from '@phosphor-ic
 import { useQuery } from '@tanstack/react-query';
 import { type ColumnDef, type SortingState } from '@tanstack/react-table';
 
-import { ContentPoster } from '@/components/content/ContentCardPrimitives';
+import { ContentFulfillmentBadge, ContentPoster } from '@/components/content/ContentCardPrimitives';
 import { ContentLineageTitle } from '@/components/content/ContentLineageTitle';
 import { AcquisitionBadge } from '@/components/ui/AcquisitionBadge';
 import { Alert } from '@/components/ui/Alert';
@@ -48,9 +48,8 @@ import { resolveContentTypeLabel } from '@/lib/contentTypeDisplay';
 import { escapeQueryString } from '@/lib/simpleFilterQuery';
 import { formatPublishDate } from '@/lib/dateFormatting';
 import { formatRelativeTime } from '@/lib/formatTime';
-import { getFulfillmentBadge } from '@/types/content';
 import type { TemporalPrecision } from '@/types/contentMetadata';
-import type { ContentListItem, FulfillmentStatus } from '@/types';
+import type { ContentListItem } from '@/types';
 
 import { countMissingDescendants, resolveWantedSearchLeaves } from './wantedSearch';
 
@@ -130,12 +129,13 @@ function TypeCell({ item, contentTypes }: { item: ContentListItem; contentTypes:
     );
 }
 
-function FulfillmentCell({ fulfillment }: { fulfillment: FulfillmentStatus }) {
-    const badge = getFulfillmentBadge(fulfillment);
+function FulfillmentCell({ item }: { item: ContentListItem }) {
     return (
-        <Badge variant={badge.variant} size="sm" dot>
-            {badge.label}
-        </Badge>
+        <ContentFulfillmentBadge
+            fulfillment={item.fulfillment}
+            publishDate={item.publishDate}
+            publishDatePrecision={item.publishDatePrecision}
+        />
     );
 }
 
@@ -417,7 +417,7 @@ export function WantedPage() {
         setMobileSelectionMode(false);
     }, [clearSelection]);
 
-    const handleSearchNow = useCallback(
+    const handleSearchReleases = useCallback(
         async (targets: ContentListItem[]) => {
             if (targets.length === 0 || isSearching) {
                 return;
@@ -519,7 +519,6 @@ export function WantedPage() {
                 id: 'title',
                 accessorKey: 'title',
                 header: 'Title',
-                size: 300,
                 cell: ({ row }) => (
                     <TitleCell
                         item={row.original}
@@ -554,8 +553,8 @@ export function WantedPage() {
                 id: 'fulfillment',
                 accessorKey: 'fulfillment',
                 header: 'Status',
-                size: 120,
-                cell: ({ row }) => <FulfillmentCell fulfillment={row.original.fulfillment} />,
+                size: 136,
+                cell: ({ row }) => <FulfillmentCell item={row.original} />,
             },
             {
                 id: 'publishDate',
@@ -584,7 +583,7 @@ export function WantedPage() {
                 id: 'action',
                 header: '',
                 enableSorting: false,
-                size: 150,
+                size: 164,
                 cell: ({ row }) => {
                     const item = row.original;
                     const container = isContainer(item);
@@ -603,20 +602,20 @@ export function WantedPage() {
                             size="sm"
                             onClick={(event) => {
                                 event.stopPropagation();
-                                void handleSearchNow([item]);
+                                void handleSearchReleases([item]);
                             }}
                             loading={isSearching}
                             disabled={isSearching}
                             aria-label={
                                 container
-                                    ? `Search now for descendants of ${item.title}`
-                                    : `Search now for ${item.title}`
+                                    ? `Search releases for descendants of ${item.title}`
+                                    : `Search releases for ${item.title}`
                             }
-                            data-action="search-now"
+                            data-action="search-releases"
                             data-content-id={item.id}
                         >
                             <MagnifyingGlassIcon weight="bold" aria-hidden="true" />
-                            Search Now
+                            Search releases
                         </Button>
                     );
                     const action = (
@@ -639,7 +638,7 @@ export function WantedPage() {
         canSearch,
         contentTypes,
         destinationFor,
-        handleSearchNow,
+        handleSearchReleases,
         isContainer,
         isSearching,
         parentId,
@@ -707,7 +706,7 @@ export function WantedPage() {
                 title={
                     parentId && ancestors.length > 0 ? `Wanted in ${ancestors[ancestors.length - 1].title}` : 'Wanted'
                 }
-                description="Monitored content to be acquired."
+                description="Monitored content that is missing or incomplete."
                 icon={<TargetIcon weight="duotone" aria-hidden="true" data-testid="wanted-page__icon" />}
             />
 
@@ -738,13 +737,13 @@ export function WantedPage() {
                     <Button
                         variant="secondary"
                         size="sm"
-                        onClick={() => void handleSearchNow(selectedItems)}
+                        onClick={() => void handleSearchReleases(selectedItems)}
                         loading={isSearching}
                         disabled={isSearching}
-                        data-action="bulk-search-now"
+                        data-action="bulk-search-releases"
                     >
                         <MagnifyingGlassIcon weight="bold" aria-hidden="true" />
-                        Search Now
+                        Search releases
                     </Button>
                 </BulkActionsToolbar>
             )}
@@ -759,11 +758,7 @@ export function WantedPage() {
                 <EmptyState
                     icon={<WarningCircleIcon weight="duotone" />}
                     title="Failed to load wanted content"
-                    action={
-                        <Button variant="secondary" size="sm" onClick={() => void refetch()}>
-                            Retry
-                        </Button>
-                    }
+                    onRetry={refetch}
                     size="sm"
                 />
             ) : (
@@ -854,7 +849,7 @@ export function WantedPage() {
                                                 onToggleSelected={() => toggleMobileSelection(item)}
                                                 selectionLabel={`Select ${item.title}`}
                                             >
-                                                <FulfillmentCell fulfillment={item.fulfillment} />
+                                                <FulfillmentCell item={item} />
                                                 <TypeCell item={item} contentTypes={contentTypes} />
                                             </MobileMediaCard>
                                         ) : (
@@ -890,29 +885,29 @@ export function WantedPage() {
                                                                     size="sm"
                                                                     onClick={(event) => {
                                                                         event.stopPropagation();
-                                                                        void handleSearchNow([item]);
+                                                                        void handleSearchReleases([item]);
                                                                     }}
                                                                     loading={isSearching}
                                                                     disabled={isSearching}
                                                                     aria-label={
                                                                         container
-                                                                            ? `Search now for descendants of ${item.title}`
-                                                                            : `Search now for ${item.title}`
+                                                                            ? `Search releases for descendants of ${item.title}`
+                                                                            : `Search releases for ${item.title}`
                                                                     }
-                                                                    data-action="search-now"
+                                                                    data-action="search-releases"
                                                                     data-content-id={item.id}
                                                                 >
                                                                     <MagnifyingGlassIcon
                                                                         weight="bold"
                                                                         aria-hidden="true"
                                                                     />
-                                                                    Search Now
+                                                                    Search releases
                                                                 </Button>
                                                             </DescendantSearchGate>
                                                         ) : undefined
                                                     }
                                                 >
-                                                    <FulfillmentCell fulfillment={item.fulfillment} />
+                                                    <FulfillmentCell item={item} />
                                                     {item.acquisitionStatus && (
                                                         <AcquisitionBadge status={item.acquisitionStatus} />
                                                     )}
@@ -963,13 +958,13 @@ export function WantedPage() {
                     <Button
                         variant="secondary"
                         size="sm"
-                        onClick={() => void handleSearchNow(selectedItems)}
+                        onClick={() => void handleSearchReleases(selectedItems)}
                         loading={isSearching}
                         disabled={isSearching || !selection.hasSelection}
-                        data-action="bulk-search-now"
+                        data-action="bulk-search-releases"
                     >
                         <MagnifyingGlassIcon weight="bold" aria-hidden="true" />
-                        Search Now
+                        Search releases
                     </Button>
                 </MobileSelectionBar>
             )}

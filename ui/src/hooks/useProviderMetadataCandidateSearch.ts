@@ -2,6 +2,7 @@ import { useMutation } from '@tanstack/react-query';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { apiGet, buildUrl } from '@/lib/api';
+import type { TemporalPrecision } from '@/types/contentMetadata';
 
 export interface ProviderMetadataCandidate {
     providerType: string;
@@ -19,6 +20,8 @@ export interface ProviderMetadataCandidate {
     year?: number | null;
 
     releaseDate?: string | null;
+
+    releaseDatePrecision?: TemporalPrecision | null;
 
     overview?: string | null;
 
@@ -243,7 +246,6 @@ export function useProviderMetadataCandidateSearch() {
         const requestRef = activeRequest;
         return () => {
             mounted.current = false;
-            // Wait for an effect replay before treating cleanup as a real unmount.
             queueMicrotask(() => {
                 if (epochRef.current !== epoch) return;
                 generationRef.current++;

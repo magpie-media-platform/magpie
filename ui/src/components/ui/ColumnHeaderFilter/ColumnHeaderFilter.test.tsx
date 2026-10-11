@@ -97,7 +97,36 @@ describe('ColumnHeaderFilter', () => {
 
         // Assert
         expect(onChange).toHaveBeenCalledTimes(1);
-        expect(onChange).toHaveBeenCalledWith({ from: '2020-01-01', to: '' });
+        expect(onChange).toHaveBeenCalledWith({ preset: '', from: '2020-01-01', to: '' });
+    });
+
+    it('DateRange_CommitsTheDates_WhenBetweenDatesIsChosenAfterAPreset', async () => {
+        // Arrange
+        const user = userEvent.setup();
+        const onChange = vi.fn();
+        render(
+            <ColumnHeaderFilter
+                type="dateRange"
+                label="Time"
+                active
+                preset="7d"
+                presets={[{ value: '7d', label: 'Last 7 days' }]}
+                from=""
+                to=""
+                onChange={onChange}
+            />,
+        );
+        await user.click(screen.getByRole('button', { name: 'Time filtered, edit filter' }));
+
+        // Act
+        await user.click(screen.getByRole('menuitemradio', { name: 'Between dates' }));
+        await user.type(screen.getByLabelText('Time from'), '2026-09-01');
+        await user.type(screen.getByLabelText('Time to'), '2026-09-30');
+        await user.click(screen.getByRole('button', { name: 'Apply' }));
+
+        // Assert
+        expect(onChange).toHaveBeenCalledTimes(1);
+        expect(onChange).toHaveBeenCalledWith({ preset: 'between', from: '2026-09-01', to: '2026-09-30' });
     });
 
     it('NumberRange_CommitsFractionalMinimum_WhenAppliedFromHeader', async () => {

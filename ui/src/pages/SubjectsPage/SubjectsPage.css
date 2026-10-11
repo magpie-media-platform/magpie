@@ -56,6 +56,10 @@
         gap: var(--space-sm);
     }
 
+    .subjects-page__mobile-list .mobile-media-card__poster[data-artwork='uncropped'] {
+        object-fit: contain;
+    }
+
     .subjects-page__mobile-toolbar {
         display: flex;
     }

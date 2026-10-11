@@ -204,6 +204,7 @@ const mockCreateFilterMutateAsync = vi.fn();
 const mockParseMagpieQl = vi.fn();
 const mockBulkPatchContent = vi.fn();
 const mockBulkDeleteContent = vi.fn();
+const mockUseBulkDeletePreview = vi.fn();
 
 vi.mock('@/hooks/useFilters', async (importOriginal) => {
     const actual = await importOriginal<typeof import('@/hooks/useFilters')>();
@@ -251,6 +252,7 @@ vi.mock('@/hooks/useContent', () => ({
         isPending: false,
         error: null,
     }),
+    useBulkDeletePreview: (request: unknown) => mockUseBulkDeletePreview(request),
 }));
 
 const mockUseRootFolders = vi.fn();
@@ -338,6 +340,7 @@ describe('LibraryPage', () => {
 
         mockBulkPatchContent.mockResolvedValue({ count: 1, error: null });
         mockBulkDeleteContent.mockResolvedValue({ count: 0, error: null });
+        mockUseBulkDeletePreview.mockReturnValue({ data: undefined, error: null, isLoading: false, isError: false });
         mockUseRootFolders.mockReturnValue({
             folders: [{ id: 'root-1', name: 'Movies', path: '/media/movies', contentType: 'movies' }],
         });
@@ -425,6 +428,50 @@ describe('LibraryPage', () => {
         renderLibraryPage();
 
         expect(screen.getByTestId('library-page__loading')).toBeInTheDocument();
+    });
+
+    it('Table_StaysMountedAndBusy_WhenTheTypeFilterChangesWhilePreviousRowsShow', async () => {
+        // Arrange
+        const user = userEvent.setup();
+        mockUseContentList.mockImplementation((params: { filter?: string }) => ({
+            data: defaultContentListResult,
+            isLoading: false,
+            isPlaceholderData: params.filter !== undefined,
+            error: null,
+        }));
+        renderLibraryPage();
+        const typeTrigger = findColumnFilterTrigger('type')!;
+
+        // Act
+        await user.click(typeTrigger);
+        await user.click(await screen.findByRole('menuitemradio', { name: 'Movies' }));
+
+        // Assert
+        await waitFor(() => {
+            expect(screen.getByRole('region', { name: 'Content list' })).toHaveAttribute('aria-busy', 'true');
+        });
+        expect(typeTrigger).toBeInTheDocument();
+        expect(screen.queryByTestId('library-page__loading')).not.toBeInTheDocument();
+    });
+
+    it.each([
+        { name: 'Pagination_KeepsPageFour_WhenPreviousRowsShow', isPlaceholderData: true, pageNumber: 4 },
+        { name: 'Pagination_ClampsToPageOne_WhenTheResultHasOnePage', isPlaceholderData: false, pageNumber: 1 },
+    ])('$name', async ({ isPlaceholderData, pageNumber }) => {
+        // Arrange
+        mockUseContentList.mockReturnValue({
+            data: defaultContentListResult,
+            isLoading: false,
+            isPlaceholderData,
+            error: null,
+        });
+
+        // Act
+        renderLibraryPage(Role.Admin, ['/?page=4']);
+        await act(async () => {});
+
+        // Assert
+        expect(mockUseContentList).toHaveBeenLastCalledWith(expect.objectContaining({ pageNumber }));
     });
 
     it('shows error state when fetch fails', () => {
@@ -672,7 +719,7 @@ describe('LibraryPage', () => {
             );
             expect(mockUseContentList).toHaveBeenLastCalledWith(
                 expect.not.objectContaining({ contentType: 'not-a-type' }),
-                { enabled: false },
+                { enabled: false, keepPreviousData: true },
             );
             expect(document.querySelector('a[href="/library/add?contentType=not-a-type"]')).not.toBeInTheDocument();
             expect(screen.queryByRole('link', { name: /add content/i })).not.toBeInTheDocument();
@@ -1283,6 +1330,57 @@ describe('LibraryPage', () => {
             await waitFor(() => {
                 expect(mockBulkDeleteContent).toHaveBeenCalledWith({ ids: ['content-1'], deleteFromLibrary: true });
             });
+        });
+
+        it('lists every file of the selection with its size and the total when the bulk delete toggle is on', async () => {
+            const user = userEvent.setup();
+            mockUseBulkDeletePreview.mockImplementation((request: unknown) => ({
+                data: request
+                    ? [
+                          { path: '/media/movies/Breaking Bad/s01e01.mkv', size: 3124000000 },
+                          { path: '/media/movies/Breaking Bad/s01e02.mkv', size: 1073741824 },
+                      ]
+                    : undefined,
+                error: null,
+                isLoading: false,
+                isError: false,
+            }));
+            renderLibraryPage();
+
+            await user.click(screen.getByLabelText('Select Breaking Bad'));
+            await user.click(await waitFor(() => document.querySelector('[data-action="bulk-delete"]') as HTMLElement));
+            const dialog = await screen.findByRole('dialog');
+            expect(within(dialog).queryByRole('list', { name: 'Files to delete' })).not.toBeInTheDocument();
+
+            await user.click(within(dialog).getByRole('switch', { name: 'Also delete files from disk' }));
+
+            const files = within(within(dialog).getByRole('list', { name: 'Files to delete' })).getAllByRole(
+                'listitem',
+            );
+            expect(files.map((file) => file.textContent)).toEqual([
+                '/media/movies/Breaking Bad/s01e01.mkv2.91 GB',
+                '/media/movies/Breaking Bad/s01e02.mkv1 GB',
+            ]);
+            expect(within(dialog).getByText('Total').parentElement).toHaveTextContent('Total3.91 GB');
+            expect(mockUseBulkDeletePreview).toHaveBeenLastCalledWith({
+                ids: ['content-1'],
+                deleteFromLibrary: true,
+            });
+        });
+
+        it('keeps Delete off until the bulk file list has loaded', async () => {
+            const user = userEvent.setup();
+            mockUseBulkDeletePreview.mockReturnValue({ data: undefined, error: null, isLoading: true, isError: false });
+            renderLibraryPage();
+
+            await user.click(screen.getByLabelText('Select Breaking Bad'));
+            await user.click(await waitFor(() => document.querySelector('[data-action="bulk-delete"]') as HTMLElement));
+            const dialog = await screen.findByRole('dialog');
+            expect(within(dialog).getByRole('button', { name: /^Delete$/ })).toBeEnabled();
+
+            await user.click(within(dialog).getByRole('switch', { name: 'Also delete files from disk' }));
+
+            expect(within(dialog).getByRole('button', { name: /^Delete$/ })).toBeDisabled();
         });
 
         it('assigns a root folder to the selection via the picker', async () => {
@@ -2806,6 +2904,161 @@ describe('LibraryPage', () => {
             expect(within(swtch).getAllByRole('tab')).toHaveLength(2);
             expect(within(swtch).getByRole('tab', { name: /gallery/i })).toHaveAttribute('aria-selected', 'true');
             expect(within(swtch).getByRole('tab', { name: /list/i })).toHaveAttribute('aria-selected', 'false');
+        });
+
+        it('does not show the alphabet rail in list view', () => {
+            // Act
+            renderLibraryPage();
+
+            // Assert
+            expect(screen.queryByRole('group', { name: 'Filter by first letter' })).not.toBeInTheDocument();
+        });
+
+        it('lists every letter in the gallery alphabet rail', () => {
+            // Arrange
+            localStorage.setItem('library-view', JSON.stringify('gallery'));
+
+            // Act
+            renderLibraryPage();
+
+            // Assert
+            const rail = screen.getByRole('group', { name: 'Filter by first letter' });
+            expect(
+                within(rail)
+                    .getAllByRole('button')
+                    .map((button) => button.textContent),
+            ).toEqual(Array.from('ABCDEFGHIJKLMNOPQRSTUVWXYZ'));
+            expect(within(rail).queryByRole('button', { pressed: true })).not.toBeInTheDocument();
+        });
+
+        it('applies a title startswith condition to the server query when a letter is chosen', async () => {
+            // Arrange
+            const user = userEvent.setup();
+            localStorage.setItem('library-view', JSON.stringify('gallery'));
+            renderLibraryPage(Role.Admin, ['/?filter=tag%20has%20%22Action%22']);
+
+            // Act
+            await user.click(screen.getByRole('button', { name: 'B' }));
+
+            // Assert
+            await waitFor(() => {
+                expect(mockUseContentList).toHaveBeenLastCalledWith(
+                    expect.objectContaining({ filter: 'tag has "Action" and title startswith "B"' }),
+                );
+            });
+            expect(screen.getByRole('button', { name: 'B' })).toHaveAttribute('aria-pressed', 'true');
+        });
+
+        it('changes the letter and keeps the unrelated conditions', async () => {
+            // Arrange
+            const user = userEvent.setup();
+            localStorage.setItem('library-view', JSON.stringify('gallery'));
+            renderLibraryPage(Role.Admin, ['/?filter=tag%20has%20%22Action%22%20and%20title%20startswith%20%22B%22']);
+
+            // Act
+            await user.click(screen.getByRole('button', { name: 'C' }));
+
+            // Assert
+            await waitFor(() => {
+                expect(mockUseContentList).toHaveBeenLastCalledWith(
+                    expect.objectContaining({ filter: 'tag has "Action" and title startswith "C"' }),
+                );
+            });
+            expect(screen.getByRole('button', { name: 'C' })).toHaveAttribute('aria-pressed', 'true');
+            expect(screen.getByRole('button', { name: 'B' })).toHaveAttribute('aria-pressed', 'false');
+        });
+
+        it('clears only the letter when the chosen letter is chosen again', async () => {
+            // Arrange
+            const user = userEvent.setup();
+            localStorage.setItem('library-view', JSON.stringify('gallery'));
+            renderLibraryPage(Role.Admin, ['/?filter=tag%20has%20%22Action%22%20and%20title%20startswith%20%22B%22']);
+
+            // Act
+            await user.click(screen.getByRole('button', { name: 'B' }));
+
+            // Assert
+            await waitFor(() => {
+                expect(mockUseContentList).toHaveBeenLastCalledWith(
+                    expect.objectContaining({ filter: 'tag has "Action"' }),
+                );
+            });
+            expect(screen.getByRole('button', { name: 'B' })).toHaveAttribute('aria-pressed', 'false');
+        });
+
+        it('keeps the filter bar collapsed and the simple filter available when a letter is chosen', async () => {
+            // Arrange
+            const user = userEvent.setup();
+            localStorage.setItem('library-view', JSON.stringify('gallery'));
+            vi.spyOn(window, 'matchMedia').mockImplementation(createMatchMedia(375));
+            renderLibraryPage();
+            const filterBar = document.querySelector('[data-component="filter-bar"]');
+
+            // Act
+            await user.click(screen.getByRole('button', { name: 'B' }));
+
+            // Assert
+            await waitFor(() => {
+                expect(mockUseContentList).toHaveBeenLastCalledWith(
+                    expect.objectContaining({ filter: 'title startswith "B"' }),
+                );
+            });
+            expect(filterBar).toHaveAttribute('data-expanded', 'false');
+            await user.click(document.querySelector('[data-action="toggle-filter"]')!);
+            expect(document.querySelector('[data-action="switch-to-advanced"]')).toBeInTheDocument();
+            expect(document.querySelector('[data-action="switch-to-simple"]')).not.toBeInTheDocument();
+        });
+
+        it('keeps the simple filter disabled for a title prefix in list view', () => {
+            // Arrange
+            vi.spyOn(window, 'matchMedia').mockImplementation(createMatchMedia(375));
+
+            // Act
+            renderLibraryPage(Role.Admin, ['/?filter=title%20startswith%20%22B%22']);
+
+            // Assert
+            expect(document.querySelector('[data-action="switch-to-simple"]')).toBeDisabled();
+            expect(document.querySelector('[data-action="switch-to-advanced"]')).not.toBeInTheDocument();
+        });
+
+        it('marks the letter of an equivalent prefix condition from the filter editor', () => {
+            // Arrange
+            localStorage.setItem('library-view', JSON.stringify('gallery'));
+
+            // Act
+            renderLibraryPage(Role.Admin, ['/?filter=title%20startswith%20%22b%22']);
+
+            // Assert
+            expect(screen.getByRole('button', { name: 'B' })).toHaveAttribute('aria-pressed', 'true');
+        });
+
+        it('marks no letter for a prefix that is longer than one letter', () => {
+            // Arrange
+            localStorage.setItem('library-view', JSON.stringify('gallery'));
+
+            // Act
+            renderLibraryPage(Role.Admin, ['/?filter=title%20startswith%20%22Br%22']);
+
+            // Assert
+            const rail = screen.getByRole('group', { name: 'Filter by first letter' });
+            expect(within(rail).queryByRole('button', { pressed: true })).not.toBeInTheDocument();
+        });
+
+        it('keeps the alphabet rail when no item matches the letter', () => {
+            // Arrange
+            localStorage.setItem('library-view', JSON.stringify('gallery'));
+            mockUseContentList.mockReturnValue({
+                data: { items: [], pageNumber: 1, pageSize: 100, totalItems: 0 },
+                isLoading: false,
+                error: null,
+            });
+
+            // Act
+            renderLibraryPage(Role.Admin, ['/?filter=title%20startswith%20%22Q%22']);
+
+            // Assert
+            expect(screen.getByText('No results found')).toBeInTheDocument();
+            expect(screen.getByRole('button', { name: 'Q' })).toHaveAttribute('aria-pressed', 'true');
         });
     });
 });

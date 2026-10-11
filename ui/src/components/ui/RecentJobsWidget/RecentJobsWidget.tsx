@@ -1,9 +1,8 @@
 import { forwardRef, memo, type HTMLAttributes, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
-import { ArrowCounterClockwiseIcon, TimerIcon, WarningCircleIcon } from '@phosphor-icons/react';
+import { TimerIcon } from '@phosphor-icons/react';
 
-import { Alert } from '@/components/ui/Alert';
-import { Button } from '@/components/ui/Button';
+import { LoadErrorAlert } from '@/components/ui/LoadErrorAlert';
 import { EmptyState } from '@/components/ui/EmptyState';
 
 import './RecentJobsWidget.css';
@@ -166,14 +165,7 @@ const RecentJobsWidgetBase = forwardRef<HTMLDivElement, RecentJobsWidgetProps>(
                             <SkeletonItem />
                         </>
                     ) : error ? (
-                        <Alert variant="error" icon={<WarningCircleIcon weight="duotone" />} title="Failed to load">
-                            {onRetry && (
-                                <Button variant="ghost" size="sm" onClick={onRetry}>
-                                    <ArrowCounterClockwiseIcon weight="bold" aria-hidden="true" />
-                                    Try again
-                                </Button>
-                            )}
-                        </Alert>
+                        <LoadErrorAlert onRetry={onRetry} />
                     ) : displayedJobs.length > 0 ? (
                         displayedJobs.map((job) => <JobItem key={job.id} job={job} url={getJobUrl?.(job)} />)
                     ) : (

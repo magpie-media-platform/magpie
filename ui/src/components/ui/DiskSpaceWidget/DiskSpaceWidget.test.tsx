@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -15,6 +15,7 @@ const mockFolders: DiskSpaceInfo[] = [
         usedBytes: 2.1 * TB,
         totalBytes: 4 * TB,
         freeBytes: 1.9 * TB,
+        contentBytes: 1.5 * TB,
     },
     {
         id: 'rf-2',
@@ -23,6 +24,7 @@ const mockFolders: DiskSpaceInfo[] = [
         usedBytes: 3.5 * TB,
         totalBytes: 4 * TB,
         freeBytes: 0.5 * TB,
+        contentBytes: 3 * TB,
     },
     {
         id: 'rf-3',
@@ -31,6 +33,7 @@ const mockFolders: DiskSpaceInfo[] = [
         usedBytes: 180 * GB,
         totalBytes: 500 * GB,
         freeBytes: 320 * GB,
+        contentBytes: 120 * GB,
     },
 ];
 
@@ -114,14 +117,30 @@ describe('DiskSpaceWidget loading state', () => {
         expect(screen.queryByText('TV Shows')).not.toBeInTheDocument();
     });
 
-    it('does not show summary when loading', () => {
-        render(<DiskSpaceWidget folders={mockFolders} loading />);
-        expect(screen.queryByText('Total Used')).not.toBeInTheDocument();
-    });
-
     it('does not show view all button when loading', () => {
         render(<DiskSpaceWidget folders={mockFolders} loading onViewAllClick={() => {}} />);
         expect(screen.queryByText('Manage root folders')).not.toBeInTheDocument();
+    });
+});
+
+describe('DiskSpaceWidget failed state', () => {
+    it('DiskSpaceWidget_ShowsTheFailedRequestStateAndRetries_WhenTheRequestFails', async () => {
+        // Arrange
+        const user = userEvent.setup();
+        const onRetry = vi.fn();
+        render(
+            <DiskSpaceWidget folders={[]} error={new Error('offline')} onRetry={onRetry} onViewAllClick={vi.fn()} />,
+        );
+
+        // Act
+        await user.click(screen.getByRole('button', { name: 'Try again' }));
+
+        // Assert
+        expect(screen.getByRole('alert')).toHaveTextContent('Failed to load');
+        expect(screen.getByText('- folders')).toBeInTheDocument();
+        expect(screen.queryByText('No root folders configured')).not.toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: 'Manage root folders' })).not.toBeInTheDocument();
+        expect(onRetry).toHaveBeenCalledTimes(1);
     });
 });
 
@@ -131,31 +150,33 @@ describe('DiskSpaceWidget empty state', () => {
         expect(screen.getByText('No root folders configured')).toBeInTheDocument();
     });
 
-    it('does not show summary when no folders', () => {
-        render(<DiskSpaceWidget folders={[]} />);
-        expect(screen.queryByText('Total Used')).not.toBeInTheDocument();
-    });
-
     it('does not show view all button when no folders', () => {
         render(<DiskSpaceWidget folders={[]} onViewAllClick={() => {}} />);
         expect(screen.queryByText('Manage root folders')).not.toBeInTheDocument();
     });
 });
 
-describe('DiskSpaceWidget summary', () => {
-    it('displays total used space', () => {
+describe('DiskSpaceWidget figures', () => {
+    it('shows the content size, free space and disk size of each folder', () => {
         render(<DiskSpaceWidget folders={mockFolders} />);
-        expect(screen.getByText('Total Used')).toBeInTheDocument();
+
+        const tv = within(screen.getByText('TV Shows').closest<HTMLElement>('[data-folder-id]')!);
+        expect(tv.getByText('1.50 TB content')).toBeInTheDocument();
+        expect(tv.getByText('1.90 TB free')).toBeInTheDocument();
+        expect(tv.getByText('4.00 TB total')).toBeInTheDocument();
+        const music = within(screen.getByText('Music').closest<HTMLElement>('[data-folder-id]')!);
+        expect(music.getByText('120.00 GB content')).toBeInTheDocument();
+        expect(music.getByText('320.00 GB free')).toBeInTheDocument();
+        expect(music.getByText('500.00 GB total')).toBeInTheDocument();
     });
 
-    it('displays total free space', () => {
+    it('shows no total across the folders', () => {
         render(<DiskSpaceWidget folders={mockFolders} />);
-        expect(screen.getByText('Total Free')).toBeInTheDocument();
-    });
 
-    it('displays total capacity', () => {
-        render(<DiskSpaceWidget folders={mockFolders} />);
-        expect(screen.getByText('Total Capacity')).toBeInTheDocument();
+        expect(screen.queryByText('Total Used')).not.toBeInTheDocument();
+        expect(screen.queryByText('Total Free')).not.toBeInTheDocument();
+        expect(screen.queryByText('Total Capacity')).not.toBeInTheDocument();
+        expect(document.querySelector('.disk-space-widget__summary')).not.toBeInTheDocument();
     });
 });
 
@@ -178,6 +199,7 @@ describe('DiskSpaceWidget usage percentage', () => {
             usedBytes: 60 * GB,
             totalBytes: 100 * GB,
             freeBytes: 40 * GB,
+            contentBytes: 0,
         };
         render(<DiskSpaceWidget folders={[folder]} />);
 
@@ -193,6 +215,7 @@ describe('DiskSpaceWidget usage percentage', () => {
             usedBytes: 75 * GB,
             totalBytes: 100 * GB,
             freeBytes: 25 * GB,
+            contentBytes: 0,
         };
         render(<DiskSpaceWidget folders={[folder]} />);
 
@@ -208,6 +231,7 @@ describe('DiskSpaceWidget usage percentage', () => {
             usedBytes: 90 * GB,
             totalBytes: 100 * GB,
             freeBytes: 10 * GB,
+            contentBytes: 0,
         };
         render(<DiskSpaceWidget folders={[folder]} />);
 
@@ -231,6 +255,7 @@ describe('DiskSpaceWidget progress bar', () => {
             usedBytes: 50 * GB,
             totalBytes: 100 * GB,
             freeBytes: 50 * GB,
+            contentBytes: 0,
         };
         render(<DiskSpaceWidget folders={[folder]} />);
 
@@ -246,6 +271,7 @@ describe('DiskSpaceWidget progress bar', () => {
             usedBytes: 50 * GB,
             totalBytes: 100 * GB,
             freeBytes: 50 * GB,
+            contentBytes: 0,
         };
         render(<DiskSpaceWidget folders={[folder]} />);
 
@@ -254,6 +280,98 @@ describe('DiskSpaceWidget progress bar', () => {
         expect(progressBar).toHaveAttribute('aria-valuemin', '0');
         expect(progressBar).toHaveAttribute('aria-valuemax', '100');
         expect(progressBar).toHaveAttribute('aria-label', '50% used');
+    });
+
+    it('ProgressBar_ShowsContentAndOtherUsedSpaceAsTwoParts_WhenTheContentIsPartOfTheUsedSpace', () => {
+        // Arrange
+        const folder: DiskSpaceInfo = {
+            id: 'tv',
+            name: 'TV',
+            path: '/mnt/share/tv',
+            usedBytes: 7 * TB - 224.58 * GB,
+            totalBytes: 7 * TB,
+            freeBytes: 224.58 * GB,
+            contentBytes: 4.86 * TB,
+        };
+
+        // Act
+        render(<DiskSpaceWidget folders={[folder]} />);
+
+        // Assert
+        const progressBar = screen.getByRole('progressbar', { name: '97% used' });
+        expect(progressBar.querySelector('.disk-space-widget__progress-content')).toHaveStyle({ width: '69%' });
+        expect(progressBar.querySelector('.disk-space-widget__progress-bar--critical')).toHaveStyle({ width: '28%' });
+        expect(screen.getByText('97%')).toHaveClass('disk-space-widget__usage-percent--critical');
+    });
+
+    it('ProgressBar_KeepsAThinContentPart_WhenTheContentShareIsVerySmall', () => {
+        // Arrange
+        const folder: DiskSpaceInfo = {
+            id: 'music',
+            name: 'Music',
+            path: '/mnt/share/music',
+            usedBytes: 7 * TB - 224.58 * GB,
+            totalBytes: 7 * TB,
+            freeBytes: 224.58 * GB,
+            contentBytes: 6.08 * GB,
+        };
+
+        // Act
+        render(<DiskSpaceWidget folders={[folder]} />);
+
+        // Assert
+        const progressBar = screen.getByRole('progressbar', { name: '97% used' });
+        expect(progressBar.querySelector('.disk-space-widget__progress-content')).toHaveStyle({ width: '1%' });
+        expect(progressBar.querySelector('.disk-space-widget__progress-bar--critical')).toHaveStyle({ width: '96%' });
+    });
+
+    it.each([
+        ['nearly all of the used space', 49.8],
+        ['more than the used space', 80],
+    ])('ProgressBar_FillsTheUsedShareWithContentOnly_WhenTheContentIs %s', (_, contentGigabytes) => {
+        // Arrange
+        const folder: DiskSpaceInfo = {
+            id: 'test',
+            name: 'Test',
+            path: '/test',
+            usedBytes: 50 * GB,
+            totalBytes: 100 * GB,
+            freeBytes: 50 * GB,
+            contentBytes: contentGigabytes * GB,
+        };
+
+        // Act
+        render(<DiskSpaceWidget folders={[folder]} />);
+
+        // Assert
+        const progressBar = screen.getByRole('progressbar', { name: '50% used' });
+        expect(progressBar.querySelector('.disk-space-widget__progress-content')).toHaveStyle({ width: '50%' });
+        expect(progressBar.querySelector('.disk-space-widget__progress-bar')).toBeNull();
+    });
+
+    it('ProgressBar_DescribesItselfWithTheContentAndTotalFigures_WhenTheDiskIsAvailable', () => {
+        // Arrange
+        const folder: DiskSpaceInfo = {
+            id: 'tv',
+            name: 'TV',
+            path: '/mnt/share/tv',
+            usedBytes: 7 * TB - 224.58 * GB,
+            totalBytes: 7 * TB,
+            freeBytes: 224.58 * GB,
+            contentBytes: 4.86 * TB,
+        };
+
+        // Act
+        render(<DiskSpaceWidget folders={[folder]} />);
+
+        // Assert
+        const progressBar = screen.getByRole('progressbar', { name: '97% used' });
+        expect(progressBar).toHaveAttribute('aria-valuenow', '97');
+        expect(progressBar).toHaveAccessibleDescription('4.86 TB content 7.00 TB total');
+        expect(screen.getByText('4.86 TB content').querySelector('.disk-space-widget__content-marker')).toHaveAttribute(
+            'aria-hidden',
+            'true',
+        );
     });
 });
 
@@ -377,36 +495,6 @@ describe('DiskSpaceWidget accessibility', () => {
     });
 });
 
-describe('DiskSpaceWidget compact mobile elements', () => {
-    it('renders compact summary with used / total format', () => {
-        render(<DiskSpaceWidget folders={mockFolders} />);
-
-        const compact = document.querySelector('.disk-space-widget__summary-compact');
-        expect(compact).toBeInTheDocument();
-    });
-
-    it('renders compact row details for each folder', () => {
-        render(<DiskSpaceWidget folders={mockFolders} />);
-
-        const compactRows = document.querySelectorAll('.disk-space-widget__row-compact');
-        expect(compactRows.length).toBe(3);
-    });
-
-    it('does not render compact summary when loading', () => {
-        render(<DiskSpaceWidget folders={mockFolders} loading />);
-
-        const compact = document.querySelector('.disk-space-widget__summary-compact');
-        expect(compact).not.toBeInTheDocument();
-    });
-
-    it('does not render compact summary when no folders', () => {
-        render(<DiskSpaceWidget folders={[]} />);
-
-        const compact = document.querySelector('.disk-space-widget__summary-compact');
-        expect(compact).not.toBeInTheDocument();
-    });
-});
-
 describe('DiskSpaceWidget unavailable state', () => {
     const unavailableFolder: DiskSpaceInfo = {
         id: 'rf-unavailable',
@@ -415,6 +503,7 @@ describe('DiskSpaceWidget unavailable state', () => {
         usedBytes: 0,
         totalBytes: 0,
         freeBytes: 0,
+        contentBytes: 2 * GB,
     };
 
     it('shows Unavailable instead of a usage percentage', () => {
@@ -434,11 +523,23 @@ describe('DiskSpaceWidget unavailable state', () => {
         expect(screen.queryByRole('progressbar')).not.toBeInTheDocument();
     });
 
-    it('does not render used, free, or total figures', () => {
+    it('does not render free or total figures', () => {
         render(<DiskSpaceWidget folders={[unavailableFolder]} />);
-        expect(screen.queryByText(/used$/)).not.toBeInTheDocument();
         expect(screen.queryByText(/free$/)).not.toBeInTheDocument();
         expect(screen.queryByText(/total$/)).not.toBeInTheDocument();
+    });
+
+    it('still shows the content size', () => {
+        render(<DiskSpaceWidget folders={[unavailableFolder]} />);
+        expect(screen.getByText('2.00 GB content')).toBeInTheDocument();
+    });
+
+    it('ContentFigure_ShowsNoMarker_WhenTheDiskIsUnavailable', () => {
+        // Act
+        render(<DiskSpaceWidget folders={[unavailableFolder]} />);
+
+        // Assert
+        expect(document.querySelector('.disk-space-widget__content-marker')).toBeNull();
     });
 
     it('still shows the folder path', () => {
@@ -456,10 +557,11 @@ describe('DiskSpaceWidget byte formatting', () => {
             usedBytes: 500,
             totalBytes: 1000,
             freeBytes: 500,
+            contentBytes: 500,
         };
         render(<DiskSpaceWidget folders={[folder]} />);
 
-        expect(screen.getByText('500 B used')).toBeInTheDocument();
+        expect(screen.getByText('500 B content')).toBeInTheDocument();
     });
 
     it('formats kilobytes correctly', () => {
@@ -470,10 +572,11 @@ describe('DiskSpaceWidget byte formatting', () => {
             usedBytes: 1024,
             totalBytes: 2048,
             freeBytes: 1024,
+            contentBytes: 1024,
         };
         render(<DiskSpaceWidget folders={[folder]} />);
 
-        expect(screen.getByText('1 KB used')).toBeInTheDocument();
+        expect(screen.getByText('1 KB content')).toBeInTheDocument();
     });
 
     it('formats megabytes correctly', () => {
@@ -484,10 +587,11 @@ describe('DiskSpaceWidget byte formatting', () => {
             usedBytes: 500 * 1024 * 1024,
             totalBytes: 1024 * 1024 * 1024,
             freeBytes: 524 * 1024 * 1024,
+            contentBytes: 500 * 1024 * 1024,
         };
         render(<DiskSpaceWidget folders={[folder]} />);
 
-        expect(screen.getByText('500.0 MB used')).toBeInTheDocument();
+        expect(screen.getByText('500.0 MB content')).toBeInTheDocument();
     });
 
     it('formats gigabytes correctly', () => {
@@ -498,10 +602,11 @@ describe('DiskSpaceWidget byte formatting', () => {
             usedBytes: 50 * GB,
             totalBytes: 100 * GB,
             freeBytes: 50 * GB,
+            contentBytes: 50 * GB,
         };
         render(<DiskSpaceWidget folders={[folder]} />);
 
-        expect(screen.getByText('50.00 GB used')).toBeInTheDocument();
+        expect(screen.getByText('50.00 GB content')).toBeInTheDocument();
     });
 
     it('formats terabytes correctly', () => {
@@ -512,10 +617,11 @@ describe('DiskSpaceWidget byte formatting', () => {
             usedBytes: 2 * TB,
             totalBytes: 4 * TB,
             freeBytes: 2 * TB,
+            contentBytes: 2 * TB,
         };
         render(<DiskSpaceWidget folders={[folder]} />);
 
-        expect(screen.getByText('2.00 TB used')).toBeInTheDocument();
+        expect(screen.getByText('2.00 TB content')).toBeInTheDocument();
     });
 
     it('clamps units index for values beyond petabytes', () => {
@@ -527,10 +633,11 @@ describe('DiskSpaceWidget byte formatting', () => {
             usedBytes: 2 * EB,
             totalBytes: 4 * EB,
             freeBytes: 2 * EB,
+            contentBytes: 2 * EB,
         };
         render(<DiskSpaceWidget folders={[folder]} />);
 
-        expect(screen.getByText('2048.00 PB used')).toBeInTheDocument();
+        expect(screen.getByText('2048.00 PB content')).toBeInTheDocument();
     });
 
     it('formats zero bytes correctly', () => {
@@ -541,9 +648,10 @@ describe('DiskSpaceWidget byte formatting', () => {
             usedBytes: 0,
             totalBytes: 100 * GB,
             freeBytes: 100 * GB,
+            contentBytes: 0,
         };
         render(<DiskSpaceWidget folders={[folder]} />);
 
-        expect(screen.getByText('0 B used')).toBeInTheDocument();
+        expect(screen.getByText('0 B content')).toBeInTheDocument();
     });
 });

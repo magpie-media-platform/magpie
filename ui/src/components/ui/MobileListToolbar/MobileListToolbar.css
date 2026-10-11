@@ -8,59 +8,36 @@
         min-height: var(--touch-target-min);
     }
 
-    /* The toggle has one width in both states, so it needs no reserved width, and it shares the toolbar line. */
     .mobile-list-toolbar > .mobile-select-toggle {
         flex: none;
         margin-bottom: 0;
     }
 
     .mobile-list-toolbar__sorting {
-        display: flex;
-        align-items: center;
+        flex: 1 1 0;
         justify-content: flex-end;
-        gap: var(--space-xs);
+    }
+
+    .mobile-list-toolbar .list-sort-control .select-trigger {
         min-width: 0;
-        margin-left: auto;
     }
 
     .mobile-list-toolbar__controls {
         display: flex;
+        flex: 1 1 0;
         align-items: center;
+        justify-content: space-between;
         gap: var(--space-xs);
-        margin-left: auto;
         min-width: 0;
-    }
-
-    .mobile-list-toolbar__controls .mobile-list-toolbar__filter-actions,
-    .mobile-list-toolbar__controls .mobile-list-toolbar__sorting {
-        margin-left: 0;
     }
 
     .mobile-list-toolbar__filter-actions {
         display: flex;
         align-items: center;
         gap: var(--space-sm);
-        margin-left: auto;
     }
 
-    .mobile-list-toolbar__filter-actions + .mobile-list-toolbar__sorting {
-        margin-left: 0;
-    }
-
-    .mobile-list-toolbar__sorting .select-trigger {
-        width: auto;
-        min-width: 7.5rem;
-        max-width: 10rem;
-    }
-
-    .mobile-list-toolbar__direction {
-        flex: 0 0 var(--touch-target-min);
-        width: var(--touch-target-min);
-        min-width: var(--touch-target-min);
-        padding-inline: 0;
-    }
-
-    @media (max-width: 359px) {
+    @media (max-width: 420px) {
         .mobile-list-toolbar__selection {
             flex-basis: var(--touch-target-min);
             width: var(--touch-target-min);
@@ -71,11 +48,6 @@
 
         .mobile-list-toolbar__selection svg {
             font-size: var(--text-base);
-        }
-
-        .mobile-list-toolbar__sorting .select-trigger {
-            min-width: 6.75rem;
-            max-width: 8rem;
         }
     }
 }

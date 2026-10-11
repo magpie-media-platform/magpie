@@ -16,7 +16,7 @@ public interface IFileRoutingContentTypeDefinitionProvider : IContentTypeDefinit
     /// <param name="parent">The confirmed parent of the file</param>
     /// <param name="children">The direct children available for routing</param>
     /// <param name="signals">The parsed file signals</param>
-    /// <returns>The child IDs in ordinal order, or an empty list when routing is unresolved</returns>
+    /// <returns>The child IDs in parsed file order, or an empty list when routing is unresolved</returns>
     IReadOnlyList<Guid> ResolveFileChildren(
         ContentHierarchyItem parent,
         IReadOnlyList<ContentHierarchyItem> children,

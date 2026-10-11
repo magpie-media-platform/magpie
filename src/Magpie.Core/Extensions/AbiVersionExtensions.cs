@@ -33,6 +33,26 @@ internal static class AbiVersionExtensions
             : TryParseAbiVersion(value, out var exact) && normalizedCurrent.CompareTo(exact) == 0;
     }
 
+    /// <summary>
+    /// Reads the Magpie.Sdk version that an extension package is built against.
+    /// </summary>
+    /// <param name="sdkRange">The Magpie.Sdk dependency range of the package, in NuGet notation</param>
+    /// <returns>The lowest Magpie.Sdk version that the range accepts, when known.</returns>
+    public static Version? ReadBuiltAgainst(string? sdkRange)
+    {
+        var value = sdkRange?.Trim() ?? string.Empty;
+        var exclusive = value.StartsWith('(');
+        var minimum = exclusive || value.StartsWith('[') ? value[1..].Split(',', ']', ')')[0] : value;
+        if (!TryParseAbiVersion(minimum, out var builtAgainst))
+        {
+            return null;
+        }
+
+        return exclusive
+            ? new(builtAgainst.Major, builtAgainst.Minor, builtAgainst.Build, builtAgainst.Revision + 1)
+            : builtAgainst;
+    }
+
     public static Version Normalize(this Version version)
     {
         return new(

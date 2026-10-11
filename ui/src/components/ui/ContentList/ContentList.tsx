@@ -146,16 +146,9 @@ function TypeCell({ level, levelLabel, contentType }: { level?: string; levelLab
     return <ContentTypeBadge level={level} levelLabel={levelLabel} contentType={contentType} />;
 }
 
-function MonitoringCell({
-    monitoring,
-    effectiveMonitoring,
-}: {
-    monitoring: MonitoringMode | null;
-    effectiveMonitoring: MonitoringMode;
-}) {
+function MonitoringCell({ effectiveMonitoring }: { effectiveMonitoring: MonitoringMode }) {
     return (
         <ContentMonitoringIndicator
-            monitoring={monitoring}
             effectiveMonitoring={effectiveMonitoring}
             className="content-list__monitor-eye"
             activeClassName="content-list__monitor-eye--on"
@@ -164,23 +157,16 @@ function MonitoringCell({
     );
 }
 
-function FulfillmentCell({ fulfillment, importPending }: { fulfillment: FulfillmentStatus; importPending?: boolean }) {
-    return <ContentFulfillmentBadge fulfillment={fulfillment} importPending={importPending} />;
-}
-
-function StatusCell({
-    fulfillment,
-    importPending,
-    acquisitionStatus,
-}: {
-    fulfillment: FulfillmentStatus;
-    importPending?: boolean;
-    acquisitionStatus?: AcquisitionStatus;
-}) {
+function StatusCell({ item }: { item: ContentItem }) {
     return (
         <div className="content-list__status-cell">
-            <FulfillmentCell fulfillment={fulfillment} importPending={importPending} />
-            {acquisitionStatus && <AcquisitionBadge status={acquisitionStatus} />}
+            <ContentFulfillmentBadge
+                fulfillment={item.fulfillment}
+                importPending={item.importPending}
+                publishDate={item.publishDate}
+                publishDatePrecision={item.publishDatePrecision}
+            />
+            {item.acquisitionStatus && <AcquisitionBadge status={item.acquisitionStatus} />}
         </div>
     );
 }
@@ -233,7 +219,6 @@ export const ContentList = forwardRef<HTMLDivElement, ContentListProps>(
                     accessorKey: 'posterUrl',
                     header: '',
                     enableSorting: false,
-                    size: 48,
                     cell: ({ row }) => (
                         <ContentPoster
                             posterUrl={row.original.posterUrl}
@@ -260,7 +245,6 @@ export const ContentList = forwardRef<HTMLDivElement, ContentListProps>(
                                   />
                               )
                             : 'Title',
-                    size: 300,
                     cell: ({ row }) => <TitleCell item={row.original} />,
                 },
                 {
@@ -286,7 +270,6 @@ export const ContentList = forwardRef<HTMLDivElement, ContentListProps>(
                               )
                             : 'Type',
                     enableSorting: false,
-                    size: 100,
                     cell: ({ row }) => (
                         <TypeCell
                             level={row.original.level}
@@ -313,13 +296,7 @@ export const ContentList = forwardRef<HTMLDivElement, ContentListProps>(
                               )
                             : '',
                     enableSorting: false,
-                    size: 56,
-                    cell: ({ row }) => (
-                        <MonitoringCell
-                            monitoring={row.original.monitoring}
-                            effectiveMonitoring={row.original.effectiveMonitoring}
-                        />
-                    ),
+                    cell: ({ row }) => <MonitoringCell effectiveMonitoring={row.original.effectiveMonitoring} />,
                 },
                 {
                     id: 'fulfillment',
@@ -339,14 +316,7 @@ export const ContentList = forwardRef<HTMLDivElement, ContentListProps>(
                               )
                             : 'Status',
                     enableSorting: false,
-                    size: 230,
-                    cell: ({ row }) => (
-                        <StatusCell
-                            fulfillment={row.original.fulfillment}
-                            importPending={row.original.importPending}
-                            acquisitionStatus={row.original.acquisitionStatus}
-                        />
-                    ),
+                    cell: ({ row }) => <StatusCell item={row.original} />,
                 },
                 {
                     id: 'publishDate',
@@ -378,7 +348,6 @@ export const ContentList = forwardRef<HTMLDivElement, ContentListProps>(
                                   />
                               )
                             : 'Published',
-                    size: 156,
                     sortUndefined: 'last',
                     cell: ({ row }) => (
                         <PublishedCell
@@ -391,14 +360,12 @@ export const ContentList = forwardRef<HTMLDivElement, ContentListProps>(
                     id: 'dateAdded',
                     accessorKey: 'dateAdded',
                     header: 'Added',
-                    size: 100,
                     cell: ({ row }) => <DateAddedCell dateAdded={row.original.dateAdded} />,
                 },
                 {
                     id: 'fulfilledDate',
                     accessorKey: 'fulfilledAt',
                     header: 'Fulfilled',
-                    size: 100,
                     sortUndefined: 'last',
                     cell: ({ row }) => <DateAddedCell dateAdded={row.original.fulfilledAt} />,
                 },
@@ -406,7 +373,6 @@ export const ContentList = forwardRef<HTMLDivElement, ContentListProps>(
                     id: 'primaryMediaSize',
                     accessorKey: 'primaryMediaSize',
                     header: 'Media size',
-                    size: 110,
                     sortUndefined: 'last',
                     cell: ({ row }) =>
                         row.original.primaryMediaSize === undefined
@@ -417,7 +383,6 @@ export const ContentList = forwardRef<HTMLDivElement, ContentListProps>(
                     id: 'primaryMediaFileCount',
                     accessorKey: 'primaryMediaFileCount',
                     header: 'Media files',
-                    size: 100,
                     sortUndefined: 'last',
                     cell: ({ row }) => row.original.primaryMediaFileCount ?? '—',
                 },
@@ -466,13 +431,7 @@ export const ContentList = forwardRef<HTMLDivElement, ContentListProps>(
         const defaultEmptyState = <EmptyState title="No content found" size="sm" />;
 
         return (
-            <div
-                ref={ref}
-                className={classes}
-                data-component="content-list"
-                data-selection-enabled={selection ? 'true' : undefined}
-                {...props}
-            >
+            <div ref={ref} className={classes} data-component="content-list" {...props}>
                 <Slot slot="content.list.actions" className="content-list__extension-actions" />
                 <Slot slot="content.list.columns" className="content-list__extension-columns" />
 

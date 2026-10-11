@@ -761,7 +761,9 @@ internal sealed partial class FileSystem(
 
             if (OperatingSystem.IsWindowsVersionAtLeast(6, 2))
             {
-                if (!PInvoke.GetDiskFreeSpaceEx(resolvedPath, out var free, out _, out _) || free > long.MaxValue)
+                if (!PInvoke.GetDiskFreeSpaceEx(resolvedPath, out var free, out var total, out _) ||
+                    free > long.MaxValue ||
+                    total > long.MaxValue)
                 {
                     return null;
                 }
@@ -769,7 +771,8 @@ internal sealed partial class FileSystem(
                 return new()
                 {
                     VolumeId = ReadWindowsCapacityVolumeId(resolvedPath),
-                    AvailableBytes = (long)free
+                    AvailableBytes = (long)free,
+                    TotalBytes = (long)total
                 };
             }
 
@@ -782,7 +785,8 @@ internal sealed partial class FileSystem(
             return mount is null || mount.AvailableFreeSpace < 0 ? null : new StorageCapacity
             {
                 VolumeId = mount.Name,
-                AvailableBytes = mount.AvailableFreeSpace
+                AvailableBytes = mount.AvailableFreeSpace,
+                TotalBytes = mount.TotalSize
             };
         }
         catch (Exception ex) when (ex is not OperationCanceledException)

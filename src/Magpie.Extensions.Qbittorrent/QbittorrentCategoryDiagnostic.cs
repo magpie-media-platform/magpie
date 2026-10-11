@@ -6,10 +6,11 @@ using System.Threading.Tasks;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
 using Magpie.Sdk.Diagnostics;
+using Magpie.Sdk.Services;
 
 namespace Magpie.Extensions.Qbittorrent;
 
-internal sealed class QbittorrentCategoryDiagnostic : IDiagnosticCheck
+internal sealed class QbittorrentCategoryDiagnostic(ISettingsService settingsService) : IDiagnosticCheck
 {
     public const string Id = "qbittorrent.config.category-missing";
 
@@ -31,10 +32,12 @@ internal sealed class QbittorrentCategoryDiagnostic : IDiagnosticCheck
         return false;
     }
 
-    public Task<IReadOnlyList<DiagnosticFinding>> RunAsync(
+    public async Task<IReadOnlyList<DiagnosticFinding>> RunAsync(
         DiagnosticContext context,
         CancellationToken cancellationToken = default)
     {
+        var instanceName = await settingsService.GetInstanceNameAsync(cancellationToken).ConfigureAwait(false);
+
         var findings = new List<DiagnosticFinding>();
         foreach (var client in context.DownloadClients)
         {
@@ -59,11 +62,11 @@ internal sealed class QbittorrentCategoryDiagnostic : IDiagnosticCheck
                 Severity = DiagnosticFindingSeverity.Info,
                 Title = $"qBittorrent client {client.Name} has no category configured",
                 Detail = $"The qBittorrent client \"{client.Name}\" has no category. " +
-                    "A category keeps Magpie downloads separate for filtering and cleanup.",
+                    $"A category keeps {instanceName} downloads separate for filtering and cleanup.",
                 AffectedEntity = $"DownloadClient:{client.Id}",
             });
         }
 
-        return Task.FromResult<IReadOnlyList<DiagnosticFinding>>(findings);
+        return findings;
     }
 }

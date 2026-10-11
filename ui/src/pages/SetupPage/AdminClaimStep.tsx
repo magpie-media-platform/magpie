@@ -27,11 +27,6 @@ function getErrorMessage(error: unknown): string {
     return 'Failed to create the administrator account. Try again.';
 }
 
-function getContinuationErrorMessage(error: unknown): string {
-    const detail = error instanceof Error && error.message ? `: ${error.message}` : '';
-    return `Administrator created, but setup failed to continue${detail}. Select Continue setup to try again.`;
-}
-
 export function AdminClaimStep({ onAdvance }: AdminClaimStepProps): ReactNode {
     const statusQuery = useSetupStatus();
     const createAdmin = useCreateSetupAdmin();
@@ -66,11 +61,7 @@ export function AdminClaimStep({ onAdvance }: AdminClaimStepProps): ReactNode {
                     }
                 }
 
-                try {
-                    await onAdvance();
-                } catch (err) {
-                    setError(getContinuationErrorMessage(err));
-                }
+                await onAdvance();
             } finally {
                 setIsFinalizing(false);
             }

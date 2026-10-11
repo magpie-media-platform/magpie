@@ -7,6 +7,7 @@ import { Skeleton } from '@/components/ui/Skeleton';
 import {
     MagpieActivityEntryKind,
     useContentMagpieActivity,
+    useCorrelatedMagpieActivity,
     useJobExecutionTreeActivity,
     type JobExecutionTreeNode,
     type MagpieActivityEntry,
@@ -124,12 +125,17 @@ export function RelatedEventsChain({
     const [alsoPage, setAlsoPage] = useState(1);
     const [chainPage, setChainPage] = useState(1);
     const contextParams = useMemo(() => ({ pageNumber: 1, pageSize: 1000 }), []);
-    const shouldLoadContext = active && !!correlationId && !!seedEntityId;
+    const shouldLoadContext = active && !!correlationId;
+    const seeded = useContentMagpieActivity(shouldLoadContext ? seedEntityId : null, contextParams);
+    const correlated = useCorrelatedMagpieActivity(
+        shouldLoadContext && !seedEntityId ? correlationId : null,
+        contextParams,
+    );
     const {
         activity: contentActivity,
         isLoading: isLoadingContext,
         error: contextError,
-    } = useContentMagpieActivity(shouldLoadContext ? seedEntityId : null, contextParams);
+    } = seedEntityId ? seeded : correlated;
     const resolvedExecutionId =
         executionId ??
         contentActivity?.entries.find(
@@ -223,14 +229,16 @@ export function RelatedEventsChain({
         return [...entries.values()].sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
     }, [contentActivity?.entries, correlationId, chainIds, selfEntry]);
 
+    const alsoTarget = selfId == null ? '' : `${selfKind}-${selfId}`;
+    const pagedAlsoTarget = useRef<string | null>(null);
     useEffect(() => {
-        if (selfId == null) {
-            setAlsoPage(1);
+        if (isLoading || also.length === 0 || pagedAlsoTarget.current === alsoTarget) {
             return;
         }
+        pagedAlsoTarget.current = alsoTarget;
         const index = also.findIndex((e) => e.id === selfId && e.kind === selfKind);
         setAlsoPage(index < 0 ? 1 : Math.floor(index / RELATED_PAGE_SIZE) + 1);
-    }, [also, selfId, selfKind]);
+    }, [also, alsoTarget, isLoading, selfId, selfKind]);
 
     const totalRelatedCount = chainNodeCount + also.length;
     const alsoTotalPages = Math.max(1, Math.ceil(also.length / RELATED_PAGE_SIZE));
@@ -322,8 +330,8 @@ export function RelatedEventsChain({
                                     pageCount={alsoTotalPages}
                                     totalItems={also.length}
                                     onFirst={() => setAlsoPage(1)}
-                                    onPrevious={() => setAlsoPage((p) => Math.max(1, p - 1))}
-                                    onNext={() => setAlsoPage((p) => Math.min(alsoTotalPages, p + 1))}
+                                    onPrevious={() => setAlsoPage(Math.max(1, safeAlsoPage - 1))}
+                                    onNext={() => setAlsoPage(Math.min(alsoTotalPages, safeAlsoPage + 1))}
                                     onLast={() => setAlsoPage(alsoTotalPages)}
                                 />
                             )}

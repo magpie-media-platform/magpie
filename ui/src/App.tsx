@@ -39,6 +39,7 @@ import {
     SidebarSeparator,
 } from './components/ui/Sidebar';
 import { useLibraryTypes, useTypeIconName, type LibraryTypeDefinition } from './hooks/useLibraryTypes';
+import { InstanceNameProvider, useInstanceName } from './hooks/useInstanceName';
 import { useSystemInfo } from './hooks/useSystemStatus';
 import { ScanCompletionTrackerProvider } from './hooks/useScanCompletionTracker';
 import { useScrollRestoration } from './hooks/useScrollRestoration';
@@ -73,6 +74,7 @@ function AppHeader() {
     const { toggleSidebar, sidebarOpen, sidebarCollapsed } = useAppShell();
     const isDesktopSidebar = useMediaQuery('(min-width: 768px)');
     const sidebarExpanded = isDesktopSidebar ? !sidebarCollapsed : sidebarOpen;
+    const instanceName = useInstanceName();
 
     return (
         <Slot slot="global.header">
@@ -80,7 +82,7 @@ function AppHeader() {
                 brand={
                     <Link to="/">
                         <Logo size={26} variant="solid" />
-                        <span>Magpie</span>
+                        <span>{instanceName}</span>
                     </Link>
                 }
                 status={<LiveUpdateStatus />}
@@ -110,6 +112,7 @@ const AppSidebar = memo(function AppSidebar({ contentTypes, subjectTypes }: AppS
     const location = useLocation();
     const typeIconName = useTypeIconName();
     const { data: systemInfo } = useSystemInfo();
+    const instanceName = useInstanceName();
     const version = systemInfo?.version;
 
     const isActive = useIsActive();
@@ -191,7 +194,7 @@ const AppSidebar = memo(function AppSidebar({ contentTypes, subjectTypes }: AppS
                         icon={<FunnelIcon weight="duotone" />}
                         active={isActive('/filters')}
                         onClick={closeSidebar}
-                        title="Reusable filters for the library and wishlists"
+                        title="Create and manage saved filters."
                     >
                         Filters
                     </SidebarItem>
@@ -217,7 +220,7 @@ const AppSidebar = memo(function AppSidebar({ contentTypes, subjectTypes }: AppS
                         icon={<TargetIcon weight="duotone" />}
                         active={isActive('/wanted')}
                         onClick={closeSidebar}
-                        title="Monitored content Magpie is actively trying to acquire"
+                        title={`Monitored content ${instanceName} is actively trying to acquire`}
                     >
                         Wanted
                     </SidebarItem>
@@ -392,6 +395,7 @@ function AppLayout() {
 
     const location = useLocation();
     const { contentTypes, subjectTypes } = useLibraryTypes();
+    const instanceName = useInstanceName();
     useScrollRestoration();
 
     if (isStandaloneRoute(location.pathname)) {
@@ -404,7 +408,7 @@ function AppLayout() {
         <ContentLineageProvider contentTypes={contentTypes}>
             <AppShell sidebarCollapsed={sidebarCollapsed} onSidebarCollapsedChange={setSidebarCollapsed}>
                 <SkipLink targetId="main-content" />
-                <AppShellHeader>{isAdmin ? <AdminHeader /> : <AppHeader />}</AppShellHeader>
+                <AppShellHeader>{isAdmin ? <AdminHeader instanceName={instanceName} /> : <AppHeader />}</AppShellHeader>
 
                 <div className="app-shell__body">
                     <AppShellSidebar ariaLabel={isAdmin ? 'Admin navigation' : 'Main navigation'}>
@@ -416,7 +420,7 @@ function AppLayout() {
                     </AppShellSidebar>
 
                     <AppShellMain>
-                        <RestartRequiredBanner />
+                        <RestartRequiredBanner instanceName={instanceName} />
                         <ExtensionLoadFailureBanner />
                         <RouteOutlet />
                     </AppShellMain>
@@ -483,7 +487,9 @@ function App() {
 
     return (
         <QueryClientProvider client={queryClient}>
-            <RouterProvider router={router} />
+            <InstanceNameProvider>
+                <RouterProvider router={router} />
+            </InstanceNameProvider>
         </QueryClientProvider>
     );
 }

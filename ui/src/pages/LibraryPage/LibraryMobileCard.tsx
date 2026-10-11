@@ -7,6 +7,7 @@ import { useLibraryTypes } from '@/hooks/useLibraryTypes';
 import { resolveContentTypeLabel } from '@/lib/contentTypeDisplay';
 import { formatShortDate } from '@/lib/dateFormatting';
 import { formatPrimaryMediaSummary } from '@/lib/formatSize';
+import { toPlainTextSummary } from '@/lib/plainTextSummary';
 import type { ContentListItem } from '@/types';
 
 interface LibraryMobileCardProps {
@@ -43,21 +44,25 @@ export function LibraryMobileCard({ item, selectionMode, selected, onToggle, onL
             selectionLabel={`Select ${item.title} card`}
             titleAccessory={
                 <ContentMonitoringIndicator
-                    monitoring={item.monitoring}
                     effectiveMonitoring={item.effectiveMonitoring}
                     className="library-page__mobile-eye"
                     activeClassName="library-page__mobile-eye--on"
                     dataMonitoring={item.effectiveMonitoring !== 'Unmonitored' ? 'true' : 'false'}
                 />
             }
-            description={item.overview || undefined}
+            description={toPlainTextSummary(item.overview) || undefined}
         >
             {kindLabel && (
                 <Badge variant="default" size="sm">
                     {kindLabel}
                 </Badge>
             )}
-            <ContentFulfillmentBadge fulfillment={item.fulfillment} importPending={item.importPending} />
+            <ContentFulfillmentBadge
+                fulfillment={item.fulfillment}
+                importPending={item.importPending}
+                publishDate={item.publishDate}
+                publishDatePrecision={item.publishDatePrecision}
+            />
             {item.acquisitionStatus && <AcquisitionBadge status={item.acquisitionStatus} />}
             <span>Media: {formatPrimaryMediaSummary(item.primaryMediaFileCount, item.primaryMediaSize)}</span>
             <span>Fulfilled: {item.fulfilledAt ? formatShortDate(item.fulfilledAt) : '—'}</span>

@@ -1168,6 +1168,12 @@ internal sealed class DownloadRepository(
                         externalIds.Contains(download.Release.ExternalId!)) ||
                     download.ReleaseIdentityKeys.Any(identity =>
                         authorities.Contains(identity.Authority) && values.Contains(identity.Value)))
+                .Where(download => download.Status != DownloadStatus.Failed ||
+                    download.FailureReason != DownloadFailureReason.ClientRejected ||
+                    !context.ReleaseSources.Any(source =>
+                        source.ReleaseId == download.ReleaseId &&
+                        source.IndexerConnectionId != null &&
+                        source.CreatedAt > download.FailedAt))
                 .ToListAsync(cancellationToken)
                 .ConfigureAwait(false);
             return
@@ -1338,7 +1344,6 @@ internal sealed class DownloadRepository(
 
         var distinctIds = contentItemIds.Distinct().ToList();
 
-        // The most recently modified in-flight download sets the status, so a progress tick can change it.
         var computed = await context.ContentItems.AsNoTracking()
             .Where(ci => distinctIds.Contains(ci.Id))
             .Select(ci => new

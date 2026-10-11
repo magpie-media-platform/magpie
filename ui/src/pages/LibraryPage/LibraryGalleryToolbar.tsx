@@ -1,11 +1,9 @@
 import { forwardRef, type ComponentPropsWithoutRef } from 'react';
-import { SortAscendingIcon, SortDescendingIcon } from '@phosphor-icons/react';
 import type { SortingState } from '@tanstack/react-table';
 
 import { SelectModeToggle } from '@/components/ui/BulkActionsToolbar';
-import { Select, SelectContent, SelectItem, SelectTrigger } from '@/components/ui/Select';
+import { ListSortControl } from '@/components/ui/ListSortControl';
 import type { MobileListSelectionControl, MobileListSortOption } from '@/components/ui/MobileListToolbar';
-import { useListSorting } from '@/hooks/ui/useListSorting';
 
 export interface LibraryGalleryToolbarProps extends Omit<ComponentPropsWithoutRef<'div'>, 'onChange'> {
     sorting: SortingState;
@@ -21,16 +19,6 @@ export const LibraryGalleryToolbar = forwardRef<HTMLDivElement, LibraryGalleryTo
         { sorting, sortOptions, onSortingChange, selection, selectedCount = 0, disabled = false, className, ...props },
         ref,
     ) => {
-        const { activeOption, isDescending, selectField, setDirection } = useListSorting(
-            sorting,
-            sortOptions,
-            onSortingChange,
-        );
-
-        if (!activeOption) {
-            return null;
-        }
-
         const classes = ['library-gallery-toolbar', className].filter(Boolean).join(' ');
 
         return (
@@ -51,47 +39,15 @@ export const LibraryGalleryToolbar = forwardRef<HTMLDivElement, LibraryGalleryTo
                     )}
                 </div>
 
-                <div className="library-gallery-toolbar__group" role="group" aria-label="Sort gallery">
+                <div className="library-gallery-toolbar__group">
                     <span className="library-gallery-toolbar__label">Sort</span>
-                    <Select value={activeOption.id} onValueChange={selectField} disabled={disabled}>
-                        <SelectTrigger size="sm" aria-label="Sort by field" data-sort="field">
-                            {activeOption.label}
-                        </SelectTrigger>
-                        <SelectContent>
-                            {sortOptions.map((option) => (
-                                <SelectItem key={option.id} value={option.id}>
-                                    {option.label}
-                                </SelectItem>
-                            ))}
-                        </SelectContent>
-                    </Select>
-
-                    <div className="library-gallery-toolbar__direction">
-                        <button
-                            type="button"
-                            className="library-gallery-toolbar__direction-option"
-                            data-state={isDescending ? undefined : 'on'}
-                            aria-pressed={!isDescending}
-                            aria-label="Sort ascending"
-                            disabled={disabled}
-                            onClick={() => setDirection(false)}
-                            data-sort="ascending"
-                        >
-                            <SortAscendingIcon weight="bold" aria-hidden="true" />
-                        </button>
-                        <button
-                            type="button"
-                            className="library-gallery-toolbar__direction-option"
-                            data-state={isDescending ? 'on' : undefined}
-                            aria-pressed={isDescending}
-                            aria-label="Sort descending"
-                            disabled={disabled}
-                            onClick={() => setDirection(true)}
-                            data-sort="descending"
-                        >
-                            <SortDescendingIcon weight="bold" aria-hidden="true" />
-                        </button>
-                    </div>
+                    <ListSortControl
+                        aria-label="Sort gallery"
+                        sorting={sorting}
+                        sortOptions={sortOptions}
+                        onSortingChange={onSortingChange}
+                        disabled={disabled}
+                    />
                 </div>
             </div>
         );

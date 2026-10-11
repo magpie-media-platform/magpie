@@ -114,8 +114,6 @@ export function FilterQueryEditor({
                                 if (!onSubmitRef.current) {
                                     return false;
                                 }
-                                // With suggestions open, the key accepts the highlighted one and never runs the query or
-                                // adds a line, also in the moment after the list opens, when CodeMirror ignores acceptance.
                                 if (completionStatus(view.state) !== null) {
                                     acceptCompletion(view);
                                     return true;
@@ -211,7 +209,6 @@ export function FilterQueryEditor({
     }, [createEditor]);
 
     useEffect(() => {
-        // An empty transaction is the only way to make CodeMirror recompute contentAttributes.
         viewRef.current?.dispatch({});
     }, [ariaLabel, ariaLabelledBy, ariaDescribedBy]);
 

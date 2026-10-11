@@ -236,7 +236,6 @@ describe('ActivityTab', () => {
         async (dismissal) => {
             // Arrange
             const user = userEvent.setup();
-            // JSDOM returns a snapshot. Browsers expose live animation names during exit.
             const getComputedStyle = window.getComputedStyle.bind(window);
             vi.spyOn(window, 'getComputedStyle').mockImplementation(
                 (element) =>
@@ -263,7 +262,6 @@ describe('ActivityTab', () => {
             // Act
             await user.click(trigger);
             const preview = await screen.findByRole('dialog', { name: 'Local title' });
-            // Commit the close before the document receives the click, as in a browser event.
             const flushClick = () => flushSync(() => {});
             document.body.addEventListener('click', flushClick, { once: true });
             if (dismissal === 'close button') {

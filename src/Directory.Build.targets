@@ -5,6 +5,7 @@
 
   <PropertyGroup Condition="$(MSBuildProjectName.StartsWith('Magpie.Extensions.'))">
     <TargetsForTfmSpecificBuildOutput>$(TargetsForTfmSpecificBuildOutput);PackExtensionDependencies</TargetsForTfmSpecificBuildOutput>
+    <PackageTags>magpie</PackageTags>
   </PropertyGroup>
 
   <Target Name="PackExtensionDependencies" DependsOnTargets="ResolvePackageAssets">

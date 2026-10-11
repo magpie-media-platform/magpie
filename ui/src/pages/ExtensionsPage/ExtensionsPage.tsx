@@ -11,6 +11,7 @@ import {
     ArrowClockwiseIcon,
 } from '@phosphor-icons/react';
 
+import { InstallExtensionDialog } from '@/components/configuration/InstallExtensionDialog';
 import { Button } from '@/components/ui/Button';
 import { Badge } from '@/components/ui/Badge';
 import { Switch } from '@/components/ui/Switch';
@@ -35,8 +36,8 @@ import {
     type ExtensionItem,
     type ExtensionUpdateInfo,
 } from '@/hooks/useExtensionManagement';
+import { useInstanceName } from '@/hooks/useInstanceName';
 import { getErrorMessage } from '@/lib/errors';
-import { InstallExtensionDialog } from './InstallExtensionDialog';
 import { NuGetFeedsSection, type NuGetFeedsSectionHandle } from './NuGetFeedsSection';
 import { getStatusVariant, getStatusLabel } from './extensionStatus';
 
@@ -56,6 +57,7 @@ function comparePackageIdDescending(a: string | null | undefined, b: string | nu
 }
 
 export function ExtensionsPage() {
+    const instanceName = useInstanceName();
     useDocumentTitle('Extensions');
     const { extensions, isLoading, error, toggleEnabled, reorderExtensions, refetch } = useExtensionManagement();
     const actions = useExtensionActions();
@@ -130,12 +132,12 @@ export function ExtensionsPage() {
             toast({
                 title: 'Extension Installed',
                 description: result.restartRequired
-                    ? `${result.extension.name} v${result.extension.version} installed. Restart Magpie to load it.`
+                    ? `${result.extension.name} v${result.extension.version} installed. Restart ${instanceName} to load it.`
                     : `${result.extension.name} v${result.extension.version} installed.`,
                 variant: 'success',
             });
         },
-        [actions, toast],
+        [actions, toast, instanceName],
     );
 
     const handleInstallFromFile = useCallback(
@@ -144,12 +146,12 @@ export function ExtensionsPage() {
             toast({
                 title: 'Extension Installed',
                 description: result.restartRequired
-                    ? `${result.extension.name} installed from ${file.name}. Restart Magpie to load it.`
+                    ? `${result.extension.name} installed from ${file.name}. Restart ${instanceName} to load it.`
                     : `${result.extension.name} installed from ${file.name}.`,
                 variant: 'success',
             });
         },
-        [actions, toast],
+        [actions, toast, instanceName],
     );
 
     const [activeTab, setActiveTab] = useState('installed');
@@ -246,11 +248,7 @@ export function ExtensionsPage() {
                         icon={<WarningCircleIcon weight="duotone" />}
                         title="Failed to load extensions"
                         description={getErrorMessage(error)}
-                        action={
-                            <Button variant="secondary" size="sm" onClick={() => refetch()}>
-                                Retry
-                            </Button>
-                        }
+                        onRetry={refetch}
                     />
                 </Slot>
             </div>

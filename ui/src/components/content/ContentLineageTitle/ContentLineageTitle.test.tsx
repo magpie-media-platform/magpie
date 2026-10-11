@@ -86,4 +86,38 @@ describe('ContentLineageTitle', () => {
         expect(await screen.findByTitle('Parent > Leaf')).toBeInTheDocument();
         expect(load).toHaveBeenCalledTimes(2);
     });
+
+    it.each([
+        ['True', true, /^PilotShow>Season 1$/, 1],
+        ['False', false, /^Show>Season 1>Pilot$/, 0],
+    ])(
+        'ContentLineageTitle_ListsSegmentsInOrder_WhenStackedIs%s',
+        async (_, stacked, expectedText, expectedAncestorLines) => {
+            // Arrange
+            load.mockImplementation((url) =>
+                Promise.resolve(
+                    url.endsWith('/season')
+                        ? { id: 'season', parentId: 'show', name: 'Season 1' }
+                        : { id: 'show', name: 'Show' },
+                ),
+            );
+            render(
+                <QueryClientProvider client={client}>
+                    <ContentLineageProvider contentTypes={[]}>
+                        <ContentLineageTitle
+                            qualifiedName={{ id: 'pilot', parentId: 'season', title: 'Pilot' }}
+                            stacked={stacked}
+                        />
+                    </ContentLineageProvider>
+                </QueryClientProvider>,
+            );
+
+            // Act
+            const title = await screen.findByTitle('Show > Season 1 > Pilot');
+
+            // Assert
+            expect(title).toHaveTextContent(expectedText);
+            expect(title.querySelectorAll('.content-lineage-title__ancestors')).toHaveLength(expectedAncestorLines);
+        },
+    );
 });

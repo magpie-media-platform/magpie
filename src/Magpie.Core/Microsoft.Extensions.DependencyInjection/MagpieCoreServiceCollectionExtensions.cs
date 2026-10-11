@@ -186,6 +186,7 @@ public static class MagpieCoreServiceCollectionExtensions
     {
         services.AddScoped<ITransactionManager, TransactionManager>();
         services.AddScoped<IApiKeyRepository, ApiKeyRepository>();
+        services.AddScoped<IAuditHistoryRepository, AuditHistoryRepository>();
         services.AddScoped<IAuditRecordRepository, AuditRecordRepository>();
         services.AddScoped<IBlockedFileTypeRepository, BlockedFileTypeRepository>();
         services.AddScoped<IContentFilterRepository, ContentFilterRepository>();
@@ -238,6 +239,7 @@ public static class MagpieCoreServiceCollectionExtensions
         services.AddScoped<IDiagnosticCheck, PathResolutionDiagnostic>();
         services.AddScoped<IDiagnosticCheck, DefaultJobScheduleDiagnostic>();
         services.AddScoped<IDiagnosticCheck, DuplicateRootDiagnostic>();
+        services.AddScoped<IDiagnosticCheck, ExtensionLoadDiagnostic>();
         services.AddScoped<IDiagnosticRepair, ContentDefaultsRepair>();
         services.AddScoped<IDiagnosticRepair, MissingDefaultJobRepair>();
 
@@ -286,7 +288,7 @@ public static class MagpieCoreServiceCollectionExtensions
         services.RegisterJob<MediaInfoExtractItemJob>(MediaInfoExtractItemJob.Spec);
         services.RegisterJob<MediaFileReconciliationJob>(MediaFileReconciliationJob.Spec);
         services.RegisterJob<MetadataContainerCleanupJob>(MetadataContainerCleanupJob.Spec);
-        services.RegisterJob<PruneOrphanedSubjectsJob>(PruneOrphanedSubjectsJob.Spec);
+        services.RegisterJob<SubjectMaintenanceJob>(SubjectMaintenanceJob.Spec);
 
         return services;
     }

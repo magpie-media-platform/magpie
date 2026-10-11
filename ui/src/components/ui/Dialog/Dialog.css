@@ -33,7 +33,7 @@
         border: 1px solid var(--border-default);
         border-radius: var(--radius-lg);
         box-shadow: var(--shadow-lg);
-        overflow: hidden;
+        overflow: hidden auto;
         animation-duration: var(--duration-normal);
         animation-timing-function: var(--easing-default);
         animation-fill-mode: forwards;

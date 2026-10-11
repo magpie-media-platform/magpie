@@ -7,7 +7,17 @@
         }
     }
 
-    /* A long title ends in an ellipsis, so the button keeps one line and stays inside the footer. */
+    .preview-drawer__footer.sheet-footer {
+        @media (max-width: 639px) {
+            flex-direction: column-reverse;
+            padding: var(--space-lg);
+
+            & > .button {
+                padding-inline: var(--space-md);
+            }
+        }
+    }
+
     .preview-drawer__open {
         min-width: 0;
         max-width: 100%;

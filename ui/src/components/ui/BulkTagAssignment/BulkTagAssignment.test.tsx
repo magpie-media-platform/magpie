@@ -404,5 +404,31 @@ describe('BulkTagAssignment', () => {
 
             expect(screen.queryByText('Add')).not.toBeInTheDocument();
         });
+
+        it('keeps pending choices and the search when the selection refetches while open', async () => {
+            // Arrange
+            const user = userEvent.setup();
+            const onApply = vi.fn();
+            const { rerender } = render(<BulkTagAssignment {...defaultProps} onApply={onApply} />);
+            await user.click(screen.getByRole('button', { name: /Favorites/i }));
+            await user.click(screen.getByRole('button', { name: /Watch Later/i }));
+            await user.click(screen.getByRole('button', { name: /Watch Later/i }));
+            await user.type(screen.getByPlaceholderText('Search tags...'), 'fav');
+
+            // Act
+            rerender(
+                <BulkTagAssignment
+                    {...defaultProps}
+                    onApply={onApply}
+                    availableTags={[...mockTags]}
+                    selectedItems={[...mockSelectedItems]}
+                />,
+            );
+            await user.click(screen.getByRole('button', { name: /Apply/ }));
+
+            // Assert
+            expect(screen.getByPlaceholderText('Search tags...')).toHaveValue('fav');
+            expect(onApply).toHaveBeenCalledWith({ tagsToAdd: ['tag-1'], tagsToRemove: ['tag-2'] });
+        });
     });
 });

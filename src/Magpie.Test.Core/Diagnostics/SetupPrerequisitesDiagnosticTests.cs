@@ -10,6 +10,7 @@ using Magpie.Models.Data;
 using Magpie.Models.Enums;
 using Magpie.Sdk.Diagnostics;
 using Magpie.Sdk.Integrations;
+using Magpie.Sdk.Services;
 
 using Moq;
 
@@ -24,6 +25,7 @@ public sealed class SetupPrerequisitesDiagnosticTests
     private List<DownloadClient> _downloadClients = null!;
     private Mock<IRootFolderRepository> _rootFolders = null!;
     private List<IDownloadClientIntegration> _downloadClientIntegrations = null!;
+    private Mock<ISettingsService> _settingsService = null!;
     private IDiagnosticCheck _subject = null!;
 
     [SetUp]
@@ -39,11 +41,13 @@ public sealed class SetupPrerequisitesDiagnosticTests
             .Setup(r => r.ListAllAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync([]);
         _downloadClientIntegrations = [];
+        _settingsService = new Mock<ISettingsService>();
 
         _subject = new SetupPrerequisitesDiagnostic(
             _indexerConnections.Object,
             _rootFolders.Object,
-            _downloadClientIntegrations);
+            _downloadClientIntegrations,
+            _settingsService.Object);
     }
 
     [Test]
@@ -262,5 +266,24 @@ public sealed class SetupPrerequisitesDiagnosticTests
             Assert.That(findings[0].Detail, Does.Contain("\"downloadclient-a\""));
             Assert.That(findings[0].Detail, Does.Contain("ignore"));
         }
+    }
+
+    [Test]
+    public async Task RunAsync_NamesTheInstance_WhenNoDownloadClientIsConfigured()
+    {
+        // Arrange
+        _settingsService
+            .Setup(service => service.GetInstanceNameAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync("Home Lab");
+
+        // Act
+        var findings = await _subject.RunAsync(new() { DownloadClients = _downloadClients, }).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(
+            findings,
+            Has.Exactly(1).Matches<DiagnosticFinding>(f =>
+                f.Title == "No download client is configured" &&
+                f.Detail == "No download client is configured, so Home Lab cannot send downloads."));
     }
 }

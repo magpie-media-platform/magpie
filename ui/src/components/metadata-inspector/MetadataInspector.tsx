@@ -45,6 +45,7 @@ import {
 } from '@/hooks/useSubjectMetadataInspector';
 import { useExternalChangeConflict } from '@/hooks/useExternalChangeConflict';
 import { useUnsavedChangesGuard } from '@/hooks/useUnsavedChangesGuard';
+import { useInstanceName } from '@/hooks/useInstanceName';
 import { humanizeCustomKey } from '@/lib/contentTypeDisplay';
 import { formatShortDate } from '@/lib/dateFormatting';
 import { getErrorMessage } from '@/lib/errors';
@@ -1261,6 +1262,7 @@ interface SubItemFormState {
 }
 
 export function MetadataInspector({ contentId, owner }: MetadataInspectorProps) {
+    const instanceName = useInstanceName();
     const resolvedOwner: MetadataInspectorOwner = owner ?? { kind: 'content', id: contentId };
     const isContentOwner = resolvedOwner.kind === 'content';
     const { data: query, patch, reorder } = useInspectorHooks(resolvedOwner);
@@ -1348,7 +1350,6 @@ export function MetadataInspector({ contentId, owner }: MetadataInspectorProps) 
         return keys;
     }, [workingUser, baselineUser]);
 
-    // A successful save's own events can arrive before its refetch; they must not mark the draft stale.
     const [awaitingSavedState, setAwaitingSavedState] = useState(false);
     const {
         state: conflictState,
@@ -1621,7 +1622,7 @@ export function MetadataInspector({ contentId, owner }: MetadataInspectorProps) 
 
             {data?.subjectsTruncated && (
                 <Alert variant="warning" title="Some related names are not resolved">
-                    Magpie shows the unresolved names as Unknown.
+                    {instanceName} shows the unresolved names as Unknown.
                 </Alert>
             )}
 

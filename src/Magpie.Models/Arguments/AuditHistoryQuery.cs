@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 
 using Magpie.Models.Enums;
 using Magpie.Models.Paging;
@@ -44,4 +45,34 @@ public sealed record AuditHistoryQuery
     /// The inclusive upper bound on the timestamp, or <see langword="null"/> for no upper bound.
     /// </summary>
     public DateTime? To { get; set; }
+
+    /// <summary>
+    /// The categories to filter on, or <see langword="null"/> for every category.
+    /// </summary>
+    public IReadOnlyCollection<string>? Categories { get; set; }
+
+    /// <summary>
+    /// The id of the user that acted, or <see langword="null"/> for no filter.
+    /// </summary>
+    public Guid? UserId { get; set; }
+
+    /// <summary>
+    /// Whether a user acted, or <see langword="null"/> for no filter.
+    /// </summary>
+    public bool? HasUser { get; set; }
+
+    /// <summary>
+    /// The correlation id to filter on, or <see langword="null"/> for no filter.
+    /// </summary>
+    public Guid? CorrelationId { get; set; }
+
+    /// <summary>
+    /// The text to find in the label or the detail, or <see langword="null"/> for no filter.
+    /// </summary>
+    public string? Search { get; set; }
+
+    /// <summary>
+    /// The timestamp order of the entries.
+    /// </summary>
+    public SortDirection Direction { get; set; } = SortDirection.Descending;
 }

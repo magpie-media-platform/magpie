@@ -15,6 +15,8 @@ const mockContextValue: AuthContextValue = {
     hasPermission: () => true,
     getRequiredRole: () => undefined,
     hasRole: () => true,
+    permissionsFailed: false,
+    retryPermissions: () => {},
     signOut: async () => {},
     login: async () => {},
 };

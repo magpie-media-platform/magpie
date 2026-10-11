@@ -21,6 +21,8 @@ import {
     DialogFooter,
     DialogClose,
 } from '@/components/ui/Dialog';
+import { useFit } from '@/hooks/ui/useFit';
+import { useMediaQuery } from '@/hooks/ui/useMediaQuery';
 import { useFileBrowser, type FileSystemEntry } from '@/hooks/useFileBrowser';
 import { returnFocusOnClose } from '@/lib/returnFocus';
 
@@ -29,6 +31,8 @@ import type { PathInputMode } from '@/components/ui/PathInput';
 import './FileBrowser.css';
 
 export type { FileSystemEntry };
+
+const BREADCRUMB_FITS = ['parent', 'current'];
 
 function normalizeInitialPath(path: string | undefined): string {
     return path?.trim() || '/';
@@ -172,6 +176,10 @@ export function FileBrowser({
     const [manualPath, setManualPath] = useState(defaultInitialPath);
     const [selectedEntry, setSelectedEntry] = useState<FileSystemEntry | null>(null);
     const [validationError, setValidationError] = useState<string | null>(null);
+    const [breadcrumbExpanded, setBreadcrumbExpanded] = useState(false);
+    const [breadcrumb, setBreadcrumb] = useState<HTMLElement | null>(null);
+    useFit(breadcrumb, BREADCRUMB_FITS);
+    const isShortPhone = useMediaQuery('(max-width: 480px) and (max-height: 700px)');
 
     const { navigate: browseNavigate, entries, isLoading: loading, error: apiError, reset } = useFileBrowser(endpoint);
 
@@ -189,6 +197,7 @@ export function FileBrowser({
 
             setValidationError(null);
             setSelectedEntry(null);
+            setBreadcrumbExpanded(false);
             setCurrentPath(path);
             setManualPath(path);
             browseNavigate(path);
@@ -275,6 +284,10 @@ export function FileBrowser({
     ];
     const rootIndex = rootPath ? allBreadcrumbSegments.findIndex((segment) => pathsEqual(segment.path, rootPath)) : 0;
     const breadcrumbSegments = allBreadcrumbSegments.slice(Math.max(0, rootIndex));
+    const isBreadcrumbCollapsed = isShortPhone && !breadcrumbExpanded && breadcrumbSegments.length > 4;
+    const visibleBreadcrumbSegments = isBreadcrumbCollapsed
+        ? [breadcrumbSegments[0], null, ...breadcrumbSegments.slice(-2)]
+        : breadcrumbSegments;
 
     const canSelect = mode === 'folder' || (selectedEntry && (mode === 'both' || selectedEntry.type === mode));
 
@@ -324,9 +337,17 @@ export function FileBrowser({
                             <ArrowUpIcon weight="bold" aria-hidden="true" />
                         </Button>
 
-                        <nav className="file-browser__breadcrumb" aria-label="Current path">
-                            {breadcrumbSegments.map((segment, index) => (
-                                <span key={segment.path} className="file-browser__breadcrumb-item">
+                        <nav
+                            ref={setBreadcrumb}
+                            className={
+                                isBreadcrumbCollapsed
+                                    ? 'file-browser__breadcrumb file-browser__breadcrumb--collapsed'
+                                    : 'file-browser__breadcrumb'
+                            }
+                            aria-label="Current path"
+                        >
+                            {visibleBreadcrumbSegments.map((segment, index) => (
+                                <span key={segment?.path ?? 'hidden'} className="file-browser__breadcrumb-item">
                                     {index > 0 && (
                                         <CaretRightIcon
                                             size={12}
@@ -335,14 +356,26 @@ export function FileBrowser({
                                             aria-hidden="true"
                                         />
                                     )}
-                                    <button
-                                        type="button"
-                                        className="file-browser__breadcrumb-link"
-                                        onClick={() => navigateTo(segment.path)}
-                                        disabled={loading}
-                                    >
-                                        {segment.name}
-                                    </button>
+                                    {segment ? (
+                                        <button
+                                            type="button"
+                                            className="file-browser__breadcrumb-link"
+                                            onClick={() => navigateTo(segment.path)}
+                                            disabled={loading}
+                                            autoFocus={breadcrumbExpanded && index === 1}
+                                        >
+                                            {segment.name}
+                                        </button>
+                                    ) : (
+                                        <button
+                                            type="button"
+                                            className="file-browser__breadcrumb-link"
+                                            aria-label="Show full path"
+                                            onClick={() => setBreadcrumbExpanded(true)}
+                                        >
+                                            …
+                                        </button>
+                                    )}
                                 </span>
                             ))}
                         </nav>
@@ -451,7 +484,9 @@ export function FileBrowser({
                     {mode === 'folder' && (
                         <div className="file-browser__selection">
                             <span className="file-browser__selection-label">Selected:</span>
-                            <span className="file-browser__selection-path">{selectedEntry?.path ?? currentPath}</span>
+                            <span className="file-browser__selection-path">
+                                <bdi dir="ltr">{selectedEntry?.path ?? currentPath}</bdi>
+                            </span>
                         </div>
                     )}
                 </div>

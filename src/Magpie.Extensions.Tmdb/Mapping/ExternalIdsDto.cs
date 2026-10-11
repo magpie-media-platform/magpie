@@ -13,6 +13,9 @@ internal sealed record ExternalIdsDto
     [JsonPropertyName("tvdb_id")]
     public int? TvdbId { get; init; }
 
+    [JsonPropertyName("tvrage_id")]
+    public int? TvrageId { get; init; }
+
     [JsonPropertyName("facebook_id")]
     public string? FacebookId { get; init; }
 

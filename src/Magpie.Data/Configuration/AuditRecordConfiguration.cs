@@ -13,11 +13,10 @@ internal sealed class AuditRecordConfiguration : IEntityTypeConfiguration<AuditR
         builder.ToTable("system_audit");
         builder.HasKey(e => e.Id);
         builder.Property(e => e.Id).HasValueGenerator<SequentialGuidValueGenerator>();
-        builder.HasIndex(e => e.Timestamp);
-        builder.HasIndex(e => e.Category);
+
+        builder.HasIndex(e => new { e.Timestamp, e.Id, e.Category, e.UserId });
         builder.HasIndex(e => e.EntityType);
         builder.HasIndex(e => e.EntityId);
-        builder.HasIndex(e => e.UserId);
         builder.HasIndex(e => e.CorrelationId);
         builder.HasIndex(e => e.JobExecutionId);
     }

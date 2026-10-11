@@ -36,4 +36,9 @@ public sealed record DiskSpaceInfo
     /// The used bytes on the drive that holds the root folder.
     /// </summary>
     public long UsedBytes { get; init; }
+
+    /// <summary>
+    /// The total size in bytes of the media files in the root folder.
+    /// </summary>
+    public long ContentBytes { get; init; }
 }

@@ -103,6 +103,7 @@ export function LibraryPage() {
                         lockContentLevel={selectedLevel?.slug}
                         referencedSavedFilter={filters.referencedSavedFilter}
                         isAppliedFilterDirty={filters.isAppliedFilterDirty}
+                        allowTitlePrefix={view === 'gallery'}
                     />
 
                     {library.hasBulkActions && (
@@ -129,6 +130,7 @@ export function LibraryPage() {
                     {!filters.filterRestoreError && (
                         <LibraryContentSection
                             isLoading={library.isLoading}
+                            isPlaceholderData={content.isPlaceholderData}
                             contentTypeValidationPending={route.contentTypeValidationPending}
                             error={content.error}
                             onRetry={() => content.refetch()}
@@ -142,6 +144,8 @@ export function LibraryPage() {
                             onPaginationChange={pagination.handlePaginationChange}
                             headerFilters={filters.headerFilters}
                             headerFilterHandlers={filters.headerFilterHandlers}
+                            titlePrefix={filters.titlePrefix}
+                            onTitlePrefixChange={filters.handleTitlePrefixChange}
                             hasBulkActions={library.hasBulkActions}
                             selection={selection.selection}
                             selectionMode={library.selectionMode}
@@ -212,6 +216,7 @@ export function LibraryPage() {
                 onCancelBulkDelete={bulk.closeBulkDeleteConfirm}
                 bulkDeleteFiles={bulk.bulkDeleteFiles}
                 onBulkDeleteFilesChange={bulk.setBulkDeleteFiles}
+                bulkDeletePreview={bulk.bulkDeletePreview}
                 isDeleting={bulk.isDeleting}
             />
         </div>

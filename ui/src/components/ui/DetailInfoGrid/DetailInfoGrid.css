@@ -12,7 +12,7 @@
 
     .detail-info-row {
         display: grid;
-        grid-template-columns: 7rem minmax(8rem, 1fr) minmax(12rem, 18rem);
+        grid-template-columns: 7rem minmax(5.5rem, 1fr) max-content;
         gap: var(--space-md);
         align-items: start;
         min-height: 32px;
@@ -75,7 +75,7 @@
         }
 
         .detail-info-row__control {
-            grid-column: 2;
+            grid-column: 1 / -1;
             justify-content: stretch;
         }
     }
@@ -86,8 +86,7 @@
         }
 
         .detail-info-row__value,
-        .detail-info-row[data-has-control='false'] .detail-info-row__value,
-        .detail-info-row__control {
+        .detail-info-row[data-has-control='false'] .detail-info-row__value {
             grid-column: 1;
         }
     }

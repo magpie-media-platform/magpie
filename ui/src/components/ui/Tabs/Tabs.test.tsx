@@ -189,7 +189,9 @@ describe('Tabs', () => {
         expect(root.style.minHeight).toBe('1200px');
 
         frames.forEach((cb) => cb(0));
-        expect(observeSpy).toHaveBeenCalledTimes(1);
+        expect(observeSpy.mock.calls.filter(([element]) => element.getAttribute('role') === 'tabpanel')).toHaveLength(
+            1,
+        );
         expect(root.style.minHeight).toBe('1200px');
 
         scroller.scrollTop = 445;
@@ -686,6 +688,21 @@ describe('Tabs', () => {
     });
 });
 
+describe('TabsList fit', () => {
+    it('shares the row equally while the labels hold', () => {
+        render(
+            <Tabs defaultValue="tab1">
+                <TabsList>
+                    <TabsTrigger value="tab1">Tab 1</TabsTrigger>
+                    <TabsTrigger value="tab2">Tab 2</TabsTrigger>
+                </TabsList>
+            </Tabs>,
+        );
+
+        expect(screen.getByRole('tablist')).toHaveAttribute('data-fit', 'equal');
+    });
+});
+
 describe('DetailTabsList', () => {
     const strip = () => (
         <TooltipProvider>
@@ -700,13 +717,12 @@ describe('DetailTabsList', () => {
         </TooltipProvider>
     );
 
-    it('uses the shared two-mode detail strip without measurement state', () => {
+    it('shows labels in the detail strip while the tabs hold', () => {
         render(strip());
 
         const list = screen.getByRole('tablist');
         expect(list).toHaveClass('tabs-list--detail');
-        expect(list).not.toHaveAttribute('data-collapsed');
-        expect(list).not.toHaveAttribute('data-measuring');
+        expect(list).toHaveAttribute('data-fit', 'labels');
         expect(screen.getByText('Tab 1')).toBeInTheDocument();
         expect(screen.getByRole('tab', { name: 'Tab 2 (3)' })).toBeInTheDocument();
         expect(screen.getByText('3')).toBeInTheDocument();

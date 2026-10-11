@@ -102,10 +102,12 @@
     }
 
     .details-panel--dialog .details-panel__label {
+        min-width: 0;
         font-size: var(--text-xs);
         font-weight: var(--weight-medium);
         text-transform: uppercase;
         letter-spacing: 0.02em;
+        overflow-wrap: anywhere;
     }
 
     .details-panel--dialog .details-panel__value {

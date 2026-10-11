@@ -44,6 +44,11 @@ internal sealed class SystemEndpointGroup : IApiEndpointGroup
             .ProducesProblem(StatusCodes.Status503ServiceUnavailable)
             .AllowAnonymous();
 
+        builder.MapGet("instance-name", GetInstanceNameAsync)
+            .WithName(nameof(GetInstanceNameAsync))
+            .Produces<string>()
+            .AllowAnonymous();
+
         builder.MapGet("files", BrowseFilesAsync)
             .WithName(nameof(BrowseFilesAsync))
             .Produces<IReadOnlyList<FileSystemEntry>>()
@@ -113,6 +118,13 @@ internal sealed class SystemEndpointGroup : IApiEndpointGroup
     internal IResult GetSystemReadiness()
     {
         return Results.Ok();
+    }
+
+    internal async Task<IResult> GetInstanceNameAsync(
+        [FromServices] ISettingsService settingsService,
+        CancellationToken cancellationToken)
+    {
+        return Results.Ok(await settingsService.GetInstanceNameAsync(cancellationToken).ConfigureAwait(false));
     }
 
     internal async Task<IResult> BrowseFilesAsync(

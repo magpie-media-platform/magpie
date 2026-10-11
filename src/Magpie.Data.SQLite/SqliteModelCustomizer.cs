@@ -12,6 +12,7 @@ internal sealed class SqliteModelCustomizer(ModelCustomizerDependencies dependen
     public override void Customize(ModelBuilder modelBuilder, DbContext context)
     {
         base.Customize(modelBuilder, context);
+        modelBuilder.Entity<ContentHierarchyItem>().HasIndex(e => new { e.ParentId, e.EffectiveMonitoring });
         modelBuilder.Entity<ReleaseIdentityKey>()
             .HasIndex(e => new { e.Authority, e.Value })
             .IsUnique()

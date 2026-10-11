@@ -22,9 +22,11 @@ public interface IExtensionRepository :
     /// </summary>
     /// <param name="discovered">The extensions that the host discovered</param>
     /// <param name="loaded">The loaded extensions</param>
+    /// <param name="packageVersions">The package versions of the extensions, by extension id</param>
     /// <param name="cancellationToken">The token that cancels the operation</param>
     Task RegisterLoadedExtensionsAsync(
         IReadOnlyList<Extension> discovered,
         IReadOnlyList<IExtension> loaded,
+        IReadOnlyDictionary<Guid, string> packageVersions,
         CancellationToken cancellationToken = default);
 }

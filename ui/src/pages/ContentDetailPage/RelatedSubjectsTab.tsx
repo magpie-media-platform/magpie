@@ -73,7 +73,6 @@ export function RelatedSubjectsTab({ contentId }: RelatedSubjectsTabProps) {
 }
 
 function RelatedSubjectEntry({ row }: { row: ContentRelationship }) {
-    // Avatar keeps its image-error state, so a new URL needs a fresh instance.
     const avatar = (
         <Avatar
             key={row.imageUrl}

@@ -26,6 +26,7 @@
 
             h1 {
                 margin-block: 0 0.5rem;
+                overflow-wrap: anywhere;
             }
 
             p {
@@ -39,5 +40,15 @@
             <h1>Magpie is offline</h1>
             <p>Check your connection, then reload this page.</p>
         </main>
+        <script>
+            try {
+                const instanceName = localStorage.getItem('magpie.instanceName');
+                if (instanceName) {
+                    document.title = document.querySelector('h1').textContent = `${instanceName} is offline`;
+                }
+            } catch {
+                void 0;
+            }
+        </script>
     </body>
 </html>

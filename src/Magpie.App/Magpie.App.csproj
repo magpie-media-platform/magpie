@@ -55,8 +55,4 @@
     </ItemGroup>
   </Target>
 
-  <Target Name="RemoveIntegrationTestShimsPublishOutput" AfterTargets="Publish">
-    <RemoveDir Directories="$(PublishDir)extensions\integrationtestshims" />
-  </Target>
-
 </Project>

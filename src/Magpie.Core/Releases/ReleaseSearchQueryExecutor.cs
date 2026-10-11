@@ -1713,6 +1713,7 @@ internal sealed class ReleaseSearchQueryExecutor(
                 {
                     Key = string.Empty,
                     IndexerId = release.IndexerId,
+                    IndexerConnectionId = connection.Id,
                     Protocol = release.Protocol,
                     ExternalId = release.ExternalId,
                     Title = release.Title,
@@ -1973,6 +1974,7 @@ internal sealed class ReleaseSearchQueryExecutor(
         foreach (var candidate in source.Sources)
         {
             if (!target.Sources.Any(existing => existing.IndexerId == candidate.IndexerId &&
+                existing.IndexerConnectionId == candidate.IndexerConnectionId &&
                 string.Equals(existing.ExternalId, candidate.ExternalId, StringComparison.Ordinal) &&
                 Equals(existing.InfoUrl, candidate.InfoUrl)))
             {
@@ -2039,6 +2041,7 @@ internal sealed class ReleaseSearchQueryExecutor(
                 ReleaseId = releaseSource.ReleaseId,
                 Key = releaseSource.Key,
                 IndexerId = releaseSource.IndexerId,
+                IndexerConnectionId = releaseSource.IndexerConnectionId,
                 Protocol = releaseSource.Protocol,
                 ExternalId = releaseSource.ExternalId,
                 Title = releaseSource.Title,

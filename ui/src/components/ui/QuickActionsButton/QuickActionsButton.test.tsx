@@ -104,6 +104,44 @@ describe('QuickActionsButton', () => {
         });
     });
 
+    it('SingleAction_ShowsItsLabelOnTheFab_WhenShowLabelIsSet', () => {
+        // Arrange
+        const singleAction: QuickAction[] = [
+            { id: 'retry-failed', label: 'Retry failed (12)', icon: <ArrowClockwiseIcon />, onClick: vi.fn() },
+        ];
+
+        // Act
+        render(<QuickActionsButton actions={singleAction} showLabel />);
+
+        // Assert
+        const fab = screen.getByRole('button', { name: 'Retry failed (12)' });
+        expect(fab).toHaveTextContent('Retry failed (12)');
+        expect(fab).toHaveClass('quick-actions-button__fab--labelled');
+    });
+
+    it('SingleAction_RunsAtOnce_WhenItHasADescription', async () => {
+        // Arrange
+        const user = userEvent.setup();
+        const onCreate = vi.fn();
+        const describedAction: QuickAction[] = [
+            {
+                id: 'create-backup',
+                label: 'Create Backup',
+                icon: <ArrowClockwiseIcon />,
+                onClick: onCreate,
+                description: 'Create needs write access to the backup directory',
+            },
+        ];
+        render(<QuickActionsButton actions={describedAction} title="Create Backup" />);
+
+        // Act
+        await user.click(screen.getByRole('button', { name: 'Create Backup' }));
+
+        // Assert
+        expect(onCreate).toHaveBeenCalledTimes(1);
+        expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+
     it('single disabled action renders disabled FAB', () => {
         const onClickDisabled = vi.fn();
         const disabledAction: QuickAction[] = [

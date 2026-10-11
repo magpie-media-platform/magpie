@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Text.Json;
 
 using Magpie.Extensions.Cardigann.Engine;
@@ -35,7 +36,11 @@ public sealed class JsonElementExtensionsTests
         const string json = """{"items":["text",null,42,true]}""";
 
         // Act
-        var result = json.ApplyCardigannFilter("jsonjoinarray", new object[] { "items", "|" }, TimeProvider.System);
+        var result = json.ApplyCardigannFilter(
+            "jsonjoinarray",
+            new object[] { "items", "|" },
+            new Dictionary<string, object?>(),
+            TimeProvider.System);
 
         // Assert
         Assert.That(result, Is.EqualTo("text||42|true"));

@@ -95,7 +95,6 @@ internal sealed class DownloadImportScanJob(
             return;
         }
 
-        // Text reference filters do not match all GUID forms that the item job accepts.
         var downloadIds = downloads.Select(download => download.Id).ToHashSet();
         var history = (await jobExecutionRepository.QueryAllAsync(
             new JobExecutionQuery { JobType = MagpieJobs.Types.DownloadImportItem },

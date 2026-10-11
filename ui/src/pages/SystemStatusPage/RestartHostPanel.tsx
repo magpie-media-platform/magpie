@@ -12,10 +12,12 @@ import {
     DialogTitle,
 } from '@/components/ui/Dialog';
 import { useHostRestart } from '@/hooks/useHostRestart';
+import { useInstanceName } from '@/hooks/useInstanceName';
 
 import './RestartHostPanel.css';
 
 export function RestartHostPanel() {
+    const instanceName = useInstanceName();
     const { capabilityLoading, canRestart, phase, error, openConfirm, cancelConfirm, requestRestart, reset, recover } =
         useHostRestart();
 
@@ -39,7 +41,7 @@ export function RestartHostPanel() {
                     icon={<WarningIcon weight="fill" aria-hidden="true" />}
                     data-testid="restart-unavailable"
                 >
-                    This deployment has no supervisor to relaunch Magpie, so a restart cannot be performed.
+                    This deployment has no supervisor to relaunch {instanceName}, so a restart cannot be performed.
                 </Alert>
             )}
 
@@ -79,11 +81,11 @@ export function RestartHostPanel() {
             >
                 <DialogContent size="alert" data-component="restart-confirm-dialog">
                     <DialogHeader>
-                        <DialogTitle>Restart Magpie?</DialogTitle>
+                        <DialogTitle>Restart {instanceName}?</DialogTitle>
                         <DialogDescription>
-                            Magpie will shut down and the supervisor will relaunch it. The interface will be briefly
-                            unavailable while it reconnects. Running jobs stop. Each job retries or stays failed,
-                            according to its recovery policy.
+                            {instanceName} will shut down and the supervisor will relaunch it. The interface will be
+                            briefly unavailable while it reconnects. Running jobs stop. Each job retries or stays
+                            failed, according to its recovery policy.
                         </DialogDescription>
                     </DialogHeader>
                     <DialogFooter>
@@ -114,13 +116,13 @@ export function RestartHostPanel() {
                                     className="restart-host-panel__overlay-icon"
                                     aria-hidden="true"
                                 />
-                                <h3 className="restart-host-panel__overlay-title">Magpie is back online</h3>
+                                <h3 className="restart-host-panel__overlay-title">{instanceName} is back online</h3>
                                 <p className="restart-host-panel__overlay-message">
-                                    Magpie has restarted and is responding again.
+                                    {instanceName} has restarted and is responding again.
                                 </p>
                                 <div className="restart-host-panel__overlay-actions">
                                     <Button variant="primary" onClick={recover} data-action="reload">
-                                        Reload Magpie
+                                        Reload {instanceName}
                                     </Button>
                                     <Button variant="ghost" onClick={reset} data-action="dismiss">
                                         Dismiss
@@ -138,7 +140,7 @@ export function RestartHostPanel() {
                                 <p className="restart-host-panel__overlay-message">
                                     {phase === 'restarting'
                                         ? 'Requesting a graceful restart...'
-                                        : 'Waiting for Magpie to come back online.'}
+                                        : `Waiting for ${instanceName} to come back online.`}
                                 </p>
                             </>
                         )}

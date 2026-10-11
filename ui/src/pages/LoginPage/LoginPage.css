@@ -36,6 +36,7 @@
         font-size: var(--text-2xl);
         font-weight: var(--weight-bold);
         color: var(--text-primary);
+        overflow-wrap: anywhere;
     }
 
     .login-page__subtitle {

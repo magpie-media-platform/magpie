@@ -20,8 +20,6 @@ internal static class CommandHttpRequestExecutionExtensions
         this HttpRequestMessage request,
         CommandTransportOptions transportOptions,
         Func<CancellationToken, Task<WebApplication>> localAppFactory,
-        bool blob,
-        string? outputPath,
         TextWriter output,
         TextWriter error,
         CancellationToken cancellationToken)
@@ -43,12 +41,7 @@ internal static class CommandHttpRequestExecutionExtensions
         {
             using (client)
             {
-                var completionOption = blob
-                    ? HttpCompletionOption.ResponseHeadersRead
-                    : HttpCompletionOption.ResponseContentRead;
-                using var response = await client
-                    .SendAsync(request, completionOption, cancellationToken)
-                    .ConfigureAwait(false);
+                using var response = await client.SendAsync(request, cancellationToken).ConfigureAwait(false);
                 if (!response.IsSuccessStatusCode)
                 {
                     var failureBody = await response.Content.ReadAsStringAsync(cancellationToken)
@@ -64,35 +57,12 @@ internal static class CommandHttpRequestExecutionExtensions
                     return 1;
                 }
 
-                if (!blob)
+                var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+                if (!string.IsNullOrWhiteSpace(body))
                 {
-                    var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
-                    if (!string.IsNullOrWhiteSpace(body))
-                    {
-                        await output.WriteLineAsync(FormatJson(body)).ConfigureAwait(false);
-                    }
-
-                    return 0;
+                    await output.WriteLineAsync(FormatJson(body)).ConfigureAwait(false);
                 }
 
-                var targetPath = string.IsNullOrWhiteSpace(outputPath)
-                    ? ResolveSuggestedFileName(response)
-                    : outputPath;
-                if (string.IsNullOrWhiteSpace(targetPath))
-                {
-                    await error.WriteLineAsync("The server did not suggest a file name; specify --output.")
-                        .ConfigureAwait(false);
-                    return 1;
-                }
-
-                var fullPath = Path.GetFullPath(targetPath);
-                var file = new FileStream(fullPath, FileMode.Create, FileAccess.Write, FileShare.None);
-                await using (file.ConfigureAwait(false))
-                {
-                    await response.Content.CopyToAsync(file, cancellationToken).ConfigureAwait(false);
-                }
-
-                await output.WriteLineAsync(fullPath).ConfigureAwait(false);
                 return 0;
             }
         }
@@ -106,17 +76,6 @@ internal static class CommandHttpRequestExecutionExtensions
             await WriteTransportFailureAsync(ex, error).ConfigureAwait(false);
             return 1;
         }
-    }
-
-    private static string? ResolveSuggestedFileName(HttpResponseMessage response)
-    {
-        var contentDisposition = response.Content.Headers.ContentDisposition;
-        var fileName = contentDisposition?.FileNameStar ?? contentDisposition?.FileName;
-        var name = Path.GetFileName(fileName?.Trim('"').Replace('\\', '/'));
-        return string.IsNullOrWhiteSpace(name) || name is "." or ".." ||
-            name.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0 || name.Contains(':')
-                ? null
-                : name;
     }
 
     private static Task WriteTransportFailureAsync(Exception exception, TextWriter error)

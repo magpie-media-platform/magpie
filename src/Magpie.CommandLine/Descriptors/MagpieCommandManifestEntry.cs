@@ -15,5 +15,4 @@ internal sealed record MagpieCommandManifestEntry(
     IReadOnlyList<MagpieCommandParameterDescriptor> PathParameters,
     IReadOnlyList<MagpieCommandParameterDescriptor> QueryParameters,
     MagpieCommandBodyKind BodyKind,
-    string? FileFieldName,
-    bool BlobResult);
+    string? FileFieldName);

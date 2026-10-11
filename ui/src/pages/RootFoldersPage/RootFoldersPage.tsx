@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
+import { Fragment, useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
     FolderOpenIcon,
@@ -114,8 +114,8 @@ export function RootFoldersPage() {
     }, [editingFolder, folders]);
     const {
         folders: diskSpaceFolders,
-        totals: diskSpaceTotals,
         isLoading: isDiskSpaceLoading,
+        error: diskSpaceError,
         refetch: refetchDiskSpace,
     } = useDiskSpace();
 
@@ -361,7 +361,6 @@ export function RootFoldersPage() {
                 accessorFn: (row) => row.name,
                 header: 'Name',
                 meta: { mobileRole: 'header' },
-                size: 220,
                 cell: ({ row }) => (
                     <span className="root-folders-table__name" title={row.original.name}>
                         {row.original.name}
@@ -372,10 +371,14 @@ export function RootFoldersPage() {
                 id: 'path',
                 accessorFn: (row) => row.path,
                 header: 'Path',
-                size: 280,
                 cell: ({ row }) => (
                     <span className="root-folders-table__path" title={row.original.path}>
-                        {row.original.path}
+                        {row.original.path.split(/(?<=[\\/])(?<!^\\{1,2})/).map((segment, index) => (
+                            <Fragment key={index}>
+                                {index > 0 && <wbr />}
+                                {segment}
+                            </Fragment>
+                        ))}
                     </span>
                 ),
             },
@@ -393,7 +396,6 @@ export function RootFoldersPage() {
                     />
                 ),
                 meta: { headerLabel: 'Type' },
-                size: 160,
                 cell: ({ row }) => {
                     const name = getContentTypeName(row.original.contentType, contentTypes);
                     return (
@@ -407,7 +409,6 @@ export function RootFoldersPage() {
                 id: 'monitoring',
                 accessorFn: (row) => row.defaultMonitoring,
                 header: 'Monitoring',
-                size: 130,
                 cell: ({ row }) => {
                     const monitoring = row.original.defaultMonitoring;
                     return (
@@ -422,7 +423,7 @@ export function RootFoldersPage() {
                 accessorFn: (row) => row.isDefault,
                 header: 'Default',
                 enableSorting: false,
-                size: 100,
+                size: 90,
                 cell: ({ row }) => {
                     const folder = row.original;
                     const contentTypeName = getContentTypeName(folder.contentType, contentTypes);
@@ -447,7 +448,7 @@ export function RootFoldersPage() {
                 id: 'actions',
                 header: '',
                 enableSorting: false,
-                size: 120,
+                size: 104,
                 cell: ({ row }) => (
                     <div className="root-folders-page__item-actions card-actions">
                         <Tooltip content="Edit">
@@ -528,11 +529,7 @@ export function RootFoldersPage() {
         <EmptyState
             icon={<WarningCircleIcon weight="duotone" />}
             title="Failed to load root folders"
-            action={
-                <Button variant="secondary" size="sm" onClick={() => refetch()}>
-                    Retry
-                </Button>
-            }
+            onRetry={refetch}
             size="sm"
         />
     );
@@ -567,8 +564,9 @@ export function RootFoldersPage() {
                         heading="Root Folders"
                         icon={<HardDrivesIcon weight="duotone" />}
                         folders={diskSpaceFolders}
-                        totals={diskSpaceTotals}
                         loading={isDiskSpaceLoading}
+                        error={diskSpaceError}
+                        onRetry={() => void refetchDiskSpace()}
                         headingLevel={3}
                     />
                 </section>

@@ -109,10 +109,10 @@ export async function acquireContent(api: ApiClient, fixture: AcquisitionFixture
     let secondGrabStatus: number | undefined;
     if (fixture.proveConcurrentGrab) {
         await mocks.downloadClient.setLatency({ DownloadReleaseAsync: 2_000 });
-        const firstGrab = api.post(`/api/interactive-search/${fixture.contentId}/grab`, candidate.release);
+        const firstGrab = api.post(`/api/interactive-search/${fixture.contentId}/grab/${candidate.release.id}`);
         await new Promise((resolve) => setTimeout(resolve, 250));
         try {
-            await api.post(`/api/interactive-search/${fixture.contentId}/grab`, candidate.release);
+            await api.post(`/api/interactive-search/${fixture.contentId}/grab/${candidate.release.id}`);
         } catch (error) {
             if (!(error instanceof ApiError)) {
                 throw error;
@@ -122,7 +122,7 @@ export async function acquireContent(api: ApiClient, fixture: AcquisitionFixture
         await firstGrab;
         await mocks.downloadClient.setLatency({});
     } else {
-        await api.post(`/api/interactive-search/${fixture.contentId}/grab`, candidate.release);
+        await api.post(`/api/interactive-search/${fixture.contentId}/grab/${candidate.release.id}`);
     }
 
     const queued = await until(

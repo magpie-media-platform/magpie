@@ -18,6 +18,11 @@
         background-color: var(--bg-tertiary);
     }
 
+    .children-tab__poster.children-tab__poster--spacer {
+        height: 0;
+        background: none;
+    }
+
     .children-tab__poster--placeholder {
         display: flex;
         align-items: center;
@@ -179,15 +184,10 @@
         display: flex;
         align-items: center;
         flex-wrap: wrap;
-        gap: var(--space-xs);
+        gap: var(--space-sm);
         min-width: 0;
         font-size: var(--text-sm);
         color: var(--text-secondary);
-
-        & > .button {
-            max-width: 100%;
-            white-space: normal;
-        }
     }
 
     .files-tab__summary {
@@ -203,16 +203,29 @@
         }
     }
 
-    .files-tab__import-action {
-        flex-shrink: 0;
-        margin-inline-start: auto;
-    }
-
-    .files-tab__empty-actions {
+    .files-tab__content-actions {
         display: flex;
         flex-wrap: wrap;
-        justify-content: center;
+        justify-content: flex-end;
         gap: var(--space-sm);
+        margin-inline-start: auto;
+
+        .empty-state & {
+            justify-content: center;
+        }
+    }
+
+    .files-tab > .bulk-actions-toolbar-presence {
+        margin-top: calc(var(--space-md) * -1);
+    }
+
+    .files-tab .bulk-actions-toolbar {
+        margin: var(--space-md) 0 0;
+    }
+
+    .files-tab__selection-actions > .button {
+        flex: 1 1 auto;
+        justify-content: center;
     }
 
     .files-tab__menu-trigger {
@@ -322,15 +335,6 @@
         min-width: 0;
     }
 
-    .files-tab__file-actions {
-        display: flex;
-        align-items: center;
-        flex-wrap: wrap;
-        gap: var(--space-sm);
-        padding-top: var(--space-sm);
-        border-top: 1px solid var(--border-subtle);
-    }
-
     .files-tab__panel-meta {
         display: flex;
         align-items: center;
@@ -410,25 +414,10 @@
         color: var(--text-secondary);
     }
 
-    /* The card layout shows the file actions in menus, so the toolbar and each file header stay on one line. */
     @media (max-width: 1023px) {
-        .files-tab__header {
-            flex-wrap: nowrap;
-        }
-
-        .files-tab__summary {
-            flex: 1 1 auto;
-            min-width: 0;
-        }
-
         .files-tab__panel-header {
             align-items: flex-start;
             gap: var(--space-sm);
-
-            /* The checkbox keeps its touch target but lets it overlap the card padding, so it sits by the name. */
-            & > .checkbox {
-                margin: calc(var(--space-sm) * -1);
-            }
         }
 
         .files-tab__name-cell {
@@ -441,7 +430,6 @@
             overflow-wrap: anywhere;
         }
 
-        /* The icon stays beside the first line of the path, which wraps to at most two lines. */
         .files-tab__folder {
             align-items: flex-start;
 
@@ -455,9 +443,13 @@
             -webkit-box-orient: vertical;
             -webkit-line-clamp: 2;
             white-space: normal;
-
-            /* A path has few spaces, so it breaks anywhere rather than leaving a short first line. */
             word-break: break-all;
+        }
+    }
+
+    @media (max-width: 1023px) and (pointer: coarse) {
+        .files-tab__panel-header > .checkbox {
+            margin: calc(var(--space-sm) * -1);
         }
     }
 
@@ -537,11 +529,12 @@
         gap: var(--space-xs);
     }
 
-    .releases-tab__waiting-reason {
+    .releases-tab__reason {
         display: block;
         color: var(--text-muted);
         font-size: var(--text-xs);
         white-space: normal;
+        overflow-wrap: anywhere;
     }
 
     .releases-tab__sources {

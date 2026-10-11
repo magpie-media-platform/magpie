@@ -298,6 +298,54 @@ public sealed class ContentFileServiceTests
             Is.EqualTo(Path.Combine(_rootFolder.Path, "Root", "Metadata Leaf (2020) Network", "source.mkv")));
     }
 
+    [TestCase("AC/DC", "01 - Hells Bells.flac", "AC DC", "01 - Hells Bells.flac")]
+    [TestCase("AC\\DC", "01 - Hells Bells.flac", "AC DC", "01 - Hells Bells.flac")]
+    [TestCase("Show", "Show - S01E05 - 24/7.mkv", "Show", "Show - S01E05 - 24 7.mkv")]
+    public async Task PreviewRenameAsync_KeepsEachNameInOneSegment_WhenAProviderNameContainsAPathSeparator(
+        string directoryName,
+        string fileName,
+        string expectedDirectory,
+        string expectedFileName)
+    {
+        // Arrange
+        var provider = new Mock<IPathResolutionContentTypeDefinitionProvider>();
+        provider
+            .Setup(p => p.BuildPathPlan(
+                It.IsAny<IReadOnlyList<ContentHierarchyItem>>(),
+                It.IsAny<IReadOnlyDictionary<Guid, IReadOnlyDictionary<string, IReadOnlyList<string>>>>(),
+                It.IsAny<string>(),
+                It.IsAny<string>()))
+            .Returns(new ContentPathPlan
+            {
+                Directories = [new ContentPathPlanDirectory { LevelSlug = "movie", Name = directoryName }],
+                FileName = fileName
+            });
+        _contentTypes.Setup(registry => registry.FindProviderFor("movie")).Returns(provider.Object);
+        var original = new FileInfo(Path.Combine(_rootFolder.Path, "incoming", "source.mkv"));
+
+        // Act
+        var result = await _subject.PreviewRenameAsync(_leaf.Id, original).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(
+            result.Rename.FullName,
+            Is.EqualTo(Path.Combine(_rootFolder.Path, expectedDirectory, expectedFileName)));
+    }
+
+    [Test]
+    public async Task PreviewRenameAsync_KeepsTheItemNameInOneSegment_WhenTheNameContainsAPathSeparator()
+    {
+        // Arrange
+        _leaf.Name = "Face/Off";
+        var original = new FileInfo(Path.Combine(_rootFolder.Path, "incoming", "source.mkv"));
+
+        // Act
+        var result = await _subject.PreviewRenameAsync(_leaf.Id, original).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(result.Rename.FullName, Is.EqualTo(Path.Combine(_rootFolder.Path, "Face Off", "source.mkv")));
+    }
+
     [Test]
     public async Task PreviewRenameAsync_ReturnsSubfolderTarget_WhenRootLevelDeclaresSubfolder()
     {
@@ -686,12 +734,29 @@ public sealed class ContentFileServiceTests
         Assert.That(exception!.Message, Is.EqualTo("Rename target escapes root folder"));
     }
 
-    [TestCase(new string[0], "S01E01.mkv")]
+    [TestCase(new string[0], 1, 1, 2, 3, "S01E01.mkv")]
     [TestCase(
         new[] { "22222222-2222-2222-2222-222222222222", "33333333-3333-3333-3333-333333333333" },
+        1,
+        1,
+        2,
+        3,
         "S01E01-03.mkv")]
+    [TestCase(new string[0], 17, 5, 6, 7, "S17E05.mkv")]
+    [TestCase(
+        new[] { "22222222-2222-2222-2222-222222222222", "33333333-3333-3333-3333-333333333333" },
+        17,
+        5,
+        6,
+        7,
+        "S17E05-07.mkv")]
+    [TestCase(new string[0], 0, 5, 6, 7, "S00E05.mkv")]
     public async Task PreviewRenameMaskAsync_RendersTheCoveredRange_WhenTheFileCoversSiblings(
         string[] covered,
+        int seasonNumber,
+        int firstNumber,
+        int secondNumber,
+        int thirdNumber,
         string expectedFileName)
     {
         // Arrange
@@ -736,6 +801,22 @@ public sealed class ContentFileServiceTests
         _leaf.Ordinal = 1;
         _leaf.ParentId = season.Id;
         _leaf.ContentItem = new ContentItem { Id = primary.ContentItemId, MediaFiles = { primary } };
+        season.MetadataContainer = new()
+        {
+            Contributions =
+            {
+                new() { ProviderType = "tmdb", Ordinal = 0, SequenceNumber = 1 },
+                new() { ProviderType = "user", Ordinal = -1, SequenceNumber = seasonNumber }
+            }
+        };
+        _leaf.MetadataContainer = new()
+        {
+            Contributions =
+            {
+                new() { ProviderType = "tmdb", Ordinal = 0, SequenceNumber = 1 },
+                new() { ProviderType = "user", Ordinal = -1, SequenceNumber = firstNumber }
+            }
+        };
         _files[primary.FilePath] = 5;
         _contentHierarchyItems
             .Setup(r => r.GetLineageAsync(_leaf.Id, It.IsAny<CancellationToken>()))
@@ -766,6 +847,10 @@ public sealed class ContentFileServiceTests
                         Slug = "episode-2",
                         Name = "Episode 2",
                         Ordinal = 2,
+                        MetadataContainer = new()
+                        {
+                            Contributions = { new() { ProviderType = "user", SequenceNumber = secondNumber } }
+                        },
                         ContentItem = new() { Id = new Guid("22222222-2222-2222-2222-222222222222") }
                     },
                     new()
@@ -775,6 +860,10 @@ public sealed class ContentFileServiceTests
                         Slug = "episode-3",
                         Name = "Episode 3",
                         Ordinal = 3,
+                        MetadataContainer = new()
+                        {
+                            Contributions = { new() { ProviderType = "user", SequenceNumber = thirdNumber } }
+                        },
                         ContentItem = new() { Id = new Guid("33333333-3333-3333-3333-333333333333") }
                     }
                 ],
@@ -821,8 +910,23 @@ public sealed class ContentFileServiceTests
             Is.EqualTo(Path.Combine(_rootFolder.Path, "Show", expectedFileName)));
     }
 
-    [Test]
-    public async Task PreviewImportRenameMaskAsync_RendersTheCoveredRange_WhenTheFileCoversSiblings()
+    [TestCase(1, 1, 2, 3, "S01E01-03.mkv", null)]
+    [TestCase(17, 5, 6, 7, "S17E05-07.mkv", null)]
+    [TestCase(17, 7, 5, 6, "S17E05-07.mkv", null)]
+    [TestCase(17, 5, 7, 8, null, "The rename token 'Episode.Number' has no value.")]
+    [TestCase(17, 5, 6, 8, null, "The rename token 'Episode.Number' has no value.")]
+    [TestCase(17, 5, 5, 6, null, "The rename token 'Episode.Number' has no value.")]
+    [TestCase(17, 5, 5, 5, null, "The rename token 'Episode.Number' has no value.")]
+    [TestCase(null, 5, 6, 7, null, "The rename token 'Season.Number' has no value.")]
+    [TestCase(17, null, 6, 7, null, "The rename token 'Episode.Number' has no value.")]
+    [TestCase(17, 5, 6, null, null, "The rename token 'Episode.Number' has no value.")]
+    public async Task PreviewImportRenameMaskAsync_RendersTheCoveredRange_WhenTheFileCoversSiblings(
+        int? seasonNumber,
+        int? firstNumber,
+        int? secondNumber,
+        int? thirdNumber,
+        string? expectedFileName,
+        string? expectedError)
     {
         // Arrange
         var show = new ContentHierarchyItem
@@ -875,7 +979,24 @@ public sealed class ContentFileServiceTests
         _leaf.Level = "episode";
         _leaf.Ordinal = 1;
         _leaf.ParentId = season.Id;
+        season.MetadataContainer = new()
+        {
+            Contributions = { new() { ProviderType = "user", SequenceNumber = seasonNumber } }
+        };
+        _leaf.MetadataContainer = new()
+        {
+            Contributions = { new() { ProviderType = "user", SequenceNumber = firstNumber } }
+        };
+        covered[0].MetadataContainer = new()
+        {
+            Contributions = { new() { ProviderType = "user", SequenceNumber = secondNumber } }
+        };
+        covered[1].MetadataContainer = new()
+        {
+            Contributions = { new() { ProviderType = "user", SequenceNumber = thirdNumber } }
+        };
         _files[path] = 5;
+        _fileSystem.Setup(fileSystem => fileSystem.DirectoryExists(It.IsAny<string>())).Returns(false);
         _contentTypes
             .Setup(registry => registry.GetDefinitionFor("tv"))
             .Returns(new ContentTypeDefinition
@@ -912,9 +1033,13 @@ public sealed class ContentFileServiceTests
             .ConfigureAwait(false);
 
         // Assert
-        Assert.That(
-            preview.Files.Single().DestinationPath,
-            Is.EqualTo(Path.Combine(_rootFolder.Path, "Show", "S01E01-03.mkv")));
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(
+                preview.Files.Single().DestinationPath,
+                Is.EqualTo(expectedFileName is null ? null : Path.Combine(_rootFolder.Path, "Show", expectedFileName)));
+            Assert.That(preview.Files.Single().Error, Is.EqualTo(expectedError));
+        }
     }
 
     [TestCase(new string[0], "episode")]

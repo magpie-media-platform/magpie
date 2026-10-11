@@ -12,7 +12,6 @@ export interface ListSorting {
     isDescending: boolean;
     selectField: (id: string) => void;
     setDirection: (desc: boolean) => void;
-    toggleDirection: () => void;
 }
 
 /** Resolves the active sort field and direction from table sorting state. */
@@ -47,9 +46,5 @@ export function useListSorting(
         [activeOption, onSortingChange],
     );
 
-    const toggleDirection = useCallback(() => {
-        setDirection(!isDescending);
-    }, [isDescending, setDirection]);
-
-    return { activeOption, isDescending, selectField, setDirection, toggleDirection };
+    return { activeOption, isDescending, selectField, setDirection };
 }

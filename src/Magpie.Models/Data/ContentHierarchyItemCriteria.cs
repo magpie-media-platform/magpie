@@ -92,6 +92,11 @@ public sealed record ContentHierarchyItemCriteria
     public CollectionCriteria<MediaFileCriteria> MediaFiles { get; set; } = new();
 
     /// <summary>
+    /// Criteria for the item and its descendants.
+    /// </summary>
+    public CollectionCriteria<ContentHierarchyItemCriteria> Subtree { get; set; } = new();
+
+    /// <summary>
     /// Criteria for the file system path.
     /// </summary>
     public CriteriaSet<PropertyCriterion<string>> Path { get; set; } = new();

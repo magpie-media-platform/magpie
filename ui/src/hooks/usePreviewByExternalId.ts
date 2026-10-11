@@ -2,6 +2,7 @@ import { useMutation } from '@tanstack/react-query';
 
 import { apiPost } from '@/lib/api';
 import type { ContentPreviewClip } from '@/types/content';
+import type { TemporalPrecision } from '@/types/contentMetadata';
 
 export interface PreviewByExternalIdRequest {
     providerType: string;
@@ -48,6 +49,7 @@ export interface ContentPreview {
     originalTitle?: string | null;
     overview?: string | null;
     releaseDate?: string | null;
+    releaseDatePrecision?: TemporalPrecision | null;
     year?: number | null;
     duration?: string | null;
     language?: string | null;

@@ -5,6 +5,8 @@ import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
 
+import type { AuthContextValue } from '@/auth';
+
 import { ToastProvider, ToastStateProvider, ToastViewport, ToastList } from '@/components/ui/Toast';
 import { TooltipProvider } from '@/components/ui/Tooltip';
 
@@ -22,13 +24,18 @@ vi.mock('@/auth', async (importOriginal) => {
     const original = await importOriginal<typeof import('@/auth')>();
     return {
         ...original,
-        useAuth: () =>
-            ({
-                isAuthenticated: true,
-                hasPermission: () => true,
-                getRequiredRole: () => undefined,
-                hasRole: () => true,
-            }) as unknown as ReturnType<typeof original.useAuth>,
+        useAuth: (): AuthContextValue => ({
+            isLoading: false,
+            isAuthenticated: true,
+            user: null,
+            hasPermission: () => true,
+            getRequiredRole: () => undefined,
+            hasRole: () => true,
+            permissionsFailed: false,
+            retryPermissions: () => {},
+            signOut: async () => {},
+            login: async () => {},
+        }),
     };
 });
 
@@ -170,6 +177,7 @@ function defaultApiGet(url: string) {
                     totalBytes: 1000 * 1024 * 1024 * 1024,
                     freeBytes: 750 * 1024 * 1024 * 1024,
                     usedBytes: 250 * 1024 * 1024 * 1024,
+                    contentBytes: 200 * 1024 * 1024 * 1024,
                 },
                 {
                     id: 'folder-2',
@@ -178,11 +186,9 @@ function defaultApiGet(url: string) {
                     totalBytes: 1000 * 1024 * 1024 * 1024,
                     freeBytes: 500 * 1024 * 1024 * 1024,
                     usedBytes: 500 * 1024 * 1024 * 1024,
+                    contentBytes: 0,
                 },
             ],
-            totalBytes: 1000 * 1024 * 1024 * 1024,
-            freeBytes: 750 * 1024 * 1024 * 1024,
-            usedBytes: 250 * 1024 * 1024 * 1024,
         });
     }
     if (url.startsWith('/quality-tier-lists')) {
@@ -205,6 +211,7 @@ function defaultApiGet(url: string) {
 
 afterEach(() => {
     cleanup();
+    vi.unstubAllGlobals();
     document
         .querySelectorAll('[data-component="toast"], .toast-viewport, [role="status"], [role="alert"]')
         .forEach((node) => {
@@ -274,6 +281,7 @@ describe('RootFoldersPage', () => {
     });
 
     it('keeps the selection toggle on the list toolbar line', async () => {
+        vi.stubGlobal('innerWidth', 390);
         render(<RootFoldersPage />, { wrapper: createTestWrapper() });
 
         const toggle = await screen.findByRole('button', { name: 'Select', pressed: false });
@@ -313,7 +321,7 @@ describe('RootFoldersPage', () => {
 
         await waitFor(() => {
             expect(document.querySelector('[data-component="monitoring-default-settings"]')).toBeInTheDocument();
-            expect(document.querySelector('[data-setting="system-default-monitoring"]')).toBeInTheDocument();
+            expect(document.querySelector('[data-field="system-default-monitoring"]')).toBeInTheDocument();
         });
     });
 
@@ -330,7 +338,7 @@ describe('RootFoldersPage', () => {
             expect(tvShows).not.toBeNull();
 
             const movieDiskSpace = within(movies as HTMLElement);
-            expect(movieDiskSpace.getByText('250.00 GB used')).toBeInTheDocument();
+            expect(movieDiskSpace.getByText('200.00 GB content')).toBeInTheDocument();
             expect(movieDiskSpace.getByText('750.00 GB free')).toBeInTheDocument();
             expect(movieDiskSpace.getByText('1000.00 GB total')).toBeInTheDocument();
             expect(movies).toHaveAttribute('data-usage-status', 'healthy');
@@ -417,6 +425,35 @@ describe('RootFoldersPage table rows', () => {
         });
         expect(screen.getByTitle(longName).closest('[data-column="name"]')).toBeInTheDocument();
         expect(screen.getByTitle(longPath).closest('[data-column="path"]')).toBeInTheDocument();
+    });
+
+    it('RootFoldersPage_OffersALineBreakAfterEachPathSeparator_WhenItShowsAPath', async () => {
+        // Arrange
+        render(<RootFoldersPage />, { wrapper: createTestWrapper() });
+
+        // Act
+        const path = await within(await screen.findByRole('grid')).findByTitle('/media/movies');
+
+        // Assert
+        expect(path.innerHTML).toBe('/<wbr>media/<wbr>movies');
+    });
+
+    it('RootFoldersPage_KeepsTheUncPrefixWithTheServerName_WhenItShowsAUncPath', async () => {
+        // Arrange
+        const uncPath = '\\\\diskstation\\video\\TV Shows';
+        mockApiGet.mockImplementation((url: string) => {
+            if (url === '/root-folders') {
+                return Promise.resolve([{ ...mockApiFolders[0], id: 'folder-unc', path: uncPath }]);
+            }
+            return defaultApiGet(url);
+        });
+        render(<RootFoldersPage />, { wrapper: createTestWrapper() });
+
+        // Act
+        const path = await within(await screen.findByRole('grid')).findByTitle(uncPath);
+
+        // Assert
+        expect(path.innerHTML).toBe('\\\\diskstation\\<wbr>video\\<wbr>TV Shows');
     });
 
     it('renders a content type badge per row', async () => {

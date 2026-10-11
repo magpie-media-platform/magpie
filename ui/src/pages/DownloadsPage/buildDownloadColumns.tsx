@@ -180,6 +180,7 @@ export function TitleCell({ download }: { download: ApiDownload }) {
                         parentId: download.contentHierarchyParentId,
                         title: label,
                     }}
+                    stacked
                 />
             </LocalContentLink>
         );

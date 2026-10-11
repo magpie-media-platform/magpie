@@ -8,6 +8,7 @@ import type { ReactNode } from 'react';
 import { AuthProvider } from '@/auth/AuthContext';
 import { Role } from '@/auth/types';
 import { ToastProvider, ToastStateProvider } from '@/components/ui/Toast';
+import { RestartRequiredProvider } from '@/hooks/ui/useRestartRequired';
 import { testEffectivePermissions } from '@/test/permissions';
 import { ApiError } from '@/lib/api';
 import * as apiModule from '@/lib/api';
@@ -17,6 +18,12 @@ import type { ApiSettingsGroup } from '@/hooks/useSettings';
 import { LoginPage } from '@/pages/LoginPage/LoginPage';
 
 import { SetupPage } from './SetupPage';
+
+const instanceNameState = vi.hoisted(() => ({ name: 'Magpie' }));
+
+vi.mock('@/hooks/useInstanceName', () => ({
+    useInstanceName: () => instanceNameState.name,
+}));
 
 vi.mock('@/lib/setupApi', async (importOriginal) => {
     const actual = await importOriginal<typeof import('@/lib/setupApi')>();
@@ -82,11 +89,13 @@ function renderSetupPage({ initialUser = null, loginElement = <div>Login page</d
                             skipSessionInit
                             initialPermissions={testEffectivePermissions()}
                         >
-                            <Routes>
-                                <Route path="/setup" element={<SetupPage />} />
-                                <Route path="/login" element={loginElement} />
-                                <Route path="/" element={<div>Home page</div>} />
-                            </Routes>
+                            <RestartRequiredProvider>
+                                <Routes>
+                                    <Route path="/setup" element={<SetupPage />} />
+                                    <Route path="/login" element={loginElement} />
+                                    <Route path="/" element={<div>Home page</div>} />
+                                </Routes>
+                            </RestartRequiredProvider>
                         </AuthProvider>
                     </MemoryRouter>
                 </ToastProvider>
@@ -152,6 +161,7 @@ const SETTINGS_GROUP_WITH_KEYS: ApiSettingsGroup = {
 describe('SetupPage', () => {
     beforeEach(() => {
         vi.resetAllMocks();
+        instanceNameState.name = 'Magpie';
         vi.mocked(setupApiModule.fetchSetupDatabaseStatus).mockResolvedValue({
             initialized: true,
             provider: 'SQLite',
@@ -161,6 +171,20 @@ describe('SetupPage', () => {
 
     afterEach(() => {
         vi.restoreAllMocks();
+    });
+
+    it('renders the instance name in the heading and the title when the instance name is set', async () => {
+        instanceNameState.name = 'Home Lab';
+        vi.mocked(setupApiModule.fetchSetupStatus).mockResolvedValue({
+            isRequired: true,
+            isComplete: false,
+            requiresAdminClaim: true,
+        });
+
+        renderSetupPage();
+
+        expect(await screen.findByRole('heading', { name: 'Welcome to Home Lab' })).toBeInTheDocument();
+        expect(document.title).toBe('Set Up - Home Lab');
     });
 
     it('renders the wizard shell when setup is required', async () => {
@@ -308,7 +332,8 @@ describe('SetupPage', () => {
         await waitFor(() => {
             expect(vi.mocked(apiModule.apiGet)).toHaveBeenCalledWith('/settings/groups');
         });
-        expect(await screen.findByText(/loading installed extensions/i)).toBeInTheDocument();
+        await waitForStep('extensions');
+        await user.click(screen.getByRole('button', { name: 'Continue' }));
         expect(screen.queryByText('Provider A')).not.toBeInTheDocument();
 
         await act(async () => {
@@ -484,7 +509,7 @@ describe('SetupPage', () => {
         await act(async () => {
             finishLogin({ id: 'user-1', username: 'admin', role: Role.Admin });
         });
-        await waitForStep('indexer');
+        await waitForStep('extensions');
         expect(setupApiModule.createSetupAdmin).toHaveBeenCalledOnce();
         expect(authApiModule.login).toHaveBeenCalledOnce();
     });
@@ -496,6 +521,8 @@ describe('SetupPage', () => {
 
         renderSetupPage();
         await claimAdmin(user);
+        await waitForStep('extensions');
+        await user.click(screen.getByRole('button', { name: 'Continue' }));
 
         await waitForStep('indexer');
         expect(document.querySelector('[data-step="metadata"]')).toBeNull();
@@ -508,6 +535,8 @@ describe('SetupPage', () => {
 
         renderSetupPage();
         await claimAdmin(user);
+        await waitForStep('extensions');
+        await user.click(screen.getByRole('button', { name: 'Continue' }));
 
         await waitForStep('metadata');
         expect(await screen.findByText('Provider A')).toBeInTheDocument();
@@ -529,10 +558,10 @@ describe('SetupPage', () => {
         expect(metadataSummary).not.toHaveTextContent('Skipped');
     });
 
-    it('keeps the claimed-admin form disabled until extension settings finish loading', async () => {
+    it('handleAdvance_StaysOnTheExtensionsStep_WhenExtensionSettingsAreLoading', async () => {
+        // Arrange
         const user = userEvent.setup();
         mockAdminClaim();
-
         let resolveGroups!: (groups: ApiSettingsGroup[]) => void;
         const groupsResponse = new Promise<ApiSettingsGroup[]>((resolve) => {
             resolveGroups = resolve;
@@ -543,20 +572,15 @@ describe('SetupPage', () => {
             }
             return [] as never;
         });
-
         renderSetupPage();
         await claimAdmin(user);
+        await waitForStep('extensions');
 
-        await waitFor(() => {
-            expect(vi.mocked(apiModule.apiGet)).toHaveBeenCalledWith('/settings/groups');
-        });
-        const continueButton = screen.getByRole('button', { name: /continue setup/i });
-        expect(continueButton).toBeDisabled();
-        expect(screen.getByLabelText(/^username/i)).toBeDisabled();
+        // Act
+        await user.click(screen.getByRole('button', { name: 'Continue' }));
 
-        await user.click(continueButton);
-        expect(vi.mocked(setupApiModule.createSetupAdmin)).toHaveBeenCalledTimes(1);
-
+        // Assert
+        expect(screen.getByRole('button', { name: 'Continue' })).toBeDisabled();
         await act(async () => {
             resolveGroups([]);
         });
@@ -565,26 +589,27 @@ describe('SetupPage', () => {
         expect(vi.mocked(authApiModule.login)).toHaveBeenCalledTimes(1);
     });
 
-    it('keeps a settings-load failure on the admin step and lets the user retry without recreating the admin', async () => {
+    it('handleAdvance_KeepsTheExtensionsStepWithTheError_WhenExtensionSettingsFailToLoad', async () => {
+        // Arrange
         const user = userEvent.setup();
         mockAdminClaim();
-        vi.mocked(apiModule.apiGet).mockRejectedValueOnce(new ApiError(500, 'Could not load extension settings'));
-
+        vi.mocked(apiModule.apiGet).mockImplementation(async (path: string) => {
+            if (path === '/settings/groups') {
+                throw new ApiError(500, 'Could not load extension settings');
+            }
+            return [] as never;
+        });
         renderSetupPage();
         await claimAdmin(user);
+        await waitForStep('extensions');
 
-        const error = await screen.findByTestId('setup-error');
-        expect(error).toHaveTextContent(/administrator created, but setup failed to continue/i);
-        expect(error).toHaveTextContent(/continue setup to try again/i);
-        expect(document.querySelector('[data-step="admin"]')).toBeInTheDocument();
-        expect(vi.mocked(setupApiModule.createSetupAdmin)).toHaveBeenCalledTimes(1);
+        // Act
+        await user.click(screen.getByRole('button', { name: 'Continue' }));
 
-        mockApiGet([]);
-        await user.click(screen.getByRole('button', { name: /continue setup/i }));
-
-        await waitForStep('indexer');
-        expect(vi.mocked(setupApiModule.createSetupAdmin)).toHaveBeenCalledTimes(1);
-        expect(vi.mocked(authApiModule.login)).toHaveBeenCalledTimes(1);
+        // Assert
+        expect(await screen.findByTestId('setup-error')).toHaveTextContent('Could not load extension settings');
+        expect(document.querySelector('[data-step="extensions"]')).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Continue' })).toBeEnabled();
     });
 
     it('presents the root-folder step before the media-server step', async () => {
@@ -594,6 +619,8 @@ describe('SetupPage', () => {
 
         renderSetupPage();
         await claimAdmin(user);
+        await waitForStep('extensions');
+        await user.click(screen.getByRole('button', { name: 'Continue' }));
 
         await waitForStep('indexer');
         await user.click(screen.getByRole('button', { name: /skip for now/i }));

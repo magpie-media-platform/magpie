@@ -115,7 +115,7 @@ describe('local preview workflow', () => {
         expect(screen.getByTestId('location')).toHaveTextContent('/downloads?status=active');
         // Act
         await user.click(trigger);
-        await user.click(await screen.findByRole('button', { name: 'Open Local title' }));
+        await user.click(await screen.findByRole('link', { name: 'Open Local title' }));
         // Assert
         await waitFor(() => expect(screen.getByTestId('location')).toHaveTextContent('/library/local'));
         expect(screen.getByTestId('location-state')).toHaveTextContent(
@@ -158,12 +158,76 @@ describe('local preview workflow', () => {
             .mockResolvedValueOnce({ title: 'Local title' });
         // Act
         fireEvent.click(trigger);
-        fireEvent.click(await screen.findByRole('button', { name: 'Open Local title' }));
+        fireEvent.click(await screen.findByRole('link', { name: 'Open Local title' }));
         // Assert
         await waitFor(() => expect(screen.getByTestId('location')).toHaveTextContent('/library/local'));
         expect(screen.getByTestId('location-state')).toHaveTextContent(
             '{"contentOrigin":{"pathname":"/wanted","search":"?page=3&filter=missing","hash":"","state":null}}',
         );
+    });
+
+    it('LocalPreview_RendersOpenControlAsLinkAndClosesDrawer_WhenOpenControlIsClicked', async () => {
+        // Arrange
+        vi.mocked(apiGet)
+            .mockResolvedValueOnce({ id: 'local', name: 'Fallback', contentType: 'movie', level: 'movie' })
+            .mockResolvedValueOnce({ title: 'Local title' });
+        render(
+            <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+                <MemoryRouter>
+                    <LocalContentPreviewProvider>
+                        <LocalContentLink contentId="local">Inspect item</LocalContentLink>
+                        <LocationLabel />
+                    </LocalContentPreviewProvider>
+                </MemoryRouter>
+            </QueryClientProvider>,
+            { wrapper: TooltipProvider },
+        );
+        fireEvent.click(screen.getByRole('link', { name: 'Inspect item' }));
+
+        // Act
+        const open = await screen.findByRole('link', { name: 'Open Local title' });
+
+        // Assert
+        expect(open).toHaveAttribute('href', '/library/local');
+        expect(open).toHaveAttribute('data-action', 'open-content');
+
+        // Act
+        fireEvent.click(open);
+
+        // Assert
+        await waitFor(() => expect(screen.queryByTestId('preview-drawer')).not.toBeInTheDocument());
+        expect(screen.getByTestId('location')).toHaveTextContent('/library/local');
+    });
+
+    it('LocalPreview_ShowsReadableOverview_WhenStoredOverviewHasMarkdown', async () => {
+        // Arrange
+        vi.mocked(apiGet)
+            .mockResolvedValueOnce({ id: 'local', name: 'Fallback', contentType: 'movie', level: 'movie' })
+            .mockResolvedValueOnce({
+                title: 'Local title',
+                overview:
+                    "[Comment by Kim Stanley Robinson, on The Guardian's website][1]: The Left Hand of Darkness by Ursula K Le Guin (1969) > One of my favorite novels is The Left Hand of Darkness. [1]: https://www.theguardian.com/books/2011/may/14/science-fiction-authors-choice",
+            });
+        render(
+            <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+                <MemoryRouter>
+                    <LocalContentPreviewProvider>
+                        <LocalContentLink contentId="local">Inspect item</LocalContentLink>
+                    </LocalContentPreviewProvider>
+                </MemoryRouter>
+            </QueryClientProvider>,
+            { wrapper: TooltipProvider },
+        );
+
+        // Act
+        fireEvent.click(screen.getByRole('link', { name: 'Inspect item' }));
+
+        // Assert
+        expect(
+            await screen.findByText(
+                "Comment by Kim Stanley Robinson, on The Guardian's website: The Left Hand of Darkness by Ursula K Le Guin (1969) One of my favorite novels is The Left Hand of Darkness.",
+            ),
+        ).toBeInTheDocument();
     });
 
     it('shows the full open label in a tooltip when the ellipsis hides part of it', async () => {
@@ -185,7 +249,7 @@ describe('local preview workflow', () => {
             { wrapper: TooltipProvider },
         );
         fireEvent.click(screen.getByRole('link', { name: 'Inspect item' }));
-        const open = await screen.findByRole('button', {
+        const open = await screen.findByRole('link', {
             name: 'Open A Very Long Title That Does Not Fit On One Line Of The Drawer Footer',
         });
 
@@ -222,7 +286,7 @@ describe('local preview workflow', () => {
             { wrapper: TooltipProvider },
         );
         fireEvent.click(screen.getByRole('link', { name: 'Inspect item' }));
-        const open = await screen.findByRole('button', {
+        const open = await screen.findByRole('link', {
             name: 'Open A Very Long Title That Does Not Fit On One Line Of The Drawer Footer',
         });
 

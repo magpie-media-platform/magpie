@@ -309,6 +309,7 @@ describe('Filter Query Autocomplete', () => {
                 'relationships',
                 'mediaFile',
                 'mediaFiles',
+                'subtree',
                 'and',
                 'or',
                 'not',

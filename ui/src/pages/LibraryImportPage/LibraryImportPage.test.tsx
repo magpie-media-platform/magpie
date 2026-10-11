@@ -16,15 +16,6 @@ import type {
 import type { ManualMatchTarget } from './ManualMatchDialog';
 import type { ImportScanControllerValue } from './useImportScanController';
 
-const mockNavigate = vi.fn();
-vi.mock('react-router-dom', async () => {
-    const actual = await vi.importActual('react-router-dom');
-    return {
-        ...actual,
-        useNavigate: () => mockNavigate,
-    };
-});
-
 const useLibraryImportCandidateGroupsMock = vi.fn();
 const useLibraryImportGroupCandidatesMock = vi.fn();
 const acceptGroupMutateAsync = vi.fn();
@@ -319,7 +310,8 @@ describe('LibraryImportPage', () => {
         expect(row).toHaveTextContent('tvmaze');
         expect(row).toHaveTextContent('Episode: 157');
         expect(within(row).getByRole('button', { name: /^Accept$/ })).toBeInTheDocument();
-        expect(within(row).getByRole('button', { name: /^Season$/ })).toBeInTheDocument();
+        expect(within(row).getByRole('link', { name: 'Bluey 2018' })).toBeInTheDocument();
+        expect(within(row).queryByRole('button', { name: /^Season$/ })).toBeNull();
         expect(within(row).queryByRole('button', { name: /^Match$/ })).toBeNull();
     });
 
@@ -361,8 +353,8 @@ describe('LibraryImportPage', () => {
         expect(within(row).queryByTitle('query:unknown show')).toBeNull();
     });
 
-    it('opens file details for a single-level group', async () => {
-        const user = userEvent.setup();
+    it('GroupLink_OpensTheFiles_WhenTheGroupHasOneLevel', async () => {
+        // Arrange
         setGroups([
             buildGroup({
                 groupKey: 'movie-1',
@@ -373,16 +365,20 @@ describe('LibraryImportPage', () => {
                 leafCount: 1,
             }),
         ]);
+
+        // Act
         render(<LibraryImportPage monitoringMode="" onMonitoringModeChange={() => {}} />, {
             wrapper: createTestWrapper(),
         });
 
+        // Assert
         await waitFor(() => expect(rowFor('movie-1')).toBeInTheDocument());
         const row = rowFor('movie-1');
         expect(within(row).getByRole('button', { name: /^Accept$/ })).toBeInTheDocument();
-        await user.click(within(row).getByRole('button', { name: 'Details' }));
-
-        expect(mockNavigate).toHaveBeenCalledWith('/library/import?key=movie-1&title=127+Hours');
+        expect(within(row).getByRole('link', { name: '127 Hours 2018' })).toHaveAttribute(
+            'href',
+            '/library/import?key=movie-1&title=127+Hours',
+        );
     });
 
     it('renders a single-leaf group count without an s (singular DTO display name)', async () => {
@@ -393,36 +389,6 @@ describe('LibraryImportPage', () => {
 
         await waitFor(() => expect(rowFor('movie-1')).toBeInTheDocument());
         expect(rowFor('movie-1')).toHaveTextContent('Movie: 1');
-    });
-
-    it('labels the dig-in button with the unchanged DTO child level name', async () => {
-        setGroups([
-            buildGroup({
-                groupKey: 'artist-1',
-                childLevelSlug: 'album',
-                childLevelDisplayName: 'Anthology',
-            }),
-        ]);
-        render(<LibraryImportPage monitoringMode="" onMonitoringModeChange={() => {}} />, {
-            wrapper: createTestWrapper(),
-        });
-
-        await waitFor(() => expect(rowFor('artist-1')).toBeInTheDocument());
-        const row = rowFor('artist-1');
-        expect(within(row).getByRole('button', { name: /^Anthology$/ })).toBeInTheDocument();
-        expect(within(row).queryByRole('button', { name: /^Season$/ })).toBeNull();
-    });
-
-    it('leaves a dig-in level name that already ends in s alone instead of doubling it', async () => {
-        setGroups([buildGroup({ groupKey: 'series-1', childLevelSlug: 'series', childLevelDisplayName: 'Series' })]);
-        render(<LibraryImportPage monitoringMode="" onMonitoringModeChange={() => {}} />, {
-            wrapper: createTestWrapper(),
-        });
-
-        await waitFor(() => expect(rowFor('series-1')).toBeInTheDocument());
-        const row = rowFor('series-1');
-        expect(within(row).getByRole('button', { name: /^Series$/ })).toBeInTheDocument();
-        expect(within(row).queryByRole('button', { name: /^Seriess$/ })).toBeNull();
     });
 
     it('disables Accept for a matched group whose candidates are all already queued', async () => {
@@ -597,18 +563,22 @@ describe('LibraryImportPage', () => {
         expect(screen.queryByText('1 selected')).not.toBeInTheDocument();
     });
 
-    it('renders a silenced group with its Silenced count and only the dig-in action', async () => {
+    it('GroupRow_ShowsTheSilencedCountAndOnlyItsLink_WhenEveryFileIsSilenced', async () => {
+        // Arrange
         setGroups([buildUnmatchedGroup({ groupKey: 'silenced-group', statusCounts: { Rejected: 1 } })]);
+
+        // Act
         render(<LibraryImportPage monitoringMode="" onMonitoringModeChange={() => {}} />, {
             wrapper: createTestWrapper(),
         });
 
+        // Assert
         await waitFor(() => expect(rowFor('silenced-group')).toBeInTheDocument());
         const row = rowFor('silenced-group');
         expect(row).toHaveTextContent('1 Silenced');
         expect(within(row).queryByRole('button', { name: /^Match$/ })).toBeNull();
         expect(within(row).queryByRole('button', { name: /^Accept$/ })).toBeNull();
-        expect(within(row).getByRole('button', { name: /^Season$/ })).toBeInTheDocument();
+        expect(within(row).getByRole('link', { name: 'Unknown Show' })).toBeInTheDocument();
     });
 
     it('renders a matching-pending group as pending and still offers a manual Match', async () => {
@@ -624,20 +594,22 @@ describe('LibraryImportPage', () => {
         expect(row).not.toHaveTextContent('MatchingPending');
         expect(within(row).getByRole('button', { name: /^Match$/ })).toBeEnabled();
         expect(within(row).queryByRole('button', { name: /^Accept$/ })).toBeNull();
-        expect(within(row).getByRole('button', { name: /^Season$/ })).toBeInTheDocument();
+        expect(within(row).getByRole('link', { name: 'Unknown Show' })).toBeInTheDocument();
     });
 
-    it('digging into a matched group navigates to the drill-down route with the group key and root folder', async () => {
-        const user = userEvent.setup();
+    it('GroupLink_KeepsTheRootFolderFilter_WhenTheQueueIsFiltered', async () => {
+        // Arrange
         setGroups([buildGroup()]);
+
+        // Act
         render(<LibraryImportPage monitoringMode="" onMonitoringModeChange={() => {}} />, {
             wrapper: createTestWrapper('/library/import?rootFolderId=folder-2'),
         });
 
+        // Assert
         await waitFor(() => expect(rowFor('/media/tv/Bluey')).toBeInTheDocument());
-        await user.click(within(rowFor('/media/tv/Bluey')).getByRole('button', { name: /^Season$/ }));
-
-        expect(mockNavigate).toHaveBeenCalledWith(
+        expect(within(rowFor('/media/tv/Bluey')).getByRole('link', { name: 'Bluey 2018' })).toHaveAttribute(
+            'href',
             expect.stringMatching(/^\/library\/import\?key=.*rootFolderId=folder-2/),
         );
     });

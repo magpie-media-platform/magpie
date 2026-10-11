@@ -49,7 +49,7 @@ export interface IndexerSearchResult {
 export interface MatchIndexerReleaseVariables {
     contentHierarchyItemId: string;
 
-    release: ApiRelease;
+    releaseId: string;
 }
 
 export const indexerSearchQueryKeys = {
@@ -71,7 +71,7 @@ export function useIndexerSearch(connectionIds: string[], query: IndexerSearchQu
 
 export function useMatchIndexerRelease() {
     return useMutation({
-        mutationFn: ({ contentHierarchyItemId, release }: MatchIndexerReleaseVariables) =>
-            apiPost<string>(`/indexer-search/${contentHierarchyItemId}/match`, release),
+        mutationFn: ({ contentHierarchyItemId, releaseId }: MatchIndexerReleaseVariables) =>
+            apiPost<string>(`/indexer-search/${contentHierarchyItemId}/match/${releaseId}`),
     });
 }

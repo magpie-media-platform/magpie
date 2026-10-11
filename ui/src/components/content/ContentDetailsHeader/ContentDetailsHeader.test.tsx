@@ -1,7 +1,8 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ContentDetailsHeader, type ContentDetailItem, type ParentContentRef } from './ContentDetailsHeader';
 import { TooltipProvider } from '@/components/ui/Tooltip';
@@ -22,7 +23,6 @@ const mockContent: ContentDetailItem = {
     posterUrl: 'https://example.com/poster.jpg',
     contentType: 'movie',
     levelLabel: 'Movie',
-    monitoring: 'Monitored',
     effectiveMonitoring: 'Monitored',
     fulfillment: 'fulfilled',
     year: 2024,
@@ -36,6 +36,10 @@ const mockParent: ParentContentRef = {
 };
 
 describe('ContentDetailsHeader', () => {
+    afterEach(() => {
+        vi.restoreAllMocks();
+    });
+
     it('renders the title', () => {
         renderWithRouter(<ContentDetailsHeader content={mockContent} />);
         expect(screen.getByRole('heading', { name: /Test Movie/i })).toBeInTheDocument();
@@ -169,11 +173,10 @@ describe('ContentDetailsHeader', () => {
         });
     });
 
-    it('renders explicit unmonitored and fulfillment states separately', () => {
+    it('renders unmonitored and fulfillment states separately', () => {
         // Arrange
         const unmonitoredContent = {
             ...mockContent,
-            monitoring: 'Unmonitored' as const,
             effectiveMonitoring: 'Unmonitored' as const,
             fulfillment: 'missing' as const,
         };
@@ -183,23 +186,6 @@ describe('ContentDetailsHeader', () => {
 
         // Assert
         expect(screen.getByText('Unmonitored')).toBeInTheDocument();
-        expect(screen.getByText('Missing')).toBeInTheDocument();
-    });
-
-    it('renders inherited unmonitored and fulfillment states separately', () => {
-        // Arrange
-        const inheritedUnmonitored = {
-            ...mockContent,
-            monitoring: null,
-            effectiveMonitoring: 'Unmonitored' as const,
-            fulfillment: 'missing' as const,
-        };
-
-        // Act
-        renderWithRouter(<ContentDetailsHeader content={inheritedUnmonitored} />);
-
-        // Assert
-        expect(screen.getByText('Unmonitored (inherited)')).toBeInTheDocument();
         expect(screen.getByText('Missing')).toBeInTheDocument();
     });
 
@@ -225,10 +211,200 @@ describe('ContentDetailsHeader', () => {
         expect(screen.getByText('A test movie about testing things.')).toBeInTheDocument();
     });
 
+    it('ContentDetailsHeader_RendersReadableOverview_WhenStoredOverviewHasMarkdown', () => {
+        // Arrange
+        const content = {
+            ...mockContent,
+            overview:
+                "[Comment by Kim Stanley Robinson, on The Guardian's website][1]: The Left Hand of Darkness by Ursula K Le Guin (1969) > One of my favorite novels is The Left Hand of Darkness. [1]: https://www.theguardian.com/books/2011/may/14/science-fiction-authors-choice",
+        };
+
+        // Act
+        renderWithRouter(<ContentDetailsHeader content={content} />);
+
+        // Assert
+        expect(
+            screen.getByText(
+                "Comment by Kim Stanley Robinson, on The Guardian's website: The Left Hand of Darkness by Ursula K Le Guin (1969) One of my favorite novels is The Left Hand of Darkness.",
+            ),
+        ).toBeInTheDocument();
+    });
+
     it('does not render overview when not provided', () => {
         const contentWithoutOverview = { ...mockContent, overview: undefined };
         renderWithRouter(<ContentDetailsHeader content={contentWithoutOverview} />);
         expect(screen.queryByText('A test movie about testing things.')).not.toBeInTheDocument();
+    });
+
+    describe('overview expansion', () => {
+        it('ContentDetailsHeader_OffersNoOverviewToggle_WhenOverviewFits', () => {
+            // Arrange
+            vi.spyOn(Element.prototype, 'scrollHeight', 'get').mockReturnValue(72);
+            vi.spyOn(Element.prototype, 'clientHeight', 'get').mockReturnValue(72);
+
+            // Act
+            renderWithRouter(<ContentDetailsHeader content={mockContent} />);
+
+            // Assert
+            expect(screen.queryByRole('button', { name: /Show/ })).not.toBeInTheDocument();
+        });
+
+        describe('when the overview is clamped', () => {
+            beforeEach(() => {
+                vi.spyOn(Element.prototype, 'scrollHeight', 'get').mockReturnValue(160);
+                vi.spyOn(Element.prototype, 'clientHeight', 'get').mockReturnValue(72);
+            });
+
+            it('ContentDetailsHeader_OffersCollapsedOverviewToggle_WhenOverviewIsClamped', () => {
+                // Arrange
+                // Act
+                renderWithRouter(<ContentDetailsHeader content={mockContent} />);
+
+                // Assert
+                const toggle = screen.getByRole('button', { name: 'Show more' });
+                const overview = screen.getByText('A test movie about testing things.');
+                expect(toggle).toHaveAttribute('aria-expanded', 'false');
+                expect(toggle).toHaveAttribute('aria-controls', overview.id);
+                expect(overview).not.toHaveClass('content-details-header__overview--expanded');
+            });
+
+            it('ContentDetailsHeader_ExpandsOverview_WhenToggleIsClicked', async () => {
+                // Arrange
+                const user = userEvent.setup();
+                renderWithRouter(<ContentDetailsHeader content={mockContent} />);
+
+                // Act
+                await user.click(screen.getByRole('button', { name: 'Show more' }));
+
+                // Assert
+                expect(screen.getByRole('button', { name: 'Show less' })).toHaveAttribute('aria-expanded', 'true');
+                expect(screen.getByText('A test movie about testing things.')).toHaveClass(
+                    'content-details-header__overview--expanded',
+                );
+            });
+
+            it('ContentDetailsHeader_CollapsesOverview_WhenExpandedToggleIsClicked', async () => {
+                // Arrange
+                const user = userEvent.setup();
+                renderWithRouter(<ContentDetailsHeader content={mockContent} />);
+                await user.click(screen.getByRole('button', { name: 'Show more' }));
+
+                // Act
+                await user.click(screen.getByRole('button', { name: 'Show less' }));
+
+                // Assert
+                expect(screen.getByRole('button', { name: 'Show more' })).toHaveAttribute('aria-expanded', 'false');
+                expect(screen.getByText('A test movie about testing things.')).not.toHaveClass(
+                    'content-details-header__overview--expanded',
+                );
+            });
+
+            it('ContentDetailsHeader_TogglesOverviewFromKeyboard_WhenToggleHasFocus', async () => {
+                // Arrange
+                const user = userEvent.setup();
+                renderWithRouter(<ContentDetailsHeader content={mockContent} />);
+                screen.getByRole('button', { name: 'Show more' }).focus();
+
+                // Act
+                await user.keyboard('{Enter}');
+
+                // Assert
+                expect(screen.getByRole('button', { name: 'Show less' })).toBeInTheDocument();
+            });
+
+            it('ContentDetailsHeader_CollapsesOverview_WhenContentChanges', async () => {
+                // Arrange
+                const user = userEvent.setup();
+                const { rerender } = renderWithRouter(<ContentDetailsHeader content={mockContent} />);
+                await user.click(screen.getByRole('button', { name: 'Show more' }));
+
+                // Act
+                rerender(
+                    <QueryClientProvider client={new QueryClient()}>
+                        <MemoryRouter>
+                            <ContentDetailsHeader
+                                content={{ ...mockContent, id: 'test-2', overview: 'Another overview.' }}
+                            />
+                        </MemoryRouter>
+                    </QueryClientProvider>,
+                );
+
+                // Assert
+                expect(screen.getByRole('button', { name: 'Show more' })).toBeInTheDocument();
+                expect(screen.getByText('Another overview.')).not.toHaveClass(
+                    'content-details-header__overview--expanded',
+                );
+            });
+        });
+    });
+
+    describe('content ratings', () => {
+        const ratings = [
+            { id: 'r1', body: 'GB', rating: '15' },
+            { id: 'r2', body: 'DE', rating: '12' },
+            { id: 'r3', body: 'FR', rating: 'U' },
+            { id: 'r4', body: 'US', rating: 'PG' },
+            { id: 'r5', body: 'JP', rating: 'G' },
+            { id: 'r6', body: 'AU', rating: 'M' },
+        ];
+
+        it.each([
+            ['en-US', /^USPGGB15DE12FRU$/],
+            ['de-DE', /^DE12GB15FRUUSPG$/],
+            ['fr', /^FRUGB15DE12USPG$/],
+        ])('ContentDetailsHeader_ShowsFourRatingsWithLocaleFirst_WhenLocaleIs%s', (locale, expected) => {
+            // Arrange
+            vi.spyOn(window.navigator, 'language', 'get').mockReturnValue(locale);
+
+            // Act
+            renderWithRouter(<ContentDetailsHeader content={mockContent} contentRatings={ratings} />);
+
+            // Assert
+            expect(screen.getByRole('list')).toHaveTextContent(expected);
+            expect(screen.getByRole('button', { name: 'Show all (2 more)' })).toHaveAttribute('aria-expanded', 'false');
+        });
+
+        it('ContentDetailsHeader_ExpandsAndCollapsesRatings_WhenToggleIsClicked', async () => {
+            // Arrange
+            const user = userEvent.setup();
+            renderWithRouter(<ContentDetailsHeader content={mockContent} contentRatings={ratings} />);
+
+            // Act
+            await user.click(screen.getByRole('button', { name: 'Show all (2 more)' }));
+
+            // Assert
+            expect(screen.getByRole('list')).toHaveTextContent(/^USPGGB15DE12FRUJPGAUM$/);
+            expect(screen.getByRole('button', { name: 'Show fewer' })).toHaveAttribute('aria-expanded', 'true');
+
+            // Act
+            await user.click(screen.getByRole('button', { name: 'Show fewer' }));
+
+            // Assert
+            expect(screen.getByRole('list')).toHaveTextContent(/^USPGGB15DE12FRU$/);
+        });
+
+        it('ContentDetailsHeader_TogglesRatingsFromKeyboard_WhenToggleHasFocus', async () => {
+            // Arrange
+            const user = userEvent.setup();
+            renderWithRouter(<ContentDetailsHeader content={mockContent} contentRatings={ratings} />);
+            screen.getByRole('button', { name: 'Show all (2 more)' }).focus();
+
+            // Act
+            await user.keyboard('{Enter}');
+
+            // Assert
+            expect(screen.getByRole('list')).toHaveTextContent(/^USPGGB15DE12FRUJPGAUM$/);
+        });
+
+        it('ContentDetailsHeader_ShowsNoRatingsToggle_WhenFourOrFewerRatings', () => {
+            // Arrange
+            // Act
+            renderWithRouter(<ContentDetailsHeader content={mockContent} contentRatings={ratings.slice(0, 4)} />);
+
+            // Assert
+            expect(screen.getByRole('list')).toHaveTextContent(/^USPGGB15DE12FRU$/);
+            expect(screen.queryByRole('button', { name: /Show/ })).not.toBeInTheDocument();
+        });
     });
 
     it('renders actions when provided', () => {

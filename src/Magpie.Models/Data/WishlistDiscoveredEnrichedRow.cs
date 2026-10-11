@@ -1,6 +1,7 @@
 using System;
 
 using Magpie.Models.Enums;
+using Magpie.Models.Filtering;
 
 namespace Magpie.Models.Data;
 
@@ -48,6 +49,11 @@ public sealed record WishlistDiscoveredEnrichedRow
     /// The date of first publication.
     /// </summary>
     public DateTime? PublishDate { get; init; }
+
+    /// <summary>
+    /// The calendar precision of <see cref="PublishDate"/>.
+    /// </summary>
+    public TemporalPrecision? PublishDatePrecision { get; init; }
 
     /// <summary>
     /// The UTC time when the library received the content item.

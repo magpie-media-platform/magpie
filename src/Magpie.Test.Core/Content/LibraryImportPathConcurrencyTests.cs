@@ -138,8 +138,9 @@ public sealed class LibraryImportPathConcurrencyTests
             .Returns((string left, string right) => left.Replace('\\', '/') == right.Replace('\\', '/'));
         var transactions = new Mock<ITransactionManager>();
         transactions.Setup(manager => manager.ExecuteWithTransactionAsync(
-                It.IsAny<Func<CancellationToken, Task<(Guid, MediaFile?)>>>(), It.IsAny<CancellationToken>()))
-            .Returns(async (Func<CancellationToken, Task<(Guid, MediaFile?)>> operation, CancellationToken token) =>
+                It.IsAny<Func<CancellationToken, Task<Guid>>>(),
+                It.IsAny<CancellationToken>()))
+            .Returns(async (Func<CancellationToken, Task<Guid>> operation, CancellationToken token) =>
             {
                 await _beforeTransaction.ConfigureAwait(false);
                 return await operation(token).ConfigureAwait(false);

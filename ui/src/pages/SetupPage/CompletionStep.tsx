@@ -13,6 +13,7 @@ import { useRootFolders } from '@/hooks/useRootFolders';
 import { useCompleteSetup } from '@/hooks/useSetup';
 import { apiGet, isApiError } from '@/lib/api';
 import { hasConfiguredExtensionSettings, settingsQueryKeys, type ApiSettingsGroup } from '@/hooks/useSettings';
+import { useInstanceName } from '@/hooks/useInstanceName';
 import type { SetupStepId } from './setupSteps';
 
 interface CompletionStepProps {
@@ -29,6 +30,7 @@ interface SummaryRow {
 const EMPTY_SKIPPED_STEPS: SetupStepId[] = [];
 
 export function CompletionStep({ onAdvance, skippedSteps = EMPTY_SKIPPED_STEPS }: CompletionStepProps): ReactNode {
+    const instanceName = useInstanceName();
     const { toast } = useToast();
     const { isAuthenticated } = useAuth();
     const navigate = useNavigate();
@@ -96,7 +98,7 @@ export function CompletionStep({ onAdvance, skippedSteps = EMPTY_SKIPPED_STEPS }
             await completeSetup.mutateAsync();
             toast({
                 title: 'Setup complete',
-                description: 'Magpie is ready to go.',
+                description: `${instanceName} is ready to go.`,
                 variant: 'success',
             });
             void navigate(isAuthenticated ? '/' : '/login', { replace: true });
@@ -108,12 +110,13 @@ export function CompletionStep({ onAdvance, skippedSteps = EMPTY_SKIPPED_STEPS }
                 variant: 'error',
             });
         }
-    }, [completeSetup, isAuthenticated, navigate, onAdvance, toast]);
+    }, [completeSetup, isAuthenticated, navigate, onAdvance, toast, instanceName]);
 
     return (
         <div className="setup-page__form" data-step="done">
             <p className="setup-page__hint">
-                Review the settings below. Then finish setup to start Magpie. The Admin pages contain these settings.
+                Review the settings below. Then finish setup to start {instanceName}. The Admin pages contain these
+                settings.
             </p>
 
             <ul className="setup-page__summary-list" data-component="setup-summary" role="list">

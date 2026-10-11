@@ -25,7 +25,7 @@ import { apiGet } from '@/lib/api';
 import { useInvalidateQueriesOnEvents } from '@/hooks/useInvalidateQueriesOnEvents';
 import type { ApiContentHierarchyItem, PagedContentHierarchyItems } from '@/types/content';
 
-import { fetchWantedChildren, useWantedContent, WANTED_CONTAINER_FILTER, WANTED_PAGE_SIZE } from './useWantedContent';
+import { fetchWantedChildren, useWantedContent, WANTED_PAGE_SIZE } from './useWantedContent';
 
 const missingItem: ApiContentHierarchyItem = {
     id: 'content-missing-1',
@@ -72,7 +72,7 @@ function createWrapper() {
 }
 
 describe('useWantedContent', () => {
-    it('keeps user MQL inside the wanted hierarchy and monitoring scope on both requests', async () => {
+    it('keeps user MQL inside the wanted subtree scope and the upgrade monitoring scope', async () => {
         const { Wrapper } = createWrapper();
         const { result } = renderHook(() => useWantedContent('show-1', 'title contains "a" or monitoring = false'), {
             wrapper: Wrapper,
@@ -82,10 +82,13 @@ describe('useWantedContent', () => {
             .mocked(apiGet)
             .mock.calls.map(([url]) => new URL(String(url), 'http://magpie.local').searchParams);
         expect(params[0].get('filter')).toBe(
-            'Fulfillment in (Missing, Partial) and (title contains "a" or monitoring = false)',
+            'Fulfillment in (Missing, Partial) and ' +
+                '(subtree has (monitoring != Unmonitored and fulfillment = Missing) ' +
+                'or subtree has (monitoring != Unmonitored and fulfillment = Partial)) and ' +
+                '(title contains "a" or monitoring = false)',
         );
         expect(params[0].get('parentId')).toBe('show-1');
-        expect(params[0].get('monitoring')).toBe('true');
+        expect(params[0].get('monitoring')).toBeNull();
         expect(params[1].get('filter')).toBe('title contains "a" or monitoring = false');
         expect(params[1].get('fulfillment')).toBe('Upgradable');
         expect(params[1].get('monitoring')).toBe('true');
@@ -118,8 +121,12 @@ describe('useWantedContent', () => {
         const containerParams = new URL(containerUrl!, 'http://magpie.local').searchParams;
         const upgradeParams = new URL(upgradeUrl!, 'http://magpie.local').searchParams;
         expect(containerParams.get('topLevelOnly')).toBe('true');
-        expect(containerParams.get('monitoring')).toBe('true');
-        expect(containerParams.get('filter')).toBe(WANTED_CONTAINER_FILTER);
+        expect(containerParams.get('monitoring')).toBeNull();
+        expect(containerParams.get('filter')).toBe(
+            'Fulfillment in (Missing, Partial) and ' +
+                '(subtree has (monitoring != Unmonitored and fulfillment = Missing) ' +
+                'or subtree has (monitoring != Unmonitored and fulfillment = Partial))',
+        );
         expect(upgradeParams.get('topLevelOnly')).toBe('true');
         expect(upgradeParams.get('monitoring')).toBe('true');
         expect(upgradeParams.get('fulfillment')).toBe('Upgradable');
@@ -147,7 +154,7 @@ describe('useWantedContent', () => {
         await waitFor(() => expect(result.current.isLoading).toBe(false));
 
         const urls = vi.mocked(apiGet).mock.calls.map(([url]) => String(url));
-        expect(urls).toContainEqual(expect.stringContaining('parentId=show-1&monitoring=true'));
+        expect(urls).toContainEqual(expect.stringContaining('parentId=show-1&filter='));
         expect(urls.some((url) => url.includes('topLevelOnly='))).toBe(false);
     });
 
@@ -215,11 +222,13 @@ describe('useWantedContent', () => {
         expect(result.current.totalItems).toBe(1);
     });
 
-    it('loads monitored descendants through the same content route', async () => {
+    it('loads the children whose subtree holds monitored content through the same content route', async () => {
         await fetchWantedChildren('parent-1');
 
-        expect(apiGet).toHaveBeenCalledWith(
-            expect.stringContaining('parentId=parent-1&monitoring=true&pageNumber=1&pageSize=200'),
-        );
+        const params = new URL(String(vi.mocked(apiGet).mock.calls[0][0]), 'http://magpie.local').searchParams;
+        expect(params.get('parentId')).toBe('parent-1');
+        expect(params.get('filter')).toBe('subtree has (monitoring != Unmonitored)');
+        expect(params.get('monitoring')).toBeNull();
+        expect(params.get('pageSize')).toBe('200');
     });
 });

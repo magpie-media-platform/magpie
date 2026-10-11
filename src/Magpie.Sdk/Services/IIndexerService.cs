@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -114,7 +115,7 @@ public interface IIndexerService
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Searches the selected indexer connections and coalesces the duplicate releases.
+    /// Searches the selected indexer connections and stores the coalesced releases.
     /// </summary>
     /// <param name="request">The selected connection ids and the query to run</param>
     /// <param name="cancellationToken">The token that cancels the operation</param>
@@ -124,18 +125,19 @@ public interface IIndexerService
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Stores or coalesces a raw release and adds one content hierarchy item to its scope.
+    /// Adds one content hierarchy item to the scope of a stored release.
     /// </summary>
     /// <param name="contentHierarchyItemId">The id of the content hierarchy item to associate</param>
-    /// <param name="release">The raw release to store</param>
+    /// <param name="releaseId">The id of the stored release</param>
     /// <param name="actingUserId">The user to record as the actor, or <see langword="null"/> for the system</param>
     /// <param name="cancellationToken">The token that cancels the operation</param>
     /// <returns>
-    /// The id of the stored release, or <see langword="null"/> when the content hierarchy item does not exist
+    /// The id of the stored release, or <see langword="null"/> when the content hierarchy item or the release does
+    /// not exist
     /// </returns>
     Task<Guid?> MatchAsync(
         Guid contentHierarchyItemId,
-        Release release,
+        Guid releaseId,
         Guid? actingUserId,
         CancellationToken cancellationToken = default);
 
@@ -203,6 +205,19 @@ public interface IIndexerService
         Guid connectionId,
         TimeSpan timeout,
         CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Fetches a release payload with the session of an indexer connection.
+    /// </summary>
+    /// <param name="connectionId">The id of the indexer connection that supplied the release</param>
+    /// <param name="payloadUrl">The URL of the release payload</param>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
+    /// <returns>The response with the payload, or <see langword="null"/> for a fetch without a session</returns>
+    /// <exception cref="ReleasePayloadRejectedException">The indexer failed to fetch the release payload</exception>
+    Task<HttpResponseMessage?> FetchPayloadAsync(
+        Guid connectionId,
+        Uri payloadUrl,
+        CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Lists the configured indexer feeds.

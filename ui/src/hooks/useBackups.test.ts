@@ -7,7 +7,6 @@ vi.mock('@/lib/api', () => ({
     apiGet: vi.fn(),
     apiPost: vi.fn(),
     apiDelete: vi.fn(),
-    apiFetchResponse: vi.fn(),
 }));
 
 import { apiGet, apiPost, apiDelete } from '@/lib/api';
@@ -267,5 +266,58 @@ describe('useBackups', () => {
         });
 
         expect(apiPost).toHaveBeenCalledWith('/database/backups/20240115_103000/restore');
+    });
+
+    it('Refetch_ReloadsTheDeniedReasons_WhenCalled', async () => {
+        // Arrange
+        const { result } = renderHook(() => useBackups(), { wrapper: createWrapper() });
+        await waitFor(() => {
+            expect(result.current.isLoading).toBe(false);
+        });
+        mockDatabaseRequests(mockApiBackups, {
+            provider: 'SQLite',
+            backupRestoreSupported: true,
+            optimizeSupported: false,
+            deleteDeniedReason: 'Delete needs write access to the backup directory',
+        });
+
+        // Act
+        await act(async () => {
+            await result.current.refetch();
+        });
+
+        // Assert
+        await waitFor(() => {
+            expect(result.current.capabilities?.deleteDeniedReason).toBe(
+                'Delete needs write access to the backup directory',
+            );
+        });
+    });
+
+    it('DeleteBackup_ReloadsTheDeniedReasons_WhenTheDeleteFails', async () => {
+        // Arrange
+        const { result } = renderHook(() => useBackups(), { wrapper: createWrapper() });
+        await waitFor(() => {
+            expect(result.current.isLoading).toBe(false);
+        });
+        mockDatabaseRequests(mockApiBackups, {
+            provider: 'SQLite',
+            backupRestoreSupported: true,
+            optimizeSupported: false,
+            deleteDeniedReason: 'Delete needs write access to the backup directory',
+        });
+        vi.mocked(apiDelete).mockRejectedValue(new Error('Delete needs write access to the backup directory'));
+
+        // Act
+        await act(async () => {
+            await result.current.deleteBackup('20240115_103000').catch(() => undefined);
+        });
+
+        // Assert
+        await waitFor(() => {
+            expect(result.current.capabilities?.deleteDeniedReason).toBe(
+                'Delete needs write access to the backup directory',
+            );
+        });
     });
 });

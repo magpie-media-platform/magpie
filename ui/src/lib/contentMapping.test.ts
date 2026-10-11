@@ -66,6 +66,23 @@ describe('extractContentFields', () => {
         expect(result.date).toBe('2025-06-15');
     });
 
+    it('ExtractContentFields_CarriesThePublishDatePrecision_WhenTheMetadataHasOne', () => {
+        // Act
+        const result = extractContentFields(
+            makeItem({
+                metadataContainer: {
+                    id: 'mc-1',
+                    contributions: [
+                        { ordinal: 0, publishDate: '2025-06-15T00:00:00Z', publishDatePrecision: 'Instant' },
+                    ],
+                },
+            }),
+        );
+
+        // Assert
+        expect(result.datePrecision).toBe('Instant');
+    });
+
     it('extracts poster URL from metadata', () => {
         const result = extractContentFields(
             makeItem({

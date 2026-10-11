@@ -56,6 +56,12 @@ internal static class FilterFieldRegistryExtensions
         CriteriaValueOperator.IsNotNull,
     ];
 
+    private static readonly HashSet<CriteriaValueOperator> EnumCollectionOperators =
+    [
+        CriteriaValueOperator.Equals,
+        CriteriaValueOperator.NotEquals,
+    ];
+
     private static readonly HashSet<CriteriaValueOperator> RelationshipContainerIdOperators =
     [
         CriteriaValueOperator.Equals,
@@ -107,6 +113,8 @@ internal static class FilterFieldRegistryExtensions
 
     private static readonly CollectionFieldDefinition MediaFilesFieldDefinition =
         CreateMediaFileFieldDefinition(nameof(ContentHierarchyItemCriteria.MediaFiles));
+
+    private static readonly CollectionFieldDefinition SubtreeFieldDefinition = CreateSubtreeFieldDefinition();
 
     private static readonly MetadataCollectionMutation<GenreCriteria> GenreCollectionMutation = new(
         metadata => metadata.Genres,
@@ -318,6 +326,7 @@ internal static class FilterFieldRegistryExtensions
                 new(RelationshipsFieldDefinition, RelationshipCollectionMutation.Add),
             [nameof(MediaFile)] = new(MediaFileFieldDefinition, AddMediaFileCriteria),
             [nameof(ContentHierarchyItemCriteria.MediaFiles)] = new(MediaFilesFieldDefinition, AddMediaFileCriteria),
+            [nameof(ContentHierarchyItemCriteria.Subtree)] = new(SubtreeFieldDefinition, AddSubtreeCriteria),
         };
 
     private static readonly Dictionary<string, ScalarFieldInfo<SubjectTransformContext>> SubjectFields =
@@ -871,6 +880,77 @@ internal static class FilterFieldRegistryExtensions
             MediaFiles = isSome
                 ? AppendSomeGroup<MediaFileCriteria>(mediaFiles, group)
                 : AppendNone<MediaFileCriteria>(mediaFiles, group)
+        });
+    }
+
+    private static CollectionFieldDefinition CreateSubtreeFieldDefinition()
+    {
+        return new CollectionFieldDefinition(
+            nameof(ContentHierarchyItemCriteria.Subtree),
+            typeof(MonitoringMode),
+            new Dictionary<string, ItemFieldInfo>(StringComparer.OrdinalIgnoreCase)
+            {
+                [nameof(ContentHierarchyItemCriteria.Monitoring)] = new(
+                    nameof(ContentHierarchyItemCriteria.Monitoring),
+                    typeof(MonitoringMode),
+                    EnumCollectionOperators),
+                [nameof(ContentHierarchyItemCriteria.Fulfillment)] = new(
+                    nameof(ContentHierarchyItemCriteria.Fulfillment),
+                    typeof(FulfillmentStatus),
+                    EnumCollectionOperators)
+            },
+            value => CreateSubtreeFieldCriteria(
+                nameof(ContentHierarchyItemCriteria.Monitoring),
+                CriteriaValueOperator.Equals,
+                value),
+            CreateSubtreeFieldCriteria,
+            (a, b) => MergeSubtreeCriteria((ContentHierarchyItemCriteria)a, (ContentHierarchyItemCriteria)b));
+    }
+
+    private static ContentHierarchyItemCriteria CreateSubtreeFieldCriteria(
+        string propName,
+        CriteriaValueOperator op,
+        object? value)
+    {
+        return propName switch
+        {
+            nameof(ContentHierarchyItemCriteria.Monitoring) => new()
+            {
+                Monitoring = new()
+                {
+                    And = [new() { Operator = op, Value = value is MonitoringMode mode ? mode : default }]
+                }
+            },
+            nameof(ContentHierarchyItemCriteria.Fulfillment) => new()
+            {
+                Fulfillment = new()
+                {
+                    And = [new() { Operator = op, Value = value is FulfillmentStatus status ? status : default }]
+                }
+            },
+            _ => throw new ArgumentOutOfRangeException(nameof(propName), propName, null)
+        };
+    }
+
+    private static ContentHierarchyItemCriteria MergeSubtreeCriteria(
+        ContentHierarchyItemCriteria a,
+        ContentHierarchyItemCriteria b)
+    {
+        return new ContentHierarchyItemCriteria
+        {
+            Monitoring = MergeCriteriaSet(a.Monitoring, b.Monitoring),
+            Fulfillment = MergeCriteriaSet(a.Fulfillment, b.Fulfillment)
+        };
+    }
+
+    private static void AddSubtreeCriteria(ContentTransformContext context, IReadOnlyList<object> group, bool isSome)
+    {
+        var subtree = context.ContentItem.Subtree;
+        context.SetContentItem(context.ContentItem with
+        {
+            Subtree = isSome
+                ? AppendSomeGroup<ContentHierarchyItemCriteria>(subtree, group)
+                : AppendNone<ContentHierarchyItemCriteria>(subtree, group)
         });
     }
 

@@ -229,16 +229,7 @@ describe('formatUtcDate', () => {
 
 describe('formatUtcDateTime', () => {
     it('formats a date-time string in UTC', () => {
-        const expected = new Date('2024-01-01T20:00:00Z').toLocaleString(undefined, {
-            year: 'numeric',
-            month: 'short',
-            day: 'numeric',
-            hour: '2-digit',
-            minute: '2-digit',
-            timeZone: 'UTC',
-        });
-
-        expect(formatUtcDateTime('2024-01-01T20:00:00Z')).toBe(expected);
+        expect(formatUtcDateTime('2024-01-01T20:00:00Z')).toBe('Jan 1, 2024, 08:00 PM');
     });
 });
 

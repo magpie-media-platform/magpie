@@ -13,7 +13,6 @@ using Magpie.Abstractions.Jobs;
 using Magpie.Abstractions.Repositories;
 using Magpie.Core.Events;
 using Magpie.Core.Jobs;
-using Magpie.Core.Jobs.Fulfillment;
 using Magpie.Data;
 using Magpie.Data.Configuration;
 using Magpie.Models;
@@ -67,6 +66,18 @@ internal sealed class JobExecutionRepository(
 
     private static bool IsTrue(IReadOnlyDictionary<string, string> parameters, string field) =>
         parameters.TryGetValue(field, out var raw) && bool.TryParse(raw, out var value) && value;
+
+    private static string? ResolveParameter(JobExecution execution, JobSpec? spec, string field)
+    {
+        var value = execution.Parameters.GetValueOrDefault(field);
+        if (string.IsNullOrWhiteSpace(value) &&
+            spec?.LockPartitionEventContextKeys.GetValueOrDefault(field) is { } eventContextKey)
+        {
+            value = execution.TriggerContext.GetValueOrDefault(eventContextKey.ToEventContextKey());
+        }
+
+        return string.IsNullOrWhiteSpace(value) ? null : value;
+    }
 
     private static DateTime? ReconcileNotBeforeAt(DateTime? existing, DateTime? incoming, DateTime now)
     {
@@ -673,24 +684,11 @@ internal sealed class JobExecutionRepository(
         JobExecution? existing;
         if (incoming.NotBeforeAt is { } incomingDeferral && incomingDeferral > now)
         {
-            var deferred = await matching
+            existing = await matching
                 .Where(e => e.Status == JobExecutionStatus.Queued && e.NotBeforeAt != null && e.NotBeforeAt > now)
                 .OrderBy(e => e.NotBeforeAt)
                 .ThenBy(e => e.CreatedAt)
-                .ToListAsync(cancellationToken)
-                .ConfigureAwait(false);
-            existing = deferred.FirstOrDefault(candidate =>
-                incoming.JobType != MagpieJobs.Types.ReleaseDownloadItem ||
-                !incoming.Parameters.ContainsKey(ReleaseDownloadItemJob.CapacityPreviousDownloadId) ||
-                candidate.Parameters.GetValueOrDefault(ReleaseDownloadItemJob.CapacityPreviousDownloadId) ==
-                    incoming.Parameters[ReleaseDownloadItemJob.CapacityPreviousDownloadId] &&
-                Guid.TryParse(
-                    candidate.Parameters.GetValueOrDefault(MagpieJobs.Parameters.ContentHierarchyItemId),
-                    out var candidateTarget) &&
-                Guid.TryParse(
-                    incoming.Parameters.GetValueOrDefault(MagpieJobs.Parameters.ContentHierarchyItemId),
-                    out var incomingTarget) &&
-                candidateTarget == incomingTarget);
+                .FirstOrDefaultAsync(cancellationToken).ConfigureAwait(false);
         }
         else
         {
@@ -710,32 +708,34 @@ internal sealed class JobExecutionRepository(
         var upstreamDeferred = existing.StatusMessage == MagpieJobs.StatusMessages.UpstreamThrottled;
         var reconciled = upstreamDeferred ? existing.NotBeforeAt
             : ReconcileNotBeforeAt(existing.NotBeforeAt, incoming.NotBeforeAt, now);
+        jobRegistry.TryGetJobSpec(incoming.JobType, out var spec);
         var sameTarget = string.Equals(
-            existing.Parameters.GetValueOrDefault(MagpieJobs.Parameters.ContentHierarchyItemId),
-            incoming.Parameters.GetValueOrDefault(MagpieJobs.Parameters.ContentHierarchyItemId),
+            ResolveParameter(existing, spec, MagpieJobs.Parameters.ContentHierarchyItemId),
+            ResolveParameter(incoming, spec, MagpieJobs.Parameters.ContentHierarchyItemId),
             StringComparison.OrdinalIgnoreCase);
         var statusMessage = upstreamDeferred
             ? MagpieJobs.Parameters.IsForced(incoming.Parameters) ? incoming.StatusMessage : existing.StatusMessage
             : sameTarget ? incoming.StatusMessage ?? existing.StatusMessage : existing.StatusMessage;
 
-        jobRegistry.TryGetJobSpec(incoming.JobType, out var spec);
         var trueWins = (spec?.CoalesceTrueWinsFields ?? [])
             .Where(field => IsTrue(incoming.Parameters, field) && !IsTrue(existing.Parameters, field))
             .ToList();
         var widening = (spec?.CoalesceWideningFields ?? [])
-            .Where(field => existing.Parameters.TryGetValue(field, out var value) &&
-                !string.Equals(value, incoming.Parameters.GetValueOrDefault(field), StringComparison.OrdinalIgnoreCase))
+            .Where(field => ResolveParameter(existing, spec, field) is { } value &&
+                !string.Equals(value, ResolveParameter(incoming, spec, field), StringComparison.OrdinalIgnoreCase))
             .ToList();
         if (reconciled != existing.NotBeforeAt ||
             statusMessage != existing.StatusMessage ||
             trueWins.Count > 0 ||
             widening.Count > 0)
         {
-            if (widening.Count > 0)
+            foreach (var field in widening)
             {
-                existing.Parameters = existing.Parameters
-                    .Where(parameter => !widening.Contains(parameter.Key))
-                    .ToDictionary(parameter => parameter.Key, parameter => parameter.Value);
+                existing.Parameters.Remove(field);
+                if (spec?.LockPartitionEventContextKeys.GetValueOrDefault(field) is { } eventContextKey)
+                {
+                    existing.TriggerContext.Remove(eventContextKey.ToEventContextKey());
+                }
             }
 
             foreach (var field in trueWins)
@@ -751,6 +751,7 @@ internal sealed class JobExecutionRepository(
                 .ExecuteUpdateAsync(
                     setters => setters
                         .SetProperty(e => e.Parameters, existing.Parameters)
+                        .SetProperty(e => e.TriggerContext, existing.TriggerContext)
                         .SetProperty(e => e.NotBeforeAt, existing.NotBeforeAt)
                         .SetProperty(e => e.StatusMessage, existing.StatusMessage)
                         .SetProperty(e => e.ModifiedAt, existing.ModifiedAt),

@@ -1,0 +1,88 @@
+@layer components {
+    .list-sort-control {
+        display: flex;
+        align-items: center;
+        gap: var(--space-xs);
+        min-width: 0;
+    }
+
+    .list-sort-control .select-trigger {
+        width: auto;
+        min-width: 7.5rem;
+        max-width: 10rem;
+
+        @media (pointer: coarse) {
+            min-width: 5.5rem;
+        }
+    }
+
+    .list-sort-control__label {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    .list-sort-control__direction {
+        display: inline-flex;
+        align-items: stretch;
+        flex: none;
+        overflow: hidden;
+        min-height: 32px;
+        border-radius: var(--radius-md);
+        outline: 1px solid var(--border-default);
+        outline-offset: -1px;
+
+        @media (pointer: coarse) {
+            min-height: var(--touch-target-min);
+        }
+    }
+
+    .list-sort-control__direction-option {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: var(--space-xs) var(--space-sm);
+        color: var(--text-secondary);
+        background-color: var(--bg-secondary);
+        border: none;
+        cursor: pointer;
+        transition:
+            background-color var(--duration-fast) var(--easing-default),
+            color var(--duration-fast) var(--easing-default);
+
+        @media (pointer: coarse) {
+            min-width: var(--touch-target-min);
+        }
+    }
+
+    .list-sort-control__direction-option + .list-sort-control__direction-option {
+        border-left: 1px solid var(--border-default);
+    }
+
+    .list-sort-control__direction-option:hover:not(:disabled) {
+        color: var(--text-primary);
+    }
+
+    .list-sort-control__direction-option:focus-visible {
+        outline: var(--focus-ring-width) solid var(--focus-ring-color);
+        outline-offset: calc(-1 * var(--focus-ring-width));
+    }
+
+    .list-sort-control__direction-option[data-state='on'] {
+        color: var(--text-on-accent);
+        background-color: var(--accent-primary);
+    }
+
+    .list-sort-control__direction-option:disabled {
+        opacity: var(--opacity-disabled);
+        cursor: not-allowed;
+    }
+
+    @media (max-width: 359px) {
+        .list-sort-control .select-trigger {
+            min-width: 6.75rem;
+            max-width: 8rem;
+        }
+    }
+}

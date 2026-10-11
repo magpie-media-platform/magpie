@@ -4,6 +4,7 @@ import { ArrowRightIcon, FilmStripIcon, SkipForwardIcon } from '@phosphor-icons/
 import { Button } from '@/components/ui/Button';
 import { useToast } from '@/components/ui/Toast';
 import { useMediaServers } from '@/hooks/useMediaServers';
+import { useInstanceName } from '@/hooks/useInstanceName';
 import { MediaServerForm, type MediaServerFormValues } from '@/components/configuration/MediaServerForm';
 import { toStringSettings } from '@/lib/integrationSettings';
 
@@ -15,6 +16,7 @@ interface FirstMediaServerStepProps {
 }
 
 export function FirstMediaServerStep({ onAdvance }: FirstMediaServerStepProps): ReactNode {
+    const instanceName = useInstanceName();
     const { toast } = useToast();
     const { createServer, isCreating, servers } = useMediaServers();
     const { formOpen, setFormOpen, added, markAdded, addAnother, continueToNext } = useAddAnotherStep(onAdvance);
@@ -30,7 +32,7 @@ export function FirstMediaServerStep({ onAdvance }: FirstMediaServerStepProps): 
                 });
                 toast({
                     title: 'Media server created',
-                    description: `Magpie created ${values.name}.`,
+                    description: `${instanceName} created ${values.name}.`,
                     variant: 'success',
                 });
                 markAdded();
@@ -44,7 +46,7 @@ export function FirstMediaServerStep({ onAdvance }: FirstMediaServerStepProps): 
                 throw error;
             }
         },
-        [createServer, markAdded, toast],
+        [createServer, markAdded, toast, instanceName],
     );
 
     const configuredMediaServerCountLabel = `${servers.length} media server${servers.length === 1 ? '' : 's'}`;
@@ -52,8 +54,8 @@ export function FirstMediaServerStep({ onAdvance }: FirstMediaServerStepProps): 
     return (
         <div className="setup-page__form" data-step="server">
             <p className="setup-page__hint">
-                A media server connection lets Magpie refresh its library after imports. One can be added now, or this
-                step can be skipped.
+                A media server connection lets {instanceName} refresh its library after imports. One can be added now,
+                or this step can be skipped.
             </p>
             {servers.length > 0 && (
                 <p className="setup-page__hint" data-state="already-added">

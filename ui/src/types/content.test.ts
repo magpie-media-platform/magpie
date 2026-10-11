@@ -44,9 +44,44 @@ describe('getFulfillmentBadge', () => {
     });
 
     it('shows import pending only in place of missing', () => {
-        expect(getFulfillmentBadge('missing', true)).toEqual({ variant: 'pending', label: 'Import pending' });
-        expect(getFulfillmentBadge('fulfilled', true)).toEqual({ variant: 'fulfilled', label: 'Fulfilled' });
-        expect(getFulfillmentBadge('upgradable', true)).toEqual({ variant: 'upgradable', label: 'Upgradable' });
+        expect(getFulfillmentBadge('missing', { importPending: true })).toEqual({
+            variant: 'pending',
+            label: 'Import pending',
+        });
+        expect(getFulfillmentBadge('fulfilled', { importPending: true })).toEqual({
+            variant: 'fulfilled',
+            label: 'Fulfilled',
+        });
+        expect(getFulfillmentBadge('upgradable', { importPending: true })).toEqual({
+            variant: 'upgradable',
+            label: 'Upgradable',
+        });
+    });
+
+    it('shows upcoming only in place of missing', () => {
+        expect(getFulfillmentBadge('missing', { publishDate: '2099-01-01' })).toEqual({
+            variant: 'default',
+            label: 'Upcoming',
+        });
+        expect(getFulfillmentBadge('fulfilled', { publishDate: '2099-01-01' })).toEqual({
+            variant: 'fulfilled',
+            label: 'Fulfilled',
+        });
+        expect(getFulfillmentBadge('upgradable', { publishDate: '2099-01-01' })).toEqual({
+            variant: 'upgradable',
+            label: 'Upgradable',
+        });
+    });
+
+    it.each([
+        ['ThePublishDateIsPast', '2000-01-01'],
+        ['ThereIsNoPublishDate', undefined],
+    ])('GetFulfillmentBadge_ShowsMissing_When%s', (_condition, publishDate) => {
+        // Act
+        const badge = getFulfillmentBadge('missing', { publishDate });
+
+        // Assert
+        expect(badge).toEqual({ variant: 'missing', label: 'Missing' });
     });
 });
 

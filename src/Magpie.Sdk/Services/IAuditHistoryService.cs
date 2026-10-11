@@ -1,3 +1,4 @@
+using System;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -19,5 +20,16 @@ public interface IAuditHistoryService
     /// <param name="cancellationToken">The token that cancels the operation</param>
     Task<PagedList<AuditHistoryEntry>> QueryAsync(
         AuditHistoryQuery query,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Purges the audit history.
+    /// </summary>
+    /// <param name="olderThanDays">The age in days</param>
+    /// <param name="callerUserId">The id of the user that purges the audit history</param>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
+    Task<AuditHistoryPurgeCounts> PurgeAsync(
+        int olderThanDays,
+        Guid callerUserId,
         CancellationToken cancellationToken = default);
 }

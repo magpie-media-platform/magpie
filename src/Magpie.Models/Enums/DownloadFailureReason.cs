@@ -43,5 +43,10 @@ public enum DownloadFailureReason
     /// <summary>
     /// A grab failed after a possible dispatch to a client, so the result is not known.
     /// </summary>
-    AmbiguousDispatchFailure = 10
+    AmbiguousDispatchFailure = 10,
+
+    /// <summary>
+    /// The release size exceeds the available space at the destination.
+    /// </summary>
+    InsufficientDestinationSpace = 11
 }

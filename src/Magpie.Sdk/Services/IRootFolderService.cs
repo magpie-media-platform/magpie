@@ -65,7 +65,7 @@ public interface IRootFolderService
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Gets the free and total disk space of the root folders.
+    /// Gets the disk space and the content size of each root folder.
     /// </summary>
     /// <param name="cancellationToken">The token that cancels the operation</param>
     Task<DiskSpaceResult> GetDiskSpaceAsync(CancellationToken cancellationToken = default);

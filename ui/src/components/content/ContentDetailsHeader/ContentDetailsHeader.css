@@ -173,7 +173,9 @@
             align-items: center;
         }
 
-        .content-details-header__badges {
+        .content-details-header__badges,
+        .content-details-header__ratings,
+        .content-details-header__ratings-list {
             justify-content: center;
         }
 
@@ -223,6 +225,16 @@
         .content-details-header__overview {
             -webkit-line-clamp: 4;
         }
+    }
+
+    .content-details-header__overview--expanded {
+        display: block;
+        -webkit-line-clamp: unset;
+        overflow: visible;
+    }
+
+    .content-details-header__overview-toggle {
+        width: fit-content;
     }
 
     .content-details-header__rating {

@@ -6,7 +6,7 @@ import { useRestartRequired } from '@/hooks/ui/useRestartRequired';
 
 import './RestartRequiredBanner.css';
 
-export function RestartRequiredBanner() {
+export function RestartRequiredBanner({ instanceName }: { instanceName: string }) {
     const { restartRequired, dismissed, dismiss } = useRestartRequired();
 
     if (!restartRequired || dismissed) {
@@ -22,7 +22,7 @@ export function RestartRequiredBanner() {
                 dismissible
                 onDismiss={dismiss}
             >
-                Restart Magpie to apply pending extension changes.
+                Restart {instanceName} to apply pending extension changes.
             </Alert>
         </div>
     );

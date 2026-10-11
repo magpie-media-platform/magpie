@@ -29,6 +29,11 @@ public record ReleaseSource
     public Guid? IndexerId { get; set; }
 
     /// <summary>
+    /// The id of the indexer connection that supplied the observation.
+    /// </summary>
+    public Guid? IndexerConnectionId { get; set; }
+
+    /// <summary>
     /// The transfer protocol of the source.
     /// </summary>
     public required string Protocol { get; set; }

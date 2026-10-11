@@ -5,7 +5,6 @@
         overflow-wrap: anywhere;
     }
 
-    /* Matches the DataTable card breakpoint: labels sit above the values so long paths get the full card width. */
     @media (max-width: 1023px) {
         .file-rename-preview .data-table__cell {
             flex-direction: column;

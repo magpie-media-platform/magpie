@@ -6,9 +6,11 @@ namespace Magpie.Extensions.Cardigann.Engine.Session;
 
 internal sealed class TrackerSession
 {
+    private readonly Lock _replaceGate = new();
     private int _authenticated;
     private string? _clearanceUserAgent;
     private int _clearanceStamp;
+    private int _generation;
     private long _tlsBindingExpiry;
 
     public bool Authenticated
@@ -29,6 +31,8 @@ internal sealed class TrackerSession
         set => Volatile.Write(ref _clearanceStamp, value);
     }
 
+    public int Generation => Volatile.Read(ref _generation);
+
     public CookieContainer Cookies { get; set; } = new();
 
     public SolverQueue ClearanceGate { get; } = new() { WaitForBackground = true };
@@ -39,4 +43,22 @@ internal sealed class TrackerSession
         Volatile.Write(ref _tlsBindingExpiry, expiry.UtcTicks);
 
     public void ClearTlsBinding() => Volatile.Write(ref _tlsBindingExpiry, 0);
+
+    public void Replace(int generation)
+    {
+        lock (_replaceGate)
+        {
+            if (Generation != generation)
+            {
+                return;
+            }
+
+            Authenticated = false;
+            ClearanceUserAgent = null;
+            Cookies = new CookieContainer();
+            ClearTlsBinding();
+
+            Volatile.Write(ref _generation, generation + 1);
+        }
+    }
 }

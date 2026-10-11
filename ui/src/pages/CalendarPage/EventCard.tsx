@@ -52,6 +52,7 @@ export function EventCard({ event, onClick, compact = false, showDate = false }:
                         className="calendar-page__event-title"
                         qualifiedName={{ id: event.contentId, parentId: event.parentId, title: event.title }}
                         fallback={{ contentType: event.contentType, level: event.level }}
+                        stacked
                     />
                     <CdnPhosphorIcon
                         name={typeIconName(event.contentType)}
@@ -73,12 +74,16 @@ export function EventCard({ event, onClick, compact = false, showDate = false }:
                 )}
                 <span className="calendar-page__event-statuses">
                     <ContentMonitoringIndicator
-                        monitoring={event.monitoring}
                         effectiveMonitoring={event.effectiveMonitoring}
                         className="calendar-page__event-monitoring"
                         activeClassName="calendar-page__event-monitoring--active"
                     />
-                    <ContentFulfillmentBadge fulfillment={event.fulfillment} className="calendar-page__event-badge" />
+                    <ContentFulfillmentBadge
+                        fulfillment={event.fulfillment}
+                        publishDate={event.date}
+                        publishDatePrecision={event.datePrecision}
+                        className="calendar-page__event-badge"
+                    />
                 </span>
             </div>
         </button>

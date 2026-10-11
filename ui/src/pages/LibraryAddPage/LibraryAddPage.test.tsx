@@ -544,7 +544,25 @@ describe('LibraryAddPage', () => {
         );
 
         expect(screen.getByRole('heading', { name: 'Add content', level: 1 })).toBeInTheDocument();
+        expect(screen.getByText('Search for new content to add to the library')).toBeInTheDocument();
         expect(screen.getByTestId('library-add-page__empty-initial')).toBeInTheDocument();
+    });
+
+    it('InitialEmptyState_ShowsHeadingOnly_WhenLiveTabIsOpen', () => {
+        // Arrange
+        mockApiGetByPath({});
+
+        // Act
+        render(
+            <TestWrapper>
+                <LibraryAddPage />
+            </TestWrapper>,
+        );
+
+        // Assert
+        const empty = screen.getByTestId('library-add-page__empty-initial');
+        expect(within(empty).getByText('Search for new content')).toBeInTheDocument();
+        expect(screen.queryByText(/searching external metadata providers/i)).not.toBeInTheDocument();
     });
 
     it('does not fetch provider candidate search on plain page entry', async () => {
@@ -575,6 +593,57 @@ describe('LibraryAddPage', () => {
             expect(resultsTable().getByText('The Matrix')).toBeInTheDocument();
         });
         expect(resultsTable().getByText('Mar 31, 1999')).toBeInTheDocument();
+    });
+
+    it('Published_ShowsYearOnly_WhenReleaseDatePrecisionIsYear', async () => {
+        // Arrange
+        mockApiGetByPath({});
+        mockCandidateSearchResponse = candidateSearchResult([
+            { ...candidateSearchedCandidate, releaseDate: '1975-01-01T00:00:00Z', releaseDatePrecision: 'Year' },
+        ]);
+        const user = userEvent.setup();
+
+        renderLive();
+
+        // Act
+        await user.click(screen.getByRole('button', { name: /^search$/i }));
+
+        // Assert
+        await waitFor(() => {
+            expect(resultsTable().getByText('The Matrix')).toBeInTheDocument();
+        });
+        const row = document.querySelector('[data-row-id$=":603"]') as HTMLElement;
+        expect(within(row).getByText('1975', { selector: '.library-add-page__published' })).toBeInTheDocument();
+    });
+
+    it('Published_UsesSecondaryPrecision_WhenMergedRowTakesTheSecondaryReleaseDate', async () => {
+        // Arrange
+        mockApiGetByPath({});
+        mockCandidateSearchResponse = candidateSearchResult([
+            { ...candidateSearchedCandidate, level: 'movie', releaseDate: undefined },
+            {
+                ...candidateSearchedCandidate,
+                providerType: 'provider-b',
+                externalIdSource: 'provider-b.movie',
+                externalId: 'Q83495',
+                level: 'movie',
+                releaseDate: '1999-01-01T00:00:00Z',
+                releaseDatePrecision: 'Year',
+            },
+        ]);
+        const user = userEvent.setup();
+
+        renderLive();
+
+        // Act
+        await user.click(screen.getByRole('button', { name: /^search$/i }));
+
+        // Assert
+        await waitFor(() => {
+            expect(resultsTable().getAllByText('The Matrix')).toHaveLength(1);
+        });
+        const row = document.querySelector('[data-row-id$=":603"]') as HTMLElement;
+        expect(within(row).getByText('1999', { selector: '.library-add-page__published' })).toBeInTheDocument();
     });
 
     it('shows one row when two providers return the same root-level content', async () => {
@@ -660,33 +729,28 @@ describe('LibraryAddPage', () => {
         await waitFor(() => {
             expect(resultsTable().getAllByText('The Matrix')).toHaveLength(1);
         });
-        expect(resultsTable().getAllByTestId('library-add-page__in-library-badge')).toHaveLength(1);
+        expect(resultsTable().getAllByRole('button', { name: 'In Library' })).toHaveLength(1);
     });
 
-    it('counts a merged row once in the in-library notice', async () => {
+    it('Results_ShowNoPageNoticeForLibraryMatches_WhenResultsAreInLibrary', async () => {
+        // Arrange
         mockApiGetByPath({});
         mockCandidateSearchResponse = candidateSearchResult([
             { ...candidateSearchedCandidate, level: 'movie', inLibrary: true },
-            {
-                ...candidateSearchedCandidate,
-                providerType: 'provider-b',
-                externalIdSource: 'provider-b.movie',
-                externalId: 'Q83495',
-                level: 'movie',
-                inLibrary: true,
-            },
         ]);
         const user = userEvent.setup();
 
         renderLive();
 
+        // Act
         await user.click(screen.getByRole('button', { name: /^search$/i }));
+
+        // Assert
         await waitFor(() => {
-            expect(resultsTable().getAllByText('The Matrix')).toHaveLength(1);
+            expect(resultsTable().getByText('The Matrix')).toBeInTheDocument();
         });
-        expect(screen.getByTestId('library-add-page__in-library-notice')).toHaveTextContent(
-            /1 match on this page is already in your library/i,
-        );
+        expect(screen.queryByText(/already in your library/i)).not.toBeInTheDocument();
+        expect(screen.queryByRole('status')).not.toBeInTheDocument();
     });
 
     it('does not render the source identifier beside the Source column', async () => {
@@ -732,7 +796,7 @@ describe('LibraryAddPage', () => {
     });
 
     describe('Live filter tab', () => {
-        it('disables Search and shows a hint with no criteria, firing no parse or provider candidate search', async () => {
+        it('disables Search with no criteria and shows no hint, firing no parse or provider candidate search', async () => {
             mockApiGetByPath({});
             mockCandidateSearchResponse = candidateSearchResult([candidateSearchedCandidate]);
             const user = userEvent.setup();
@@ -745,9 +809,7 @@ describe('LibraryAddPage', () => {
 
             const search = screen.getByRole('button', { name: /^search$/i }) as HTMLButtonElement;
             expect(search.disabled).toBe(true);
-            expect(screen.getByTestId('library-add-page__filter-empty')).toHaveTextContent(
-                /add a filter criterion to search/i,
-            );
+            expect(screen.queryByText(/add a filter criterion/i)).not.toBeInTheDocument();
 
             await user.click(search);
             expect(mockParseMagpieQl).not.toHaveBeenCalled();
@@ -768,8 +830,6 @@ describe('LibraryAddPage', () => {
             await waitFor(() => {
                 expect(search.disabled).toBe(false);
             });
-            expect(screen.queryByTestId('library-add-page__filter-empty')).not.toBeInTheDocument();
-
             vi.mocked(apiGet).mockClear();
             // Act
             await user.click(search);
@@ -859,6 +919,32 @@ describe('LibraryAddPage', () => {
             expect(within(cards).getByText('The Matrix')).toBeInTheDocument();
             expect(screen.queryByTestId('library-add-page__result-list')).not.toBeInTheDocument();
             expect(document.querySelector('[data-component="data-table"]')).not.toBeInTheDocument();
+        });
+
+        it('InLibraryButton_ReplacesAdd_WhenCardResultIsInLibrary', async () => {
+            // Arrange
+            installMatchMedia(390);
+            mockApiGetByPath({ rootFolders: [rootFolder('rf-movies', 'Movies', 'movies')] });
+            mockCandidateSearchResponse = candidateSearchResult([
+                {
+                    ...candidateSearchedCandidate,
+                    inLibrary: true,
+                    existingContentHierarchyItemId: '3db97837-8a29-4b92-937b-13f948bfd62d',
+                },
+            ]);
+            const user = userEvent.setup();
+
+            renderLive();
+
+            // Act
+            await user.click(screen.getByRole('button', { name: /^search$/i }));
+
+            // Assert
+            const cards = await screen.findByTestId('library-add-page__mobile-list');
+            const inLibrary = within(cards).getByRole('button', { name: 'In Library' });
+            expect(inLibrary).toBeDisabled();
+            expect(within(cards).queryByRole('button', { name: /^add$/i })).not.toBeInTheDocument();
+            expect(within(cards).queryByText('In library')).not.toBeInTheDocument();
         });
 
         it('renders a Markdown provider summary as readable text in the table', async () => {
@@ -1049,7 +1135,7 @@ describe('LibraryAddPage', () => {
             expect(nextButton.disabled).toBe(false);
         });
 
-        it('renders in-library rows without actions and addable titles as preview buttons', async () => {
+        it('renders in-library rows with a disabled In Library button and addable titles as preview buttons', async () => {
             mockApiGetByPath({ rootFolders: [rootFolder('rf-movies', 'Movies', 'movies')] });
             const owned = {
                 ...candidateSearchedCandidate,
@@ -1070,12 +1156,13 @@ describe('LibraryAddPage', () => {
             });
             expect(resultsTable().getByText('The Matrix')).toBeInTheDocument();
 
-            expect(resultsTable().getByTestId('library-add-page__in-library-badge')).toBeInTheDocument();
-
             const table = document.querySelector('[data-testid="library-add-page__result-list"]') as HTMLElement;
 
             const ownedRow = table.querySelector('[data-row-id$=":550"]') as HTMLElement;
             expect(ownedRow).not.toBeNull();
+            expect(within(ownedRow).getByRole('button', { name: 'In Library' })).toBeDisabled();
+            expect(within(ownedRow).queryByText('In library')).not.toBeInTheDocument();
+            expect(within(ownedRow).getByText('provider-a')).toBeInTheDocument();
             expect(ownedRow.querySelector('[data-action="add-content"]')).toBeNull();
             expect(ownedRow.querySelector('[data-action="preview-content"]')).toBeNull();
             expect(ownedRow.querySelector('[data-action="open-library-item"]')).toHaveAttribute(
@@ -1094,9 +1181,7 @@ describe('LibraryAddPage', () => {
                 'preview-content',
             );
             expect(within(addableRow).queryByRole('button', { name: 'Details' })).not.toBeInTheDocument();
-
-            const notice = screen.getByTestId('library-add-page__in-library-notice');
-            expect(notice).toHaveTextContent(/1 match on this page is already in your library/i);
+            expect(screen.queryByText(/already in your library/i)).not.toBeInTheDocument();
         });
 
         it('saves the current live filter via save-as', async () => {
@@ -1192,10 +1277,50 @@ describe('LibraryAddPage', () => {
             });
             const openLibraryItem = await resultsTable().findByRole('link', { name: 'The Matrix' });
             expect(openLibraryItem).toHaveAttribute('href', '/library/new-matrix-id');
+            expect(resultsTable().getByRole('button', { name: 'In Library' })).toBeDisabled();
+            expect(resultsTable().queryByRole('button', { name: /^add$/i })).not.toBeInTheDocument();
             expect(screen.getByRole('tab', { name: /live filter/i })).toHaveAttribute('aria-selected', 'true');
             expect(document.querySelector('[data-component="filter-bar"]')).toBeInTheDocument();
             expect(resultsTable().getByText('The Matrix')).toBeInTheDocument();
             expect(mockNavigate).not.toHaveBeenCalledWith('/library/new-matrix-id');
+        });
+
+        it('ViewSettings_LinksToAddedItem_WhenAddSucceeds', async () => {
+            // Arrange
+            mockApiGetByPath({ rootFolders: [rootFolder('rf-movies', 'Movies', 'movies')] });
+            mockCandidateSearchResponse = candidateSearchResult([candidateSearchedCandidate]);
+            vi.mocked(apiPost).mockResolvedValue('new-matrix-id');
+            const user = userEvent.setup();
+
+            renderLive();
+
+            await user.click(screen.getByRole('button', { name: /^search$/i }));
+
+            // Act
+            await user.click(await resultsTable().findByRole('button', { name: /^add$/i }));
+
+            // Assert
+            const viewSettings = await screen.findByRole('link', { name: 'View settings' });
+            expect(viewSettings).toHaveAttribute('href', '/library/new-matrix-id');
+        });
+
+        it('ViewSettings_IsNotOffered_WhenAddFails', async () => {
+            // Arrange
+            mockApiGetByPath({ rootFolders: [rootFolder('rf-movies', 'Movies', 'movies')] });
+            mockCandidateSearchResponse = candidateSearchResult([candidateSearchedCandidate]);
+            vi.mocked(apiPost).mockRejectedValue(new Error('boom'));
+            const user = userEvent.setup();
+
+            renderLive();
+
+            await user.click(screen.getByRole('button', { name: /^search$/i }));
+
+            // Act
+            await user.click(await resultsTable().findByRole('button', { name: /^add$/i }));
+
+            // Assert
+            expect(await screen.findByText('Failed to add content')).toBeInTheDocument();
+            expect(screen.queryByRole('link', { name: 'View settings' })).not.toBeInTheDocument();
         });
 
         it('returns focus to the table preview button after the preview drawer closes', async () => {
@@ -1674,9 +1799,75 @@ describe('LibraryAddPage', () => {
             await user.click(savedTrigger);
             await user.click(await screen.findByRole('option', { name: 'Action Hits' }));
 
-            const openEditor = await screen.findByRole('link', { name: /edit on filters page/i });
+            const openEditor = await screen.findByRole('link', { name: 'Edit filter' });
 
             expect(openEditor).toHaveAttribute('href', '/filters?edit=shared-1');
+        });
+
+        it('Panel_GroupsPickerEditQueryAndSearch_WhenSavedFilterIsSelected', async () => {
+            // Arrange
+            mockApiGetByPath({});
+            const user = userEvent.setup();
+
+            renderLive();
+
+            // Act
+            await user.click(screen.getByRole('tab', { name: /saved filter/i }));
+            await user.click(document.querySelector('[data-field="saved-filter"]') as HTMLElement);
+            await user.click(await screen.findByRole('option', { name: 'Action Hits' }));
+
+            // Assert
+            const panel = within(screen.getByRole('region', { name: 'Saved filter controls' }));
+            expect(panel.getByLabelText('Saved filter')).toBeInTheDocument();
+            expect(panel.getByRole('link', { name: 'Edit filter' })).toHaveAttribute('href', '/filters?edit=shared-1');
+            expect(panel.getByTestId('library-add-page__saved-query')).toHaveTextContent('genre has "Action"');
+            expect(panel.getByRole('button', { name: /^search$/i })).toBeInTheDocument();
+        });
+
+        it('InitialEmptyState_ShowsHeadingOnly_WhenSavedFilterTabIsOpen', async () => {
+            // Arrange
+            mockApiGetByPath({});
+            const user = userEvent.setup();
+
+            renderLive();
+
+            // Act
+            await user.click(screen.getByRole('tab', { name: /saved filter/i }));
+
+            // Assert
+            const empty = screen.getByTestId('library-add-page__empty-initial');
+            expect(within(empty).getByText('Use a saved filter')).toBeInTheDocument();
+            expect(empty.querySelector('.empty-state__description')).not.toBeInTheDocument();
+        });
+
+        it('QueryStrip_ShowsQueryWithoutLabel_WhenSavedFilterIsSelected', async () => {
+            // Arrange
+            mockApiGetByPath({});
+            const user = userEvent.setup();
+
+            renderLive();
+
+            // Act
+            await user.click(screen.getByRole('tab', { name: /saved filter/i }));
+            await user.click(document.querySelector('[data-field="saved-filter"]') as HTMLElement);
+            await user.click(await screen.findByRole('option', { name: 'Action Hits' }));
+
+            // Assert
+            const panel = within(screen.getByRole('region', { name: 'Saved filter controls' }));
+            expect(panel.getByTestId('library-add-page__saved-query')).toHaveTextContent('genre has "Action"');
+            expect(panel.queryByText('Query:')).not.toBeInTheDocument();
+        });
+
+        it('Search_SitsInFilterPanel_WhenLiveFilterIsShown', () => {
+            // Arrange
+            mockApiGetByPath({});
+
+            // Act
+            renderLive('genre has "Action"');
+
+            // Assert
+            const panel = within(screen.getByRole('region', { name: 'Filter options' }));
+            expect(panel.getByRole('button', { name: /^search$/i })).toBeInTheDocument();
         });
 
         it('Search_EnablesButton_WhenSavedFilterIsSelected', async () => {

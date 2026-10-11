@@ -20,6 +20,7 @@ import type { LibraryLevelDefinition, LibraryTypeDefinition } from '@/hooks/useL
 import { useQualityTierLists } from '@/hooks/useQualityTierLists';
 import type { RootFolderDefault, UpgradeFileHandling } from '@/hooks/useRootFolders';
 import { useSystemSettingsGroup } from '@/hooks/useSettings';
+import { useInstanceName } from '@/hooks/useInstanceName';
 import { focusFirstInvalidField } from '@/lib/focusFirstInvalidField';
 import type { MonitoringMode } from '@/types';
 
@@ -90,7 +91,11 @@ const emptyValues: RootFolderFormValues = {
 
 const DEFAULT_RENAME_TEMPLATE_SUGGESTION = '{Title} ({Year})/{Title} ({Year}).{Ext}';
 
-function parseSystemDefaultMonitoring(raw: string | undefined): MonitoringMode {
+/** Reads the stored system default monitoring as a monitoring mode. */
+export function parseSystemDefaultMonitoring(raw: string | undefined): MonitoringMode {
+    if (raw === 'Unmonitored' || raw === 'Shotgun') {
+        return raw;
+    }
     return raw === 'false' || raw === '0' ? 'Unmonitored' : 'Monitored';
 }
 
@@ -219,6 +224,7 @@ export function RootFolderForm({
     onSubmit,
     isSubmitting = false,
 }: RootFolderFormProps): ReactNode {
+    const instanceName = useInstanceName();
     const isEditing = !!initialValues?.id;
     const monitoringSettings = useSystemSettingsGroup('monitoring');
     const systemDefaultMonitoring =
@@ -738,8 +744,8 @@ export function RootFolderForm({
                             </div>
                             <p className="root-folder-form__help">
                                 Discovery associates a file with an existing library item without review when its match
-                                is confident. Ambiguous matches stay pending. Magpie does not create content, and does
-                                not move or rename files.
+                                is confident. Ambiguous matches stay pending. {instanceName} does not create content,
+                                and does not move or rename files.
                             </p>
                         </div>
 

@@ -13,7 +13,6 @@ internal static class TorrentBytesExtensions
             throw new InvalidDataException("The bytes are not a valid .torrent file.");
         }
 
-        // A valid torrent without a v1 hash (v2 only) is still sent; the client then reports its hash.
         return torrent.InfoHashes.V1?.ToHex().ToLowerInvariant();
     }
 }

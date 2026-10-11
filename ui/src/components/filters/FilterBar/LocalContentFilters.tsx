@@ -69,9 +69,6 @@ export function LocalContentFilters({
                     </SelectContent>
                 </Select>
             </div>
-            <p className="filter-bar__hint filter-bar__sync-hint">
-                These filters and the table headers edit the same MQL query. Advanced conditions stay in the query.
-            </p>
         </>
     );
 }

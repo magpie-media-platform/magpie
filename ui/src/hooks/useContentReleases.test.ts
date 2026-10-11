@@ -18,7 +18,6 @@ const mockRows: ContentReleaseRow[] = [
         protocol: 'torrent',
         size: 5_368_709_120,
         publishDate: '2024-01-15T10:00:00Z',
-        isMatch: true,
         properties: '{"seeders":"42","leechers":"3"}',
         acquisitionStatus: 'Downloading',
     },
@@ -44,10 +43,8 @@ describe('useContentReleases', () => {
         vi.restoreAllMocks();
     });
 
-    it('restores a persisted waiting reason from a fresh request and clears it on refetch', async () => {
+    it('restores a capacity fault from a fresh request and clears it on recovery', async () => {
         // Arrange
-        const reason =
-            'Waiting for destination capacity: the capacity check is unavailable. Required: unknown. Available: 99 bytes.';
         mockApiGet
             .mockResolvedValueOnce([
                 {
@@ -55,7 +52,8 @@ describe('useContentReleases', () => {
                     title: 'Film',
                     protocol: 'torrent',
                     publishDate: '2026-09-22T12:00:00Z',
-                    acquisitionWaitingReason: reason,
+                    acquisitionStatus: 'Faulted',
+                    failureReason: 'InsufficientDestinationSpace',
                 },
             ])
             .mockResolvedValueOnce(mockRows);
@@ -65,15 +63,15 @@ describe('useContentReleases', () => {
         const { result } = renderHook(() => useContentReleases('content-1'), { wrapper: Wrapper });
 
         // Assert
-        await waitFor(() => expect(result.current.rows[0]?.acquisitionWaitingReason).toBe(reason));
-        expect(result.current.rows[0].acquisitionStatus).toBeUndefined();
+        await waitFor(() => expect(result.current.rows[0]?.acquisitionStatus).toBe('Faulted'));
+        expect(result.current.rows[0].failureReason).toBe('InsufficientDestinationSpace');
 
         // Act
         await result.current.refetch();
 
         // Assert
         await waitFor(() => expect(result.current.rows[0]?.acquisitionStatus).toBe('Downloading'));
-        expect(result.current.rows[0].acquisitionWaitingReason).toBeUndefined();
+        expect(result.current.rows[0].failureReason).toBeUndefined();
     });
 
     it('fetches scored releases from the content-scoped endpoint', async () => {

@@ -546,6 +546,67 @@ describe('JobsPage Executions tab', () => {
         expect(screen.queryByTestId('jobs-page__run-caution')).not.toBeInTheDocument();
     });
 
+    it('shows the reason on Run a job when no job can run', async () => {
+        const user = userEvent.setup();
+        render(
+            <TestWrapper role={Role.Admin}>
+                <JobsPage />
+            </TestWrapper>,
+        );
+        await screen.findByRole('list', { name: /job history/i });
+
+        await user.hover(
+            within(document.querySelector('.jobs-page__executions-toolbar') as HTMLElement).getByRole('button', {
+                name: /run a job/i,
+            }),
+        );
+
+        expect(await screen.findByRole('tooltip')).toHaveTextContent('No on-demand jobs are available to run');
+    });
+
+    it('RunAJob_ShowsNoReason_WhenTheJobListFailsToLoad', async () => {
+        // Arrange
+        const queryClient = createTestQueryClient();
+        mockApiGet.mockImplementation((url: string) =>
+            url === '/jobs/specs' ? Promise.reject(new Error('Request failed')) : defaultApiGetResponse(url),
+        );
+
+        // Act
+        render(
+            <TestWrapper role={Role.Admin} queryClient={queryClient}>
+                <JobsPage />
+            </TestWrapper>,
+        );
+        await screen.findByRole('list', { name: /job history/i });
+        await waitFor(() => expect(queryClient.getQueryState(['jobs', 'specs', 'all'])?.status).toBe('error'));
+
+        // Assert
+        expect(
+            within(document.querySelector('.jobs-page__executions-toolbar') as HTMLElement).getByRole('button', {
+                name: /run a job/i,
+            }),
+        ).toBeDisabled();
+        expect(screen.queryByText('No on-demand jobs are available to run')).not.toBeInTheDocument();
+    });
+
+    it('RunAJob_ShowsTheRoleReason_WhenTheJobListFailsToLoadForAViewer', async () => {
+        // Arrange
+        mockApiGet.mockImplementation((url: string) =>
+            url === '/jobs/specs' ? Promise.reject(new Error('Request failed')) : defaultApiGetResponse(url),
+        );
+
+        // Act
+        render(
+            <TestWrapper role={Role.Viewer}>
+                <JobsPage />
+            </TestWrapper>,
+        );
+        await screen.findByRole('list', { name: /job history/i });
+
+        // Assert
+        expect(screen.getByText('Requires Manager role')).toBeInTheDocument();
+    });
+
     it('limits manager manual run options to backend-allowed job scopes', async () => {
         const user = userEvent.setup();
         const scopedSpecs: ApiJobSpec[] = [
@@ -2228,5 +2289,102 @@ describe('JobsPage phone actions button', () => {
 
         await screen.findByRole('list', { name: /job history/i });
         expect(document.querySelector('.quick-actions-button')).toBeNull();
+    });
+});
+
+describe('JobsPage history request failure', () => {
+    it('shows an error with retry instead of the empty state when the job history request fails', async () => {
+        // Arrange
+        mockApiGet.mockImplementation((url: string) =>
+            url.startsWith('/jobs?') ? Promise.reject(new Error('Server error')) : defaultApiGetResponse(url),
+        );
+
+        // Act
+        render(
+            <TestWrapper>
+                <JobsPage />
+            </TestWrapper>,
+        );
+
+        // Assert
+        expect(await screen.findByText('Failed to load job history')).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+        expect(screen.queryByText('No job history found')).not.toBeInTheDocument();
+    });
+
+    it('loads the job history when Retry succeeds', async () => {
+        // Arrange
+        const user = userEvent.setup();
+        mockApiGet.mockImplementation((url: string) =>
+            url.startsWith('/jobs?') ? Promise.reject(new Error('Server error')) : defaultApiGetResponse(url),
+        );
+        render(
+            <TestWrapper>
+                <JobsPage />
+            </TestWrapper>,
+        );
+        const retry = await screen.findByRole('button', { name: 'Retry' });
+        mockApiGet.mockImplementation(defaultApiGetResponse);
+
+        // Act
+        await user.click(retry);
+
+        // Assert
+        const list = await screen.findByRole('list', { name: /job history/i });
+        expect(within(list).getAllByRole('listitem')).toHaveLength(8);
+    });
+});
+
+describe('JobsPage trigger request failure', () => {
+    it.each([
+        ['Scheduled Jobs', '/schedule-triggers', 'Failed to load schedule triggers', 'No schedule triggers'],
+        ['Event Triggers', '/event-triggers', 'Failed to load event triggers', 'No event triggers'],
+    ])(
+        'shows an error with retry instead of the empty state when the %s request fails',
+        async (tab, endpoint, failedTitle, emptyTitle) => {
+            // Arrange
+            const user = userEvent.setup();
+            mockApiGet.mockImplementation((url: string) =>
+                url.startsWith(endpoint) ? Promise.reject(new Error('Server error')) : defaultApiGetResponse(url),
+            );
+            render(
+                <TestWrapper>
+                    <JobsPage />
+                </TestWrapper>,
+            );
+
+            // Act
+            await user.click(screen.getByRole('tab', { name: tab }));
+
+            // Assert
+            expect(await screen.findByText(failedTitle)).toBeInTheDocument();
+            expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+            expect(screen.queryByText(emptyTitle)).not.toBeInTheDocument();
+        },
+    );
+
+    it.each([
+        ['Scheduled Jobs', '/schedule-triggers', 'Hourly RSS Sync'],
+        ['Event Triggers', '/event-triggers', 'Refresh on Download Complete'],
+    ])('loads the %s when Retry succeeds', async (tab, endpoint, triggerName) => {
+        // Arrange
+        const user = userEvent.setup();
+        mockApiGet.mockImplementation((url: string) =>
+            url.startsWith(endpoint) ? Promise.reject(new Error('Server error')) : defaultApiGetResponse(url),
+        );
+        render(
+            <TestWrapper>
+                <JobsPage />
+            </TestWrapper>,
+        );
+        await user.click(screen.getByRole('tab', { name: tab }));
+        const retry = await screen.findByRole('button', { name: 'Retry' });
+        mockApiGet.mockImplementation(defaultApiGetResponse);
+
+        // Act
+        await user.click(retry);
+
+        // Assert
+        expect(await screen.findByText(triggerName)).toBeInTheDocument();
     });
 });

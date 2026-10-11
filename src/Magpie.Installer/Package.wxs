@@ -1,0 +1,165 @@
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:fw="http://wixtoolset.org/schemas/v4/wxs/firewall"
+     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui"
+     xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
+
+  <?define FolderSddl = "D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)" ?>
+
+  <Package Name="Magpie"
+           Manufacturer="Magpie"
+           Version="$(var.ProductVersion)"
+           UpgradeCode="14CBD440-8F6F-4F85-B6E7-9CC9C1B0A0A8">
+    <MajorUpgrade AllowSameVersionUpgrades="yes"
+                  MigrateFeatures="no"
+                  DowngradeErrorMessage="A newer version of Magpie is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <Property Id="ARPNOMODIFY" Value="1" />
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="Magpie">
+        <Directory Id="CONFIGFOLDER" Name="config" />
+        <Directory Id="DATAFOLDER" Name="data" />
+        <Directory Id="EXTENSIONSFOLDER" Name="extensions" />
+      </Directory>
+    </StandardDirectory>
+
+    <Feature Id="Magpie" Title="Magpie" AllowAbsent="no" AllowAdvertise="no" Display="expand">
+      <Files Include="$(var.AppDir)\**">
+        <Exclude Files="$(var.AppDir)\Magpie.App.exe" />
+      </Files>
+
+      <Component Directory="INSTALLFOLDER">
+        <File Source="$(var.AppDir)\Magpie.App.exe" KeyPath="yes" />
+        <ServiceInstall Name="Magpie"
+                        DisplayName="Magpie"
+                        Type="ownProcess"
+                        Start="auto"
+                        ErrorControl="normal"
+                        Account="NT SERVICE\Magpie"
+                        Arguments="run" />
+        <ServiceControl Name="Magpie" Start="install" Stop="both" Remove="uninstall" />
+        <RegistryValue Root="HKLM"
+                       Key="SYSTEM\CurrentControlSet\Services\Magpie"
+                       Name="Environment"
+                       Type="multiString"
+                       Value="ASPNETCORE_URLS=http://+:8080" />
+        <util:EventSource Name="Magpie.App"
+                          Log="Application"
+                          EventMessageFile="[INSTALLFOLDER]System.Diagnostics.EventLog.Messages.dll" />
+        <fw:FirewallException Name="Magpie"
+                              Port="8080"
+                              Protocol="tcp"
+                              Scope="any"
+                              Profile="private" />
+        <CreateFolder Directory="CONFIGFOLDER">
+          <PermissionEx Sddl="$(var.FolderSddl)" />
+          <util:PermissionEx Domain="NT SERVICE"
+                             User="Magpie"
+                             Read="yes"
+                             ReadAttributes="yes"
+                             ReadExtendedAttributes="yes"
+                             ReadPermission="yes"
+                             Traverse="yes"
+                             CreateFile="yes"
+                             CreateChild="yes"
+                             WriteAttributes="yes"
+                             WriteExtendedAttributes="yes"
+                             Delete="yes"
+                             Synchronize="yes" />
+        </CreateFolder>
+        <CreateFolder Directory="DATAFOLDER">
+          <PermissionEx Sddl="$(var.FolderSddl)" />
+          <util:PermissionEx Domain="NT SERVICE"
+                             User="Magpie"
+                             Read="yes"
+                             ReadAttributes="yes"
+                             ReadExtendedAttributes="yes"
+                             ReadPermission="yes"
+                             Traverse="yes"
+                             CreateFile="yes"
+                             CreateChild="yes"
+                             WriteAttributes="yes"
+                             WriteExtendedAttributes="yes"
+                             Delete="yes"
+                             Synchronize="yes" />
+        </CreateFolder>
+        <CreateFolder Directory="EXTENSIONSFOLDER">
+          <PermissionEx Sddl="$(var.FolderSddl)" />
+          <util:PermissionEx Domain="NT SERVICE"
+                             User="Magpie"
+                             Read="yes"
+                             ReadAttributes="yes"
+                             ReadExtendedAttributes="yes"
+                             ReadPermission="yes"
+                             Traverse="yes"
+                             CreateFile="yes"
+                             CreateChild="yes"
+                             WriteAttributes="yes"
+                             WriteExtendedAttributes="yes"
+                             Delete="yes"
+                             Synchronize="yes" />
+        </CreateFolder>
+      </Component>
+
+      <?include $(var.ExtensionFeatures) ?>
+    </Feature>
+
+    <SetProperty Id="ConfigureServiceRecovery"
+                 Value="&quot;[System64Folder]sc.exe&quot; failure Magpie reset= 86400 actions= restart/5000"
+                 Before="ConfigureServiceRecovery"
+                 Sequence="execute" />
+    <CustomAction Id="ConfigureServiceRecovery"
+                  BinaryRef="Wix4UtilCA_X64"
+                  DllEntry="WixQuietExec"
+                  Execute="deferred"
+                  Impersonate="no" />
+
+    <SetProperty Id="ConfigureServiceFailureFlag"
+                 Value="&quot;[System64Folder]sc.exe&quot; failureflag Magpie 1"
+                 Before="ConfigureServiceFailureFlag"
+                 Sequence="execute" />
+    <CustomAction Id="ConfigureServiceFailureFlag"
+                  BinaryRef="Wix4UtilCA_X64"
+                  DllEntry="WixQuietExec"
+                  Execute="deferred"
+                  Impersonate="no" />
+
+    <InstallExecuteSequence>
+      <Custom Action="ConfigureServiceRecovery"
+              After="InstallServices"
+              Condition="NOT REMOVE~=&quot;ALL&quot;" />
+      <Custom Action="ConfigureServiceFailureFlag"
+              After="ConfigureServiceRecovery"
+              Condition="NOT REMOVE~=&quot;ALL&quot;" />
+    </InstallExecuteSequence>
+
+    <UI>
+      <ui:WixUI Id="WixUI_FeatureTree" />
+      <Publish Dialog="WelcomeDlg"
+               Control="Next"
+               Event="NewDialog"
+               Value="CustomizeDlg"
+               Condition="NOT Installed"
+               Order="10" />
+      <Publish Dialog="WelcomeDlg"
+               Control="Next"
+               Event="NewDialog"
+               Value="VerifyReadyDlg"
+               Condition="WIX_UPGRADE_DETECTED"
+               Order="11" />
+      <Publish Dialog="CustomizeDlg"
+               Control="Back"
+               Event="NewDialog"
+               Value="WelcomeDlg"
+               Condition="NOT Installed"
+               Order="10" />
+      <Publish Dialog="VerifyReadyDlg"
+               Control="Back"
+               Event="NewDialog"
+               Value="WelcomeDlg"
+               Condition="WIX_UPGRADE_DETECTED"
+               Order="10" />
+    </UI>
+  </Package>
+</Wix>

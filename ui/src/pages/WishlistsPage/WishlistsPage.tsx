@@ -19,6 +19,7 @@ import { useTags } from '@/hooks/useTags';
 import { useUrlFilterState } from '@/hooks/useUrlFilterState';
 import { useFormOptions } from '@/hooks/useFormOptions';
 import { useUserMap } from '@/hooks/useUserMap';
+import { useInstanceName } from '@/hooks/useInstanceName';
 import { useAuth, Role } from '@/auth';
 import { canEditOwned } from '@/lib/ownership';
 import { getErrorMessage } from '@/lib/errors';
@@ -49,6 +50,7 @@ function mapApiWishlistToItem(apiWishlist: ApiWishlist): WishlistItem {
 }
 
 export function WishlistsPage() {
+    const instanceName = useInstanceName();
     useDocumentTitle('Wishlists');
     const navigate = useNavigate();
     const location = useLocation();
@@ -89,7 +91,10 @@ export function WishlistsPage() {
 
     const { rootFolderOptions, tagOptions } = useFormOptions();
     const userMap = useUserMap();
-    const { tags: entityTags } = useTags(currentEditingWishlist ? { entityId: currentEditingWishlist.id } : undefined);
+    const { tags: entityTags, isLoading: isLoadingEntityTags } = useTags(
+        currentEditingWishlist ? { entityId: currentEditingWishlist.id } : undefined,
+    );
+    const entityTagsLoaded = !currentEditingWishlist || !isLoadingEntityTags;
 
     const wishlists = useMemo(
         () =>
@@ -178,7 +183,7 @@ export function WishlistsPage() {
             await deleteWishlist(deletingWishlist.id, hasBackingFilter && deleteFilterToo);
             toast({
                 title: 'Wishlist Deleted',
-                description: `Magpie deleted "${deletingWishlist.name}".`,
+                description: `${instanceName} deleted "${deletingWishlist.name}".`,
                 variant: 'success',
             });
         } catch {
@@ -191,7 +196,7 @@ export function WishlistsPage() {
             setIsDeleting(false);
             setDeletingWishlist(null);
         }
-    }, [deletingWishlist, deleteFilterToo, deleteWishlist, toast]);
+    }, [deletingWishlist, deleteFilterToo, deleteWishlist, toast, instanceName]);
 
     const handleCancelDelete = useCallback(() => {
         setDeletingWishlist(null);
@@ -363,7 +368,7 @@ export function WishlistsPage() {
             canWriteWishlists,
         );
 
-    const wishlistsDescription = 'Saved filters Magpie uses to automatically monitor for matching content.';
+    const wishlistsDescription = `Saved filters ${instanceName} uses to automatically monitor for matching content.`;
 
     if (isLoading) {
         return (
@@ -415,11 +420,7 @@ export function WishlistsPage() {
                             icon={<WarningCircleIcon weight="duotone" />}
                             title="Failed to load wishlists"
                             description={getErrorMessage(error)}
-                            action={
-                                <Button variant="secondary" size="sm" onClick={() => refetch()}>
-                                    Retry
-                                </Button>
-                            }
+                            onRetry={refetch}
                         />
                     ) : filteredWishlists.length === 0 ? (
                         <EmptyState
@@ -429,8 +430,8 @@ export function WishlistsPage() {
                                 hasActiveFilters
                                     ? 'No wishlists match the active filters.'
                                     : canCreate
-                                      ? 'A wishlist is a saved filter Magpie uses to automatically monitor for matching content.'
-                                      : 'Wishlists are saved filters Magpie uses to automatically monitor for matching content.'
+                                      ? `A wishlist is a saved filter ${instanceName} uses to automatically monitor for matching content.`
+                                      : `Wishlists are saved filters ${instanceName} uses to automatically monitor for matching content.`
                             }
                         />
                     ) : (
@@ -454,7 +455,7 @@ export function WishlistsPage() {
             <QuickActionsButton actions={addWishlistActions} title="Add Wishlist" visible={canCreate} />
 
             <WishlistForm
-                open={formOpen}
+                open={formOpen && entityTagsLoaded}
                 onOpenChange={handleFormOpenChange}
                 initialValues={getFormInitialValues()}
                 rootFolders={rootFolderOptions}

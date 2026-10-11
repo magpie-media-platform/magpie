@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
@@ -579,6 +582,21 @@ describe('SubjectsPage', () => {
     });
 
     describe('list', () => {
+        it('shows uncropped artwork whole on the subject cards only', () => {
+            // Arrange
+            const css = readFileSync(resolve(process.cwd(), 'src/pages/SubjectsPage/SubjectsPage.css'), 'utf8');
+            const cardCss = readFileSync(
+                resolve(process.cwd(), 'src/components/ui/MobileMediaCard/MobileMediaCard.css'),
+                'utf8',
+            );
+
+            // Assert
+            expect(css).toMatch(
+                /\.subjects-page__mobile-list \.mobile-media-card__poster\[data-artwork='uncropped'\] \{\s*object-fit: contain;\s*\}/,
+            );
+            expect(cardCss).not.toContain('data-artwork');
+        });
+
         it('renders the subject list with rows from the server', () => {
             renderSubjectsPage();
 

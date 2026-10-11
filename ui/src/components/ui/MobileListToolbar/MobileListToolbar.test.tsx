@@ -10,7 +10,7 @@ const sortOptions: MobileListSortOption[] = [
 ];
 
 describe('MobileListToolbar', () => {
-    it('SortDirection_DescribesCurrentState_WhenDirectionCanToggle', () => {
+    it('SortDirection_MarksCurrentDirectionAsPressed_WhenSorted', () => {
         // Arrange
         render(
             <MobileListToolbar
@@ -21,11 +21,12 @@ describe('MobileListToolbar', () => {
         );
 
         // Act
-        const direction = screen.getByRole('button', { name: 'Sort ascending' });
+        const ascending = screen.getByRole('button', { name: 'Sort ascending' });
+        const descending = screen.getByRole('button', { name: 'Sort descending' });
 
         // Assert
-        expect(direction).toHaveAttribute('data-direction', 'desc');
-        expect(direction).toHaveAttribute('aria-description', 'Current direction: descending');
+        expect(ascending).toHaveAttribute('aria-pressed', 'false');
+        expect(descending).toHaveAttribute('aria-pressed', 'true');
     });
 
     it('keeps the selection control in place while its state changes', async () => {
@@ -60,7 +61,7 @@ describe('MobileListToolbar', () => {
         );
     });
 
-    it('toggles the active sort direction', async () => {
+    it('sets the active sort direction', async () => {
         const user = userEvent.setup();
         const onSortingChange = vi.fn();
         render(

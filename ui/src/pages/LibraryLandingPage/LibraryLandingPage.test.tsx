@@ -2,6 +2,7 @@ import { render, screen, within, fireEvent, waitFor } from '@testing-library/rea
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { BooksIcon } from '@phosphor-icons/react';
 
 import { LibraryLandingPage } from './LibraryLandingPage';
 import { AuthProvider, Role } from '@/auth';
@@ -98,6 +99,15 @@ describe('LibraryLandingPage', () => {
         expect(screen.getByRole('heading', { name: 'Library', level: 1 })).toBeInTheDocument();
     });
 
+    it('renders the subtitle', () => {
+        // Arrange
+        // Act
+        renderLibraryLanding();
+
+        // Assert
+        expect(screen.getByText("Browse what's in the library.")).toBeInTheDocument();
+    });
+
     describe('Content Types Section', () => {
         it('renders content section heading', () => {
             renderLibraryLanding();
@@ -124,29 +134,67 @@ describe('LibraryLandingPage', () => {
             expect(showsLink).toHaveAttribute('href', '/library/content/shows');
         });
 
-        it('has link to all content page', () => {
+        it('renders an All content card that links to all content', () => {
+            // Act
             renderLibraryLanding();
 
-            const viewAllLink = screen.getByRole('link', { name: /view all content/i });
+            // Assert
+            const allContentLink = screen.getByRole('link', { name: 'All content 192 items' });
+            expect(allContentLink).toHaveAttribute('href', '/library/all');
+            expect(
+                within(allContentLink)
+                    .getByTestId('library-landing__all-content-icon')
+                    .closest('[data-component="card"]'),
+            ).toHaveAttribute('data-interactive', 'true');
+        });
 
-            expect(viewAllLink).toHaveAttribute('href', '/library/all');
+        it('renders the All content card with the Library navigation icon', () => {
+            // Arrange
+            renderLibraryLanding();
+            const { container } = render(<BooksIcon weight="duotone" />);
+
+            // Act
+            const cardIcon = screen.getByTestId('library-landing__all-content-icon').querySelector('svg');
+
+            // Assert
+            expect(cardIcon?.innerHTML).toBe(container.querySelector('svg')?.innerHTML);
+        });
+
+        it('renders the All content card before the content type cards', () => {
+            // Act
+            renderLibraryLanding();
+
+            // Assert
+            const links = screen.getAllByRole('link');
+            expect(links[0]).toHaveAttribute('href', '/library/all');
+            expect(links[1]).toHaveAttribute('href', '/library/content/movies');
+            expect(links[2]).toHaveAttribute('href', '/library/content/shows');
+        });
+
+        it('has no View all content link', () => {
+            // Act
+            renderLibraryLanding();
+
+            // Assert
+            expect(screen.queryByRole('link', { name: /view all content/i })).not.toBeInTheDocument();
         });
     });
 
     describe('Subject Types Section', () => {
-        it('renders subject section heading', () => {
+        it('has no Subjects heading', () => {
+            // Act
             renderLibraryLanding();
 
-            expect(screen.getByRole('heading', { name: 'Subjects', level: 2 })).toBeInTheDocument();
+            // Assert
+            expect(screen.queryByRole('heading', { name: /subject/i })).not.toBeInTheDocument();
+            expect(screen.queryByRole('region', { name: /subject/i })).not.toBeInTheDocument();
         });
 
         it('renders subject type cards', () => {
             renderLibraryLanding();
 
-            const subjectSection = screen.getByRole('region', { name: 'Subjects' });
-
-            expect(within(subjectSection).getByText('Actors')).toBeInTheDocument();
-            expect(within(subjectSection).getByText('Studios')).toBeInTheDocument();
+            expect(screen.getByText('Actors')).toBeInTheDocument();
+            expect(screen.getByText('Studios')).toBeInTheDocument();
         });
 
         it('creates correct links to subject type pages', () => {
@@ -160,12 +208,21 @@ describe('LibraryLandingPage', () => {
             expect(studiosLink).toBeDefined();
         });
 
-        it('has link to all subjects page', () => {
+        it('has no link to all subjects', () => {
+            // Act
             renderLibraryLanding();
 
-            const viewAllLink = screen.getByRole('link', { name: /view all subjects/i });
+            // Assert
+            expect(screen.queryByRole('link', { name: /all subjects/i })).not.toBeInTheDocument();
+            expect(document.querySelector('a[href="/library/subjects/all"]')).not.toBeInTheDocument();
+        });
 
-            expect(viewAllLink).toHaveAttribute('href', '/library/subjects/all');
+        it('has no visible text that names subjects', () => {
+            // Act
+            renderLibraryLanding();
+
+            // Assert
+            expect(document.body).not.toHaveTextContent(/subject/i);
         });
     });
 
@@ -186,7 +243,7 @@ describe('LibraryLandingPage', () => {
             expect(skeletons.length).toBeGreaterThan(0);
         });
 
-        it('hides view all links when loading', () => {
+        it('hides the All content card when loading', () => {
             mockUseLibraryTypes.mockReturnValue({
                 contentTypes: [],
                 subjectTypes: [],
@@ -198,8 +255,7 @@ describe('LibraryLandingPage', () => {
 
             renderLibraryLanding();
 
-            expect(screen.queryByRole('link', { name: /view all content/i })).not.toBeInTheDocument();
-            expect(screen.queryByRole('link', { name: /view all subjects/i })).not.toBeInTheDocument();
+            expect(screen.queryByRole('link', { name: /all content/i })).not.toBeInTheDocument();
         });
     });
 
@@ -219,6 +275,7 @@ describe('LibraryLandingPage', () => {
             renderLibraryLanding();
 
             expect(screen.getByText(/no content types registered/i)).toBeInTheDocument();
+            expect(screen.queryByRole('link', { name: /all content/i })).not.toBeInTheDocument();
         });
 
         it('shows empty message when no subject types', () => {
@@ -235,7 +292,7 @@ describe('LibraryLandingPage', () => {
 
             renderLibraryLanding();
 
-            expect(screen.getByText(/no subject types registered/i)).toBeInTheDocument();
+            expect(screen.getByText('No categories registered. Install extensions to add them.')).toBeInTheDocument();
         });
     });
 
@@ -293,7 +350,7 @@ describe('LibraryLandingPage', () => {
 
             const cards = document.querySelectorAll('[data-component="card"][data-interactive="true"]');
 
-            expect(cards.length).toBe(4);
+            expect(cards.length).toBe(5);
         });
     });
 
@@ -305,6 +362,7 @@ describe('LibraryLandingPage', () => {
             expect(screen.getByText('150 items')).toBeInTheDocument();
             expect(screen.getByText('85 items')).toBeInTheDocument();
             expect(screen.getByText('12 items')).toBeInTheDocument();
+            expect(screen.getByText('192 items')).toBeInTheDocument();
         });
 
         it('displays singular "1 item" for count of 1', () => {
@@ -315,7 +373,7 @@ describe('LibraryLandingPage', () => {
             renderLibraryLanding();
 
             const items = screen.getAllByText('1 item');
-            expect(items.length).toBe(2);
+            expect(items.length).toBe(3);
         });
 
         it('displays "0 items" for an empty type card', () => {
@@ -338,7 +396,7 @@ describe('LibraryLandingPage', () => {
 
             expect(screen.queryByText('Movies')).not.toBeInTheDocument();
             expect(screen.queryByText('TV Shows')).not.toBeInTheDocument();
-            expect(screen.queryByText('View all content')).not.toBeInTheDocument();
+            expect(screen.queryByText('All content')).not.toBeInTheDocument();
             expect(document.querySelector('[data-component="onboarding-prompt"]')).toBeInTheDocument();
             expect(screen.getByText('Actors')).toBeInTheDocument();
         });
@@ -351,7 +409,7 @@ describe('LibraryLandingPage', () => {
             renderLibraryLanding();
 
             const countSkeletons = screen.getAllByTestId('library-landing__count-skeleton');
-            expect(countSkeletons.length).toBe(4);
+            expect(countSkeletons.length).toBe(5);
         });
 
         it('renders subject card counts from subject totalItems responses', async () => {
@@ -383,14 +441,15 @@ describe('LibraryLandingPage', () => {
 
             renderLibraryLanding();
 
-            const subjectSection = screen.getByRole('region', { name: 'Subjects' });
-            expect(within(subjectSection).getByText('People')).toBeInTheDocument();
-            expect(within(subjectSection).getAllByTestId('library-landing__count-skeleton')).toHaveLength(2);
+            const peopleCard = screen.getByRole('link', { name: /People/ });
+            const studiosCard = screen.getByRole('link', { name: /Studios/ });
+            expect(within(peopleCard).getByTestId('library-landing__count-skeleton')).toBeInTheDocument();
+            expect(within(studiosCard).getByTestId('library-landing__count-skeleton')).toBeInTheDocument();
 
             await waitFor(() => {
-                expect(within(subjectSection).getByText('4,053 items')).toBeInTheDocument();
-                expect(within(subjectSection).getByText('12 items')).toBeInTheDocument();
-                expect(within(subjectSection).queryAllByTestId('library-landing__count-skeleton')).toHaveLength(0);
+                expect(within(peopleCard).getByText('4,053 items')).toBeInTheDocument();
+                expect(within(studiosCard).getByText('12 items')).toBeInTheDocument();
+                expect(screen.queryAllByTestId('library-landing__count-skeleton')).toHaveLength(0);
             });
 
             expect(api.apiGet).toHaveBeenCalledWith(expect.stringContaining('/subjects?kind=person'));
@@ -482,11 +541,10 @@ describe('LibraryLandingPage', () => {
     });
 
     describe('Accessibility', () => {
-        it('has properly labeled sections', () => {
+        it('has a labeled content section', () => {
             renderLibraryLanding();
 
             expect(screen.getByRole('region', { name: 'Content' })).toBeInTheDocument();
-            expect(screen.getByRole('region', { name: 'Subjects' })).toBeInTheDocument();
         });
 
         it('has icon marked as decorative', () => {

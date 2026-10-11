@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -474,6 +475,21 @@ internal sealed class IndexerService(
             selectedConnectionIds: selectedIds).ConfigureAwait(false);
 
         var phase = phases[0];
+        await transactionManager.ExecuteWithTransactionAsync(
+            async transactionCancellationToken =>
+            {
+                foreach (var candidate in phase.Candidates)
+                {
+                    await StoreReleaseAsync(candidate.Release, null, transactionCancellationToken)
+                        .ConfigureAwait(false);
+                }
+
+                await releaseRepository.MarkObservedAsync(
+                    [.. phase.Candidates.Select(candidate => candidate.Release.Id)],
+                    transactionCancellationToken)
+                    .ConfigureAwait(false);
+            },
+            cancellationToken).ConfigureAwait(false);
         var outcomes = phase.Connections.ToDictionary(outcome => outcome.ConnectionId);
         var results = new List<IndexerSearchConnectionResult>(connections.Length);
         foreach (var connection in connections)
@@ -515,16 +531,15 @@ internal sealed class IndexerService(
 
     public async Task<Guid?> MatchAsync(
         Guid contentHierarchyItemId,
-        Release release,
+        Guid releaseId,
         Guid? actingUserId,
         CancellationToken cancellationToken = default)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(release.Title);
-
         var item = await contentHierarchyItemRepository
             .GetByIdAsync(contentHierarchyItemId, cancellationToken)
             .ConfigureAwait(false);
-        if (item is null)
+        var release = await releaseRepository.GetByIdAsync(releaseId, cancellationToken).ConfigureAwait(false);
+        if (item is null || release is null)
         {
             return null;
         }
@@ -532,13 +547,6 @@ internal sealed class IndexerService(
         return await transactionManager.ExecuteWithTransactionAsync(
             async transactionCancellationToken =>
             {
-                var now = timeProvider.GetUtcNow().UtcDateTime;
-                release.Id = Guid.NewGuid();
-                release.CreatedAt = now;
-                release.CreatedByUserId = actingUserId;
-                release.ModifiedAt = null;
-                release.ModifiedByUserId = null;
-                await StoreReleaseAsync(release, actingUserId, transactionCancellationToken).ConfigureAwait(false);
                 await AddScopeAsync(
                     release.Id,
                     contentHierarchyItemId,
@@ -637,6 +645,34 @@ internal sealed class IndexerService(
         CancellationToken cancellationToken)
     {
         return TestSavedConnectionAsync(indexerId, connectionId, timeout, cancellationToken);
+    }
+
+    public async Task<HttpResponseMessage?> FetchPayloadAsync(
+        Guid connectionId,
+        Uri payloadUrl,
+        CancellationToken cancellationToken = default)
+    {
+        var connection = await indexerConnectionRepository.GetByIdAsync(connectionId, cancellationToken)
+            .ConfigureAwait(false);
+        var indexer = connection is not { Enabled: true }
+            ? null
+            : await indexerRepository.GetByIdAsync(connection.IndexerId, cancellationToken).ConfigureAwait(false);
+        if (ResolveIntegration(indexer) is not { } integration)
+        {
+            return null;
+        }
+
+        try
+        {
+            return await integration.FetchPayloadAsync(payloadUrl, connection!.Settings, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+        {
+            throw new ReleasePayloadRejectedException(
+                $"The indexer failed to fetch the release payload: {ex.Message}",
+                transient: true);
+        }
     }
 
     private async Task<ConfigurationTestResult> TestSavedConnectionAsync(

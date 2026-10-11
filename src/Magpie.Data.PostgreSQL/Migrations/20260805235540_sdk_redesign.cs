@@ -400,7 +400,6 @@ namespace Magpie.Data.PostgreSQL.Migrations
                 type: "integer",
                 nullable: true);
 
-            // The old values mean inherit (0), monitor (1), and exclude (2).
             migrationBuilder.Sql("""
                 DO $$
                 BEGIN

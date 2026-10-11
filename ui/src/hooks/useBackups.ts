@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 
-import { apiFetchResponse, apiGet, apiPost, apiDelete } from '@/lib/api';
+import { apiGet, apiPost, apiDelete } from '@/lib/api';
 import { useInvalidateQueriesOnEvents } from '@/hooks/useInvalidateQueriesOnEvents';
 import { executeJobRequest } from '@/lib/jobActions';
 import { POLLING_INTERVALS } from '@/lib/queryClient';
@@ -45,6 +45,12 @@ export interface BackupCapabilities {
     optimizeSupported: boolean;
 
     lastOptimizedAt?: string | null;
+
+    backupDeniedReason?: string | null;
+
+    restoreDeniedReason?: string | null;
+
+    deleteDeniedReason?: string | null;
 }
 
 export const backupQueryKeys = {
@@ -89,26 +95,14 @@ async function restoreBackup(id: string): Promise<void> {
     return apiPost(`/database/backups/${encodeURIComponent(id)}/restore`);
 }
 
-/** The browser must still be able to read the blob when the download starts. */
-const BLOB_URL_LIFETIME_MS = 60_000;
-
-async function downloadBackup(id: string): Promise<void> {
-    const response = await apiFetchResponse(`/database/backups/${encodeURIComponent(id)}/download`);
-    const blobUrl = URL.createObjectURL(await response.blob());
-    const anchor = document.createElement('a');
-    anchor.href = blobUrl;
-    anchor.download = `magpie-backup-${id}.db`;
-    document.body.append(anchor);
-    anchor.click();
-    anchor.remove();
-    setTimeout(() => URL.revokeObjectURL(blobUrl), BLOB_URL_LIFETIME_MS);
-}
-
 export function useBackups() {
     const queryClient = useQueryClient();
-    useInvalidateQueriesOnEvents(['backup.completed', 'backup.failed', 'backup.deleted'], [backupQueryKeys.list()], {
-        exact: true,
-    });
+    useInvalidateQueriesOnEvents(
+        ['backup.completed', 'backup.failed', 'backup.deleted'],
+        [backupQueryKeys.list(), backupQueryKeys.capabilities()],
+        { exact: true },
+    );
+    const invalidateCapabilities = () => queryClient.invalidateQueries({ queryKey: backupQueryKeys.capabilities() });
 
     const capabilitiesQuery = useQuery({
         queryKey: backupQueryKeys.capabilities(),
@@ -134,14 +128,12 @@ export function useBackups() {
         onSuccess: () => {
             void queryClient.invalidateQueries({ queryKey: backupQueryKeys.list() });
         },
+        onError: invalidateCapabilities,
     });
 
     const restoreMutation = useMutation({
         mutationFn: restoreBackup,
-    });
-
-    const downloadMutation = useMutation({
-        mutationFn: downloadBackup,
+        onError: invalidateCapabilities,
     });
 
     const backups: BackupItem[] = useMemo(() => backupsQuery.data?.map(transformBackup) ?? [], [backupsQuery.data]);
@@ -166,10 +158,8 @@ export function useBackups() {
         isRestoring: restoreMutation.isPending,
         restoreError: queryErrorOrNull(restoreMutation),
 
-        downloadBackup: downloadMutation.mutateAsync,
-        isDownloading: downloadMutation.isPending,
-        downloadError: queryErrorOrNull(downloadMutation),
-
-        refetch: backupsQuery.refetch,
+        refetch: async () => {
+            await Promise.all([capabilitiesQuery.refetch(), backupsQuery.refetch()]);
+        },
     };
 }

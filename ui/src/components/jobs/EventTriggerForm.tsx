@@ -12,6 +12,7 @@ import type { JobScopeValue } from '@/types/jobs';
 
 import { Alert } from '@/components/ui/Alert';
 import { Button } from '@/components/ui/Button';
+import { EventContextFilterRow } from '@/components/ui/EventContextFilterRow';
 import { Input } from '@/components/ui/Input';
 import { Label } from '@/components/ui/Label';
 import { Switch } from '@/components/ui/Switch';
@@ -788,65 +789,18 @@ export function EventTriggerForm({
                                     </p>
                                 )}
                                 {values.filters.map((filter, index) => (
-                                    <div
+                                    <EventContextFilterRow
                                         key={filterKeys[index]}
-                                        className="event-trigger-form__filter"
-                                        data-filter-index={index}
-                                    >
-                                        <div className="event-trigger-form__filter-row">
-                                            <div className="event-trigger-form__filter-key">
-                                                <Input
-                                                    id={`filter-${index}-key`}
-                                                    value={filter.key}
-                                                    onChange={(e) => handleFilterKeyChange(index, e.target.value)}
-                                                    placeholder="Key"
-                                                    error={!!errors[`${filterKeys[index]}-key`]}
-                                                    errorMessage={errors[`${filterKeys[index]}-key`] || undefined}
-                                                    disabled={isSubmitting}
-                                                    aria-label={`Filter ${index + 1} key`}
-                                                    data-field={`filter-${index}-key`}
-                                                />
-                                            </div>
-                                            <div className="event-trigger-form__filter-pattern">
-                                                <Input
-                                                    id={`filter-${index}-pattern`}
-                                                    value={filter.pattern ?? ''}
-                                                    onChange={(e) => handleFilterPatternChange(index, e.target.value)}
-                                                    placeholder="Pattern (regex)"
-                                                    error={!!errors[`${filterKeys[index]}-pattern`]}
-                                                    errorMessage={errors[`${filterKeys[index]}-pattern`] || undefined}
-                                                    disabled={isSubmitting}
-                                                    aria-label={`Filter ${index + 1} pattern`}
-                                                    data-field={`filter-${index}-pattern`}
-                                                    className="event-trigger-form__pattern-input"
-                                                />
-                                            </div>
-                                            <div className="event-trigger-form__filter-negate">
-                                                <Switch
-                                                    checked={filter.negate}
-                                                    onCheckedChange={(negate) =>
-                                                        handleFilterNegateChange(index, negate)
-                                                    }
-                                                    disabled={isSubmitting}
-                                                    aria-label={`Filter ${index + 1} negate`}
-                                                    data-field={`filter-${index}-negate`}
-                                                />
-                                                <span className="event-trigger-form__filter-negate-label">Negate</span>
-                                            </div>
-                                            <Button
-                                                type="button"
-                                                variant="ghost"
-                                                size="sm"
-                                                onClick={() => handleRemoveFilter(index)}
-                                                disabled={isSubmitting}
-                                                aria-label={`Remove filter ${index + 1}`}
-                                                data-action={`remove-filter-${index}`}
-                                                className="event-trigger-form__filter-remove"
-                                            >
-                                                <TrashIcon weight="bold" aria-hidden="true" />
-                                            </Button>
-                                        </div>
-                                    </div>
+                                        index={index}
+                                        filter={filter}
+                                        keyError={errors[`${filterKeys[index]}-key`]}
+                                        patternError={errors[`${filterKeys[index]}-pattern`]}
+                                        disabled={isSubmitting}
+                                        onKeyChange={handleFilterKeyChange}
+                                        onPatternChange={handleFilterPatternChange}
+                                        onNegateChange={handleFilterNegateChange}
+                                        onRemove={handleRemoveFilter}
+                                    />
                                 ))}
                                 <Button
                                     type="button"

@@ -23,24 +23,44 @@
 
     .file-browser__breadcrumb {
         display: flex;
+        flex-wrap: wrap;
         align-items: center;
         flex: 1;
         min-width: 0;
-        overflow-x: auto;
-        scrollbar-width: none;
+    }
 
-        &::-webkit-scrollbar {
-            display: none;
+    .file-browser__breadcrumb--collapsed {
+        flex-wrap: nowrap;
+
+        & .file-browser__breadcrumb-item {
+            flex-shrink: 0;
+        }
+
+        & .file-browser__breadcrumb-link {
+            min-width: 24px;
+            min-height: 24px;
+        }
+
+        &[data-fit='current'] {
+            & .file-browser__breadcrumb-item:nth-last-child(2) {
+                display: none;
+            }
+
+            & .file-browser__breadcrumb-item:last-child {
+                flex-shrink: 1;
+            }
         }
     }
 
     .file-browser__breadcrumb-item {
         display: flex;
         align-items: center;
-        flex-shrink: 0;
+        min-width: 0;
+        max-width: 100%;
     }
 
     .file-browser__breadcrumb-separator {
+        flex-shrink: 0;
         color: var(--text-muted);
         margin: 0 var(--space-xs);
     }
@@ -54,7 +74,9 @@
         padding: var(--space-xs);
         border-radius: var(--radius-sm);
         cursor: pointer;
-        white-space: nowrap;
+        min-width: 0;
+        overflow-wrap: anywhere;
+        text-align: left;
         transition:
             color var(--duration-fast) var(--easing-default),
             background-color var(--duration-fast) var(--easing-default);
@@ -118,6 +140,7 @@
 
     .file-browser__entry-button {
         flex: 1;
+        min-width: 0;
         display: flex;
         align-items: center;
         gap: var(--space-sm);
@@ -179,9 +202,7 @@
     .file-browser__entry-name {
         flex: 1;
         min-width: 0;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
+        overflow-wrap: anywhere;
     }
 
     .file-browser__entry-open {
@@ -211,6 +232,8 @@
         gap: var(--space-sm);
         padding: var(--space-xl);
         color: var(--status-unhealthy);
+        overflow-wrap: anywhere;
+        text-align: center;
     }
 
     .file-browser__empty {
@@ -241,8 +264,23 @@
     .file-browser__selection-path {
         color: var(--text-primary);
         font-family: var(--font-mono);
+        direction: rtl;
+        text-align: left;
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
+    }
+
+    @media (max-width: 480px) {
+        .file-browser__content {
+            flex: 1;
+            min-height: 0;
+            overflow: hidden auto;
+        }
+
+        .file-browser__list-container {
+            min-height: calc(var(--touch-target-min) * 3);
+            max-height: none;
+        }
     }
 }

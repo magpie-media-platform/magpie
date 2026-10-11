@@ -18,11 +18,9 @@ export interface ContentReleaseRow {
     categories?: string[];
     languages?: string[];
     properties?: string | null;
-    isMatch?: boolean | null;
-    rejectionReason?: string | null;
     acquisitionStatus?: DownloadStatusValue | null;
-    acquisitionWaitingReason?: string | null;
     failureReason?: string | null;
+    decisionReason?: string | null;
     status?: ReleaseScopeStatus;
 }
 
@@ -46,8 +44,6 @@ export function useContentReleases(contentId: string | null | undefined, options
         queryFn: () => fetchContentReleases(contentId!),
         enabled: (options?.enabled ?? true) && !!contentId,
         staleTime: POLLING_INTERVALS.normal / 2,
-        refetchInterval: (query) =>
-            query.state.data?.some((release) => release.acquisitionWaitingReason) ? POLLING_INTERVALS.normal : false,
     });
     const relatedIds = [contentId, ...(query.data?.map((release) => release.id) ?? [])].filter(
         (id): id is string => !!id,

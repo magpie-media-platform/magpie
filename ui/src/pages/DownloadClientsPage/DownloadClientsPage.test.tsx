@@ -154,6 +154,7 @@ describe('DownloadClientsPage', () => {
 
     afterEach(() => {
         vi.restoreAllMocks();
+        vi.unstubAllGlobals();
     });
 
     it('renders with correct data-page attribute', () => {
@@ -171,6 +172,7 @@ describe('DownloadClientsPage', () => {
     });
 
     it('keeps the selection toggle on the list toolbar line', () => {
+        vi.stubGlobal('innerWidth', 390);
         const queryClient = createTestQueryClient();
         render(<DownloadClientsPage />, { wrapper: createTestWrapper(queryClient) });
 

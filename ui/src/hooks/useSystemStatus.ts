@@ -4,7 +4,7 @@ import { useAuth } from '@/auth';
 import { useInvalidateQueriesOnEvents } from '@/hooks/useInvalidateQueriesOnEvents';
 import { apiGet } from '@/lib/api';
 import { queryErrorOrNull } from '@/lib/utils';
-import type { DiskSpaceInfo, DiskSpaceTotals } from '@/types/system';
+import type { DiskSpaceInfo } from '@/types/system';
 
 interface ApiSystemInfo {
     version: string;
@@ -24,13 +24,11 @@ interface ApiDiskSpaceInfo {
     totalBytes: number;
     freeBytes: number;
     usedBytes: number;
+    contentBytes: number;
 }
 
 interface ApiDiskSpaceResponse {
     folders: ApiDiskSpaceInfo[];
-    totalBytes: number;
-    freeBytes: number;
-    usedBytes: number;
 }
 
 export interface SystemStatusData {
@@ -45,8 +43,6 @@ export interface SystemStatusData {
     };
 
     diskSpace: DiskSpaceInfo[];
-
-    diskSpaceTotals: DiskSpaceTotals;
 
     isLoading: boolean;
 }
@@ -72,20 +68,12 @@ function mapApiDiskSpaceToUi(diskSpaceInfo: ApiDiskSpaceInfo[]): DiskSpaceInfo[]
         usedBytes: info.usedBytes,
         totalBytes: info.totalBytes,
         freeBytes: info.freeBytes,
+        contentBytes: info.contentBytes,
     }));
 }
 
-function getDiskSpaceData(data: ApiDiskSpaceResponse | undefined) {
-    return {
-        folders: data ? mapApiDiskSpaceToUi(data.folders) : [],
-        totals: data
-            ? {
-                  usedBytes: data.usedBytes,
-                  totalBytes: data.totalBytes,
-                  freeBytes: data.freeBytes,
-              }
-            : { usedBytes: 0, totalBytes: 0, freeBytes: 0 },
-    };
+function getDiskSpaceFolders(data: ApiDiskSpaceResponse | undefined): DiskSpaceInfo[] {
+    return data ? mapApiDiskSpaceToUi(data.folders) : [];
 }
 
 function useDiskSpaceQuery(isAuthenticated: boolean) {
@@ -140,14 +128,11 @@ export function useSystemStatus(): SystemStatusData {
               startedAt: null,
           };
 
-    const diskSpaceData = getDiskSpaceData(diskSpaceQuery.data);
-
     const isLoading = infoQuery.isLoading || diskSpaceQuery.isLoading;
 
     return {
         systemInfo,
-        diskSpace: diskSpaceData.folders,
-        diskSpaceTotals: diskSpaceData.totals,
+        diskSpace: getDiskSpaceFolders(diskSpaceQuery.data),
         isLoading,
     };
 }
@@ -166,11 +151,9 @@ export function useSystemInfo() {
 export function useDiskSpace() {
     const { isAuthenticated } = useAuth();
     const diskSpaceQuery = useDiskSpaceQuery(isAuthenticated);
-    const diskSpaceData = getDiskSpaceData(diskSpaceQuery.data);
 
     return {
-        folders: diskSpaceData.folders,
-        totals: diskSpaceData.totals,
+        folders: getDiskSpaceFolders(diskSpaceQuery.data),
         isLoading: diskSpaceQuery.isLoading,
         error: queryErrorOrNull(diskSpaceQuery),
         refetch: diskSpaceQuery.refetch,

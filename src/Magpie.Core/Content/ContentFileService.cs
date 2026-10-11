@@ -1187,7 +1187,6 @@ internal sealed class ContentFileService(
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            // A file that also covers a kept item passed to that item when the owner was deleted.
             if (file.Coverage.Count > 0 &&
                 await mediaFileRepository.GetByIdAsync(file.Id, cancellationToken).ConfigureAwait(false) is not null)
             {
@@ -1599,11 +1598,15 @@ internal sealed class ContentFileService(
                     .Select(directory => new ContentPathPlanDirectory
                     {
                         LevelSlug = directory.LevelSlug,
-                        Name = NormalizeContentPath(directory.Name)
+                        Name = NormalizeContentPath(directory.Name.NormalizeContentPathSegment())
                     })
                     .Where(directory => directory.Name.Length > 0)
                     .ToArray();
-                var joined = string.Join('/', directories.Select(directory => directory.Name).Append(plan.FileName));
+                var joined = string.Join(
+                    '/',
+                    directories
+                        .Select(directory => directory.Name)
+                        .Append(plan.FileName.NormalizeContentPathSegment()));
                 return (NormalizeContentPath(joined), directories);
             }
         }
@@ -1623,12 +1626,11 @@ internal sealed class ContentFileService(
 
             if (!string.IsNullOrWhiteSpace(requiredTokens ? rendered : rendered.Split('/', '\\')[^1]))
             {
-                // An empty directory list marks a rendered mask, so placement nests it under the folder owner.
                 return (requiredTokens ? rendered : BuildFallbackPathResult(rendered), []);
             }
         }
 
-        return (BuildFallbackPathResult(flatLeafFolder + "/" + fileName), null);
+        return (BuildFallbackPathResult(flatLeafFolder.NormalizeContentPathSegment() + "/" + fileName), null);
     }
 
     private static string BuildFallbackPathResult(string relativeFilePath)
@@ -2558,11 +2560,26 @@ internal sealed class ContentFileService(
 
     private static string? NumberRange(IEnumerable<ContentHierarchyItem> items)
     {
-        var ordinals = items.Select(item => item.Ordinal).OfType<int>().ToArray();
-        return ordinals.Length == 0 ? null
-            : ordinals.Min() == ordinals.Max() ? ordinals[0].ToString(CultureInfo.InvariantCulture)
-            : string.Create(CultureInfo.InvariantCulture, $"{ordinals.Min()}-{ordinals.Max()}");
+        var numbers = items.Select(SequenceNumberOf).ToArray();
+        if (numbers.Length == 0 || numbers.Any(number => number is null))
+        {
+            return null;
+        }
+
+        var minimum = numbers.Min()!.Value;
+        var maximum = numbers.Max()!.Value;
+        if (numbers.Distinct().Count() != numbers.Length || (long)maximum - minimum + 1 != numbers.Length)
+        {
+            return null;
+        }
+
+        return minimum == maximum ? minimum.ToString(CultureInfo.InvariantCulture)
+            : string.Create(CultureInfo.InvariantCulture, $"{minimum}-{maximum}");
     }
+
+    private static int? SequenceNumberOf(ContentHierarchyItem item) =>
+        item.MetadataContainer?.Contributions.OrderBy(contribution => contribution.Ordinal)
+            .Select(contribution => contribution.SequenceNumber).FirstOrDefault(number => number is not null);
 
     private static MediaInfoTrack? FirstTrack(RenameTokenSource source, string type) =>
         source.MediaInfo?.Tracks.FirstOrDefault(track => track.Type.Equals(type, StringComparison.OrdinalIgnoreCase));
@@ -2637,7 +2654,7 @@ internal sealed class ContentFileService(
                 source => LevelOf(source, level.Slug) is { } node
                     ? node == source.Leaf && source.Covered.Count > 0
                         ? NumberRange(source.Covered.Append(node))
-                        : node.Ordinal?.ToString(CultureInfo.InvariantCulture)
+                        : SequenceNumberOf(node)?.ToString(CultureInfo.InvariantCulture)
                     : null));
         }
 
@@ -3089,7 +3106,6 @@ internal sealed class ContentFileService(
             .FirstOrDefault(index => owners.Contains(lineage[index].Level), lineage.Count - 1);
         var ownerLineage = lineage.Skip(ownerIndex).ToArray();
 
-        // Existing provider-owned directories are authoritative; a mask cannot rename them.
         return ResolvePath(ownerLineage, folder, pathUpdates, out _, out var error)
             ?? throw new ArgumentException(error ?? "The folder-providing parent has no path.");
     }

@@ -1019,7 +1019,7 @@ async function acquireRelease(
     const candidate = candidates.find(
         (item) => item.release.externalId === fixture.releaseExternalId,
     )!;
-    expect(await api.post<string>(`/api/interactive-search/${fixture.contentId}/grab`, candidate.release)).toMatch(
+    expect(await api.post<string>(`/api/interactive-search/${fixture.contentId}/grab/${candidate.release.id}`)).toMatch(
         /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
     );
 
@@ -1206,7 +1206,7 @@ async function proveRejectedConcurrentGrab(api: ApiClient, hierarchyItemId: stri
     );
     const candidate = candidates.find((entry) => entry.release.externalId === guardReleaseExternalId)!;
     const callsBefore = (await mocks.downloadClient.calls('DownloadReleaseAsync')).length;
-    expect(await api.post<string>(`/api/interactive-search/${hierarchyItemId}/grab`, candidate.release)).toMatch(
+    expect(await api.post<string>(`/api/interactive-search/${hierarchyItemId}/grab/${candidate.release.id}`)).toMatch(
         /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
     );
     await until(

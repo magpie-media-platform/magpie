@@ -67,13 +67,12 @@ export function useInteractiveSearch(contentHierarchyItemId: string | undefined,
 
 interface GrabInteractiveCandidateVariables {
     contentHierarchyItemId: string;
-    release: ApiRelease;
+    releaseId: string;
 }
 
 async function grabCandidate(variables: GrabInteractiveCandidateVariables): Promise<JobActionDisposition> {
     const response = await apiPost<JobActionResponse>(
-        `/interactive-search/${variables.contentHierarchyItemId}/grab`,
-        variables.release,
+        `/interactive-search/${variables.contentHierarchyItemId}/grab/${variables.releaseId}`,
     );
     return normalizeJobActionDisposition(response);
 }

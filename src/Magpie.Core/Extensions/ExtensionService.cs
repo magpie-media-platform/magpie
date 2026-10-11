@@ -151,6 +151,7 @@ internal sealed class ExtensionService(
         return staged with
         {
             Id = existing.Id,
+            Name = existing.Name,
             PackageId = existing.PackageId,
             LifecycleVersion = existing.LifecycleVersion,
             FilePath = Path.Combine(targetDirectory, assemblyRelativePath),
@@ -210,9 +211,14 @@ internal sealed class ExtensionService(
             return null;
         }
 
+        using var stream = entry.Open();
+        return ReadNuspec(stream, entry.FullName, logger);
+    }
+
+    private static NuspecMetadata? ReadNuspec(Stream stream, string nuspecName, ILogger logger)
+    {
         try
         {
-            using var stream = entry.Open();
             var doc = XDocument.Load(stream);
             var metadata = doc.Root?.Elements()
                 .FirstOrDefault(e => e.Name.LocalName == "metadata");
@@ -227,14 +233,19 @@ internal sealed class ExtensionService(
                 Version: Get("version"),
                 Title: Get("title") ?? Get("id"),
                 Authors: NormalizeOrNull(Get("authors")),
-                Description: NormalizeOrNull(Get("description")));
+                Description: NormalizeOrNull(Get("description")),
+                SdkRange: metadata?.Descendants()
+                    .FirstOrDefault(element =>
+                        element.Name.LocalName == "dependency" &&
+                        string.Equals(
+                            element.Attribute("id")?.Value,
+                            ExtensionLoader.SdkAssemblyName,
+                            StringComparison.OrdinalIgnoreCase))
+                    ?.Attribute("version")?.Value);
         }
         catch (Exception ex)
         {
-            logger.LogError(
-                ex,
-                "The extension service failed to read nuspec metadata from {NuspecEntry}",
-                entry.FullName);
+            logger.LogError(ex, "The extension service failed to read nuspec metadata from {NuspecEntry}", nuspecName);
             return null;
         }
     }
@@ -345,8 +356,7 @@ internal sealed class ExtensionService(
                 continue;
             }
 
-            var relative = entry.FullName.Substring(prefix.Length);
-            var path = ResolveSafeExtractionPath(targetDir, relative, entry, fileSystem);
+            var path = ResolveSafeExtractionPath(targetDir, entry.FullName, entry, fileSystem);
             var directory = Path.GetDirectoryName(path);
             if (!string.IsNullOrEmpty(directory))
             {
@@ -355,10 +365,10 @@ internal sealed class ExtensionService(
 
             ExtractEntry(entry, path, fileSystem);
 
-            if (relative.EndsWith(".dll", StringComparison.OrdinalIgnoreCase) &&
+            if (entry.Name.EndsWith(".dll", StringComparison.OrdinalIgnoreCase) &&
                 (mainDll is null ||
                     string.Equals(
-                        Path.GetFileNameWithoutExtension(relative),
+                        Path.GetFileNameWithoutExtension(entry.Name),
                         packageId,
                         StringComparison.OrdinalIgnoreCase)))
             {
@@ -475,6 +485,12 @@ internal sealed class ExtensionService(
     {
         var cut = version.IndexOfAny(['-', '+']);
         return cut < 0 ? version : version[..cut];
+    }
+
+    private static bool IsLoadable(Version? builtAgainst)
+    {
+        return builtAgainst is null ||
+            ExtensionLoader.CurrentAbiVersion.IsCompatibleWith(builtAgainst, targetAbi: null);
     }
 
     private static string? NormalizeOrNull(string? value)
@@ -611,7 +627,7 @@ internal sealed class ExtensionService(
             throw new ArgumentException("A package ID is required.", nameof(packageId));
         }
 
-        var stream = await DownloadPackageAsync(packageId, version, cancellationToken)
+        var stream = await DownloadPackageAsync(packageId, version, minimumVersion: null, cancellationToken)
             .ConfigureAwait(false)
             ?? throw new InvalidOperationException($"NuGet package {packageId} could not be downloaded.");
 
@@ -840,7 +856,7 @@ internal sealed class ExtensionService(
         CancellationToken cancellationToken = default)
     {
         ValidateSourceUri(create.SourceUrl);
-        return await packageSourceRepository.CreateAsync(
+        var source = await packageSourceRepository.CreateAsync(
             new ExtensionPackageSource
             {
                 Name = create.Name,
@@ -855,6 +871,8 @@ internal sealed class ExtensionService(
             },
             actingUserId,
             cancellationToken).ConfigureAwait(false);
+        _updateInfoCache.Remove(UpdateInfoCacheKey);
+        return source;
     }
 
     public async Task<bool> PatchPackageSourceAsync(
@@ -868,9 +886,11 @@ internal sealed class ExtensionService(
             ValidateSourceUri(sourceUrl.Value);
         }
 
-        return await packageSourceRepository
+        var patched = await packageSourceRepository
             .PatchAsync(patch with { Id = packageSourceId }, actingUserId, cancellationToken)
             .ConfigureAwait(false);
+        _updateInfoCache.Remove(UpdateInfoCacheKey);
+        return patched;
     }
 
     public async Task<bool> DeletePackageSourceAsync(
@@ -878,8 +898,10 @@ internal sealed class ExtensionService(
         Guid? actingUserId,
         CancellationToken cancellationToken = default)
     {
-        return await packageSourceRepository.DeleteAsync(packageSourceId, actingUserId, cancellationToken)
+        var deleted = await packageSourceRepository.DeleteAsync(packageSourceId, actingUserId, cancellationToken)
             .ConfigureAwait(false);
+        _updateInfoCache.Remove(UpdateInfoCacheKey);
+        return deleted;
     }
 
     private async Task<ExtensionInstallResult?> UpgradeAsync(
@@ -894,20 +916,17 @@ internal sealed class ExtensionService(
             return null;
         }
 
-        if (!existing.Managed || string.IsNullOrWhiteSpace(existing.PackageId))
-        {
-            throw new InvalidOperationException(
-                $"Extension {existing.Name} is not a NuGet-managed extension and cannot be updated.");
-        }
-
         if (!TryResolveExtensionRootDirectory(existing, out var targetDir))
         {
             throw new InvalidOperationException(
                 $"Extension {existing.Name} does not have a safe staging directory under the extensions root.");
         }
 
-        var stream = await DownloadPackageAsync(existing.PackageId, version, cancellationToken)
-            .ConfigureAwait(false)
+        var stream = await DownloadPackageAsync(
+            existing.PackageId,
+            version,
+            minimumVersion: existing.Managed ? null : existing.Version,
+            cancellationToken).ConfigureAwait(false)
             ?? throw new InvalidOperationException($"NuGet package {existing.PackageId} could not be downloaded.");
 
         try
@@ -963,30 +982,31 @@ internal sealed class ExtensionService(
                     throw new InvalidOperationException(
                         $"Extension {existing.Name} no longer exists and could not be updated.");
                 }
-
-                if (movedExisting && Directory.Exists(backupDir))
-                {
-                    TryDeleteDirectory(backupDir);
-                }
-
-                logger.LogInformation(
-                    "The extension service updated extension {ExtensionName} to v{ExtensionVersion} in " +
-                    "{TargetDirectory} and needs a restart",
-                    updated.Name,
-                    updated.Version,
-                    targetDir);
-                await PublishActivationChangedAsync(cancellationToken).ConfigureAwait(false);
-                await eventBus.PublishAsync(
-                    ExtensionEventBuilder.BuildExtensionUpgradedEvent(existing.Id, existing.Version, updated.Version),
-                    cancellationToken)
-                    .ConfigureAwait(false);
-                return new() { Extension = updated, RestartRequired = true };
             }
             catch
             {
                 RestoreUpdatedExtensionDirectory(targetDir, tempDir, backupDir, movedExisting, movedReplacement);
                 throw;
             }
+
+            if (movedExisting && Directory.Exists(backupDir))
+            {
+                TryDeleteDirectory(backupDir);
+            }
+
+            _updateInfoCache.Remove(UpdateInfoCacheKey);
+            logger.LogInformation(
+                "The extension service updated extension {ExtensionName} to v{ExtensionVersion} in " +
+                "{TargetDirectory} and needs a restart",
+                updated.Name,
+                updated.Version,
+                targetDir);
+            await PublishActivationChangedAsync(cancellationToken).ConfigureAwait(false);
+            await eventBus.PublishAsync(
+                ExtensionEventBuilder.BuildExtensionUpgradedEvent(existing.Id, existing.Version, updated.Version),
+                cancellationToken)
+                .ConfigureAwait(false);
+            return new() { Extension = updated, RestartRequired = true };
         }
         finally
         {
@@ -1011,24 +1031,23 @@ internal sealed class ExtensionService(
         {
             var extensions = await extensionRepository.ListAllAsync(cancellationToken).ConfigureAwait(false);
             var updates = new List<ExtensionUpdateInfo>();
+            IReadOnlyList<FlatContainer>? flatContainers = null;
 
             foreach (var extension in extensions)
             {
-                if (!extension.Managed || string.IsNullOrWhiteSpace(extension.PackageId))
-                {
-                    updates.Add(new ExtensionUpdateInfo(
-                        extension.Id,
-                        extension.PackageId,
-                        extension.Version,
-                        LatestVersion: null,
-                        HasUpdate: false));
-                    continue;
-                }
-
                 var versions = await GetVersionsAsync(extension.PackageId, cancellationToken)
                     .ConfigureAwait(false);
-                var latest = versions.LastOrDefault(candidate => !IsPrerelease(candidate));
-                var hasUpdate = !string.IsNullOrWhiteSpace(latest) && IsNewer(latest, extension.Version);
+                flatContainers ??= await GetFlatContainersAsync(cancellationToken).ConfigureAwait(false);
+                var newerVersions = versions.Where(candidate => IsNewer(candidate, extension.Version));
+                var takeoverVersions = versions.Where(candidate => !IsNewer(extension.Version, candidate));
+                var (latest, _) = await FindLoadableVersionAsync(
+                    flatContainers,
+                    extension.PackageId,
+                    extension.Managed ? newerVersions : takeoverVersions,
+                    cancellationToken).ConfigureAwait(false);
+                var hasUpdate = latest is not null;
+                latest ??= versions.LastOrDefault(candidate =>
+                    !IsPrerelease(candidate) && !IsNewer(candidate, extension.Version));
 
                 updates.Add(new ExtensionUpdateInfo(
                     extension.Id,
@@ -1098,7 +1117,7 @@ internal sealed class ExtensionService(
         Guid? modifiedByUserId,
         CancellationToken cancellationToken)
     {
-        Directory.CreateDirectory(hostEnvironment.ExtensionsRoot);
+        fileSystem.CreateDirectory(hostEnvironment.ExtensionsRoot);
         var targetDir = fileSystem.GetFullPath(Path.Combine(hostEnvironment.ExtensionsRoot, directoryName));
         if (!fileSystem.IsPathWithin(hostEnvironment.ExtensionsRoot, targetDir) ||
             fileSystem.PathsEqual(hostEnvironment.ExtensionsRoot, targetDir) ||
@@ -1313,6 +1332,7 @@ internal sealed class ExtensionService(
     private async Task<Stream?> DownloadPackageAsync(
         string packageId,
         string? version,
+        string? minimumVersion,
         CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(packageId))
@@ -1324,9 +1344,29 @@ internal sealed class ExtensionService(
         if (string.IsNullOrWhiteSpace(resolvedVersion))
         {
             var versions = await GetVersionsAsync(packageId, cancellationToken).ConfigureAwait(false);
-            resolvedVersion = versions.LastOrDefault(candidate => !IsPrerelease(candidate));
+            if (minimumVersion is not null)
+            {
+                versions = [.. versions.Where(candidate =>
+                    !IsPrerelease(candidate) && !IsNewer(minimumVersion, candidate))];
+            }
+
+            var flatContainers = await GetFlatContainersAsync(cancellationToken).ConfigureAwait(false);
+            (resolvedVersion, var newestBuiltAgainst) = await FindLoadableVersionAsync(
+                flatContainers,
+                packageId,
+                versions,
+                cancellationToken).ConfigureAwait(false);
             if (string.IsNullOrWhiteSpace(resolvedVersion))
             {
+                if (newestBuiltAgainst is not null &&
+                    versions.LastOrDefault(candidate => !IsPrerelease(candidate)) is { } newest)
+                {
+                    throw new MagpieException(
+                        $"No stable version of NuGet package {packageId} is compatible with host ABI " +
+                        $"{ExtensionLoader.CurrentAbiVersion.Format()}; version {newest} needs host ABI " +
+                        $"{newestBuiltAgainst.Format()} or a later {newestBuiltAgainst.Major}.x version.");
+                }
+
                 if (versions.Count > 0)
                 {
                     throw new InvalidOperationException(
@@ -1451,6 +1491,16 @@ internal sealed class ExtensionService(
         ExtensionPackageSource source,
         CancellationToken cancellationToken)
     {
+        void LogNoPackageHashes()
+        {
+            logger.LogWarning(
+                "NuGet source {PackageSourceName} installed package {PackageId} {Version} without integrity " +
+                "verification because it publishes no package hashes",
+                source.Name,
+                packageId,
+                version);
+        }
+
         if (string.IsNullOrWhiteSpace(registrationUrl))
         {
             if (!LooksLikeSearchEndpoint(source.SourceUrl) && !LooksLikeFlatContainerEndpoint(source.SourceUrl))
@@ -1458,12 +1508,7 @@ internal sealed class ExtensionService(
                 throw new InvalidDataException("The package source has no integrity metadata.");
             }
 
-            logger.LogWarning(
-                "NuGet source {PackageSourceName} installed package {PackageId} {Version} without integrity " +
-                "verification because it publishes no package hashes",
-                source.Name,
-                packageId,
-                version);
+            LogNoPackageHashes();
             return;
         }
 
@@ -1482,6 +1527,13 @@ internal sealed class ExtensionService(
             foreach (var entry in entries.EnumerateArray())
             {
                 var catalog = entry.GetProperty("catalogEntry");
+                var catalogIsUrl = catalog.ValueKind == JsonValueKind.String;
+                if (catalogIsUrl)
+                {
+                    catalog = await GetFromJsonAsync<JsonElement>(catalog.GetString()!, source, cancellationToken)
+                        .ConfigureAwait(false);
+                }
+
                 if (!string.Equals(
                     catalog.GetProperty("version").GetString(),
                     version,
@@ -1490,10 +1542,19 @@ internal sealed class ExtensionService(
                     continue;
                 }
 
-                var metadata = await GetFromJsonAsync<JsonElement>(
-                    catalog.GetProperty("@id").GetString()!,
-                    source,
-                    cancellationToken).ConfigureAwait(false);
+                var metadata = catalogIsUrl
+                    ? catalog
+                    : await GetFromJsonAsync<JsonElement>(
+                        catalog.GetProperty("@id").GetString()!,
+                        source,
+                        cancellationToken).ConfigureAwait(false);
+                if (!metadata.TryGetProperty("packageHash", out _) &&
+                    !metadata.TryGetProperty("packageHashAlgorithm", out _))
+                {
+                    LogNoPackageHashes();
+                    return;
+                }
+
                 if (!string.Equals(
                     metadata.GetProperty("id").GetString(),
                     packageId,
@@ -1585,6 +1646,93 @@ internal sealed class ExtensionService(
         }
     }
 
+    private async Task<IReadOnlyList<FlatContainer>> GetFlatContainersAsync(CancellationToken cancellationToken)
+    {
+        var flatContainers = new List<FlatContainer>();
+        foreach (var source in await GetEnabledSourcesAsync(cancellationToken).ConfigureAwait(false))
+        {
+            var endpoints = await ResolveEndpointsAsync(source, cancellationToken).ConfigureAwait(false);
+            if (!string.IsNullOrWhiteSpace(endpoints.FlatContainerUrl))
+            {
+                flatContainers.Add(new(source, endpoints.FlatContainerUrl));
+            }
+        }
+
+        return flatContainers;
+    }
+
+    private async Task<(string? Version, Version? NewestBuiltAgainst)> FindLoadableVersionAsync(
+        IReadOnlyList<FlatContainer> flatContainers,
+        string packageId,
+        IEnumerable<string> versions,
+        CancellationToken cancellationToken)
+    {
+        Version? newestBuiltAgainst = null;
+        foreach (var version in versions.Where(candidate => !IsPrerelease(candidate)).Reverse())
+        {
+            var builtAgainst = await ReadBuiltAgainstAsync(flatContainers, packageId, version, cancellationToken)
+                .ConfigureAwait(false);
+            if (IsLoadable(builtAgainst))
+            {
+                return (version, newestBuiltAgainst);
+            }
+
+            newestBuiltAgainst ??= builtAgainst;
+        }
+
+        return (null, newestBuiltAgainst);
+    }
+
+    private async Task<Version?> ReadBuiltAgainstAsync(
+        IReadOnlyList<FlatContainer> flatContainers,
+        string packageId,
+        string version,
+        CancellationToken cancellationToken)
+    {
+        var lowerId = Uri.EscapeDataString(packageId.ToLowerInvariant());
+        var lowerVersion = Uri.EscapeDataString(version.ToLowerInvariant());
+        foreach (var flatContainer in flatContainers)
+        {
+            var nuspecUrl = $"{flatContainer.Url.TrimEnd('/')}/{lowerId}/{lowerVersion}/{lowerId}.nuspec";
+            try
+            {
+                using var request = new HttpRequestMessage(HttpMethod.Get, nuspecUrl);
+                ApplyCredentials(request, flatContainer.Source);
+                using var response = await httpClientFactory.CreateClient(HttpClientName)
+                    .SendAsync(request, cancellationToken)
+                    .ConfigureAwait(false);
+                if (response.StatusCode == HttpStatusCode.NotFound)
+                {
+                    continue;
+                }
+
+                response.EnsureSuccessStatusCode();
+                var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+                await using var streamHandle = stream.ConfigureAwait(false);
+                if (ReadNuspec(stream, nuspecUrl, logger) is { } nuspec)
+                {
+                    return AbiVersionExtensions.ReadBuiltAgainst(nuspec.SdkRange);
+                }
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(
+                    ex,
+                    "The extension service failed to read the nuspec of NuGet package {PackageId} {Version} " +
+                    "from {PackageSourceName}",
+                    packageId,
+                    version,
+                    flatContainer.Source.Name);
+            }
+        }
+
+        return null;
+    }
+
     private async Task AddSearchResultsAsync(
         ExtensionPackageSource source,
         string? query,
@@ -1610,24 +1758,30 @@ internal sealed class ExtensionService(
                 return;
             }
 
-            foreach (var package in response.Data)
-            {
-                if (string.IsNullOrWhiteSpace(package.Id) ||
-                    string.IsNullOrWhiteSpace(package.Version) ||
-                    !MatchesSourceFilter(source, package))
-                {
-                    continue;
-                }
+            IReadOnlyList<FlatContainer> flatContainers = string.IsNullOrWhiteSpace(endpoints.FlatContainerUrl)
+                ? []
+                : [new(source, endpoints.FlatContainerUrl)];
+            var packages = response.Data
+                .Where(package =>
+                    !string.IsNullOrWhiteSpace(package.Id) &&
+                    !string.IsNullOrWhiteSpace(package.Version) &&
+                    MatchesSourceFilter(source, package))
+                .ToList();
+            var versions = await Task.WhenAll(packages.Select(package =>
+                    FindLoadableSearchVersionAsync(flatContainers, package, cancellationToken)))
+                .ConfigureAwait(false);
 
-                if (!seen.Add($"{package.Id}|{package.Version}"))
+            foreach (var (package, version) in packages.Zip(versions))
+            {
+                if (!seen.Add($"{package.Id}|{version}"))
                 {
                     continue;
                 }
 
                 results.Add(new NuGetSearchResult
                 {
-                    Id = package.Id,
-                    Version = package.Version,
+                    Id = package.Id!,
+                    Version = version,
                     Title = package.Title,
                     Description = package.Description,
                     Authors = package.Authors ?? [],
@@ -1646,6 +1800,20 @@ internal sealed class ExtensionService(
         {
             logger.LogError(ex, "The extension service failed to search NuGet source {PackageSourceName}", source.Name);
         }
+    }
+
+    private async Task<string> FindLoadableSearchVersionAsync(
+        IReadOnlyList<FlatContainer> flatContainers,
+        NuGetPackage package,
+        CancellationToken cancellationToken)
+    {
+        var versions = package.Versions?.Select(entry => entry.Version).OfType<string>().ToList() ?? [];
+        var (version, _) = await FindLoadableVersionAsync(
+            flatContainers,
+            package.Id!,
+            versions.Count > 0 ? versions : [package.Version!],
+            cancellationToken).ConfigureAwait(false);
+        return version ?? package.Version!;
     }
 
     private async Task<IReadOnlyList<ExtensionPackageSource>> GetEnabledSourcesAsync(
@@ -1851,7 +2019,18 @@ internal sealed class ExtensionService(
 
         [JsonPropertyName("tags")]
         public IReadOnlyList<string>? Tags { get; init; }
+
+        [JsonPropertyName("versions")]
+        public IReadOnlyList<NuGetPackageVersion>? Versions { get; init; }
     }
+
+    private sealed record NuGetPackageVersion
+    {
+        [JsonPropertyName("version")]
+        public string? Version { get; init; }
+    }
+
+    private sealed record FlatContainer(ExtensionPackageSource Source, string Url);
 
     private sealed record NuGetVersionsResponse
     {
@@ -1864,5 +2043,6 @@ internal sealed class ExtensionService(
         string? Version,
         string? Title,
         string? Authors,
-        string? Description);
+        string? Description,
+        string? SdkRange);
 }

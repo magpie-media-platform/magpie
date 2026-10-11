@@ -547,6 +547,78 @@ public sealed class JobRuntimeBackgroundServiceTests
     }
 
     [Test]
+    public async Task StartAsync_ReclaimsAnotherNodesRun_WhenItsHeartbeatTurnsStaleOneCutoffAfterTheStart()
+    {
+        // Arrange
+        var time = new Mock<FakeTimeProvider>(new DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero))
+        {
+            CallBase = true
+        };
+        var cleanupSleeps = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        time
+            .Setup(provider => provider.CreateTimer(
+                It.IsAny<TimerCallback>(),
+                It.IsAny<object?>(),
+                TimeSpan.FromMinutes(3),
+                It.IsAny<TimeSpan>()))
+            .Callback(() => cleanupSleeps.TrySetResult())
+            .CallBase();
+        _options.RunningStaleCutoff = TimeSpan.FromMinutes(3);
+        var orphan = new JobExecution
+        {
+            Id = Guid.NewGuid(),
+            JobType = "ReleaseSearchItem",
+            Status = JobExecutionStatus.Running,
+            NodeId = "node-before-restart",
+            LastHeartbeat = new DateTime(2026, 1, 1, 11, 59, 30, DateTimeKind.Utc)
+        };
+        var reclaimed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _executions
+            .Setup(repository => repository.QueryAsync(
+                It.Is<JobExecutionQuery>(query =>
+                    query.Status == JobExecutionStatus.Running &&
+                    query.LastHeartbeat!.Max == new DateTime(2026, 1, 1, 12, 0, 0, DateTimeKind.Utc)),
+                It.IsAny<PagingParameter>(),
+                null,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<JobExecution> { Items = [orphan] });
+        _executions
+            .Setup(repository => repository.TryRecoverInactiveAsync(
+                It.IsAny<JobExecution>(),
+                It.IsAny<string>(),
+                It.IsAny<CancellationToken>()))
+            .Callback(() => reclaimed.TrySetResult())
+            .ReturnsAsync(true);
+        using var subject = new JobRuntimeBackgroundService(
+            Mock.Of<IJobRegistry>(registry => registry.ListJobSpecs() == new[] { _spec }),
+            _runtime.Object,
+            Mock.Of<IJobConcurrencyScheduler>(),
+            _options,
+            _hostEnvironment,
+            _scopeFactory.Object,
+            new Mock<IEventBus> { DefaultValue = DefaultValue.Mock }.Object,
+            _shutdownSignal,
+            NullLogger<JobRuntimeBackgroundService>.Instance,
+            time.Object,
+            _migrationState);
+
+        // Act
+        await subject.StartAsync(default).ConfigureAwait(false);
+        await cleanupSleeps.Task.WaitAsync(TimeSpan.FromSeconds(1)).ConfigureAwait(false);
+        time.Object.Advance(TimeSpan.FromMinutes(3));
+        await reclaimed.Task.WaitAsync(TimeSpan.FromSeconds(1)).ConfigureAwait(false);
+        await subject.StopAsync(default).ConfigureAwait(false);
+
+        // Assert
+        _executions.Verify(
+            repository => repository.TryRecoverInactiveAsync(
+                It.Is<JobExecution>(execution => execution.Id == orphan.Id),
+                It.IsAny<string>(),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Test]
     public async Task ReclaimOwnOrphanedRunningAsync_CancelsTheRequestedRow_WhenTheOrphanIsAlsoOwned()
     {
         // Arrange

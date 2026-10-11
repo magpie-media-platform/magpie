@@ -1,5 +1,5 @@
 import userEvent from '@testing-library/user-event';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
@@ -67,9 +67,38 @@ describe('RelatedEventsChain', () => {
         expect(apiGet).not.toHaveBeenCalled();
     });
 
-    it('does not fetch when the execution id is null', () => {
-        render(wrap(<RelatedEventsChain executionId={null} correlationId={correlationId} active />));
+    it('does not fetch when the execution id and the correlation id are null', () => {
+        render(wrap(<RelatedEventsChain executionId={null} correlationId={null} active />));
         expect(apiGet).not.toHaveBeenCalled();
+    });
+
+    it('shows the correlated activity when no content seeds the view', async () => {
+        vi.mocked(apiGet).mockImplementation((url: string) => {
+            if (url.startsWith('/audit-history')) {
+                return Promise.resolve({
+                    items: [
+                        {
+                            id: 'audit-1',
+                            kind: MagpieActivityEntryKind.AuditRecord,
+                            timestamp: '2024-05-01T09:00:00Z',
+                            correlationId,
+                            label: 'CreatedRun',
+                            category: 'Jobs',
+                        },
+                    ],
+                    totalItems: 1,
+                    pageNumber: 1,
+                    pageSize: 1000,
+                });
+            }
+            return Promise.resolve(mockExecutionTree);
+        });
+        render(wrap(<RelatedEventsChain executionId={executionId} correlationId={correlationId} active />));
+
+        await waitFor(() => {
+            expect(screen.getByTestId('related-events__also')).toHaveTextContent('Created Run');
+        });
+        expect(apiGet).toHaveBeenCalledWith(`/audit-history?correlationId=${correlationId}&pageNumber=1&pageSize=1000`);
     });
 
     it('fetches and renders the execution tree in real parent-child order, not chronologically', async () => {
@@ -185,7 +214,7 @@ describe('RelatedEventsChain', () => {
                         kind: MagpieActivityEntryKind.JobExecution,
                         timestamp: '2024-05-01T09:05:00Z',
                         label: 'SelectedJob',
-                        category: 'Job',
+                        category: 'Jobs',
                     }}
                 />,
             ),
@@ -219,7 +248,13 @@ describe('RelatedEventsChain', () => {
     });
 
     it('renders the empty message when the execution tree is empty', async () => {
-        vi.mocked(apiGet).mockResolvedValue({ root: null, totalCount: 0 });
+        vi.mocked(apiGet).mockImplementation((url: string) =>
+            Promise.resolve(
+                url.startsWith('/audit-history')
+                    ? { items: [], totalItems: 0, pageNumber: 1, pageSize: 1000 }
+                    : { root: null, totalCount: 0 },
+            ),
+        );
         render(wrap(<RelatedEventsChain executionId={executionId} correlationId={correlationId} active />));
 
         await waitFor(() => {
@@ -385,6 +420,131 @@ describe('RelatedEventsChain', () => {
         expect(pager.getByText('21 results')).toBeInTheDocument();
     });
 
+    it('Pagination_OpensOnPageOfSelfEntry_WhenRelatedActivityLoadsAfterTheSelfEntry', async () => {
+        // Arrange
+        const entries = Array.from({ length: 45 }, (_, index) => ({
+            id: `audit-${index}`,
+            kind: MagpieActivityEntryKind.AuditRecord,
+            timestamp: `2024-05-01T09:${String(index).padStart(2, '0')}:00Z`,
+            correlationId,
+            label: 'GrabSkipped',
+            category: 'Content',
+            status: null,
+            detail: `Entry ${index}.`,
+        }));
+        vi.mocked(apiGet).mockImplementation((url: string) => {
+            if (url.startsWith('/audit-history')) {
+                return Promise.resolve({ items: entries, totalItems: 45, pageNumber: 1, pageSize: 1000 });
+            }
+            return Promise.resolve(mockExecutionTree);
+        });
+
+        // Act
+        render(
+            wrap(
+                <RelatedEventsChain
+                    executionId={null}
+                    correlationId={correlationId}
+                    seedEntityId="content-1"
+                    selfEntry={entries[44] as MagpieActivityEntry}
+                />,
+            ),
+        );
+
+        // Assert
+        const pager = within(await screen.findByRole('navigation', { name: 'Related activity pagination' }));
+        expect(pager.getByText('Page 3 of 3')).toBeInTheDocument();
+        expect(screen.getByText('Entry 44.')).toBeInTheDocument();
+    });
+
+    it('Pagination_KeepsRelatedPage_WhenActivityRefetches', async () => {
+        // Arrange
+        const user = userEvent.setup();
+        const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+        let auditFetches = 0;
+        vi.mocked(apiGet).mockImplementation((url: string) => {
+            if (url.startsWith('/audit-history')) {
+                auditFetches += 1;
+                return Promise.resolve({
+                    items: Array.from({ length: 21 }, (_, index) => ({
+                        id: `audit-${index}`,
+                        kind: MagpieActivityEntryKind.AuditRecord,
+                        timestamp: '2024-05-01T09:00:00Z',
+                        correlationId,
+                        label: 'GrabSkipped',
+                        category: 'Content',
+                        status: null,
+                        detail: `Fetch ${auditFetches}.`,
+                    })),
+                    totalItems: 21,
+                    pageNumber: 1,
+                    pageSize: 1000,
+                });
+            }
+            return Promise.resolve(mockExecutionTree);
+        });
+        render(
+            <QueryClientProvider client={queryClient}>
+                <RelatedEventsChain executionId={null} correlationId={correlationId} seedEntityId="content-1" />
+            </QueryClientProvider>,
+        );
+        const pager = within(await screen.findByRole('navigation', { name: 'Related activity pagination' }));
+        await user.click(pager.getByRole('button', { name: 'Go to next page' }));
+        expect(pager.getByText('Page 2 of 2')).toBeInTheDocument();
+
+        // Act
+        await act(() => queryClient.invalidateQueries());
+
+        // Assert
+        expect(await screen.findByText('Fetch 2.')).toBeInTheDocument();
+        expect(pager.getByText('Page 2 of 2')).toBeInTheDocument();
+    });
+
+    it('Pagination_MovesToPreviousPage_WhenActivityShrinksBelowTheCurrentPage', async () => {
+        // Arrange
+        const user = userEvent.setup();
+        const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+        let entryCount = 41;
+        vi.mocked(apiGet).mockImplementation((url: string) => {
+            if (url.startsWith('/audit-history')) {
+                return Promise.resolve({
+                    items: Array.from({ length: entryCount }, (_, index) => ({
+                        id: `audit-${index}`,
+                        kind: MagpieActivityEntryKind.AuditRecord,
+                        timestamp: '2024-05-01T09:00:00Z',
+                        correlationId,
+                        label: 'GrabSkipped',
+                        category: 'Content',
+                        status: null,
+                        detail: `Entry ${index}.`,
+                    })),
+                    totalItems: entryCount,
+                    pageNumber: 1,
+                    pageSize: 1000,
+                });
+            }
+            return Promise.resolve(mockExecutionTree);
+        });
+        render(
+            <QueryClientProvider client={queryClient}>
+                <RelatedEventsChain executionId={null} correlationId={correlationId} seedEntityId="content-1" />
+            </QueryClientProvider>,
+        );
+        const pager = within(await screen.findByRole('navigation', { name: 'Related activity pagination' }));
+        await user.click(pager.getByRole('button', { name: 'Go to next page' }));
+        await user.click(pager.getByRole('button', { name: 'Go to next page' }));
+        expect(pager.getByText('Page 3 of 3')).toBeInTheDocument();
+        entryCount = 21;
+        await act(() => queryClient.invalidateQueries());
+        expect(await screen.findByText('Page 2 of 2')).toBeInTheDocument();
+
+        // Act
+        await user.click(pager.getByRole('button', { name: 'Go to previous page' }));
+
+        // Assert
+        expect(pager.getByText('Page 1 of 2')).toBeInTheDocument();
+    });
+
     it('renders a lone activity with no relations sanely, with no arrows and no also section', async () => {
         const selfEntry: MagpieActivityEntry = {
             id: 'b',
@@ -392,7 +552,7 @@ describe('RelatedEventsChain', () => {
             timestamp: '2024-05-01T11:00:00Z',
             correlationId,
             label: 'SecondStep',
-            category: 'Job',
+            category: 'Jobs',
             status: 'Completed',
             detail: null,
         };

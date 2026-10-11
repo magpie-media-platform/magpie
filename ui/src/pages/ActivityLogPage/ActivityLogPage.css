@@ -1,0 +1,177 @@
+@layer components {
+    .activity-log-page {
+        display: flex;
+        flex-direction: column;
+        height: 100%;
+        width: 100%;
+        max-width: var(--content-max-width);
+        margin: 0 auto;
+    }
+
+    .activity-log-page__pull-to-refresh {
+        flex: 1;
+        min-height: 0;
+    }
+
+    .activity-log-page__pull-to-refresh .pull-to-refresh__content {
+        padding: var(--space-lg);
+    }
+
+    .activity-log-page .page-header__actions {
+        flex-wrap: wrap;
+    }
+
+    .activity-log-page__count {
+        font-size: var(--text-sm);
+        color: var(--text-secondary);
+        white-space: nowrap;
+    }
+
+    .activity-log-page__phone-count {
+        display: none;
+    }
+
+    .activity-log-page .list-filter-toolbar__active {
+        display: none;
+    }
+
+    .activity-log-page .list-filter-toolbar__compact-label {
+        display: inline;
+    }
+
+    .activity-log-page__time,
+    .activity-log-page__event {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-2xs);
+        min-width: 0;
+    }
+
+    .activity-log-page__exact-time {
+        font-size: var(--text-xs);
+        color: var(--text-muted);
+        white-space: nowrap;
+    }
+
+    .activity-log-page__event-name {
+        padding: 0;
+        border: none;
+        background: none;
+        color: var(--text-primary);
+        font: inherit;
+        font-weight: var(--weight-semibold);
+        text-align: left;
+        cursor: pointer;
+        overflow-wrap: anywhere;
+    }
+
+    .activity-log-page__event-name:hover {
+        color: var(--accent-primary);
+    }
+
+    .activity-log-page__event-name:focus-visible {
+        outline: var(--focus-ring-width) solid var(--focus-ring-color);
+        outline-offset: var(--focus-ring-offset);
+    }
+
+    .activity-log-page__detail {
+        font-size: var(--text-sm);
+        color: var(--text-secondary);
+        overflow-wrap: anywhere;
+    }
+
+    .activity-log-page__table .data-table__cell[data-column='user'] {
+        white-space: nowrap;
+    }
+
+    @media (min-width: 1024px) {
+        .activity-log-page__table .data-table__cell[data-column='event'] {
+            min-width: 11rem;
+        }
+
+        .activity-log-page__table .data-table__cell[data-column='target'] {
+            min-width: 6rem;
+        }
+    }
+
+    @media (min-width: 1024px) and (max-width: 1199px) {
+        .activity-log-page__table .data-table__cell,
+        .activity-log-page__table .data-table__header-cell {
+            padding-inline: var(--space-sm);
+        }
+    }
+
+    .activity-log-page__empty {
+        color: var(--text-muted);
+    }
+
+    .activity-log-page__pager {
+        margin-top: var(--space-md);
+        justify-content: flex-end;
+    }
+
+    @media (max-width: 639px) {
+        .activity-log-page .page-header__actions {
+            display: none;
+        }
+
+        .activity-log-page__phone-count {
+            display: block;
+            margin-bottom: var(--space-sm);
+        }
+    }
+
+    @media (max-width: 1023px) {
+        .activity-log-page__table .data-table__row {
+            gap: var(--space-xs);
+            padding: var(--space-sm) var(--space-md);
+        }
+
+        .activity-log-page__table .data-table__cell {
+            padding: 0;
+        }
+
+        .activity-log-page__table .data-table__cell::before {
+            content: none;
+        }
+
+        .activity-log-page__table .data-table__cell[data-mobile-role='header'][data-column='category'] {
+            order: -2;
+            margin-left: 0;
+        }
+
+        .activity-log-page__table .data-table__cell[data-column='time'] {
+            margin-left: auto;
+        }
+
+        .activity-log-page__exact-time {
+            display: none;
+        }
+
+        .activity-log-page__table .data-table__cell[data-column='user'] {
+            flex: 1 1 0;
+        }
+
+        .activity-log-page__table .data-table__cell[data-column='status'] {
+            flex: 0 0 auto;
+        }
+    }
+
+    .purge-activity-log {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-md);
+    }
+
+    .purge-activity-log__field {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-xs);
+    }
+
+    .purge-activity-log__retention {
+        margin: 0;
+        font-size: var(--text-sm);
+        color: var(--text-secondary);
+    }
+}

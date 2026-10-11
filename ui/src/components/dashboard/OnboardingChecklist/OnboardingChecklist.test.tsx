@@ -10,13 +10,16 @@ import { OnboardingChecklist } from './OnboardingChecklist';
 const renderWithRouter = (ui: React.ReactElement) => render(<MemoryRouter>{ui}</MemoryRouter>);
 
 const stepsWith = (done: { indexer?: boolean; downloadClient?: boolean; rootFolder?: boolean; monitored?: boolean }) =>
-    deriveOnboardingSteps({
-        hasIndexer: done.indexer ?? false,
-        hasDownloadClient: done.downloadClient ?? false,
-        hasRootFolder: done.rootFolder ?? false,
-        hasMonitoredContent: done.monitored ?? false,
-        isComplete: false,
-    });
+    deriveOnboardingSteps(
+        {
+            hasIndexer: done.indexer ?? false,
+            hasDownloadClient: done.downloadClient ?? false,
+            hasRootFolder: done.rootFolder ?? false,
+            hasMonitoredContent: done.monitored ?? false,
+            isComplete: false,
+        },
+        'Magpie',
+    );
 
 describe('OnboardingChecklist', () => {
     it('renders all four pipeline steps', () => {

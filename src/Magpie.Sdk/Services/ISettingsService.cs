@@ -30,6 +30,12 @@ public interface ISettingsService
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// The trimmed name of this instance, or "Magpie" when no name is set.
+    /// </summary>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
+    Task<string> GetInstanceNameAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// An extension settings group by extension id and name.
     /// </summary>
     /// <param name="extensionId">The id of the extension that owns the group</param>

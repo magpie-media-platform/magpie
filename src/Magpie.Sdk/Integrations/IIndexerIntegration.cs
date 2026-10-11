@@ -1,4 +1,6 @@
+using System;
 using System.Collections.Generic;
+using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -64,4 +66,17 @@ public interface IIndexerIntegration
     Task<ConfigurationTestResult> TestConnectionAsync(
         IReadOnlyDictionary<string, string> settings,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Fetches a release payload with the session of the indexer.
+    /// </summary>
+    /// <param name="payloadUrl">The URL of the release payload</param>
+    /// <param name="settings">The settings of the configured provider</param>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
+    /// <returns>The response with the payload, or <see langword="null"/> when the payload needs no session</returns>
+    Task<HttpResponseMessage?> FetchPayloadAsync(
+        Uri payloadUrl,
+        IReadOnlyDictionary<string, string> settings,
+        CancellationToken cancellationToken = default) =>
+        Task.FromResult<HttpResponseMessage?>(null);
 }

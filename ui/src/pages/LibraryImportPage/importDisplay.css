@@ -1,0 +1,44 @@
+@layer components {
+    .import-display__status-rollup {
+        display: flex;
+        gap: var(--space-xs);
+        flex-wrap: wrap;
+    }
+
+    .import-display__level {
+        color: var(--text-muted);
+        font-weight: var(--weight-normal);
+    }
+
+    .import-display__group-link {
+        display: inline-flex;
+        align-items: center;
+        gap: var(--space-xs);
+        min-width: 0;
+        color: var(--text-primary);
+        font-weight: var(--weight-medium);
+        text-decoration: none;
+
+        & > svg {
+            flex-shrink: 0;
+            color: var(--text-muted);
+        }
+
+        &:hover {
+            color: var(--accent-primary);
+
+            & .import-display__group-link-label {
+                text-decoration: underline;
+            }
+
+            & > svg {
+                color: var(--accent-primary);
+            }
+        }
+    }
+
+    .import-display__group-link-label {
+        min-width: 0;
+        overflow-wrap: anywhere;
+    }
+}

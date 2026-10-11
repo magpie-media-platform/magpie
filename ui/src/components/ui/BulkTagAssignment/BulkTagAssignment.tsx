@@ -107,7 +107,7 @@ export function BulkTagAssignment({
             setActions({});
             setSearchQuery('');
         }
-    }, [open, initialTagStates]);
+    }, [open]);
 
     const tagStates = useMemo(() => {
         const states: Record<string, TagState> = {};

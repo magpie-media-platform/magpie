@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState, type KeyboardEvent } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { ArrowRightIcon, GlobeIcon, ListBulletsIcon, MagnifyingGlassIcon, XIcon } from '@phosphor-icons/react';
+import { ArrowRightIcon, BinocularsIcon, ListBulletsIcon, MagnifyingGlassIcon, XIcon } from '@phosphor-icons/react';
 
 import { DisabledTooltip, useAuth } from '@/auth';
 import { Alert } from '@/components/ui/Alert';
@@ -38,12 +38,12 @@ export function LibraryQuickSearch() {
                     <Button
                         variant="ghost"
                         className="library-quick-search__trigger"
-                        aria-label="Search library"
+                        aria-label="Search"
                         data-action="open-library-search"
                     >
                         <MagnifyingGlassIcon size={20} weight="bold" aria-hidden="true" />
                         <span className="library-quick-search__trigger-label" aria-hidden="true">
-                            Search library
+                            Search
                         </span>
                     </Button>
                 </DialogTrigger>
@@ -78,9 +78,10 @@ function LibraryQuickSearchPanel() {
 
     const settled = title !== '' && title === debouncedTitle;
     const matches = settled && search.isSuccess ? search.data.items : [];
+    const hasMoreMatches = settled && search.isSuccess && search.data.totalItems > matches.length;
     const activeMatch = matches[Math.min(activeIndex, matches.length - 1)];
     const titleFilter = setContentFilter('', 'title', title);
-    const canSearchProviders = hasPermission('content.add');
+    const canAddContent = hasPermission('content.add');
     const preloadState: LibraryAddPreloadState = { filterQuery: titleFilter };
 
     useEffect(() => {
@@ -201,20 +202,21 @@ function LibraryQuickSearchPanel() {
                     <XIcon size={20} weight="bold" aria-hidden="true" />
                 </DialogClose>
             </div>
-            <p className="library-quick-search__scope">Searches titles at every level of the library.</p>
             {body}
             {title !== '' && (
                 <div className="library-quick-search__actions">
-                    <Link
-                        className="library-quick-search__action"
-                        to={`/library/all?${new URLSearchParams({ filter: titleFilter, levels: 'all' }).toString()}`}
-                        data-action="view-all-library-matches"
-                    >
-                        <ListBulletsIcon size={18} aria-hidden="true" />
-                        All library results
-                    </Link>
+                    {hasMoreMatches && (
+                        <Link
+                            className="library-quick-search__action"
+                            to={`/library/all?${new URLSearchParams({ filter: titleFilter, levels: 'all' }).toString()}`}
+                            data-action="view-all-library-matches"
+                        >
+                            <ListBulletsIcon size={18} aria-hidden="true" />
+                            More In Library
+                        </Link>
+                    )}
                     <DisabledTooltip action="content.add">
-                        {canSearchProviders ? (
+                        {canAddContent ? (
                             <Button
                                 asChild
                                 variant="ghost"
@@ -222,8 +224,8 @@ function LibraryQuickSearchPanel() {
                                 data-action="search-providers"
                             >
                                 <Link to="/library/add" state={preloadState}>
-                                    <GlobeIcon size={18} aria-hidden="true" />
-                                    Search providers
+                                    <BinocularsIcon size={18} aria-hidden="true" />
+                                    Add New Content
                                 </Link>
                             </Button>
                         ) : (
@@ -233,17 +235,13 @@ function LibraryQuickSearchPanel() {
                                 disabled
                                 data-action="search-providers"
                             >
-                                <GlobeIcon size={18} aria-hidden="true" />
-                                Search providers
+                                <BinocularsIcon size={18} aria-hidden="true" />
+                                Add New Content
                             </Button>
                         )}
                     </DisabledTooltip>
                 </div>
             )}
-            <div className="library-quick-search__footer" aria-hidden="true">
-                <span>↑↓ Select · ↵ Open · Esc Close</span>
-                <span>Providers are searched only on request</span>
-            </div>
         </>
     );
 }

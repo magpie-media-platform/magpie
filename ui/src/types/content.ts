@@ -18,6 +18,7 @@ import {
     type MetadataContainer,
     type StandardFactValue,
 } from '@/lib/metadata';
+import { parseCalendarDate, parseUtcInstant } from '@/lib/dateParsing';
 import type { TemporalPrecision } from '@/types/contentMetadata';
 import type { GalleryImage } from '@/types/images';
 import type { BadgeVariant } from './badge';
@@ -76,9 +77,22 @@ const FULFILLMENT_BADGE_MAP: Record<FulfillmentStatus, FulfillmentBadge> = {
 
 const IMPORT_PENDING_BADGE: FulfillmentBadge = { variant: 'pending', label: 'Import pending' };
 
-export function getFulfillmentBadge(status: FulfillmentStatus, importPending = false): FulfillmentBadge {
+const UPCOMING_BADGE: FulfillmentBadge = { variant: 'default', label: 'Upcoming' };
+
+export function getFulfillmentBadge(
+    status: FulfillmentStatus,
+    {
+        importPending = false,
+        publishDate,
+        publishDatePrecision,
+    }: { importPending?: boolean; publishDate?: string; publishDatePrecision?: TemporalPrecision } = {},
+): FulfillmentBadge {
     if (importPending && status === 'missing') {
         return IMPORT_PENDING_BADGE;
+    }
+    const parsePublishDate = publishDatePrecision === 'Instant' ? parseUtcInstant : parseCalendarDate;
+    if (status === 'missing' && publishDate && parsePublishDate(publishDate).getTime() > Date.now()) {
+        return UPCOMING_BADGE;
     }
     return FULFILLMENT_BADGE_MAP[status] ?? FULFILLMENT_BADGE_MAP.missing;
 }

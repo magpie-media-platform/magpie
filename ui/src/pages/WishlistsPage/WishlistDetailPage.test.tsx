@@ -29,6 +29,7 @@ vi.mock('@/lib/magpieQl', async (importOriginal) => {
     return {
         ...actual,
         formatMagpieQlCriteria: async () => ({ query: 'contentType = "movie"' }),
+        parseMagpieQl: async () => ({ criteria: populatedCriteria }),
     };
 });
 
@@ -38,7 +39,7 @@ const populatedCriteria = {
     },
 };
 
-import { apiGet, apiPost, ApiError } from '@/lib/api';
+import { apiGet, apiPatch, apiPost, ApiError } from '@/lib/api';
 import type { ApiWishlist } from '@/hooks/useWishlists';
 
 const mockApiWishlists: Record<string, ApiWishlist> = {
@@ -567,6 +568,44 @@ describe('WishlistDetailPage edit action', () => {
             expect(screen.getByRole('dialog')).toBeInTheDocument();
             expect(screen.getByText('Edit Wishlist')).toBeInTheDocument();
         });
+    });
+
+    it('waits for the wishlist tags before opening the edit form and keeps them on save', async () => {
+        // Arrange
+        const user = userEvent.setup();
+        const mockApiPatch = vi.mocked(apiPatch);
+        mockApiPatch.mockResolvedValue(undefined);
+        let resolveEntityTags: (tags: { id: string; name: string }[]) => void = () => {};
+        const defaultApiGet = createMockApiGet(mockApiWishlists);
+        mockApiGet.mockImplementation((url: string) =>
+            url.includes('entityId=')
+                ? new Promise((resolve) => {
+                      resolveEntityTags = resolve;
+                  })
+                : defaultApiGet(url),
+        );
+        render(
+            <TestWrapper>
+                <WishlistDetailPage />
+            </TestWrapper>,
+        );
+        const editButton = await screen.findByRole('button', { name: 'Edit' });
+
+        // Act
+        await user.click(editButton);
+
+        // Assert
+        expect(screen.queryByText('Edit Wishlist')).not.toBeInTheDocument();
+
+        // Act
+        resolveEntityTags([{ id: 'tag-a', name: 'alpha' }]);
+        await screen.findByText('Edit Wishlist');
+        await user.type(screen.getByLabelText(/name/i), ' updated');
+        await user.click(document.querySelector('[data-action="save"]') as HTMLElement);
+
+        // Assert
+        await waitFor(() => expect(mockApiPatch).toHaveBeenCalled());
+        expect(mockApiPatch.mock.calls[0][1]).not.toHaveProperty('tags');
     });
 
     it('opens the wishlist editor (not a separate surface) from the discovered "Edit filter" affordance', async () => {

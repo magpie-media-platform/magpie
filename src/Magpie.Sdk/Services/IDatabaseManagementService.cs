@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -35,15 +34,6 @@ public interface IDatabaseManagementService
     Task<bool> DeleteBackupAsync(
         string backupId,
         Guid callerUserId,
-        CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Opens a backup file for download.
-    /// </summary>
-    /// <param name="backupId">The id of the backup to read</param>
-    /// <param name="cancellationToken">The token that cancels the operation</param>
-    Task<Stream?> OpenBackupAsync(
-        string backupId,
         CancellationToken cancellationToken = default);
 
     /// <summary>

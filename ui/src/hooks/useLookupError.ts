@@ -15,6 +15,5 @@ export function useLookupError({ data, error, errorUpdateCount = 0 }: LookupQuer
     if (data !== undefined) {
         return null;
     }
-    // React Query resets a failed query without data to pending, with no error, while that query refetches.
     return error ?? (errorUpdateCount > 0 ? lastError : null);
 }

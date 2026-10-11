@@ -18,7 +18,8 @@ namespace Magpie.Core;
 
 internal sealed class RemotePathMappingService(
     IRemotePathMappingRepository repository,
-    IFileSystem fileSystem) : IRemotePathMappingService
+    IFileSystem fileSystem,
+    ISettingsService settingsService) : IRemotePathMappingService
 {
     private static readonly string[] HostSettingKeys =
         ["host", "url", "baseUrl", "baseurl", "server", "hostname", "address"];
@@ -88,11 +89,13 @@ internal sealed class RemotePathMappingService(
         return repository.DeleteAsync(id, actingUserId, cancellationToken);
     }
 
-    public Task<ConfigurationTestResult> TestLocalPathAsync(
+    public async Task<ConfigurationTestResult> TestLocalPathAsync(
         string localPath,
         CancellationToken cancellationToken = default)
     {
-        return Task.FromResult(TestLocalPath(localPath));
+        var instanceName = await settingsService.GetInstanceNameAsync(cancellationToken).ConfigureAwait(false);
+
+        return TestLocalPath(localPath, instanceName);
     }
 
     public string? GetHost(IReadOnlyDictionary<string, string>? settings)
@@ -203,7 +206,7 @@ internal sealed class RemotePathMappingService(
             ? host[1..^1]
             : host;
 
-    private ConfigurationTestResult TestLocalPath(string localPath)
+    private ConfigurationTestResult TestLocalPath(string localPath, string instanceName)
     {
         if (string.IsNullOrWhiteSpace(localPath))
         {
@@ -229,11 +232,11 @@ internal sealed class RemotePathMappingService(
         }
         catch (UnauthorizedAccessException)
         {
-            return Failure("Local path exists but Magpie cannot read it.", ConfigurationFailureKind.Auth);
+            return Failure($"Local path exists but {instanceName} cannot read it.", ConfigurationFailureKind.Auth);
         }
         catch (SecurityException)
         {
-            return Failure("Local path exists but Magpie cannot read it.", ConfigurationFailureKind.Auth);
+            return Failure($"Local path exists but {instanceName} cannot read it.", ConfigurationFailureKind.Auth);
         }
         catch (DirectoryNotFoundException)
         {
@@ -253,7 +256,7 @@ internal sealed class RemotePathMappingService(
         }
         catch (IOException)
         {
-            return Failure("Local path exists but Magpie cannot read it.", ConfigurationFailureKind.Auth);
+            return Failure($"Local path exists but {instanceName} cannot read it.", ConfigurationFailureKind.Auth);
         }
     }
 }

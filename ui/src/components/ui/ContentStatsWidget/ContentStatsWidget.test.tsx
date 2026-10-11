@@ -196,7 +196,7 @@ describe('ContentStatsWidget recent items', () => {
         expect(item?.querySelector('.content-stats-widget__item-status')?.textContent).toBe('Upgradable');
     });
 
-    it('shows explicit unmonitored and fulfillment states separately for a recent item', () => {
+    it('shows unmonitored and fulfillment states separately for a recent item', () => {
         // Arrange
         const items: RecentContentItem[] = [
             {
@@ -204,7 +204,6 @@ describe('ContentStatsWidget recent items', () => {
                 title: 'Unmonitored Show',
                 addedAt: '1h ago',
                 fulfillment: 'missing',
-                monitoring: 'Unmonitored',
                 effectiveMonitoring: 'Unmonitored',
             },
         ];
@@ -220,16 +219,16 @@ describe('ContentStatsWidget recent items', () => {
         expect(screen.getByLabelText('Unmonitored')).toBeInTheDocument();
     });
 
-    it('shows inherited unmonitored and fulfillment states separately for a recent item', () => {
+    it('ContentItem_ShowsUpcoming_WhenAMissingItemHasAFuturePublishDate', () => {
         // Arrange
         const items: RecentContentItem[] = [
             {
-                id: 'inh1',
-                title: 'Inherited Excluded',
+                id: 'up1',
+                title: 'Future Movie',
                 addedAt: '1h ago',
                 fulfillment: 'missing',
-                monitoring: null,
-                effectiveMonitoring: 'Unmonitored',
+                publishDate: '2099-01-01',
+                publishDatePrecision: 'Day',
             },
         ];
 
@@ -237,9 +236,10 @@ describe('ContentStatsWidget recent items', () => {
         renderWithRouter(<ContentStatsWidget counts={defaultCounts} recentItems={items} />);
 
         // Assert
-        const item = document.querySelector('[data-content-id="inh1"]');
-        expect(item?.querySelector('.content-stats-widget__item-status')).toHaveTextContent('Missing');
-        expect(screen.getByLabelText('Unmonitored (inherited)')).toBeInTheDocument();
+        const item = document.querySelector('[data-content-id="up1"]');
+        expect(item?.querySelector('.content-stats-widget__item-status')).toHaveTextContent('Upcoming');
+        expect(item).toHaveAttribute('data-status', 'missing');
+        expect(screen.getByText('Missing')).toBeInTheDocument();
     });
 });
 

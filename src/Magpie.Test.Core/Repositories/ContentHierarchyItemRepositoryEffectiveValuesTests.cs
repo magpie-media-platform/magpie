@@ -267,6 +267,10 @@ public sealed class ContentHierarchyItemRepositoryEffectiveValuesTests
     [TestCase("true", MonitoringMode.Monitored, 0)]
     [TestCase("0", MonitoringMode.Unmonitored, 0)]
     [TestCase("1", MonitoringMode.Monitored, 0)]
+    [TestCase("Unmonitored", MonitoringMode.Unmonitored, 0)]
+    [TestCase("Monitored", MonitoringMode.Monitored, 0)]
+    [TestCase("Shotgun", MonitoringMode.Shotgun, 0)]
+    [TestCase("2", MonitoringMode.Monitored, 1)]
     [TestCase("not-a-boolean", MonitoringMode.Monitored, 1)]
     public async Task RecomputeAllEffectiveValuesAsync_ResolvesTheSystemDefault_WhenTheGroupHoldsAValue(
         string storedValue,

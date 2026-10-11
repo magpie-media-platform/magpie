@@ -922,4 +922,44 @@ internal sealed class QueryCoordinatorTests
             Assert.That(calls, Is.EqualTo(1));
         }
     }
+
+    [Test]
+    public async Task GetEntitiesAsync_FillsTheJoinedEntry_WhenTheOwnerCancelsBeforeTheFill()
+    {
+        // Arrange
+        var context = new RequestContext { Language = "en", FallbackLanguages = ["en"], UserAgent = "Magpie/test" };
+        var client = new Mock<IWikidataClient>();
+        client.Setup(value => value.GetEntitiesAsync(
+            It.IsAny<IReadOnlyCollection<string>>(),
+            It.IsAny<RequestContext>(),
+            It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Dictionary<string, EntityDto> { ["Q1"] = new EntityDto { Id = "Q1" } });
+        var subject = new QueryCoordinator(client.Object, _scopeFactory);
+        using var cancellation = new CancellationTokenSource();
+        Task<IReadOnlyDictionary<string, EntityDto>> joined = null!;
+
+        // Act
+        var owner = subject.GetEntitiesAsync(
+            ["Q1", "Q2"],
+            context,
+            cancellation.Token,
+            _ =>
+            {
+                joined = subject.GetEntitiesAsync(["Q1"], context, CancellationToken.None);
+                cancellation.Cancel();
+            });
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(async () => await owner.ConfigureAwait(false), Throws.InstanceOf<OperationCanceledException>());
+            client.Verify(
+                value => value.GetEntitiesAsync(
+                    It.Is<IReadOnlyCollection<string>>(ids => ids.Single() == "Q1"),
+                    context,
+                    It.IsAny<CancellationToken>()),
+                Times.Once);
+            Assert.That((await joined.ConfigureAwait(false))["Q1"].Id, Is.EqualTo("Q1"));
+        }
+    }
 }

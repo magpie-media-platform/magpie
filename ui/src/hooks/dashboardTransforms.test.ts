@@ -492,6 +492,25 @@ describe('mapRecentContent', () => {
         expect(result[0].title).toBe('Metadata Title');
     });
 
+    it('MapRecentContent_CarriesThePublishDate_WhenTheMetadataHasOne', () => {
+        // Arrange
+        const items = [
+            makeHierarchyItem({
+                metadataContainer: {
+                    id: 'mc-1',
+                    contributions: [{ ordinal: 0, publishDate: '2099-01-01', publishDatePrecision: 'Day' }],
+                },
+            }),
+        ];
+
+        // Act
+        const result = mapRecentContent(items, 5);
+
+        // Assert
+        expect(result[0].publishDate).toBe('2099-01-01');
+        expect(result[0].publishDatePrecision).toBe('Day');
+    });
+
     it('sets fulfillment to missing when no contentItem', () => {
         vi.useFakeTimers();
         vi.setSystemTime(new Date('2025-01-01T01:00:00Z'));
@@ -555,7 +574,6 @@ describe('mapUpcomingContent', () => {
         expect(result[0].title).toBe('Upcoming Episode');
         expect(result[0].contentType).toBe('episodes');
         expect(result[0].fulfillment).toBe('missing');
-        expect(result[0].monitoring).toBe('Unmonitored');
         expect(result[0].effectiveMonitoring).toBe('Unmonitored');
     });
 
@@ -572,6 +590,26 @@ describe('mapUpcomingContent', () => {
 
         const result = mapUpcomingContent(items);
         expect(result[0].title).toBe('From Metadata');
+    });
+
+    it('MapUpcomingContent_CarriesThePublishDatePrecision_WhenTheMetadataHasOne', () => {
+        // Arrange
+        const items = [
+            makeContentItemWithMetadata({
+                metadataContainer: {
+                    id: 'mc-1',
+                    contributions: [
+                        { ordinal: 0, publishDate: '2025-06-15T20:00:00Z', publishDatePrecision: 'Instant' },
+                    ],
+                },
+            }),
+        ];
+
+        // Act
+        const result = mapUpcomingContent(items);
+
+        // Assert
+        expect(result[0].datePrecision).toBe('Instant');
     });
 
     it('uses publish date from metadata as the date', () => {

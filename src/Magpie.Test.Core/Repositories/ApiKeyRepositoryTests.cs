@@ -36,6 +36,36 @@ public sealed class ApiKeyRepositoryTests
     private List<MagpieEvent> _publishedEvents = null!;
     private Guid _userId;
 
+    public static IEnumerable<TestCaseData> SuppliedExpiries()
+    {
+        yield return new TestCaseData(new DateTime(2026, 9, 8, 12, 30, 0, DateTimeKind.Utc))
+            .SetArgDisplayNames("Z");
+        yield return new TestCaseData(new DateTimeOffset(2026, 9, 8, 12, 30, 0, TimeSpan.Zero).LocalDateTime)
+            .SetArgDisplayNames("+00:00");
+        yield return new TestCaseData(new DateTimeOffset(2026, 9, 8, 5, 30, 0, TimeSpan.FromHours(-7)).LocalDateTime)
+            .SetArgDisplayNames("-07:00");
+    }
+
+    public static IEnumerable<TestCaseData> ExpiryFilterCases()
+    {
+        yield return new TestCaseData(new DateTime(2026, 9, 8, 12, 30, 0, DateTimeKind.Utc), false)
+            .SetArgDisplayNames("12:30Z", "false");
+        yield return new TestCaseData(new DateTimeOffset(2026, 9, 8, 12, 30, 0, TimeSpan.Zero).LocalDateTime, false)
+            .SetArgDisplayNames("12:30+00:00", "false");
+        yield return new TestCaseData(
+                new DateTimeOffset(2026, 9, 8, 5, 30, 0, TimeSpan.FromHours(-7)).LocalDateTime,
+                false)
+            .SetArgDisplayNames("05:30-07:00", "false");
+        yield return new TestCaseData(new DateTime(2026, 9, 8, 11, 30, 0, DateTimeKind.Utc), true)
+            .SetArgDisplayNames("11:30Z", "true");
+        yield return new TestCaseData(new DateTimeOffset(2026, 9, 8, 11, 30, 0, TimeSpan.Zero).LocalDateTime, true)
+            .SetArgDisplayNames("11:30+00:00", "true");
+        yield return new TestCaseData(
+                new DateTimeOffset(2026, 9, 8, 13, 30, 0, TimeSpan.FromHours(2)).LocalDateTime,
+                true)
+            .SetArgDisplayNames("13:30+02:00", "true");
+    }
+
     [OneTimeSetUp]
     public void CreateTemplate()
     {
@@ -819,6 +849,55 @@ public sealed class ApiKeyRepositoryTests
             Assert.That(result.Items, Has.One.With.Property(nameof(ApiKey.Name)).EqualTo("FutureKey"));
             Assert.That(result.Items, Has.One.With.Property(nameof(ApiKey.Name)).EqualTo("NoExpiryKey"));
         }
+    }
+
+    [TestCaseSource(nameof(SuppliedExpiries))]
+    public async Task GetByIdAsync_ReturnsSuppliedExpiryInstant_WhenExpiresAtHasOffset(DateTime expiresAt)
+    {
+        // Arrange
+        var apiKey = new ApiKey
+        {
+            UserId = _userId,
+            KeyPrefix = "test",
+            Name = "OffsetKey",
+            KeyHash = "hash1",
+            Enabled = true,
+            ExpiresAt = expiresAt,
+            CreatedAt = DateTime.UtcNow
+        };
+        _context.ApiKeys.Add(apiKey);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        // Act
+        var result = await _subject.GetByIdAsync(apiKey.Id).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(result?.ExpiresAt, Is.EqualTo(new DateTime(2026, 9, 8, 12, 30, 0, DateTimeKind.Utc)));
+    }
+
+    [TestCaseSource(nameof(ExpiryFilterCases))]
+    public async Task QueryAsync_MatchesExpiryInstant_WhenExpiresAtHasOffset(DateTime expiresAt, bool expired)
+    {
+        // Arrange
+        _context.ApiKeys.Add(new ApiKey
+        {
+            UserId = _userId,
+            KeyPrefix = "test",
+            Name = "OffsetKey",
+            KeyHash = "hash1",
+            Enabled = true,
+            ExpiresAt = expiresAt,
+            CreatedAt = DateTime.UtcNow
+        });
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        // Act
+        var result = await _subject
+            .QueryAsync(new ApiKeyQuery { Expired = expired }, new() { PageNumber = 1, PageSize = 100 }, null)
+            .ConfigureAwait(false);
+
+        // Assert
+        Assert.That(result.Items, Has.One.With.Property(nameof(ApiKey.Name)).EqualTo("OffsetKey"));
     }
 
     [Test]

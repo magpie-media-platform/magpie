@@ -167,6 +167,7 @@ describe('QualityTiersPage', () => {
 
     afterEach(() => {
         vi.restoreAllMocks();
+        vi.unstubAllGlobals();
     });
 
     it('renders the quality tiers registry with its summary fields', async () => {
@@ -494,6 +495,7 @@ describe('QualityTiersPage', () => {
     });
 
     it('shows selection only for managers, marking the select column hidden (no layout-participating checkbox)', async () => {
+        vi.stubGlobal('innerWidth', 390);
         await renderPage(Role.Manager);
 
         expect(document.querySelector('td[data-column="select"]')).toHaveAttribute('data-mobile-role', 'hidden');

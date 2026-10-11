@@ -1,9 +1,9 @@
-import { forwardRef, type ComponentPropsWithoutRef, useMemo, useCallback, useEffect, useState } from 'react';
-import { ImageBrokenIcon } from '@phosphor-icons/react';
+import { forwardRef, type ComponentPropsWithoutRef, useMemo, useCallback } from 'react';
 import { type ColumnDef } from '@tanstack/react-table';
 
 import { DataTable, type DataTableProps } from '../DataTable';
 import { Badge } from '../Badge';
+import { ContentPoster } from '@/components/content/ContentCardPrimitives';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { TagsCell } from '../TagsCell';
 import { resolveSubjectKindLabel } from '@/types';
@@ -33,32 +33,6 @@ export interface SubjectListProps
     onSubjectClick?: (item: SubjectItem) => void;
 
     loading?: boolean;
-}
-
-function ImageCell({ imageUrl, title }: { imageUrl?: string; title: string }) {
-    const [failed, setFailed] = useState(false);
-
-    useEffect(() => {
-        setFailed(false);
-    }, [imageUrl]);
-
-    if (!imageUrl || failed) {
-        return (
-            <div className="subject-list__image subject-list__image--placeholder">
-                <ImageBrokenIcon weight="thin" aria-hidden="true" />
-            </div>
-        );
-    }
-
-    return (
-        <img
-            src={imageUrl}
-            alt={`${title} image`}
-            className="subject-list__image"
-            loading="lazy"
-            onError={() => setFailed(true)}
-        />
-    );
 }
 
 function TitleCell({ title }: { title: string }) {
@@ -110,7 +84,14 @@ export const SubjectList = forwardRef<HTMLDivElement, SubjectListProps>(
                     header: '',
                     enableSorting: false,
                     size: 60,
-                    cell: ({ row }) => <ImageCell imageUrl={row.original.imageUrl} title={row.original.title} />,
+                    cell: ({ row }) => (
+                        <ContentPoster
+                            posterUrl={row.original.imageUrl}
+                            alt={`${row.original.title} image`}
+                            className="subject-list__image"
+                            placeholderClassName="subject-list__image--placeholder"
+                        />
+                    ),
                 },
                 {
                     id: 'title',

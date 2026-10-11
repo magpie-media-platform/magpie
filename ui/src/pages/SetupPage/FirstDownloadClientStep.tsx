@@ -4,6 +4,7 @@ import { ArrowRightIcon, DownloadSimpleIcon, SkipForwardIcon } from '@phosphor-i
 import { Button } from '@/components/ui/Button';
 import { useToast } from '@/components/ui/Toast';
 import { useDownloadClients } from '@/hooks/useDownloadClients';
+import { useInstanceName } from '@/hooks/useInstanceName';
 import { DownloadClientForm, type DownloadClientFormValues } from '@/components/configuration/DownloadClientForm';
 import { toStringSettings } from '@/lib/integrationSettings';
 
@@ -15,6 +16,7 @@ interface FirstDownloadClientStepProps {
 }
 
 export function FirstDownloadClientStep({ onAdvance }: FirstDownloadClientStepProps): ReactNode {
+    const instanceName = useInstanceName();
     const { toast } = useToast();
     const { createClient, isCreating, clients } = useDownloadClients();
     const { formOpen, setFormOpen, added, markAdded, addAnother, continueToNext } = useAddAnotherStep(onAdvance);
@@ -30,7 +32,7 @@ export function FirstDownloadClientStep({ onAdvance }: FirstDownloadClientStepPr
                 });
                 toast({
                     title: 'Download client created',
-                    description: `Magpie created ${values.name}.`,
+                    description: `${instanceName} created ${values.name}.`,
                     variant: 'success',
                 });
                 markAdded();
@@ -44,7 +46,7 @@ export function FirstDownloadClientStep({ onAdvance }: FirstDownloadClientStepPr
                 throw error;
             }
         },
-        [createClient, markAdded, toast],
+        [createClient, markAdded, toast, instanceName],
     );
 
     const configuredDownloadClientCountLabel = `${clients.length} download client${clients.length === 1 ? '' : 's'}`;

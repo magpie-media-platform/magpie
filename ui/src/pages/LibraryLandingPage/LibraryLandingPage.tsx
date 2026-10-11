@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom';
-import { FilmStripIcon, ArrowCounterClockwiseIcon, PlusIcon, TelevisionIcon } from '@phosphor-icons/react';
+import { ArrowCounterClockwiseIcon, BooksIcon, FilmStripIcon, PlusIcon, TelevisionIcon } from '@phosphor-icons/react';
 
 import { Button } from '@/components/ui/Button';
 import { CdnPhosphorIcon } from '@/components/ui/CdnPhosphorIcon';
@@ -69,13 +69,16 @@ export function LibraryLandingPage() {
 
     const contentCountsLoaded = contentTypes.length > 0 && contentTypes.every((t) => counts[t.slug] !== undefined);
     const isContentEmpty = !isLoading && contentCountsLoaded && contentTypes.every((t) => (counts[t.slug] ?? 0) === 0);
+    const allContentCount = contentCountsLoaded
+        ? contentTypes.reduce((total, type) => total + (counts[type.slug] ?? 0), 0)
+        : undefined;
 
     return (
         <div className="library-landing" data-page="library-landing">
             <PageHeader
                 className="library-landing__header"
                 title="Library"
-                description="Browse what's in the library, grouped by content and the subjects it relates to."
+                description="Browse what's in the library."
                 icon={<FilmStripIcon weight="duotone" aria-hidden="true" data-testid="library-landing__icon" />}
             />
 
@@ -95,30 +98,34 @@ export function LibraryLandingPage() {
                 </h2>
 
                 {!isContentEmpty && (
-                    <>
-                        <div className="library-landing__grid">
-                            {isLoading ? (
-                                <>
-                                    <TypeCardSkeleton />
-                                    <TypeCardSkeleton />
-                                    <TypeCardSkeleton />
-                                </>
-                            ) : hasContentTypes ? (
-                                contentTypes.map((type) => (
+                    <div className="library-landing__grid">
+                        {isLoading ? (
+                            <>
+                                <TypeCardSkeleton />
+                                <TypeCardSkeleton />
+                                <TypeCardSkeleton />
+                            </>
+                        ) : hasContentTypes ? (
+                            <>
+                                <LibraryCountCard
+                                    to="/library/all"
+                                    icon={<BooksIcon weight="duotone" />}
+                                    name="All content"
+                                    countLabel={formatLibraryItemCount(allContentCount)}
+                                    dataComponent="all-content-card"
+                                    iconTestId="library-landing__all-content-icon"
+                                    skeletonTestId="library-landing__count-skeleton"
+                                />
+                                {contentTypes.map((type) => (
                                     <TypeCard key={type.id} type={type} basePath="/library/content" counts={counts} />
-                                ))
-                            ) : (
-                                <p className="library-landing__empty">
-                                    No content types registered. Install extensions to add content types.
-                                </p>
-                            )}
-                        </div>
-                        {!isLoading && (
-                            <Link to="/library/all" className="library-landing__view-all">
-                                View all content
-                            </Link>
+                                ))}
+                            </>
+                        ) : (
+                            <p className="library-landing__empty">
+                                No content types registered. Install extensions to add content types.
+                            </p>
                         )}
-                    </>
+                    </div>
                 )}
             </section>
 
@@ -155,10 +162,7 @@ export function LibraryLandingPage() {
 
             <hr className="library-landing__separator" />
 
-            <section className="library-landing__section" aria-labelledby="subject-types-heading">
-                <h2 id="subject-types-heading" className="library-landing__section-title">
-                    Subjects
-                </h2>
+            <div className="library-landing__section">
                 <div className="library-landing__grid">
                     {isLoading ? (
                         <>
@@ -177,16 +181,11 @@ export function LibraryLandingPage() {
                         ))
                     ) : (
                         <p className="library-landing__empty">
-                            No subject types registered. Install extensions to add them.
+                            No categories registered. Install extensions to add them.
                         </p>
                     )}
                 </div>
-                {!isLoading && (
-                    <Link to="/library/subjects/all" className="library-landing__view-all">
-                        View all subjects
-                    </Link>
-                )}
-            </section>
+            </div>
         </div>
     );
 }

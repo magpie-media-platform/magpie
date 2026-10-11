@@ -1,5 +1,6 @@
 export {
     Popover,
+    PopoverAnchor,
     PopoverTrigger,
     PopoverContent,
     type PopoverProps,

@@ -48,6 +48,7 @@ import {
 import { useBulkSelection, type BulkSelection } from '@/hooks/useBulkSelection';
 import { useDownloadClients } from '@/hooks/useDownloadClients';
 import { useCardLayout } from '@/hooks/ui/useCardLayout';
+import { useInstanceName } from '@/hooks/useInstanceName';
 import { formatDateTime } from '@/lib/dateFormatting';
 import { displayLineageLeafTitle } from '@/lib/downloadTitle';
 import { type DownloadClientOption, type DownloadFilterState } from '@/types';
@@ -150,6 +151,7 @@ const HISTORY_SORT_OPTIONS: MobileListSortOption[] = [
 ];
 
 export function DownloadsPage() {
+    const instanceName = useInstanceName();
     useDocumentTitle('Downloads');
     const [searchParams, setSearchParams] = useSearchParams();
 
@@ -507,7 +509,7 @@ export function DownloadsPage() {
                 noneTitle: 'No downloads forgotten',
                 successTitle: (count) => (count === 1 ? 'Download forgotten' : `${count} downloads forgotten`),
                 successDescription: (count) =>
-                    `Magpie stopped tracking ${count === 1 ? 'it' : 'them'}. ${count === 1 ? 'The transfer is' : 'The transfers are'} left in the download client.`,
+                    `${instanceName} stopped tracking ${count === 1 ? 'it' : 'them'}. ${count === 1 ? 'The transfer is' : 'The transfers are'} left in the download client.`,
                 failureDescription: 'Failed to forget download',
             },
         });

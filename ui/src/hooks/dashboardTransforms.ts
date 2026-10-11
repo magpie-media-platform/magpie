@@ -3,7 +3,7 @@ import { formatElapsedDuration, formatRelativeTime } from '@/lib/formatTime';
 import { humanizeJobType } from '@/lib/jobExecution';
 import { toLocalDateKey } from '@/lib/dateFormatting';
 import { parseCalendarDate } from '@/lib/dateParsing';
-import { extractTitle } from '@/lib/metadata';
+import { extractPublishDate, extractPublishDatePrecision, extractTitle } from '@/lib/metadata';
 import {
     mapFulfillmentStatus,
     type ApiContentHierarchyItem,
@@ -12,6 +12,7 @@ import {
     type MonitoringMode,
 } from '@/types/content';
 import { normalizeHealthStatus } from '@/types/healthStatus';
+import type { TemporalPrecision } from '@/types/contentMetadata';
 import type { PagedList } from '@/types/paging';
 import type { ApiDownload, DownloadStatusValue } from './useDownloads';
 import type { IndexerStatusValue } from './useIndexers';
@@ -71,7 +72,8 @@ export interface RecentContentItem {
     title: string;
     addedAt: string;
     fulfillment: FulfillmentStatus;
-    monitoring: MonitoringMode | null;
+    publishDate?: string;
+    publishDatePrecision?: TemporalPrecision;
     effectiveMonitoring: MonitoringMode;
 }
 
@@ -86,12 +88,12 @@ export interface UpcomingContentItem {
     title: string;
     subtitle?: string;
     date: string;
+    datePrecision?: TemporalPrecision;
     posterUrl?: string;
     contentType: string;
     level: string;
     levelLabel?: string;
     fulfillment: FulfillmentStatus;
-    monitoring: MonitoringMode | null;
     effectiveMonitoring: MonitoringMode;
 }
 
@@ -222,7 +224,8 @@ export function mapRecentContent(items: ApiContentHierarchyItem[], limit: number
         title: extractTitle(item.metadataContainer) ?? item.name,
         addedAt: formatRelativeTime(item.createdAt),
         fulfillment: item.contentItem ? mapFulfillmentStatus(item.contentItem.fulfillment) : 'missing',
-        monitoring: item.monitoring,
+        publishDate: extractPublishDate(item.metadataContainer),
+        publishDatePrecision: extractPublishDatePrecision(item.metadataContainer),
         effectiveMonitoring: item.effectiveMonitoring,
     }));
 }
@@ -250,12 +253,12 @@ export function mapUpcomingContent(items: ApiContentItemWithMetadata[]): Upcomin
             title: fields.title,
             subtitle: fields.subtitle,
             date: fields.date,
+            datePrecision: fields.datePrecision,
             posterUrl: fields.posterUrl,
             contentType: fields.contentType,
             level: fields.level,
             levelLabel: fields.levelLabel,
             fulfillment: fields.fulfillment,
-            monitoring: item.monitoring,
             effectiveMonitoring: item.effectiveMonitoring,
         });
     }

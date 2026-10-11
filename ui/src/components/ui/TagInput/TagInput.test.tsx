@@ -1,6 +1,6 @@
 import { useState } from 'react';
 
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -112,6 +112,70 @@ describe('TagInput', () => {
 
         await user.keyboard('{Escape}');
         expect(onOpenChange).toHaveBeenCalledWith(false);
+    });
+
+    it('picks a suggestion with the pointer inside a sheet', async () => {
+        const user = userEvent.setup();
+        const onChange = vi.fn();
+        render(
+            <Sheet open>
+                <SheetContent>
+                    <SheetTitle>Wishlist</SheetTitle>
+                    <SheetDescription>Edit the wishlist item.</SheetDescription>
+                    <ControlledTagInput suggestions={['Movies', 'Documentary']} onChange={onChange} />
+                </SheetContent>
+            </Sheet>,
+        );
+
+        await user.type(input(), 'Doc');
+        await user.click(await screen.findByRole('option', { name: 'Documentary' }));
+
+        expect(onChange).toHaveBeenLastCalledWith(['Documentary']);
+    });
+
+    it.each(['wheel', 'touchMove'] as const)(
+        'leaves the %s scroll of the suggestions to the browser inside a sheet',
+        async (gesture) => {
+            const user = userEvent.setup();
+            render(
+                <Sheet open>
+                    <SheetContent>
+                        <SheetTitle>Wishlist</SheetTitle>
+                        <SheetDescription>Edit the wishlist item.</SheetDescription>
+                        <ControlledTagInput suggestions={['Movies', 'Documentary']} />
+                    </SheetContent>
+                </Sheet>,
+            );
+
+            await user.type(input(), 'o');
+            const notCancelled = fireEvent[gesture](await screen.findByRole('listbox'), {
+                deltaY: 10,
+                changedTouches: [{ clientX: 0, clientY: 10 }],
+            });
+
+            expect(notCancelled).toBe(true);
+        },
+    );
+
+    it('limits the suggestions to the room below the field', async () => {
+        const user = userEvent.setup();
+        const bounds = vi.spyOn(Element.prototype, 'getBoundingClientRect').mockReturnValue({
+            top: 650,
+            bottom: 700,
+            left: 0,
+            right: 100,
+            width: 100,
+            height: 50,
+            x: 0,
+            y: 650,
+            toJSON: () => ({}),
+        });
+        render(<ControlledTagInput suggestions={['Movies', 'Documentary']} />);
+
+        await user.click(input());
+
+        expect(await screen.findByRole('listbox')).toHaveStyle('--tag-input-listbox-room: 68px');
+        bounds.mockRestore();
     });
 
     it('closes the dropdown when the input is blurred', async () => {

@@ -11,6 +11,7 @@ using Magpie.Models;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
+using Magpie.Models.Storage;
 using Magpie.Sdk.Services;
 
 using Moq;
@@ -1558,11 +1559,12 @@ public sealed class RootFolderServiceTests
     }
 
     [Test]
-    public async Task GetDiskSpaceAsync_ReturnsUnavailableFolder_WhenFullPathResolutionThrows()
+    public async Task GetDiskSpaceAsync_ReturnsUnavailableFolder_WhenStorageCapacityIsUnavailable()
     {
         // Arrange
         var rootFolderId = Guid.NewGuid();
-        _fileSystem.Setup(fileSystem => fileSystem.GetFullPath(@"\\broken\share")).Throws<IOException>();
+        _fileSystem.Setup(fileSystem => fileSystem.GetStorageCapacity(@"\\broken\share"))
+            .Returns((StorageCapacity?)null);
         _rootFolderRepository
             .Setup(repository => repository.ListAllAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(
@@ -1575,6 +1577,9 @@ public sealed class RootFolderServiceTests
                     ContentType = "movies"
                 }
             ]);
+        _rootFolderRepository
+            .Setup(repository => repository.GetContentSizesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Dictionary<Guid, long> { [rootFolderId] = 7_000 });
 
         // Act
         var result = await _subject.GetDiskSpaceAsync().ConfigureAwait(false);
@@ -1585,24 +1590,68 @@ public sealed class RootFolderServiceTests
             Assert.That(result.Folders, Has.Length.EqualTo(1));
             Assert.That(result.Folders[0].TotalBytes, Is.EqualTo(0));
             Assert.That(result.Folders[0].FreeBytes, Is.EqualTo(0));
-            Assert.That(result.TotalBytes, Is.EqualTo(0));
+            Assert.That(result.Folders[0].ContentBytes, Is.EqualTo(7_000));
         }
     }
 
     [Test]
-    public async Task GetDiskSpaceAsync_CountsVolumeOnce_WhenTwoFoldersShareARealDrive()
+    public async Task GetDiskSpaceAsync_ReturnsUnavailableFolder_WhenTheDirectoryDoesNotExist()
     {
         // Arrange
-        var firstId = Guid.NewGuid();
-        var secondId = Guid.NewGuid();
-        var systemDrive = Path.GetPathRoot(Environment.SystemDirectory)!;
+        var rootFolderId = Guid.NewGuid();
+        _fileSystem.Setup(fileSystem => fileSystem.DirectoryExists("/media/vanished")).Returns(false);
+        _fileSystem.Setup(fileSystem => fileSystem.GetStorageCapacity("/media/vanished"))
+            .Returns(new StorageCapacity { VolumeId = "parent", AvailableBytes = 400_000, TotalBytes = 1_000_000 });
         _rootFolderRepository
             .Setup(repository => repository.ListAllAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(
             [
-                new RootFolder { Id = firstId, Name = "Movies", Path = systemDrive, ContentType = "movies" },
-                new RootFolder { Id = secondId, Name = "Shows", Path = systemDrive, ContentType = "series" }
+                new RootFolder
+                {
+                    Id = rootFolderId,
+                    Name = "Vanished",
+                    Path = "/media/vanished",
+                    ContentType = "movies"
+                }
             ]);
+        _rootFolderRepository
+            .Setup(repository => repository.GetContentSizesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Dictionary<Guid, long> { [rootFolderId] = 7_000 });
+
+        // Act
+        var result = await _subject.GetDiskSpaceAsync().ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.Folders, Has.Length.EqualTo(1));
+            Assert.That(result.Folders[0].TotalBytes, Is.EqualTo(0));
+            Assert.That(result.Folders[0].FreeBytes, Is.EqualTo(0));
+            Assert.That(result.Folders[0].UsedBytes, Is.EqualTo(0));
+            Assert.That(result.Folders[0].ContentBytes, Is.EqualTo(7_000));
+        }
+    }
+
+    [Test]
+    public async Task GetDiskSpaceAsync_ReturnsTheCapacityAndContentBytesOfEachFolder_WhenOnlyOneFolderHoldsContent()
+    {
+        // Arrange
+        var firstId = Guid.NewGuid();
+        var secondId = Guid.NewGuid();
+        _fileSystem.Setup(fileSystem => fileSystem.GetStorageCapacity("/media/movies"))
+            .Returns(new StorageCapacity { VolumeId = "first", AvailableBytes = 400_000, TotalBytes = 1_000_000 });
+        _fileSystem.Setup(fileSystem => fileSystem.GetStorageCapacity("/media/shows"))
+            .Returns(new StorageCapacity { VolumeId = "second", AvailableBytes = 50_000, TotalBytes = 200_000 });
+        _rootFolderRepository
+            .Setup(repository => repository.ListAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(
+            [
+                new RootFolder { Id = firstId, Name = "Movies", Path = "/media/movies", ContentType = "movies" },
+                new RootFolder { Id = secondId, Name = "Shows", Path = "/media/shows", ContentType = "series" }
+            ]);
+        _rootFolderRepository
+            .Setup(repository => repository.GetContentSizesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Dictionary<Guid, long> { [firstId] = 5_000_000_000 });
 
         // Act
         var result = await _subject.GetDiskSpaceAsync().ConfigureAwait(false);
@@ -1611,7 +1660,14 @@ public sealed class RootFolderServiceTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(result.Folders, Has.Length.EqualTo(2));
-            Assert.That(result.TotalBytes, Is.EqualTo(result.Folders[0].TotalBytes));
+            Assert.That(result.Folders[0].TotalBytes, Is.EqualTo(1_000_000));
+            Assert.That(result.Folders[0].FreeBytes, Is.EqualTo(400_000));
+            Assert.That(result.Folders[0].UsedBytes, Is.EqualTo(600_000));
+            Assert.That(result.Folders[0].ContentBytes, Is.EqualTo(5_000_000_000));
+            Assert.That(result.Folders[1].TotalBytes, Is.EqualTo(200_000));
+            Assert.That(result.Folders[1].FreeBytes, Is.EqualTo(50_000));
+            Assert.That(result.Folders[1].UsedBytes, Is.EqualTo(150_000));
+            Assert.That(result.Folders[1].ContentBytes, Is.EqualTo(0));
         }
     }
 

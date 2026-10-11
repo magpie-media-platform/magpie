@@ -17,7 +17,7 @@ describe('RestartRequiredBanner', () => {
     it('renders nothing when restart is not required', () => {
         render(
             <RestartRequiredProvider>
-                <RestartRequiredBanner />
+                <RestartRequiredBanner instanceName="Magpie" />
             </RestartRequiredProvider>,
         );
 
@@ -30,7 +30,7 @@ describe('RestartRequiredBanner', () => {
         render(
             <RestartRequiredProvider>
                 <Trigger />
-                <RestartRequiredBanner />
+                <RestartRequiredBanner instanceName="Magpie" />
             </RestartRequiredProvider>,
         );
 
@@ -55,7 +55,7 @@ describe('RestartRequiredBanner', () => {
             <RestartRequiredProvider>
                 <Trigger />
                 <Refresher />
-                <RestartRequiredBanner />
+                <RestartRequiredBanner instanceName="Magpie" />
             </RestartRequiredProvider>,
         );
 

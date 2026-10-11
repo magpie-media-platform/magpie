@@ -148,7 +148,6 @@ describe('CalendarPage fetch range timezone handling', () => {
                     contentType: 'movies',
                     level: 'movie',
                     fulfillment: 'missing',
-                    monitoring: 'Monitored',
                     effectiveMonitoring: 'Monitored',
                 },
             ];

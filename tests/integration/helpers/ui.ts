@@ -18,7 +18,6 @@ interface ObservedRequest {
 const FIXTURE_IMAGE_HOST = '**/assets.journey.invalid/**';
 const SCOPED_REFRESH_WINDOW_MS = 15_000;
 
-// A 1x1 JPEG: the smallest body a browser decodes as an image.
 const ONE_PIXEL_JPEG = Buffer.from(
     '/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wAALCAABAAEBAREA/8QAFAABAAAAAAAAAAAAAAAAAAAACf/EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAD8AVN//2Q==',
     'base64',
@@ -98,7 +97,6 @@ export async function expectScopedEventRefresh(
         const since = (predicate: (url: string) => boolean): ObservedRequest[] =>
             observed.filter((request) => request.at >= openedAt && predicate(request.url));
 
-        // The host emits both events in this order, so the visible refresh proves the unrelated event arrived first.
         await api.patch(`/api/content/${unrelatedId}`, { monitoring: { value: unrelated.effectiveMonitoring === 'Unmonitored' ? 'Monitored' : 'Unmonitored' } });
         await api.patch(`/api/content/${visibleId}`, { monitoring: { value: visible.effectiveMonitoring === 'Unmonitored' ? 'Monitored' : 'Unmonitored' } });
         await until(

@@ -75,7 +75,7 @@ function formatDateWithParser(dateStr: string, fallback: string, parser: (value:
     });
 }
 
-export function formatDateTime(dateStr: string): string {
+export function formatDateTime(dateStr: string, { seconds = false }: { seconds?: boolean } = {}): string {
     if (isUnknownDateSentinel(dateStr)) {
         return '-';
     }
@@ -89,6 +89,7 @@ export function formatDateTime(dateStr: string): string {
         day: 'numeric',
         hour: '2-digit',
         minute: '2-digit',
+        second: seconds ? '2-digit' : undefined,
     });
 }
 

@@ -183,15 +183,20 @@
 
     .sheet-footer {
         display: flex;
-        flex-direction: column-reverse;
+        justify-content: flex-end;
         gap: var(--space-sm);
         padding: var(--space-lg);
         border-top: 1px solid var(--border-default);
         margin-top: auto;
 
-        @media (min-width: 640px) {
-            flex-direction: row;
-            justify-content: flex-end;
+        @media (max-width: 639px) {
+            padding: var(--space-md);
+
+            & > .button {
+                flex: 1 1 auto;
+                padding-inline: var(--space-sm);
+                white-space: normal;
+            }
         }
     }
 

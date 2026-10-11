@@ -142,54 +142,6 @@
         border-radius: var(--radius-md);
     }
 
-    .event-trigger-form__filter {
-        display: flex;
-        flex-direction: column;
-        gap: var(--space-xs);
-        padding: var(--space-sm);
-        background-color: var(--bg-secondary);
-        border: 1px solid var(--border-default);
-        border-radius: var(--radius-md);
-    }
-
-    .event-trigger-form__filter-row {
-        display: flex;
-        align-items: center;
-        gap: var(--space-sm);
-        flex-wrap: wrap;
-    }
-
-    .event-trigger-form__filter-key {
-        flex: 1;
-        min-width: 100px;
-    }
-
-    .event-trigger-form__filter-pattern {
-        flex: 2;
-        min-width: 140px;
-    }
-
-    .event-trigger-form__filter-negate {
-        display: flex;
-        align-items: center;
-        gap: var(--space-xs);
-        flex-shrink: 0;
-    }
-
-    .event-trigger-form__filter-negate-label {
-        font-size: var(--text-xs);
-        color: var(--text-secondary);
-    }
-
-    .event-trigger-form__filter-remove {
-        flex-shrink: 0;
-        color: var(--text-muted);
-
-        &:hover {
-            color: var(--status-unhealthy);
-        }
-    }
-
     .event-trigger-form__add-filter {
         align-self: flex-start;
     }
@@ -198,34 +150,6 @@
         .event-trigger-form__sheet {
             max-width: 100%;
             border-radius: 0;
-        }
-
-        .event-trigger-form__filter-row {
-            flex-direction: column;
-            align-items: stretch;
-        }
-
-        .event-trigger-form__filter-key,
-        .event-trigger-form__filter-pattern {
-            flex: none;
-            min-width: auto;
-            width: 100%;
-        }
-
-        .event-trigger-form__filter-negate {
-            justify-content: space-between;
-            padding-top: var(--space-xs);
-        }
-
-        .event-trigger-form__filter-remove {
-            position: absolute;
-            top: var(--space-xs);
-            right: var(--space-xs);
-        }
-
-        .event-trigger-form__filter {
-            position: relative;
-            padding-right: calc(var(--space-md) + var(--icon-inline-md));
         }
     }
 }

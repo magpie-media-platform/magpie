@@ -409,6 +409,52 @@ describe('RootFolderForm default monitoring', () => {
         );
     });
 
+    it.each([
+        ['Shotgun', /^Shotgun:/],
+        ['Monitored', /^Monitored:/],
+        ['true', /^Monitored:/],
+    ])('SystemDefault_ShowsTheStoredMode_WhenTheSystemDefaultIs (%s)', async (stored, expected) => {
+        // Arrange
+        vi.mocked(apiGet).mockResolvedValueOnce([
+            {
+                name: 'monitoring',
+                extensionId: null,
+                createdAt: '2026-01-01T00:00:00Z',
+                settings: [
+                    {
+                        id: 'setting-1',
+                        settingsGroupId: 'group-1',
+                        key: 'system-default',
+                        value: stored,
+                        createdAt: '2026-01-01T00:00:00Z',
+                    },
+                ],
+            },
+        ]);
+
+        // Act
+        render(
+            <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+                <TooltipProvider>
+                    <RootFolderForm
+                        open
+                        onOpenChange={() => {}}
+                        initialValues={notDefaultValues}
+                        contentTypes={contentTypes}
+                        contentTypesWithFolders={['movies']}
+                        qualityTierLists={qualityTierLists}
+                        onSubmit={vi.fn()}
+                    />
+                </TooltipProvider>
+            </QueryClientProvider>,
+        );
+
+        // Assert
+        await waitFor(() =>
+            expect(screen.getByRole('radio', { name: expected })).toHaveAttribute('aria-checked', 'true'),
+        );
+    });
+
     it('saves Shotgun chosen by keyboard after the system default switch is turned off', async () => {
         // Arrange
         const user = userEvent.setup();

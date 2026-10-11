@@ -13,8 +13,6 @@ using Magpie.Models.Data;
 using Magpie.Models.Storage;
 using Magpie.Sdk.Services;
 
-using Windows.Win32;
-
 namespace Magpie.Core;
 
 internal sealed class RootFolderService(
@@ -38,21 +36,20 @@ internal sealed class RootFolderService(
         return required > available ? "Waiting for destination capacity: insufficient free space. " + values : null;
     }
 
-    private static DiskSpaceResult BuildDiskSpaceResult(IEnumerable<RootFolder> rootFolders, IFileSystem fileSystem)
+    private static DiskSpaceResult BuildDiskSpaceResult(
+        IEnumerable<RootFolder> rootFolders,
+        IReadOnlyDictionary<Guid, long> contentSizes,
+        IFileSystem fileSystem)
     {
         var diskSpaceInfos = new List<DiskSpaceInfo>();
-        var volumes = new List<(string Name, long TotalBytes, long FreeBytes)>();
 
         foreach (var folder in rootFolders)
         {
-            if (!TryGetPathCapacity(
-                folder.Path,
-                fileSystem,
-                out var volumeName,
-                out var folderTotalBytes,
-                out var folderFreeBytes))
+            contentSizes.TryGetValue(folder.Id, out var contentBytes);
+            var capacity = fileSystem.DirectoryExists(folder.Path) ? fileSystem.GetStorageCapacity(folder.Path) : null;
+            if (capacity is null)
             {
-                diskSpaceInfos.Add(CreateUnavailableDiskSpaceInfo(folder));
+                diskSpaceInfos.Add(CreateUnavailableDiskSpaceInfo(folder, contentBytes));
                 continue;
             }
 
@@ -61,86 +58,17 @@ internal sealed class RootFolderService(
                 Id = folder.Id,
                 Name = folder.Name,
                 Path = folder.Path,
-                TotalBytes = folderTotalBytes,
-                FreeBytes = folderFreeBytes,
-                UsedBytes = folderTotalBytes - folderFreeBytes
+                TotalBytes = capacity.TotalBytes,
+                FreeBytes = capacity.AvailableBytes,
+                UsedBytes = capacity.TotalBytes - capacity.AvailableBytes,
+                ContentBytes = contentBytes
             });
-
-            if (!volumes.Any(volume => fileSystem.PathsEqual(volume.Name, volumeName)))
-            {
-                volumes.Add((volumeName, folderTotalBytes, folderFreeBytes));
-            }
         }
 
-        var totalBytes = volumes.Sum(volume => volume.TotalBytes);
-        var freeBytes = volumes.Sum(volume => volume.FreeBytes);
-
-        return new()
-        {
-            Folders = [.. diskSpaceInfos],
-            TotalBytes = totalBytes,
-            FreeBytes = freeBytes,
-            UsedBytes = totalBytes - freeBytes
-        };
+        return new() { Folders = [.. diskSpaceInfos] };
     }
 
-    private static bool TryGetPathCapacity(
-        string path,
-        IFileSystem fileSystem,
-        out string volumeName,
-        out long totalBytes,
-        out long freeBytes)
-    {
-        volumeName = string.Empty;
-        totalBytes = 0;
-        freeBytes = 0;
-
-        if (string.IsNullOrWhiteSpace(path))
-        {
-            return false;
-        }
-
-        try
-        {
-            var fullPath = fileSystem.GetFullPath(path);
-            if (OperatingSystem.IsWindowsVersionAtLeast(5, 1, 2600))
-            {
-                if (!PInvoke.GetDiskFreeSpaceEx(fullPath, out var free, out var total, out _))
-                {
-                    return false;
-                }
-
-                volumeName = Path.GetPathRoot(fullPath)!;
-                totalBytes = (long)total;
-                freeBytes = (long)free;
-                return true;
-            }
-
-            var separator = Path.DirectorySeparatorChar;
-            var candidate = fullPath.EndsWith(separator) ? fullPath : fullPath + separator;
-            var mount = DriveInfo.GetDrives()
-                .Where(drive => drive.IsReady && candidate.StartsWith(
-                    drive.Name.EndsWith(separator) ? drive.Name : drive.Name + separator,
-                    StringComparison.Ordinal))
-                .MaxBy(drive => drive.Name.Length);
-
-            if (mount is null)
-            {
-                return false;
-            }
-
-            volumeName = mount.Name;
-            totalBytes = mount.TotalSize;
-            freeBytes = mount.AvailableFreeSpace;
-            return true;
-        }
-        catch
-        {
-            return false;
-        }
-    }
-
-    private static DiskSpaceInfo CreateUnavailableDiskSpaceInfo(RootFolder folder)
+    private static DiskSpaceInfo CreateUnavailableDiskSpaceInfo(RootFolder folder, long contentBytes)
     {
         return new()
         {
@@ -149,7 +77,8 @@ internal sealed class RootFolderService(
             Path = folder.Path,
             TotalBytes = 0,
             FreeBytes = 0,
-            UsedBytes = 0
+            UsedBytes = 0,
+            ContentBytes = contentBytes
         };
     }
 
@@ -450,6 +379,7 @@ internal sealed class RootFolderService(
     public async Task<DiskSpaceResult> GetDiskSpaceAsync(CancellationToken cancellationToken = default)
     {
         var rootFolders = await rootFolderRepository.ListAllAsync(cancellationToken).ConfigureAwait(false);
-        return BuildDiskSpaceResult(rootFolders, fileSystem);
+        var contentSizes = await rootFolderRepository.GetContentSizesAsync(cancellationToken).ConfigureAwait(false);
+        return BuildDiskSpaceResult(rootFolders, contentSizes, fileSystem);
     }
 }

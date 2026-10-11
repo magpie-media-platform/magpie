@@ -65,6 +65,7 @@ export interface FilterBarProps extends Omit<ComponentPropsWithoutRef<'div'>, 'o
     lockSubjectKind?: boolean;
     localContentPage?: boolean;
     includeAllContentLevels?: boolean;
+    allowTitlePrefix?: boolean;
 }
 
 export const FilterBar = forwardRef<HTMLDivElement, FilterBarProps>(
@@ -93,7 +94,9 @@ export const FilterBar = forwardRef<HTMLDivElement, FilterBarProps>(
             lockSubjectKind,
             localContentPage = false,
             includeAllContentLevels = false,
+            allowTitlePrefix = false,
             className,
+            children,
             onKeyDownCapture,
             ...props
         },
@@ -104,7 +107,7 @@ export const FilterBar = forwardRef<HTMLDivElement, FilterBarProps>(
         const isControlled = controlledExpanded !== undefined;
         const isExpanded = !collapsible || (isControlled ? controlledExpanded : (explicitExpanded ?? usesTableLayout));
 
-        const canUseSimpleMode = isSimpleQuery(value, context);
+        const canUseSimpleMode = isSimpleQuery(value, context, { allowTitlePrefix });
         const [mode, setMode] = useState<FilterMode>(canUseSimpleMode ? 'simple' : 'advanced');
 
         const effectiveMode: FilterMode = canUseSimpleMode ? mode : 'advanced';
@@ -342,6 +345,8 @@ export const FilterBar = forwardRef<HTMLDivElement, FilterBarProps>(
                                 <code className="filter-bar__query-text">{value}</code>
                             </div>
                         )}
+
+                        {children}
                     </div>
                 )}
             </div>

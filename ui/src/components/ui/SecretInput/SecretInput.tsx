@@ -1,6 +1,7 @@
 import { forwardRef, useCallback, useEffect, useRef, useState, type ChangeEvent, type FocusEvent } from 'react';
 
 import { Input, type InputProps } from '@/components/ui/Input';
+import { useMergedRef } from '@/hooks/ui/useMergedRef';
 
 import './SecretInput.css';
 
@@ -21,17 +22,7 @@ export const SecretInput = forwardRef<HTMLInputElement, SecretInputProps>(functi
     const [unlocked, setUnlocked] = useState(false);
     const innerRef = useRef<HTMLInputElement | null>(null);
 
-    const assignRef = useCallback(
-        (node: HTMLInputElement | null) => {
-            innerRef.current = node;
-            if (typeof forwardedRef === 'function') {
-                forwardedRef(node);
-            } else if (forwardedRef) {
-                forwardedRef.current = node;
-            }
-        },
-        [forwardedRef],
-    );
+    const assignRef = useMergedRef(innerRef, forwardedRef);
 
     const masked = configured && !unlocked;
 

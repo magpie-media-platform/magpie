@@ -30,6 +30,7 @@ import {
     type ExtensionItem,
 } from '@/hooks/useExtensionManagement';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
+import { useInstanceName } from '@/hooks/useInstanceName';
 import { getErrorMessage } from '@/lib/errors';
 import { formatRelativeTime } from '@/lib/formatTime';
 import { getStatusVariant, getStatusLabel } from './extensionStatus';
@@ -38,9 +39,10 @@ import { ExtensionSettingsSection } from './ExtensionSettingsSection';
 import './ExtensionDetailPage.css';
 
 export function ExtensionDetailPage() {
+    const instanceName = useInstanceName();
     useDocumentTitle('Extension');
     const { extensionId } = useParams<{ extensionId: string }>();
-    const { extension, isLoading, error, refetch } = useExtension(extensionId);
+    const { extension, updateInfo, isLoading, error, refetch } = useExtension(extensionId);
     const { toggleEnabled } = useExtensionManagement();
     const actions = useExtensionActions();
     const { toast } = useToast();
@@ -81,14 +83,14 @@ export function ExtensionDetailPage() {
             await toggleEnabled(extension.id, true);
             toast({
                 title: 'Extension Enabled',
-                description: `Magpie enabled ${extension.name} again.`,
+                description: `${instanceName} enabled ${extension.name} again.`,
                 variant: 'success',
             });
         } catch (err) {
             const message = getErrorMessage(err, 'Failed to enable the extension.');
             toast({ title: 'Failed to Enable', description: message, variant: 'error' });
         }
-    }, [extension, toggleEnabled, toast]);
+    }, [extension, toggleEnabled, toast, instanceName]);
 
     if (isLoading) {
         return (
@@ -114,11 +116,7 @@ export function ExtensionDetailPage() {
                     icon={<WarningCircleIcon weight="duotone" />}
                     title={error ? 'Failed to load extension' : 'Extension not found'}
                     description={error?.message}
-                    action={
-                        <Button variant="secondary" size="sm" onClick={() => refetch()}>
-                            Retry
-                        </Button>
-                    }
+                    onRetry={refetch}
                 />
             </div>
         );
@@ -200,7 +198,7 @@ export function ExtensionDetailPage() {
 
                 <ExtensionSettingsSection extensionId={extension.id} />
 
-                <ManagementSection extension={extension} actions={actions} />
+                <ManagementSection extension={extension} hasUpdate={updateInfo?.hasUpdate ?? false} actions={actions} />
 
                 <VersionHistorySection extension={extension} />
             </PullToRefresh>
@@ -258,30 +256,15 @@ function OverviewSection({ extension }: OverviewSectionProps) {
 
 interface ManagementSectionProps {
     extension: ExtensionItem;
+    hasUpdate: boolean;
     actions: ReturnType<typeof useExtensionActions>;
 }
 
-function ManagementSection({ extension, actions }: ManagementSectionProps) {
+function ManagementSection({ extension, hasUpdate, actions }: ManagementSectionProps) {
+    const instanceName = useInstanceName();
     const { toast } = useToast();
     const navigate = useNavigate();
     const [uninstallConfirmOpen, setUninstallConfirmOpen] = useState(false);
-
-    const handleAutoUpgradeChange = useCallback(
-        async (checked: boolean) => {
-            try {
-                await actions.patchExtension(extension.id, { autoUpgrade: { value: checked } });
-                toast({
-                    title: checked ? 'Auto-upgrade Enabled' : 'Auto-upgrade Disabled',
-                    description: `${extension.name} will ${checked ? 'now' : 'no longer'} auto-upgrade.`,
-                    variant: 'success',
-                });
-            } catch (err) {
-                const message = getErrorMessage(err, 'Failed to update automatic upgrades.');
-                toast({ title: 'Failed to Update', description: message, variant: 'error' });
-            }
-        },
-        [extension.id, extension.name, actions, toast],
-    );
 
     const handleUpdate = useCallback(async () => {
         try {
@@ -289,7 +272,7 @@ function ManagementSection({ extension, actions }: ManagementSectionProps) {
             toast({
                 title: 'Extension Updated',
                 description: result.restartRequired
-                    ? `${extension.name} updated to v${result.extension.version}. Restart Magpie to load it.`
+                    ? `${extension.name} updated to v${result.extension.version}. Restart ${instanceName} to load it.`
                     : `${extension.name} updated to v${result.extension.version}.`,
                 variant: 'success',
             });
@@ -297,7 +280,7 @@ function ManagementSection({ extension, actions }: ManagementSectionProps) {
             const message = getErrorMessage(err, 'Failed to update the extension.');
             toast({ title: 'Update Failed', description: message, variant: 'error' });
         }
-    }, [actions, extension.id, extension.name, toast]);
+    }, [actions, extension.id, extension.name, toast, instanceName]);
 
     const handleConfirmUninstall = useCallback(async () => {
         try {
@@ -305,7 +288,7 @@ function ManagementSection({ extension, actions }: ManagementSectionProps) {
             setUninstallConfirmOpen(false);
             toast({
                 title: 'Extension Uninstalled',
-                description: `${extension.name} removed. Restart Magpie to fully unload it.`,
+                description: `${extension.name} removed. Restart ${instanceName} to fully unload it.`,
                 variant: 'success',
             });
             void navigate('/admin/extensions');
@@ -313,7 +296,7 @@ function ManagementSection({ extension, actions }: ManagementSectionProps) {
             const message = getErrorMessage(err, 'Failed to uninstall the extension.');
             toast({ title: 'Uninstall Failed', description: message, variant: 'error' });
         }
-    }, [actions, extension.id, extension.name, navigate, toast]);
+    }, [actions, extension.id, extension.name, navigate, toast, instanceName]);
 
     return (
         <>
@@ -324,22 +307,8 @@ function ManagementSection({ extension, actions }: ManagementSectionProps) {
                 </h2>
 
                 <div className="extension-detail__management">
-                    {extension.managed && (
+                    {(extension.managed || hasUpdate) && (
                         <>
-                            <div className="extension-detail__management-row">
-                                <div className="extension-detail__management-label">
-                                    <Label>Auto-upgrade</Label>
-                                    <p className="extension-detail__management-help">
-                                        Automatically install new versions when available
-                                    </p>
-                                </div>
-                                <Switch
-                                    checked={extension.autoUpgrade}
-                                    onCheckedChange={handleAutoUpgradeChange}
-                                    aria-label="Toggle auto-upgrade"
-                                />
-                            </div>
-
                             <div className="extension-detail__management-row extension-detail__management-row--updates">
                                 <div className="extension-detail__management-label">
                                     <Label>Updates</Label>
@@ -410,8 +379,8 @@ function ManagementSection({ extension, actions }: ManagementSectionProps) {
                             Uninstall Extension
                         </Button>
                         <p className="extension-detail__management-help">
-                            Removes the extension's files and registration immediately. Restart Magpie to unload its
-                            currently running code.
+                            Removes the extension's files and registration immediately. Restart {instanceName} to unload
+                            its currently running code.
                         </p>
                     </div>
                 </div>
@@ -424,7 +393,11 @@ function ManagementSection({ extension, actions }: ManagementSectionProps) {
                 itemName={extension.name}
                 itemType="Extension"
                 title="Uninstall Extension"
-                description={<>Uninstall &quot;{extension.name}&quot;? Removal takes effect after Magpie restarts.</>}
+                description={
+                    <>
+                        Uninstall &quot;{extension.name}&quot;? Removal takes effect after {instanceName} restarts.
+                    </>
+                }
                 isDeleting={actions.isUninstalling}
                 confirmLabel="Uninstall"
                 confirmBusyLabel="Uninstalling..."

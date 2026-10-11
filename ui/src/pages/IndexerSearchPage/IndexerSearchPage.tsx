@@ -34,6 +34,7 @@ import {
 } from '@/hooks/useIndexerSearch';
 import { useAllIndexerConnections, useIndexers } from '@/hooks/useIndexers';
 import { useReleaseGrabGuard } from '@/hooks/useReleaseGrabGuard';
+import { useInstanceName } from '@/hooks/useInstanceName';
 import { getErrorMessage } from '@/lib/errors';
 import { formatFileSize } from '@/lib/formatSize';
 import { formatRelativeTime } from '@/lib/formatTime';
@@ -101,6 +102,7 @@ function describeSkippedConnections(data: IndexerSearchResult): string {
 }
 
 export function IndexerSearchPage() {
+    const instanceName = useInstanceName();
     useDocumentTitle('Interactive Search');
     const [searchParams, setSearchParams] = useSearchParams();
     const { toast } = useToast();
@@ -213,7 +215,7 @@ export function IndexerSearchPage() {
             }
 
             grabMutation.mutate(
-                { contentHierarchyItemId: content.id, release: candidate.release },
+                { contentHierarchyItemId: content.id, releaseId: candidate.release.id },
                 {
                     onSuccess: () => {
                         markGrabSucceeded(key);
@@ -251,7 +253,7 @@ export function IndexerSearchPage() {
             }
 
             matchMutation.mutate(
-                { contentHierarchyItemId: content.id, release: candidate.release },
+                { contentHierarchyItemId: content.id, releaseId: candidate.release.id },
                 {
                     onSuccess: () =>
                         toast({
@@ -595,13 +597,6 @@ export function IndexerSearchPage() {
                                 description="No selected indexer reported a release for this query."
                                 size="sm"
                             />
-                        ) : candidates.length === 0 ? (
-                            <EmptyState
-                                icon={<MagnifyingGlassIcon weight="thin" aria-hidden="true" />}
-                                title="No releases match the filters"
-                                description="Change or clear the result filters to show releases."
-                                size="sm"
-                            />
                         ) : (
                             <DataTable<IndexerSearchCandidate>
                                 className="indexer-search__results-table"
@@ -609,6 +604,14 @@ export function IndexerSearchPage() {
                                 data={candidates}
                                 size="sm"
                                 keepHeaderWhenEmpty
+                                emptyState={
+                                    <EmptyState
+                                        icon={<MagnifyingGlassIcon weight="thin" aria-hidden="true" />}
+                                        title="No releases match the filters"
+                                        description="Change or clear the result filters to show releases."
+                                        size="sm"
+                                    />
+                                }
                                 enableSorting
                                 sorting={sorting}
                                 onSortingChange={(updater) =>
@@ -641,7 +644,7 @@ export function IndexerSearchPage() {
                 title="Grab anyway?"
                 itemType="release"
                 itemName={pendingGrab?.candidate.release.title ?? ''}
-                description="Magpie did not assess this raw release against the selected content. Grab it anyway?"
+                description={`${instanceName} did not assess this raw release against the selected content. Grab it anyway?`}
                 confirmVariant="warning"
                 confirmLabel="Grab anyway"
                 confirmIcon={<DownloadSimpleIcon weight="bold" aria-hidden="true" />}

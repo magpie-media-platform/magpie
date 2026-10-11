@@ -1,0 +1,15 @@
+<Project Sdk="WixToolset.Sdk/5.0.2">
+
+  <PropertyGroup>
+    <InstallerPlatform>x64</InstallerPlatform>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <DefineConstants>ProductVersion=$(ProductVersion);AppDir=$(AppDir);ExtensionFeatures=$(ExtensionFeatures)</DefineConstants>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="WixToolset.Firewall.wixext" />
+    <PackageReference Include="WixToolset.UI.wixext" />
+    <PackageReference Include="WixToolset.Util.wixext" />
+  </ItemGroup>
+
+</Project>

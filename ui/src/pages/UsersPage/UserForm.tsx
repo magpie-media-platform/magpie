@@ -3,6 +3,7 @@ import { FloppyDiskIcon, XIcon } from '@phosphor-icons/react';
 
 import { useUnsavedChangesGuard } from '@/hooks/useUnsavedChangesGuard';
 import { useExternalChangeConflict } from '@/hooks/useExternalChangeConflict';
+import { useInstanceName } from '@/hooks/useInstanceName';
 
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
@@ -51,6 +52,7 @@ export function UserForm({
     isSubmitting = false,
     returnFocusRef,
 }: UserFormProps): ReactNode {
+    const instanceName = useInstanceName();
     const isEditing = Boolean(initialValues?.id);
     const title = isEditing ? 'Edit User' : 'Add User';
 
@@ -246,7 +248,7 @@ export function UserForm({
                             <p className="user-form__help">
                                 {isEditing
                                     ? 'The authentication provider cannot be changed.'
-                                    : 'Magpie creates local users here. External users are created by their authentication provider at first sign-in.'}
+                                    : `${instanceName} creates local users here. External users are created by their authentication provider at first sign-in.`}
                             </p>
                         </div>
 

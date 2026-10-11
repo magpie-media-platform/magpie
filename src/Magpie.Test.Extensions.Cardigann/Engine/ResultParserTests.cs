@@ -8,7 +8,9 @@ using AngleSharp.Html.Parser;
 using Magpie.Extensions.Cardigann.Engine;
 using Magpie.Models.Data;
 
-using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Logging;
+
+using Moq;
 
 using NUnit.Framework;
 
@@ -48,12 +50,15 @@ public sealed class ResultParserTests
         </tr></table>
         """;
 
+    private Mock<ILogger<ResultParser>> _logger = null!;
+
     private IResultParser _parser = null!;
 
     [SetUp]
     public void SetUp()
     {
-        _parser = new ResultParser(TimeProvider.System, NullLogger<ResultParser>.Instance);
+        _logger = new Mock<ILogger<ResultParser>>();
+        _parser = new ResultParser(TimeProvider.System, _logger.Object);
     }
 
     [Test]
@@ -750,6 +755,445 @@ public sealed class ResultParserTests
         {
             Assert.That(properties["poster"], Is.EqualTo("https://tracker.test/images/poster%2042.jpg"));
             Assert.That(properties["banner"], Is.EqualTo("data:image/svg+xml,%3Csvg%3E%3C/svg%3E"));
+        }
+    }
+
+    [Test]
+    public void Parse_BuildsTitleAndDownloadFromEarlierFields_WhenTextTemplatesReferenceResultAndConfig()
+    {
+        // Arrange
+        var definition = new CardigannDefinition { Id = "test" };
+        definition.Search.Rows.Selector = "tr.row";
+        definition.Search.Fields = new Dictionary<string, FieldDefinition>(StringComparer.Ordinal)
+        {
+            ["_id"] = new() { Selector = "td.id" },
+            ["title_phase1"] = new() { Selector = "td.title a" },
+            ["title"] = new() { Text = "{{ .Result.title_phase1 }}" },
+            ["download"] = new() { Text = "download.php?id={{ .Result._id }}&passkey={{ .Config.passkey }}" },
+        };
+
+        // Act
+        var releases = _parser.Parse(
+            """
+            <table><tr class="row">
+                <td class="id">42</td>
+                <td class="title"><a href="/details/42">Cool Movie</a></td>
+            </tr></table>
+            """,
+            definition,
+            new Uri("https://tracker.test/"),
+            new Dictionary<string, object?> { [".Config.passkey"] = "secret" });
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(releases, Has.Count.EqualTo(1));
+            Assert.That(releases[0].Title, Is.EqualTo("Cool Movie"));
+            Assert.That(
+                releases[0].InfoUrl?.ToString(),
+                Is.EqualTo("https://tracker.test/download.php?id=42&passkey=secret"));
+        }
+    }
+
+    [Test]
+    public void ParseJson_BuildsTitleAndDownloadFromEarlierFields_WhenTextTemplatesReferenceResultAndConfig()
+    {
+        // Arrange
+        var definition = new CardigannDefinition { Id = "test" };
+        definition.Search.Rows.Selector = "$";
+        definition.Search.Fields = new Dictionary<string, FieldDefinition>(StringComparer.Ordinal)
+        {
+            ["_id"] = new() { Selector = "id" },
+            ["title_phase1"] = new() { Selector = "name" },
+            ["title"] = new() { Text = "{{ .Result.title_phase1 }}" },
+            ["download"] = new() { Text = "download.php?id={{ .Result._id }}&passkey={{ .Config.passkey }}" },
+        };
+
+        // Act
+        var releases = _parser.ParseJson(
+            """[{"id":42,"name":"Cool Movie"}]""",
+            definition,
+            new Uri("https://tracker.test/"),
+            new Dictionary<string, object?> { [".Config.passkey"] = "secret" });
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(releases, Has.Count.EqualTo(1));
+            Assert.That(releases[0].Title, Is.EqualTo("Cool Movie"));
+            Assert.That(
+                releases[0].InfoUrl?.ToString(),
+                Is.EqualTo("https://tracker.test/download.php?id=42&passkey=secret"));
+        }
+    }
+
+    [Test]
+    public void Parse_SkipsFiltersAndRow_WhenOptionalFieldMatchesNothingAndTitleReadsIt()
+    {
+        // Arrange
+        var definition = new CardigannDefinition { Id = "test" };
+        definition.Search.Rows.Selector = "tr.row";
+        definition.Search.Fields = new Dictionary<string, FieldDefinition>(StringComparer.Ordinal)
+        {
+            ["title_phase1"] = new()
+            {
+                Selector = "td.title",
+                Optional = true,
+                Filters = [new FieldFilter { Name = "append", Args = " Spanish" }],
+            },
+            ["title"] = new() { Text = "{{ .Result.title_phase1 }}" },
+            ["download"] = new() { Text = "download.php?id=1" },
+        };
+
+        // Act
+        var releases = _parser.Parse(
+            """
+            <table>
+                <tr class="row"><td class="title">Cool Movie</td></tr>
+                <tr class="row"><td class="other">Nothing</td></tr>
+            </table>
+            """,
+            definition,
+            new Uri("https://tracker.test/"));
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(releases, Has.Count.EqualTo(1));
+            Assert.That(releases[0].Title, Is.EqualTo("Cool Movie Spanish"));
+        }
+    }
+
+    [Test]
+    public void ParseJson_SkipsFiltersAndRow_WhenOptionalFieldMatchesNothingAndTitleReadsIt()
+    {
+        // Arrange
+        var definition = new CardigannDefinition { Id = "test" };
+        definition.Search.Rows.Selector = "$";
+        definition.Search.Fields = new Dictionary<string, FieldDefinition>(StringComparer.Ordinal)
+        {
+            ["title_phase1"] = new()
+            {
+                Selector = "name",
+                Optional = true,
+                Filters = [new FieldFilter { Name = "append", Args = " Spanish" }],
+            },
+            ["title"] = new() { Text = "{{ .Result.title_phase1 }}" },
+            ["download"] = new() { Text = "download.php?id=1" },
+        };
+
+        // Act
+        var releases = _parser.ParseJson(
+            """[{"name":"Cool Movie"},{"other":"Nothing"}]""",
+            definition,
+            new Uri("https://tracker.test/"),
+            new Dictionary<string, object?>());
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(releases, Has.Count.EqualTo(1));
+            Assert.That(releases[0].Title, Is.EqualTo("Cool Movie Spanish"));
+        }
+    }
+
+    [Test]
+    public void Parse_RendersDefaultTemplate_WhenFieldMatchesNothing()
+    {
+        // Arrange
+        var definition = new CardigannDefinition { Id = "test" };
+        definition.Search.Rows.Selector = "tr.row";
+        definition.Search.Fields = new Dictionary<string, FieldDefinition>(StringComparer.Ordinal)
+        {
+            ["_id"] = new() { Selector = "td.id" },
+            ["title"] = new() { Selector = "td.title", Default = "Missing title for {{ .Result._id }}" },
+            ["download"] = new() { Text = "download.php?id={{ .Result._id }}" },
+        };
+
+        // Act
+        var releases = _parser.Parse(
+            """<table><tr class="row"><td class="id">42</td></tr></table>""",
+            definition,
+            new Uri("https://tracker.test/"));
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(releases, Has.Count.EqualTo(1));
+            Assert.That(releases[0].Title, Is.EqualTo("Missing title for 42"));
+        }
+    }
+
+    [Test]
+    public void ParseJson_RendersDefaultTemplate_WhenFieldMatchesNothing()
+    {
+        // Arrange
+        var definition = new CardigannDefinition { Id = "test" };
+        definition.Search.Rows.Selector = "$";
+        definition.Search.Fields = new Dictionary<string, FieldDefinition>(StringComparer.Ordinal)
+        {
+            ["_id"] = new() { Selector = "id" },
+            ["title"] = new() { Selector = "name", Default = "Missing title for {{ .Result._id }}" },
+            ["download"] = new() { Text = "download.php?id={{ .Result._id }}" },
+        };
+
+        // Act
+        var releases = _parser.ParseJson(
+            """[{"id":42}]""",
+            definition,
+            new Uri("https://tracker.test/"),
+            new Dictionary<string, object?>());
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(releases, Has.Count.EqualTo(1));
+            Assert.That(releases[0].Title, Is.EqualTo("Missing title for 42"));
+        }
+    }
+
+    [TestCase("append", " {{ .Result._id }}", "Cool Movie 42")]
+    [TestCase("prepend", "{{ .Config.tag }} ", "x Cool Movie")]
+    [TestCase("replace", new object[] { "Movie", "{{ .Config.tag }}" }, "Cool x")]
+    [TestCase("re_replace", new object[] { "Movie", "{{ .Result._id }}" }, "Cool 42")]
+    [TestCase(
+        "re_replace",
+        new object[] { "^(.+?) (.+)$", "$1{{ if .Config.tag }} {{ .Result._id }}{{ else }} $2{{ end }}" },
+        "Cool 42")]
+    public void Parse_RendersFilterArgumentTemplates_WhenFilterArgumentsHaveTemplates(
+        string filterName,
+        object filterArgs,
+        string expectedTitle)
+    {
+        // Arrange
+        var definition = new CardigannDefinition { Id = "test" };
+        definition.Search.Rows.Selector = "tr.row";
+        definition.Search.Fields = new Dictionary<string, FieldDefinition>(StringComparer.Ordinal)
+        {
+            ["_id"] = new() { Selector = "td.id" },
+            ["title"] = new()
+            {
+                Selector = "td.title",
+                Filters = [new FieldFilter { Name = filterName, Args = filterArgs }],
+            },
+            ["download"] = new() { Text = "download.php?id={{ .Result._id }}" },
+        };
+
+        // Act
+        var releases = _parser.Parse(
+            """<table><tr class="row"><td class="id">42</td><td class="title">Cool Movie</td></tr></table>""",
+            definition,
+            new Uri("https://tracker.test/"),
+            new Dictionary<string, object?> { [".Config.tag"] = "x" });
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(releases, Has.Count.EqualTo(1));
+            Assert.That(releases[0].Title, Is.EqualTo(expectedTitle));
+        }
+    }
+
+    [TestCase("append", " {{ .Result._id }}", "Cool Movie 42")]
+    [TestCase("prepend", "{{ .Config.tag }} ", "x Cool Movie")]
+    [TestCase("replace", new object[] { "Movie", "{{ .Config.tag }}" }, "Cool x")]
+    [TestCase("re_replace", new object[] { "Movie", "{{ .Result._id }}" }, "Cool 42")]
+    [TestCase(
+        "re_replace",
+        new object[] { "^(.+?) (.+)$", "$1{{ if .Config.tag }} {{ .Result._id }}{{ else }} $2{{ end }}" },
+        "Cool 42")]
+    public void ParseJson_RendersFilterArgumentTemplates_WhenFilterArgumentsHaveTemplates(
+        string filterName,
+        object filterArgs,
+        string expectedTitle)
+    {
+        // Arrange
+        var definition = new CardigannDefinition { Id = "test" };
+        definition.Search.Rows.Selector = "$";
+        definition.Search.Fields = new Dictionary<string, FieldDefinition>(StringComparer.Ordinal)
+        {
+            ["_id"] = new() { Selector = "id" },
+            ["title"] = new()
+            {
+                Selector = "name",
+                Filters = [new FieldFilter { Name = filterName, Args = filterArgs }],
+            },
+            ["download"] = new() { Text = "download.php?id={{ .Result._id }}" },
+        };
+
+        // Act
+        var releases = _parser.ParseJson(
+            """[{"id":42,"name":"Cool Movie"}]""",
+            definition,
+            new Uri("https://tracker.test/"),
+            new Dictionary<string, object?> { [".Config.tag"] = "x" });
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(releases, Has.Count.EqualTo(1));
+            Assert.That(releases[0].Title, Is.EqualTo(expectedTitle));
+        }
+    }
+
+    [Test]
+    public void Parse_ReturnsOneReleasePerRowGroup_WhenRowsAfterJoinsTheNextRows()
+    {
+        // Arrange
+        const string yaml = """
+            id: tokyotosho
+            name: Tokyo Toshokan
+            type: public
+            links:
+              - https://www.tokyotosho.info/
+            caps:
+              categorymappings:
+                - {id: 1, cat: TV/Anime, desc: "Anime"}
+                - {id: 7, cat: TV/Anime, desc: "Raw Anime"}
+            search:
+              paths:
+                - path: "{{ if .Keywords }}search.php{{ else }}index.php{{ end }}"
+              rows:
+                selector: "table.listing tr.category_0"
+                after: 1
+                filters:
+                  - name: andmatch
+              fields:
+                category:
+                  selector: a[href*="?cat="]
+                  attribute: href
+                  filters:
+                    - name: regexp
+                      args: (\d+)
+                title:
+                  selector: td.desc-top a[type="application/x-bittorrent"]
+                details:
+                  selector: a[href^="details.php?id="]
+                  attribute: href
+                download:
+                  selector: td.desc-top a[type="application/x-bittorrent"]
+                  attribute: href
+                magnet:
+                  selector: a[href^="magnet:?xt="]
+                  attribute: href
+                  optional: true
+                size:
+                  selector: td.desc-bot
+                  filters:
+                    - name: split
+                      args: ["|", 1]
+                    - name: regexp
+                      args: "Size: (.+?) ?$"
+                date:
+                  selector: td.desc-bot
+                  filters:
+                    - name: split
+                      args: ["|", 2]
+                    - name: regexp
+                      args: "Date: (.+?) ?$"
+                    - name: replace
+                      args: ["UTC", "+00:00"]
+                    - name: dateparse
+                      args: "yyyy-MM-dd HH:mm zzz"
+                seeders:
+                  selector: td.stats > span:nth-child(1)
+                leechers:
+                  selector: td.stats > span:nth-child(2)
+            """;
+        var definition = new CardigannLoader().LoadString(yaml, "tokyotosho");
+
+        // Act
+        var releases = _parser.Parse(
+            """
+            <table class="listing">
+                <tr class="category_0">
+                    <td rowspan="2"><a href="/?cat=1"><span class="sprite_cat-anime"></span></a></td>
+                    <td class="desc-top">
+                        <a href="magnet:?xt=urn:btih:abcdef0123456789abcdef0123456789abcdef01"><span></span></a>
+                        <a type="application/x-bittorrent" href="https://nyaa.test/1.torrent">Cool Show - 01</a>
+                    </td>
+                    <td class="web"><a href="details.php?id=101">Details</a></td>
+                </tr>
+                <tr class="category_0">
+                    <td class="desc-bot">Submitter: anon | Size: 1.37GB | Date: 2026-10-06 17:30 UTC | Comment: </td>
+                    <td class="stats">S: <span>12</span> L: <span>3</span> C: <span>40</span> ID: 101</td>
+                </tr>
+                <tr class="shade category_0">
+                    <td rowspan="2"><a href="/?cat=7"><span class="sprite_cat-raw"></span></a></td>
+                    <td class="desc-top">
+                        <a type="application/x-bittorrent" href="https://nyaa.test/2.torrent">Other Show - 02</a>
+                    </td>
+                    <td class="web"><a href="details.php?id=102">Details</a></td>
+                </tr>
+                <tr class="shade category_0">
+                    <td class="desc-bot">Submitter: anon | Size: 350MB | Date: 2026-10-05 08:15 UTC | Comment: </td>
+                    <td class="stats">S: <span>4</span> L: <span>1</span> C: <span>9</span> ID: 102</td>
+                </tr>
+            </table>
+            """,
+            definition,
+            new Uri("https://tracker.test/"));
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(releases, Has.Count.EqualTo(2));
+            Assert.That(releases[0].Title, Is.EqualTo("Cool Show - 01"));
+            Assert.That(releases[0].ExternalId, Is.EqualTo(Btih));
+            Assert.That(releases[0].Categories, Is.EqualTo(["TV/Anime"]));
+            Assert.That(releases[0].Size, Is.EqualTo(1471026299));
+            Assert.That(releases[0].PublishDate, Is.EqualTo(new DateTime(2026, 10, 6, 17, 30, 0, DateTimeKind.Utc)));
+            Assert.That(releases[0].Properties, Does.Contain("\"seeders\":\"12\""));
+            Assert.That(releases[0].Properties, Does.Contain("\"leechers\":\"3\""));
+            Assert.That(releases[1].Title, Is.EqualTo("Other Show - 02"));
+            Assert.That(releases[1].InfoUrl, Is.EqualTo(new Uri("https://nyaa.test/2.torrent")));
+            Assert.That(releases[1].Categories, Is.EqualTo(["TV/Anime"]));
+            Assert.That(releases[1].Size, Is.EqualTo(367001600));
+            Assert.That(releases[1].PublishDate, Is.EqualTo(new DateTime(2026, 10, 5, 8, 15, 0, DateTimeKind.Utc)));
+            Assert.That(releases[1].Properties, Does.Contain("\"seeders\":\"4\""));
+            Assert.That(releases[1].Properties, Does.Contain("\"leechers\":\"1\""));
+            _logger.Verify(
+                logger => logger.Log(
+                    LogLevel.Warning,
+                    It.IsAny<EventId>(),
+                    It.IsAny<It.IsAnyType>(),
+                    It.IsAny<Exception?>(),
+                    It.IsAny<Func<It.IsAnyType, Exception?, string>>()),
+                Times.Never);
+        }
+    }
+
+    [Test]
+    public void Parse_ReturnsOneRelease_WhenRowsAfterIsLargerThanTheRowCount()
+    {
+        // Arrange
+        var definition = new CardigannDefinition { Id = "test" };
+        definition.Search.Rows.Selector = "tr.release";
+        definition.Search.Rows.After = int.MaxValue;
+        definition.Search.Fields = new Dictionary<string, FieldDefinition>(StringComparer.Ordinal)
+        {
+            ["title"] = new() { Selector = "td.title" },
+            ["download"] = new() { Selector = "a.download", Attribute = "href" },
+        };
+
+        // Act
+        var releases = _parser.Parse(
+            """
+            <table>
+                <tr class="release"><td class="title">Cool Movie</td></tr>
+                <tr class="release"><td><a class="download" href="/download/1">grab</a></td></tr>
+            </table>
+            """,
+            definition,
+            new Uri("https://tracker.test/"),
+            new Dictionary<string, object?>());
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(releases, Has.Count.EqualTo(1));
+            Assert.That(releases[0].Title, Is.EqualTo("Cool Movie"));
+            Assert.That(releases[0].InfoUrl, Is.EqualTo(new Uri("https://tracker.test/download/1")));
         }
     }
 }

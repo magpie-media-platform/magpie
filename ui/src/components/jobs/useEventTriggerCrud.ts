@@ -33,6 +33,7 @@ export function useEventTriggerCrud({ scope = ADMIN_SCOPE, queryParams }: UseEve
         isUpdating,
         isDeleting,
         isLoading,
+        error,
         refetch,
     } = useEventTriggers(queryParams);
 
@@ -219,6 +220,7 @@ export function useEventTriggerCrud({ scope = ADMIN_SCOPE, queryParams }: UseEve
     return {
         triggers,
         isLoading,
+        error,
         refetch,
         togglingTriggers,
         formOpen,

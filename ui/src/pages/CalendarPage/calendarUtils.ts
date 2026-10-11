@@ -28,7 +28,7 @@ export function getFirstDayOfWeek(locale?: string): number {
             return firstDay === 7 ? 0 : firstDay;
         }
     } catch {
-        // Not every engine supplies Intl.Locale week info, so an unsupported engine falls back to Sunday.
+        /* empty */
     }
     return 0;
 }

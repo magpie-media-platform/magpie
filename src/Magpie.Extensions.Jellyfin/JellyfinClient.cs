@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
+using System.Net.Http.Headers;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -28,7 +29,6 @@ internal sealed class JellyfinClient(
     private const string ItemsPath = "Items";
     private const string MusicBrainzSource = "musicbrainz";
 
-    // An item also holds the MusicBrainz ids of its artists and album. Only the keys for its type identify the item.
     private static readonly Dictionary<string, string[]> MusicBrainzProviderKeys = new(StringComparer.OrdinalIgnoreCase)
     {
         ["MusicArtist"] = ["MusicBrainzArtist"],
@@ -36,15 +36,13 @@ internal sealed class JellyfinClient(
         ["Audio"] = ["MusicBrainzRecording", "MusicBrainzTrack"]
     };
 
-    public const string ApiKeyHeader = "X-Emby-Token";
-
     private readonly HttpClient _http = http;
     private readonly ILogger<JellyfinClient> _logger = logger;
 
     private static HttpRequestMessage CreateRequest(JellyfinSettings settings, HttpMethod method, string path)
     {
         var request = new HttpRequestMessage(method, new Uri(settings.Host, path));
-        request.Headers.Add(ApiKeyHeader, settings.ApiKey);
+        request.Headers.Authorization = new AuthenticationHeaderValue("MediaBrowser", $"Token=\"{settings.ApiKey}\"");
         return request;
     }
 

@@ -28,6 +28,7 @@ import { formatRelativeTime } from '@/lib/formatTime';
 import { parseUtcInstant } from '@/lib/dateParsing';
 import { getErrorMessage } from '@/lib/errors';
 import { useUsers, type UserQueryParams } from '@/hooks/useUsers';
+import { useInstanceName } from '@/hooks/useInstanceName';
 import type { UserItem } from '@/types';
 import { roleVariants } from '@/types';
 
@@ -69,6 +70,7 @@ interface UserManagementProps {
 }
 
 export function UserManagement({ queryParams, page = 1, pageCount = 1, onPageChange }: UserManagementProps = {}) {
+    const instanceName = useInstanceName();
     const { user: authUser } = useAuth();
     const authUserId = authUser?.id;
     const [userFormOpen, , openUserForm, closeUserForm] = useToggle();
@@ -163,7 +165,7 @@ export function UserManagement({ queryParams, page = 1, pageCount = 1, onPageCha
             await deleteUser(deletingUser.id);
             toast({
                 title: 'User deleted',
-                description: `Magpie deleted ${deletingUser.username}.`,
+                description: `${instanceName} deleted ${deletingUser.username}.`,
                 variant: 'success',
             });
         } catch {
@@ -176,7 +178,7 @@ export function UserManagement({ queryParams, page = 1, pageCount = 1, onPageCha
             setIsDeleting(false);
             setDeletingUser(null);
         }
-    }, [deletingUser, deleteUser, toast]);
+    }, [deletingUser, deleteUser, toast, instanceName]);
 
     const handleCancelDeleteUser = useCallback(() => {
         setDeletingUser(null);
@@ -192,7 +194,7 @@ export function UserManagement({ queryParams, page = 1, pageCount = 1, onPageCha
                     });
                     toast({
                         title: 'User updated',
-                        description: `Magpie updated ${values.username}.`,
+                        description: `${instanceName} updated ${values.username}.`,
                         variant: 'success',
                     });
                 } else {
@@ -204,7 +206,7 @@ export function UserManagement({ queryParams, page = 1, pageCount = 1, onPageCha
                     });
                     toast({
                         title: 'User created',
-                        description: `Magpie created ${values.username}.`,
+                        description: `${instanceName} created ${values.username}.`,
                         variant: 'success',
                     });
                 }
@@ -218,7 +220,7 @@ export function UserManagement({ queryParams, page = 1, pageCount = 1, onPageCha
                 throw error;
             }
         },
-        [createUser, updateUser, toast, closeUserForm],
+        [createUser, updateUser, toast, closeUserForm, instanceName],
     );
 
     const handleToggleUserEnabled = useCallback(

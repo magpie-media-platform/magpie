@@ -10,6 +10,7 @@ export interface FieldState {
     genre: string;
     tag: string;
     title: string;
+    titlePrefix: string;
     kind: string;
     relationshipKind: string;
     relationshipName: string;
@@ -27,6 +28,7 @@ export const EMPTY_FIELDS: FieldState = {
     genre: '',
     tag: '',
     title: '',
+    titlePrefix: '',
     kind: '',
     relationshipKind: '',
     relationshipName: '',
@@ -234,6 +236,9 @@ export function buildQuery(fields: FieldState, context: 'content' | 'subject'): 
     if (fields.title) {
         clauses.push(`title contains "${escapeQueryString(fields.title)}"`);
     }
+    if (fields.titlePrefix && context === 'content') {
+        clauses.push(`title startswith "${escapeQueryString(fields.titlePrefix)}"`);
+    }
     if (fields.genre && context === 'content') {
         clauses.push(`genre has "${escapeQueryString(fields.genre)}"`);
     }
@@ -350,6 +355,13 @@ export function parseQuery(query: string, context: 'content' | 'subject'): Field
             continue;
         }
 
+        const titlePrefixMatch = trimmed.match(/^title\s+startswith\s+"((?:\\.|[^"\\])*)"$/i);
+        if (titlePrefixMatch && context === 'content') {
+            if (state.titlePrefix || !titlePrefixMatch[1]) return null;
+            state.titlePrefix = unescapeQueryString(titlePrefixMatch[1]);
+            continue;
+        }
+
         const genreMatch = trimmed.match(/^genre\s+has\s+"((?:\\.|[^"\\])*)"$/i);
         if (genreMatch && context === 'content') {
             if (state.genre || !genreMatch[1]) return null;
@@ -370,9 +382,14 @@ export function parseQuery(query: string, context: 'content' | 'subject'): Field
     return state;
 }
 
-export function isSimpleQuery(query: string, context: 'content' | 'subject'): boolean {
+export function isSimpleQuery(
+    query: string,
+    context: 'content' | 'subject',
+    options: { allowTitlePrefix?: boolean } = {},
+): boolean {
     if (!query.trim()) {
         return true;
     }
-    return parseQuery(query, context) !== null;
+    const fields = parseQuery(query, context);
+    return fields !== null && (options.allowTitlePrefix === true || !fields.titlePrefix);
 }

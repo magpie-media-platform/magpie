@@ -2183,6 +2183,12 @@ internal sealed class QueryPlanner : IQueryPlanner
             dispositions.Add("ancestorId:constant-root");
         }
 
+        if (criteria.Subtree.Some.Count > 0 || criteria.Subtree.None.Count > 0)
+        {
+            PlanAbsentCollection(criteria.Subtree, planned);
+            dispositions.Add("subtree:constant-absent");
+        }
+
         if (criteria.Name.And.Any())
         {
             dispositions.Add("name:candidate-title");

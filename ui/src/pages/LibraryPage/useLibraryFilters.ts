@@ -13,6 +13,7 @@ import { type LibraryLevelDefinition, type LibraryTypeDefinition } from '@/hooks
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { useLiveUrlFilter } from '@/hooks/useLiveUrlFilter';
 import { useToggle } from '@/hooks/useToggle';
+import { useInstanceName } from '@/hooks/useInstanceName';
 import type { User } from '@/auth';
 import { parseMagpieQl } from '@/lib/magpieQl';
 import { canEditOwned } from '@/lib/ownership';
@@ -58,6 +59,7 @@ export function useLibraryFilters({
     isAdmin,
     canWriteFilters,
 }: UseLibraryFiltersArgs) {
+    const instanceName = useInstanceName();
     const { toast } = useToast();
 
     const appliedSavedFilterId = params.savedFilter;
@@ -193,12 +195,8 @@ export function useLibraryFilters({
     const createFilterMutation = useCreateContentFilter();
     const updateFilterMutation = useUpdateContentFilter();
 
-    const handleFilterQueryChange = useCallback(
-        (query: string, immediate = false) => {
-            if (query.length > 0) {
-                setFilterBarExpanded(true);
-            }
-
+    const applyFilterQuery = useCallback(
+        (query: string, immediate: boolean) => {
             const reference = referencedSavedFilter;
 
             setDivergedFromId(
@@ -207,6 +205,17 @@ export function useLibraryFilters({
             liveFilter.change(query, immediate);
         },
         [liveFilter, referencedSavedFilter],
+    );
+
+    const handleFilterQueryChange = useCallback(
+        (query: string, immediate = false) => {
+            if (query.length > 0) {
+                setFilterBarExpanded(true);
+            }
+
+            applyFilterQuery(query, immediate);
+        },
+        [applyFilterQuery],
     );
 
     const handleSortingChange = useCallback(
@@ -276,6 +285,11 @@ export function useLibraryFilters({
                 ),
         }),
         [setFilterField],
+    );
+
+    const handleTitlePrefixChange = useCallback(
+        (prefix: string) => applyFilterQuery(setContentFilter(filterQuery, 'titlePrefix', prefix), true),
+        [applyFilterQuery, filterQuery],
     );
 
     const missingSavedFilterNoticeRef = useRef(false);
@@ -381,14 +395,14 @@ export function useLibraryFilters({
                 closeSaveFilterDialog();
                 toast({
                     title: 'Filter saved',
-                    description: `Magpie saved "${name}" to filters.`,
+                    description: `${instanceName} saved "${name}" to filters.`,
                     variant: 'success',
                 });
             } catch {
                 setSaveFilterError('Failed to save filter. Please try again.');
             }
         },
-        [closeSaveFilterDialog, filterQuery, createFilterMutation, updateParams, toast, liveFilter],
+        [closeSaveFilterDialog, filterQuery, createFilterMutation, updateParams, toast, liveFilter, instanceName],
     );
 
     const handleUpdateFilter = useCallback(async () => {
@@ -434,7 +448,7 @@ export function useLibraryFilters({
             closeSaveFilterDialog();
             toast({
                 title: 'Filter updated',
-                description: `Magpie updated "${referencedSavedFilter.name}".`,
+                description: `${instanceName} updated "${referencedSavedFilter.name}".`,
                 variant: 'success',
             });
         } catch {
@@ -448,6 +462,7 @@ export function useLibraryFilters({
         closeSaveFilterDialog,
         toast,
         liveFilter,
+        instanceName,
     ]);
 
     return {
@@ -459,6 +474,8 @@ export function useLibraryFilters({
         retrySavedFilters,
         filterQuery,
         debouncedFilterQuery,
+        titlePrefix: readContentFilter(filterQuery, 'titlePrefix'),
+        handleTitlePrefixChange,
         sortField,
         sortDir,
         sorting,

@@ -408,15 +408,15 @@ internal sealed class CardigannIndexerIntegration(
             body = await FetchBodyAsync(method, targetUri, null, settings, baseUri, cancellationToken)
                 .ConfigureAwait(false);
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             throw;
         }
-        catch (HttpRequestException ex)
+        catch (Exception ex) when (ex is HttpRequestException or OperationCanceledException)
         {
             logger.LogWarning(
                 ex,
-                "Cardigann detail fetch skipped {Tracker} row {Title} at {Uri} after an HTTP error.",
+                "Cardigann detail fetch skipped {Tracker} row {Title} at {Uri} after a failed request.",
                 definition.Id,
                 release.Title,
                 targetUri);
@@ -540,6 +540,26 @@ internal sealed class CardigannIndexerIntegration(
         }
     }
 
+    public async Task<HttpResponseMessage?> FetchPayloadAsync(
+        Uri payloadUrl,
+        IReadOnlyDictionary<string, string> settings,
+        CancellationToken cancellationToken)
+    {
+        if (definition.Login is not { Captcha: null })
+        {
+            return null;
+        }
+
+        return await SendWithSessionAsync(
+            HttpMethod.Get,
+            payloadUrl,
+            null,
+            settings,
+            ResolveBaseUri(settings),
+            cancellationToken)
+            .ConfigureAwait(false);
+    }
+
     private async Task<string> FetchBodyAsync(
         HttpMethod method,
         Uri requestUri,
@@ -548,17 +568,53 @@ internal sealed class CardigannIndexerIntegration(
         Uri baseUri,
         CancellationToken cancellationToken)
     {
+        using var response = await SendWithSessionAsync(
+            method,
+            requestUri,
+            formBody,
+            settings,
+            baseUri,
+            cancellationToken)
+            .ConfigureAwait(false);
+
+        var cloudflareHint = response.DetectCloudflareChallenge();
+        if (cloudflareHint is not null)
+        {
+            throw new HttpRequestException(
+                $"Cardigann tracker {definition.Id} is behind Cloudflare ({cloudflareHint}) and the " +
+                "challenge could not be solved.");
+        }
+
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new HttpRequestException(
+                $"Cardigann tracker {definition.Id} returned HTTP {(int)response.StatusCode} for {requestUri}.");
+        }
+
+        return await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<HttpResponseMessage> SendWithSessionAsync(
+        HttpMethod method,
+        Uri requestUri,
+        string? formBody,
+        IReadOnlyDictionary<string, string> settings,
+        Uri baseUri,
+        CancellationToken cancellationToken)
+    {
         var login = definition.Login is { Captcha: null } ? definition.Login : null;
+        var sessionKey = SessionKey(baseUri, settings);
         for (var attempt = 0; ; attempt++)
         {
+            var generation = sessions.GetSessionGeneration(sessionKey);
             if (login is not null)
             {
                 await EnsureLoginAsync(baseUri, settings, forceRefresh: false, throwOnFailure: true, cancellationToken)
                     .ConfigureAwait(false);
             }
 
-            using var response = await sessions.SendAsync(
-                SessionKey(baseUri, settings),
+            var response = await sessions.SendAsync(
+                sessionKey,
                 baseUri,
                 method,
                 requestUri,
@@ -567,30 +623,20 @@ internal sealed class CardigannIndexerIntegration(
                 captureCookies: login is not null,
                 cancellationToken)
                 .ConfigureAwait(false);
-
-            var cloudflareHint = response.DetectCloudflareChallenge();
-            if (cloudflareHint is not null)
+            if (login is null || attempt > 0 || response.DetectCloudflareChallenge() is not null)
             {
-                throw new HttpRequestException(
-                    $"Cardigann tracker {definition.Id} is behind Cloudflare ({cloudflareHint}) and the " +
-                    "challenge could not be solved.");
+                return response;
             }
 
             var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
-            if (login is not null && attempt == 0 && sessions.IsLoggedOut(login, response.StatusCode, body))
+            if (!sessions.IsLoggedOut(login, response.StatusCode, body))
             {
-                logger.LogDebug("Cardigann {Tracker} response shows a logged-out session", definition.Id);
-                sessions.InvalidateSession(SessionKey(baseUri, settings));
-                continue;
+                return response;
             }
 
-            if (!response.IsSuccessStatusCode)
-            {
-                throw new HttpRequestException(
-                    $"Cardigann tracker {definition.Id} returned HTTP {(int)response.StatusCode} for {requestUri}.");
-            }
-
-            return body;
+            response.Dispose();
+            logger.LogDebug("Cardigann {Tracker} response shows a logged-out session", definition.Id);
+            sessions.InvalidateSession(sessionKey, generation);
         }
     }
 
@@ -763,7 +809,16 @@ internal sealed class CardigannIndexerIntegration(
             var value = settings.TryGetValue(setting.Name, out var configured) && !string.IsNullOrEmpty(configured)
                 ? configured
                 : setting.Default?.ToString() ?? string.Empty;
-            vars[$".Config.{setting.Name}"] = value;
+            if (setting.Type == "checkbox")
+            {
+                vars[$".Config.{setting.Name}"] = bool.TryParse(value, out var isChecked) && isChecked
+                    ? CardigannTemplateExtensions.TrueVar
+                    : null;
+            }
+            else
+            {
+                vars[$".Config.{setting.Name}"] = value;
+            }
         }
     }
 

@@ -58,9 +58,11 @@ import { Role } from '@/auth';
 import { testEffectivePermissions } from '@/test/permissions';
 
 let sessionRole: Role = Role.Admin;
+let instanceName = 'Magpie';
 
 beforeEach(() => {
     sessionRole = Role.Admin;
+    instanceName = 'Magpie';
     tokenStorage.set(
         `${btoa(JSON.stringify({ alg: 'none' }))}.${btoa(
             JSON.stringify({ exp: Math.floor(Date.now() / 1000) + 3600, sub: 'user-1', name: 'admin', role: 3 }),
@@ -73,6 +75,12 @@ beforeEach(() => {
             const url = String(input);
             if (url.endsWith('/auth/permissions')) {
                 return new Response(JSON.stringify(testEffectivePermissions(sessionRole)), {
+                    status: 200,
+                    headers: { 'content-type': 'application/json' },
+                });
+            }
+            if (url.endsWith('/system/instance-name')) {
+                return new Response(JSON.stringify(instanceName), {
                     status: 200,
                     headers: { 'content-type': 'application/json' },
                 });
@@ -118,11 +126,27 @@ describe('App', () => {
         });
     });
 
+    it('renders the instance name in the header brand when the instance name is set', async () => {
+        instanceName = 'Home Lab';
+        render(<App />);
+
+        const header = await screen.findByRole('banner');
+        await waitFor(() => expect(within(header).getByRole('link', { name: 'Home Lab' })).toBeInTheDocument());
+        expect(within(header).queryByText('Magpie')).not.toBeInTheDocument();
+    });
+
+    it('renders Magpie in the header brand when the instance name is empty', async () => {
+        render(<App />);
+
+        const header = await screen.findByRole('banner');
+        expect(within(header).getByRole('link', { name: 'Magpie' })).toBeInTheDocument();
+    });
+
     it('renders the library search action in the header', async () => {
         render(<App />);
 
         const header = await screen.findByRole('banner');
-        expect(within(header).getByRole('button', { name: 'Search library' })).toBeInTheDocument();
+        expect(within(header).getByRole('button', { name: 'Search' })).toBeInTheDocument();
     });
 
     it('renders the sidebar navigation', async () => {
@@ -160,6 +184,19 @@ describe('App', () => {
 
         const addContentLink = within(screen.getByRole('complementary')).getByRole('link', { name: 'Add content' });
         expect(addContentLink).toHaveAttribute('href', '/library/add');
+    });
+
+    it('renders the Filters sidebar link with the saved filters tooltip', async () => {
+        // Arrange
+        render(<App />);
+
+        // Act
+        const filtersLink = await within(await screen.findByRole('complementary')).findByRole('link', {
+            name: 'Filters',
+        });
+
+        // Assert
+        expect(filtersLink).toHaveAttribute('title', 'Create and manage saved filters.');
     });
 
     it('renders the mobile bottom nav Add content link to the same route as the sidebar', async () => {

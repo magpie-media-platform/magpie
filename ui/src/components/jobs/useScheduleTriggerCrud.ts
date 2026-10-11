@@ -39,6 +39,7 @@ export function useScheduleTriggerCrud({
         isUpdating,
         isDeleting,
         isLoading,
+        error,
         refetch,
     } = useScheduleTriggers(queryParams);
 
@@ -214,6 +215,7 @@ export function useScheduleTriggerCrud({
     return {
         triggers,
         isLoading,
+        error,
         refetch,
         runningJobs,
         togglingTriggers,

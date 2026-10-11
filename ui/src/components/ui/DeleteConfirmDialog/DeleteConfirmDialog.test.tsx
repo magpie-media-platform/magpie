@@ -1,6 +1,6 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { TooltipProvider } from '../Tooltip';
 import { DeleteConfirmDialog } from './DeleteConfirmDialog';
@@ -14,6 +14,10 @@ const defaultProps = {
 };
 
 describe('DeleteConfirmDialog', () => {
+    afterEach(() => {
+        vi.restoreAllMocks();
+    });
+
     it('renders title with item type', async () => {
         render(<DeleteConfirmDialog {...defaultProps} />);
 
@@ -123,6 +127,36 @@ describe('DeleteConfirmDialog', () => {
 
         expect(screen.getByRole('button', { name: 'Cancel' })).toBeDisabled();
         expect(screen.getByRole('button', { name: /deleting/i })).toBeDisabled();
+    });
+
+    it('disables only the delete button when confirmDisabled is true', async () => {
+        render(<DeleteConfirmDialog {...defaultProps} confirmDisabled />);
+
+        await waitFor(() => {
+            expect(screen.getByRole('dialog')).toBeInTheDocument();
+        });
+
+        expect(screen.getByRole('button', { name: 'Cancel' })).toBeEnabled();
+        expect(screen.getByRole('button', { name: /^delete$/i })).toBeDisabled();
+    });
+
+    it('renders its children between the toggle and the buttons', async () => {
+        render(
+            <DeleteConfirmDialog
+                {...defaultProps}
+                extraToggle={{ label: 'Also delete files', checked: true, onChange: vi.fn() }}
+            >
+                <p>File list</p>
+            </DeleteConfirmDialog>,
+        );
+
+        const dialog = await screen.findByRole('dialog');
+
+        const toggle = dialog.querySelector('[data-component="delete-confirm-toggle"]');
+        const list = screen.getByText('File list');
+        const confirm = screen.getByRole('button', { name: /^delete$/i });
+        expect(toggle!.compareDocumentPosition(list) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+        expect(list.compareDocumentPosition(confirm) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     });
 
     it('shows "Deleting..." text when isDeleting is true', async () => {
@@ -251,6 +285,37 @@ describe('DeleteConfirmDialog', () => {
 
         expect(screen.getByRole('button', { name: 'Cancel' })).toHaveFocus();
         expect(screen.queryByRole('tooltip')).not.toBeInTheDocument();
+    });
+
+    it('DeleteConfirmDialog_KeepsTheContentItShowedWhileDeleting_WhenItClosesDuringItsExitAnimation', async () => {
+        // Arrange
+        const realGetComputedStyle = window.getComputedStyle.bind(window);
+        vi.spyOn(window, 'getComputedStyle').mockImplementation((element, pseudo) =>
+            element instanceof HTMLElement && element.dataset.component === 'delete-confirm-dialog'
+                ? ({
+                      display: 'block',
+                      get animationName() {
+                          return `dialog-${element.dataset.state}`;
+                      },
+                  } as CSSStyleDeclaration)
+                : realGetComputedStyle(element, pseudo),
+        );
+        const { rerender } = render(
+            <DeleteConfirmDialog {...defaultProps} description="Delete 2 files from disk?" isDeleting>
+                <p>2 files listed</p>
+            </DeleteConfirmDialog>,
+        );
+        await waitFor(() => expect(screen.getByRole('dialog')).toBeInTheDocument());
+
+        // Act
+        rerender(<DeleteConfirmDialog {...defaultProps} open={false} description="Delete 0 files from disk?" />);
+
+        // Assert
+        const dialog = screen.getByRole('dialog');
+        expect(dialog).toHaveAttribute('data-state', 'closed');
+        expect(dialog).toHaveTextContent('Delete 2 files from disk?');
+        expect(dialog).toHaveTextContent('2 files listed');
+        expect(screen.getByRole('button', { name: 'Deleting...' })).toBeDisabled();
     });
 
     it('calls onCancel when overlay is clicked', async () => {

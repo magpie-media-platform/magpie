@@ -1,12 +1,8 @@
 import { forwardRef, type ComponentPropsWithoutRef, type ReactNode } from 'react';
-import { SortAscendingIcon, SortDescendingIcon } from '@phosphor-icons/react';
 import type { SortingState } from '@tanstack/react-table';
 
-import { useListSorting } from '@/hooks/ui/useListSorting';
-
 import { SelectModeToggle } from '../BulkActionsToolbar';
-import { Button } from '../Button';
-import { Select, SelectContent, SelectItem, SelectTrigger } from '../Select';
+import { ListSortControl } from '../ListSortControl';
 
 import './MobileListToolbar.css';
 
@@ -47,15 +43,17 @@ export const MobileListToolbar = forwardRef<HTMLDivElement, MobileListToolbarPro
         },
         ref,
     ) => {
-        const { activeOption, isDescending, selectField, toggleDirection } = useListSorting(
-            sorting,
-            sortOptions,
-            onSortingChange,
-        );
-
-        const hasSort = !allowUnsorted || sorting.length > 0;
         const classes = ['mobile-list-toolbar', className].filter(Boolean).join(' ');
-        const DirectionIcon = isDescending ? SortDescendingIcon : SortAscendingIcon;
+        const sortControl = (
+            <ListSortControl
+                className="mobile-list-toolbar__sorting"
+                sorting={sorting}
+                sortOptions={sortOptions}
+                onSortingChange={onSortingChange}
+                allowUnsorted={allowUnsorted}
+                disabled={disabled}
+            />
+        );
 
         return (
             <div ref={ref} className={classes} data-component="mobile-list-toolbar" {...props}>
@@ -68,77 +66,13 @@ export const MobileListToolbar = forwardRef<HTMLDivElement, MobileListToolbarPro
                     />
                 )}
 
-                {filterActions && (
+                {filterActions ? (
                     <div className="mobile-list-toolbar__controls">
                         <div className="mobile-list-toolbar__filter-actions">{filterActions}</div>
-                        {activeOption && (
-                            <div className="mobile-list-toolbar__sorting" role="group" aria-label="Sort list">
-                                <Select
-                                    value={hasSort ? activeOption.id : ''}
-                                    onValueChange={selectField}
-                                    disabled={disabled}
-                                >
-                                    <SelectTrigger size="sm" aria-label="Sort by field" data-sort="field">
-                                        {hasSort ? activeOption.label : 'Sort by'}
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                        {sortOptions.map((option) => (
-                                            <SelectItem key={option.id} value={option.id}>
-                                                {option.label}
-                                            </SelectItem>
-                                        ))}
-                                    </SelectContent>
-                                </Select>
-
-                                <Button
-                                    variant="ghost"
-                                    size="sm"
-                                    className="mobile-list-toolbar__direction"
-                                    onClick={toggleDirection}
-                                    disabled={disabled || !hasSort}
-                                    aria-label={`Sort ${isDescending ? 'ascending' : 'descending'}`}
-                                    aria-description={`Current direction: ${isDescending ? 'descending' : 'ascending'}`}
-                                    title={isDescending ? 'Descending' : 'Ascending'}
-                                    data-sort="direction"
-                                    data-direction={isDescending ? 'desc' : 'asc'}
-                                >
-                                    <DirectionIcon weight="bold" aria-hidden="true" />
-                                </Button>
-                            </div>
-                        )}
+                        {sortControl}
                     </div>
-                )}
-
-                {!filterActions && activeOption && (
-                    <div className="mobile-list-toolbar__sorting" role="group" aria-label="Sort list">
-                        <Select value={hasSort ? activeOption.id : ''} onValueChange={selectField} disabled={disabled}>
-                            <SelectTrigger size="sm" aria-label="Sort by field" data-sort="field">
-                                {hasSort ? activeOption.label : 'Sort by'}
-                            </SelectTrigger>
-                            <SelectContent>
-                                {sortOptions.map((option) => (
-                                    <SelectItem key={option.id} value={option.id}>
-                                        {option.label}
-                                    </SelectItem>
-                                ))}
-                            </SelectContent>
-                        </Select>
-
-                        <Button
-                            variant="ghost"
-                            size="sm"
-                            className="mobile-list-toolbar__direction"
-                            onClick={toggleDirection}
-                            disabled={disabled || !hasSort}
-                            aria-label={`Sort ${isDescending ? 'ascending' : 'descending'}`}
-                            aria-description={`Current direction: ${isDescending ? 'descending' : 'ascending'}`}
-                            title={isDescending ? 'Descending' : 'Ascending'}
-                            data-sort="direction"
-                            data-direction={isDescending ? 'desc' : 'asc'}
-                        >
-                            <DirectionIcon weight="bold" aria-hidden="true" />
-                        </Button>
-                    </div>
+                ) : (
+                    sortControl
                 )}
             </div>
         );

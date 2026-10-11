@@ -231,7 +231,6 @@ internal sealed class AuthService(
                 var session = await RefreshCoreAsync(refreshToken, token).ConfigureAwait(false);
                 if (session is null)
                 {
-                    // A concurrent request can commit the same rotation while this request waits for its write lock.
                     return await RecoverRenewalAsync(refreshToken, renewalKey, token).ConfigureAwait(false);
                 }
 

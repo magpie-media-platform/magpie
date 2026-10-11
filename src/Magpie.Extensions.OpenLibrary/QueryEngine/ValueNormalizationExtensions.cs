@@ -140,7 +140,6 @@ internal static class ValueNormalizationExtensions
     /// <param name="name">The subject name</param>
     internal static string ToOpenLibrarySubjectKey(this string name)
     {
-        // Literal port of Open Library normalize_subject_name (formerly str_to_key). Do not normalize further.
         var builder = new StringBuilder(name.Length);
         foreach (var character in name.Trim().ToLowerInvariant())
         {

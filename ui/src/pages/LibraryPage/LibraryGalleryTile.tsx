@@ -40,7 +40,6 @@ export function LibraryGalleryTile({
         <>
             <span className="library-gallery-tile__title-row">
                 <ContentMonitoringIndicator
-                    monitoring={item.monitoring}
                     effectiveMonitoring={item.effectiveMonitoring}
                     className="library-gallery-tile__monitoring"
                     activeClassName="library-gallery-tile__monitoring--active"
@@ -53,6 +52,8 @@ export function LibraryGalleryTile({
             <ContentFulfillmentBadge
                 fulfillment={item.fulfillment}
                 importPending={item.importPending}
+                publishDate={item.publishDate}
+                publishDatePrecision={item.publishDatePrecision}
                 className="library-gallery-tile__fulfillment"
             />
         </>
@@ -62,7 +63,6 @@ export function LibraryGalleryTile({
         <>
             <div className="library-gallery-tile__poster">
                 {selectionMode ? (
-                    // The whole poster is a pointer target. The checkbox is the control for keyboards and screen readers.
                     <button
                         type="button"
                         className="library-gallery-tile__poster-target"

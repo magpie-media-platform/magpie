@@ -14,6 +14,7 @@ import { useExternalChangeConflict } from '@/hooks/useExternalChangeConflict';
 import { useMediaServerProviderTypes } from '@/hooks/useProviderTypes';
 import { secretsConfiguredForEdit, useMediaServerSchema } from '@/hooks/useProviderSchema';
 import type { IntegrationSettingsTestRequest } from '@/hooks/useTestConnection';
+import { useInstanceName } from '@/hooks/useInstanceName';
 
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
@@ -71,6 +72,7 @@ export function MediaServerForm({
     isTesting = false,
     returnFocusRef,
 }: MediaServerFormProps): ReactNode {
+    const instanceName = useInstanceName();
     const [errors, setErrors] = useState<Record<string, string>>({});
     const [showStaleSaveDialog, setShowStaleSaveDialog] = useState(false);
 
@@ -291,7 +293,7 @@ export function MediaServerForm({
                             <p className="media-server-form__help">
                                 {noProvidersAvailable && !isEditing
                                     ? 'No media server integrations are registered. Install an extension that provides one.'
-                                    : 'Magpie imports content into this integration.'}
+                                    : `${instanceName} imports content into this integration.`}
                             </p>
                         </div>
 

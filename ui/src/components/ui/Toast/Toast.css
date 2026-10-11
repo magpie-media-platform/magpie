@@ -50,7 +50,7 @@
         border: 1px solid var(--border-default);
         border-radius: var(--radius-md);
         box-shadow: var(--shadow-lg);
-        pointer-events: auto;
+        pointer-events: auto !important;
         animation-duration: var(--duration-normal);
         animation-timing-function: var(--easing-default);
         animation-fill-mode: forwards;
@@ -388,7 +388,6 @@
             grid-area: 1 / 1 / 2 / 2;
         }
 
-        /* An absolutely positioned grid item takes its grid area, which the front toast sizes, as its containing block. */
         .toast:not([data-stack-depth='0']) {
             position: absolute;
             inset: 0;
