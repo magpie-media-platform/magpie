@@ -31,7 +31,7 @@
         align-items: center;
         gap: var(--space-sm);
         padding: var(--space-sm) var(--space-md);
-        background-color: color-mix(in srgb, var(--status-degraded) 10%, transparent);
+        background-color: var(--status-degraded-bg);
         border: 1px solid var(--status-degraded);
         border-radius: var(--radius-md);
         color: var(--status-degraded);

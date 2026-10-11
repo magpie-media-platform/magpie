@@ -5,6 +5,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
+using Magpie.Api.UI;
 using Magpie.Models.UI;
 using Magpie.Sdk.Api;
 using Magpie.Sdk.Services;
@@ -60,6 +61,17 @@ internal sealed class UIEndpointGroup : IApiEndpointGroup
             .ProducesProblem(StatusCodes.Status400BadRequest)
             .ProducesProblem(StatusCodes.Status404NotFound)
             .RequireViewer();
+
+        builder.MapGet("themes", GetThemesAsync)
+            .WithName(nameof(GetThemesAsync))
+            .Produces<ThemeCatalogResponse>()
+            .AllowAnonymous();
+
+        builder.MapGet("themes/stylesheet", GetThemeStylesheet)
+            .WithName(nameof(GetThemeStylesheet))
+            .Produces(StatusCodes.Status200OK)
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .AllowAnonymous();
     }
 
     internal IResult GetManifest(
@@ -182,5 +194,31 @@ internal sealed class UIEndpointGroup : IApiEndpointGroup
             .ConfigureAwait(false);
 
         return Results.Stream(stream, contentType ?? "application/octet-stream");
+    }
+
+    internal async Task<IResult> GetThemesAsync(
+        [FromServices] ThemeCatalog catalog,
+        [FromServices] ISettingsService settingsService,
+        CancellationToken cancellationToken)
+    {
+        var group = await settingsService.GetSystemGroupAsync("theme", cancellationToken).ConfigureAwait(false);
+        var settings = group?.Group.Settings.ToDictionary(setting => setting.Key, setting => setting.Value) ?? [];
+        var defaults = ThemeCatalog.DefaultSettings;
+        if (Enum.TryParse<ThemeMode>(settings.GetValueOrDefault("mode"), out var mode) && Enum.IsDefined(mode))
+        {
+            defaults.Mode = mode;
+        }
+
+        defaults.DarkTheme = settings.GetValueOrDefault("darkTheme", defaults.DarkTheme);
+        defaults.LightTheme = settings.GetValueOrDefault("lightTheme", defaults.LightTheme);
+
+        return Results.Ok(new ThemeCatalogResponse { Themes = catalog.List(), Defaults = defaults });
+    }
+
+    internal IResult GetThemeStylesheet([FromServices] ThemeCatalog catalog, string id)
+    {
+        var stream = catalog.OpenStylesheet(id);
+
+        return stream is null ? Results.NotFound() : Results.Stream(stream, "text/css");
     }
 }

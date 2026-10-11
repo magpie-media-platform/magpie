@@ -37,8 +37,8 @@
         align-items: center;
         justify-content: center;
         border-radius: var(--radius-full);
-        color: var(--text-on-inverse);
-        background-color: color-mix(in srgb, var(--bg-primary) 55%, transparent);
+        color: var(--text-on-scrim);
+        background-color: var(--bg-scrim);
 
         & svg {
             width: 1.5rem;

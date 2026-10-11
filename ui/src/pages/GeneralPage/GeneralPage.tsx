@@ -14,6 +14,7 @@ import { useSettingsGroupForm } from '@/hooks/useSettingsGroupForm';
 import { DEFAULT_INSTANCE_NAME } from '@/hooks/useInstanceName';
 
 import { JobRetryPolicyPanel } from './JobRetryPolicyPanel';
+import { ThemeDefaultsPanel } from './ThemeDefaultsPanel';
 
 import './GeneralPage.css';
 
@@ -200,6 +201,7 @@ export function GeneralPage() {
                 </div>
             </section>
 
+            <ThemeDefaultsPanel />
             <JobRetryPolicyPanel />
 
             <StaleSaveConfirmationDialog

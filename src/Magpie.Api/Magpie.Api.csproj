@@ -11,6 +11,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <EmbeddedResource Include="..\..\ui\src\themes\*.css;..\..\ui\src\themes\builtins.json" LogicalName="Themes/%(Filename)%(Extension)" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\Magpie.Sdk\Magpie.Sdk.csproj" />
     <ProjectReference Include="..\Magpie.CommandLine.Generators\Magpie.CommandLine.Generators.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
   </ItemGroup>

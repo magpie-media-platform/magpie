@@ -71,7 +71,7 @@
 
     .list-sort-control__direction-option[data-state='on'] {
         color: var(--text-on-accent);
-        background-color: var(--accent-primary);
+        background-color: var(--accent-fill);
     }
 
     .list-sort-control__direction-option:disabled {

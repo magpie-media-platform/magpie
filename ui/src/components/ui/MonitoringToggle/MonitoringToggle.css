@@ -51,7 +51,7 @@
         }
 
         &[data-state='active'] {
-            background-color: var(--accent-primary);
+            background-color: var(--accent-fill);
             color: var(--text-on-accent);
 
             &:focus-visible {

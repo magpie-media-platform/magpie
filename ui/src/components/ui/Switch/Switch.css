@@ -21,10 +21,10 @@
         }
 
         &[data-state='checked'] {
-            background-color: var(--accent-primary);
+            background-color: var(--accent-fill);
 
             &:hover:not(:disabled, [data-disabled]) {
-                background-color: var(--accent-secondary);
+                background-color: var(--accent-secondary-fill);
             }
         }
 
@@ -51,10 +51,14 @@
     }
 
     .switch--error {
-        background-color: var(--status-unhealthy);
+        background-color: var(--button-destructive-bg);
+
+        .switch__thumb {
+            background-color: var(--switch-thumb-error);
+        }
 
         &:hover:not(:disabled, [data-disabled]) {
-            background-color: var(--status-unhealthy);
+            background-color: var(--button-destructive-bg);
         }
 
         &:focus-visible {
@@ -62,17 +66,17 @@
         }
 
         &[data-state='checked'] {
-            background-color: var(--status-unhealthy);
+            background-color: var(--button-destructive-bg);
 
             &:hover:not(:disabled, [data-disabled]) {
-                background-color: var(--status-unhealthy);
+                background-color: var(--button-destructive-bg);
             }
         }
     }
 
     .switch__thumb {
         display: block;
-        background-color: var(--text-primary);
+        background-color: var(--switch-thumb);
         border-radius: var(--radius-full);
         transition: transform var(--duration-fast) var(--easing-default);
         will-change: transform;

@@ -1,0 +1,29 @@
+:root {
+    color-scheme: dark;
+
+    --bg-primary: #000;
+    --bg-secondary: #0a0a0a;
+    --bg-tertiary: #191919;
+    --accent-primary: #b8b8b8;
+    --accent-secondary: #d4d4d4;
+    --accent-fill: #333;
+    --accent-fill-hover: #424242;
+    --accent-secondary-fill: var(--accent-fill-hover);
+    --filter-active: var(--accent-primary);
+    --filter-active-fill: var(--accent-fill);
+    --text-on-filter: var(--text-on-accent);
+    --meter-fill-opacity: 0.65;
+    --text-primary: #ededed;
+    --text-secondary: #bdbdbd;
+    --text-muted: #999;
+    --text-on-accent: var(--text-primary);
+    --button-destructive-bg: color-mix(in srgb, var(--status-unhealthy) 12%, var(--bg-secondary));
+    --button-destructive-text: var(--status-unhealthy);
+    --switch-thumb-error: var(--button-destructive-text);
+    --button-warning-bg: color-mix(in srgb, var(--status-degraded) 12%, var(--bg-secondary));
+    --button-warning-text: var(--status-degraded);
+    --border-default: #2a2a2a;
+    --border-subtle: #191919;
+    --border-accent: #777;
+    --shadow-glow: 0 0 12px rgb(184 184 184 / 10%);
+}

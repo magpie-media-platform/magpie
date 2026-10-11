@@ -12,13 +12,13 @@
         width: var(--touch-target-min);
         height: var(--touch-target-min);
         cursor: pointer;
-        color: var(--text-on-inverse);
+        color: var(--text-on-scrim);
 
         & svg {
             width: 1.5rem;
             height: 1.5rem;
             border-radius: var(--radius-full);
-            background-color: color-mix(in srgb, var(--bg-primary) 55%, transparent);
+            background-color: var(--bg-scrim);
         }
     }
 

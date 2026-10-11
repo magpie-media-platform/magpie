@@ -1,0 +1,6 @@
+:root {
+    color-scheme: light;
+
+    --status-degraded-bg: #fff8e6;
+    --status-degraded-border: #e8cc8e;
+}

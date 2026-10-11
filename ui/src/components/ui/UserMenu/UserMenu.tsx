@@ -1,7 +1,9 @@
-import { forwardRef, type ComponentPropsWithoutRef } from 'react';
-import { SignOutIcon, CaretDownIcon } from '@phosphor-icons/react';
+import { forwardRef, useState, useSyncExternalStore, type ComponentPropsWithoutRef } from 'react';
+import { SignOutIcon, CaretDownIcon, PaletteIcon, CircleHalfIcon } from '@phosphor-icons/react';
 
 import { useAuth } from '@/auth';
+import { getThemeState, getThemeVariant, setThemePreference, subscribeTheme } from '@/lib/theme';
+import { ThemeDialog } from '../ThemeDialog';
 import { Avatar } from '../Avatar';
 import { Button } from '../Button';
 import {
@@ -21,6 +23,10 @@ export interface UserMenuProps extends ComponentPropsWithoutRef<'div'> {
 
 const UserMenu = forwardRef<HTMLDivElement, UserMenuProps>(({ showUsername = true, className, ...props }, ref) => {
     const { user, signOut } = useAuth();
+    const [themeOpen, setThemeOpen] = useState(false);
+    const { catalog, preference } = useSyncExternalStore(subscribeTheme, getThemeState);
+    const themeSettings = preference ?? catalog.defaults;
+    const nextThemeMode = getThemeVariant(themeSettings) === 'Dark' ? 'Light' : 'Dark';
 
     const classes = ['user-menu', className].filter(Boolean).join(' ');
 
@@ -52,12 +58,31 @@ const UserMenu = forwardRef<HTMLDivElement, UserMenuProps>(({ showUsername = tru
                 <DropdownMenuContent align="end" sideOffset={8}>
                     <DropdownMenuLabel>{user.username}</DropdownMenuLabel>
                     <DropdownMenuSeparator />
+                    <DropdownMenuItem onSelect={() => setThemeOpen(true)}>
+                        <PaletteIcon size={16} aria-hidden="true" />
+                        Theme…
+                    </DropdownMenuItem>
+                    {preference !== null && (
+                        <DropdownMenuItem
+                            onSelect={() => setThemePreference({ ...themeSettings, mode: nextThemeMode })}
+                        >
+                            <CircleHalfIcon
+                                size={16}
+                                weight="fill"
+                                mirrored={nextThemeMode === 'Dark'}
+                                aria-hidden="true"
+                            />
+                            {nextThemeMode} mode
+                        </DropdownMenuItem>
+                    )}
+                    <DropdownMenuSeparator />
                     <DropdownMenuItem onSelect={signOut} data-action="logout">
                         <SignOutIcon size={16} weight="duotone" aria-hidden="true" />
                         Log out
                     </DropdownMenuItem>
                 </DropdownMenuContent>
             </DropdownMenu>
+            <ThemeDialog open={themeOpen} onOpenChange={setThemeOpen} />
         </div>
     );
 });

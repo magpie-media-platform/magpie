@@ -1,0 +1,25 @@
+:root {
+    --meter-fill-opacity: 0.65;
+    --text-on-accent: var(--text-primary);
+    --button-destructive-bg: color-mix(in srgb, var(--status-unhealthy) 12%, var(--bg-secondary));
+    --button-destructive-text: var(--status-unhealthy);
+    --switch-thumb-error: var(--button-destructive-text);
+    --button-warning-bg: color-mix(in srgb, var(--status-degraded) 12%, var(--bg-secondary));
+    --button-warning-text: var(--status-degraded);
+    --bg-primary: #15191e;
+    --bg-secondary: #1e242b;
+    --bg-tertiary: #2c3540;
+    --accent-primary: #a9bfd5;
+    --accent-secondary: #c5d8e8;
+    --accent-fill: #344b61;
+    --accent-fill-hover: #425f79;
+    --accent-secondary-fill: var(--accent-fill-hover);
+    --filter-active: var(--accent-primary);
+    --text-primary: #e3e9ef;
+    --text-secondary: #b6c0ca;
+    --text-muted: #94a1ad;
+    --border-default: #394550;
+    --border-subtle: #2d3741;
+    --border-accent: #8aa7c5;
+    --shadow-glow: 0 0 16px rgb(138 167 197 / 16%);
+}

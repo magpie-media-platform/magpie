@@ -13,6 +13,28 @@
         <style data-cascade-layer-order>
             @layer reset, base, components, utilities;
         </style>
+        <script>
+            try {
+                const boot = JSON.parse(localStorage.getItem('magpie.theme.boot') ?? 'null');
+                const light =
+                    boot?.mode === 'Light' ||
+                    (boot?.mode === 'System' && matchMedia('(prefers-color-scheme: light)').matches);
+                const theme = boot?.[light ? 'Light' : 'Dark'];
+                if (theme) {
+                    const style = document.createElement('style');
+                    style.dataset.themeStylesheet = theme.id;
+                    style.textContent = theme.css;
+                    document.head.appendChild(style);
+                    document.documentElement.dataset.colorScheme = light ? 'light' : 'dark';
+                    document.documentElement.dataset.theme = theme.id;
+                    document.querySelector('meta[name="theme-color"]').content = theme.color;
+                    if (light) {
+                        document.querySelector('meta[name="apple-mobile-web-app-status-bar-style"]').content =
+                            'default';
+                    }
+                }
+            } catch {}
+        </script>
         <title>Magpie</title>
     </head>
     <body>

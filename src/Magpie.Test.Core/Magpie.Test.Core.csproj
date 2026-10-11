@@ -39,4 +39,8 @@
     <ProjectReference Include="..\Magpie.Extensions.Tv\Magpie.Extensions.Tv.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <EmbeddedResource Include="..\..\ui\src\themes\noir.css" LogicalName="test-theme.css" />
+  </ItemGroup>
+
 </Project>

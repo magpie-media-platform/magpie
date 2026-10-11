@@ -40,6 +40,7 @@ import {
 } from './components/ui/Sidebar';
 import { useLibraryTypes, useTypeIconName, type LibraryTypeDefinition } from './hooks/useLibraryTypes';
 import { InstanceNameProvider, useInstanceName } from './hooks/useInstanceName';
+import { ThemeProvider } from './hooks/useThemeCatalog';
 import { useSystemInfo } from './hooks/useSystemStatus';
 import { ScanCompletionTrackerProvider } from './hooks/useScanCompletionTracker';
 import { useScrollRestoration } from './hooks/useScrollRestoration';
@@ -488,7 +489,9 @@ function App() {
     return (
         <QueryClientProvider client={queryClient}>
             <InstanceNameProvider>
-                <RouterProvider router={router} />
+                <ThemeProvider>
+                    <RouterProvider router={router} />
+                </ThemeProvider>
             </InstanceNameProvider>
         </QueryClientProvider>
     );

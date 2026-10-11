@@ -13,6 +13,11 @@ import { GeneralPage } from './GeneralPage';
 const mockApiGet = vi.fn();
 const mockApiPatch = vi.fn();
 
+vi.mock('@/hooks/useThemeCatalog', () => ({
+    useThemeCatalog: () => ({ isPending: true }),
+    themeCatalogQueryKey: ['themes'],
+}));
+
 vi.mock('@/lib/api', () => ({
     apiGet: (...args: unknown[]) => mockApiGet(...args),
     apiPatch: (...args: unknown[]) => mockApiPatch(...args),

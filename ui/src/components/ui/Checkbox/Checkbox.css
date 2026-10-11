@@ -26,8 +26,8 @@
 
         &[data-state='checked'] .checkbox__control,
         &[data-state='indeterminate'] .checkbox__control {
-            background-color: var(--accent-primary);
-            border-color: var(--accent-primary);
+            background-color: var(--accent-fill);
+            border-color: var(--accent-fill);
         }
 
         &:disabled,
@@ -78,6 +78,10 @@
     }
 
     .checkbox--error {
+        & .checkbox__indicator {
+            color: var(--button-destructive-text);
+        }
+
         &:hover:not(:disabled, [data-disabled]) .checkbox__control {
             border-color: var(--status-unhealthy);
         }
@@ -89,8 +93,8 @@
 
         &[data-state='checked'] .checkbox__control,
         &[data-state='indeterminate'] .checkbox__control {
-            background-color: var(--status-unhealthy);
-            border-color: var(--status-unhealthy);
+            background-color: var(--button-destructive-bg);
+            border-color: var(--button-destructive-bg);
         }
     }
 
@@ -98,7 +102,7 @@
         display: flex;
         align-items: center;
         justify-content: center;
-        color: var(--bg-primary);
+        color: var(--text-on-accent);
         animation-duration: var(--duration-fast);
         animation-timing-function: var(--easing-default);
 

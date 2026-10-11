@@ -5,8 +5,8 @@
         left: var(--space-sm);
         z-index: var(--z-max);
         padding: var(--space-sm) var(--space-md);
-        background-color: var(--accent-primary);
-        color: var(--bg-primary);
+        background-color: var(--accent-fill);
+        color: var(--text-on-accent);
         font-size: var(--text-sm);
         font-weight: var(--weight-semibold);
         text-decoration: none;
@@ -26,7 +26,7 @@
         }
 
         &:hover {
-            background-color: var(--accent-secondary);
+            background-color: var(--accent-secondary-fill);
         }
     }
 }

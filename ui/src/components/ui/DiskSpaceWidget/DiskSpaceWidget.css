@@ -121,6 +121,7 @@
     .disk-space-widget__progress-bar {
         height: 100%;
         transition: width var(--duration-normal) var(--easing-default);
+        opacity: var(--meter-fill-opacity);
     }
 
     .disk-space-widget__progress-content,
@@ -130,6 +131,7 @@
 
     .disk-space-widget__content-marker {
         flex-shrink: 0;
+        opacity: var(--meter-fill-opacity);
         width: 8px;
         height: 8px;
         border-radius: var(--radius-xs);

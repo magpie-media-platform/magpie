@@ -152,18 +152,18 @@ export function FilterQueryEditor({
                 }),
                 EditorView.theme({
                     '&': {
-                        fontSize: 'var(--text-sm, 0.85rem)',
-                        fontFamily: 'var(--font-mono, "JetBrains Mono", monospace)',
+                        fontSize: 'var(--text-sm)',
+                        fontFamily: 'var(--font-mono)',
                     },
                     '.cm-content': {
-                        padding: 'var(--space-sm, 0.5rem) var(--space-md, 1rem)',
-                        caretColor: 'var(--accent-primary, #7aa2f7)',
+                        padding: 'var(--space-sm) var(--space-md)',
+                        caretColor: 'var(--accent-primary)',
                     },
                     '.cm-cursor': {
-                        borderLeftColor: 'var(--accent-primary, #7aa2f7)',
+                        borderLeftColor: 'var(--accent-primary)',
                     },
                     '&.cm-focused .cm-selectionBackground, .cm-selectionBackground': {
-                        background: 'rgba(122, 162, 247, 0.2)',
+                        background: 'color-mix(in srgb, var(--accent-primary) 20%, transparent)',
                     },
                     '.cm-activeLine': {
                         background: 'transparent',
@@ -171,21 +171,32 @@ export function FilterQueryEditor({
                     '.cm-gutters': {
                         display: 'none',
                     },
+                    '.cm-tooltip': {
+                        background: 'var(--bg-secondary)',
+                        color: 'var(--text-primary)',
+                        border: '1px solid var(--border-default)',
+                    },
                     '.cm-tooltip.cm-tooltip-autocomplete': {
-                        background: 'var(--bg-secondary, #24283b)',
-                        border: '1px solid var(--border-default, #414868)',
-                        borderRadius: 'var(--radius-sm, 6px)',
+                        borderRadius: 'var(--radius-sm)',
+                    },
+                    '.cm-tooltip.cm-completionInfo': {
+                        background: 'var(--bg-tertiary)',
+                        color: 'var(--text-secondary)',
                     },
                     '.cm-tooltip.cm-tooltip-autocomplete > ul > li': {
-                        color: 'var(--text-primary, #c0caf5)',
+                        color: 'var(--text-primary)',
                         padding: 'var(--space-xs) var(--space-sm)',
                     },
                     '.cm-tooltip.cm-tooltip-autocomplete > ul > li[aria-selected]': {
-                        background: 'var(--accent-primary, #7aa2f7)',
-                        color: 'var(--bg-primary, #1a1b26)',
+                        background: 'var(--accent-fill)',
+                        color: 'var(--text-on-accent)',
+                    },
+                    '.cm-tooltip-autocomplete li[aria-selected] .cm-completionDetail': {
+                        color: 'inherit',
+                        opacity: '1',
                     },
                     '.cm-diagnostic-error': {
-                        borderBottom: '2px solid var(--status-unhealthy, #f7768e)',
+                        borderBottom: '2px solid var(--status-unhealthy)',
                     },
                 }),
             ],

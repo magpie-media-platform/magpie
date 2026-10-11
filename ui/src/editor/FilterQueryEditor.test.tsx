@@ -26,6 +26,20 @@ describe('FilterQueryEditor', () => {
     });
 
     describe('rendering', () => {
+        it.each([
+            ' .cm-tooltip {background: var(--bg-secondary); color: var(--text-primary); border: 1px solid var(--border-default);}',
+            ' .cm-tooltip.cm-completionInfo {background: var(--bg-tertiary); color: var(--text-secondary);}',
+            ' .cm-tooltip-autocomplete li[aria-selected] .cm-completionDetail {color: inherit; opacity: 1;}',
+        ])('FilterQueryEditor_StylesTheTooltipsWithThemeTokens_WhenRendered %s', (rule) => {
+            // Arrange
+
+            // Act
+            render(<FilterQueryEditor value="" onChange={vi.fn()} />);
+
+            // Assert
+            expect(document.head.textContent).toContain(rule);
+        });
+
         it('renders container element', () => {
             render(<FilterQueryEditor value="" onChange={vi.fn()} data-testid="filter-editor" />);
 

@@ -1,0 +1,32 @@
+:root {
+    --meter-fill-opacity: 0.65;
+    --text-on-accent: var(--text-primary);
+    --button-destructive-bg: color-mix(in srgb, var(--status-unhealthy) 12%, var(--bg-secondary));
+    --button-destructive-text: var(--status-unhealthy);
+    --switch-thumb-error: var(--button-destructive-text);
+    --button-warning-bg: color-mix(in srgb, var(--status-degraded) 12%, var(--bg-secondary));
+    --button-warning-text: var(--status-degraded);
+    --bg-primary: #1b1715;
+    --bg-secondary: #26201c;
+    --bg-tertiary: #392d25;
+    --accent-primary: #d9aa85;
+    --accent-secondary: #edc4a3;
+    --accent-fill: #684a35;
+    --accent-fill-hover: #7b593f;
+    --accent-secondary-fill: var(--accent-fill-hover);
+    --filter-active: #d9aa85;
+    --text-primary: #f0e4d8;
+    --text-secondary: #cbb8a7;
+    --text-muted: #aa9584;
+    --border-default: #4b3a2d;
+    --border-subtle: #382b23;
+    --border-accent: #b68860;
+    --status-healthy: #acc184;
+    --status-unhealthy: #e99585;
+    --status-degraded: #d9b176;
+    --status-stabilizing: #c2a1c0;
+    --fulfillment-external: #97bfca;
+    --shadow-glow: 0 0 16px rgb(182 136 96 / 16%);
+    --glow-error: 0 0 16px rgb(233 149 133 / 20%);
+    --overlay-backdrop: rgb(15 11 8 / 70%);
+}

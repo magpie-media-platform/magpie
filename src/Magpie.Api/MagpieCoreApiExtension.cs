@@ -1,8 +1,10 @@
 using System;
 
 using Magpie.Api.EndpointGroups;
+using Magpie.Api.UI;
 using Magpie.Sdk.Api;
 using Magpie.Sdk.Extensions;
+using Magpie.Sdk.UI;
 
 using Microsoft.Extensions.DependencyInjection;
 
@@ -25,6 +27,9 @@ public sealed class MagpieCoreApiExtension : IExtension
     public void RegisterServices(IServiceCollection services)
     {
         ArgumentNullException.ThrowIfNull(services);
+
+        services.AddSingleton<IThemeProvider, BuiltInThemeProvider>();
+        services.AddSingleton<ThemeCatalog>();
 
         services.AddSingleton<IApiEndpointGroup, ApiKeysEndpointGroup>();
         services.AddSingleton<IApiEndpointGroup, AuditHistoryEndpointGroup>();

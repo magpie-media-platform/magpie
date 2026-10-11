@@ -21,20 +21,20 @@
         width: 9px;
         height: 9px;
         border-radius: 50%;
-        background: #eab308;
+        background: var(--status-live-connecting);
         box-shadow: 0 0 0 1px var(--text-primary);
     }
 
     .live-update-status[data-state='connected'] .live-update-status__dot {
-        background: #22c55e;
+        background: var(--status-live-connected);
     }
 
     .live-update-status[data-state='failed'] .live-update-status__dot {
-        background: #ef4444;
+        background: var(--status-live-failed);
     }
 
     .live-update-status[data-state='unsupported'] .live-update-status__dot {
-        background: #000;
+        background: var(--status-live-unsupported);
     }
 
     .live-update-status__error {

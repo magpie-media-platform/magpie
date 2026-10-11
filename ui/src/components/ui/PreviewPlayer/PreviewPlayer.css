@@ -80,7 +80,7 @@
     }
 
     .preview-player__facade:hover .preview-player__play {
-        background-color: var(--accent-primary);
+        background-color: var(--accent-fill);
         color: var(--text-on-accent);
     }
 
@@ -99,7 +99,7 @@
     }
 
     .preview-player__facade:hover .preview-player__play--hero {
-        background-color: var(--accent-primary);
+        background-color: var(--accent-fill);
         color: var(--text-on-accent);
         transform: translate(-50%, -50%) scale(1.05);
     }

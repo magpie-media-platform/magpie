@@ -18,6 +18,7 @@ internal sealed class SetupRedirectMiddleware(RequestDelegate next, ILogger<Setu
         "/api/system/ready",
         "/api/system/setup",
         "/api/auth",
+        "/api/ui/themes",
     ];
 
     public const string SetupRequiredHeader = "X-Magpie-Setup-Required";

@@ -106,15 +106,15 @@
         padding: var(--space-sm) var(--space-md);
         font-size: var(--text-sm);
         color: var(--text-secondary);
-        background-color: color-mix(in srgb, var(--status-degraded, #e0af68) 12%, transparent);
-        border: 1px solid color-mix(in srgb, var(--status-degraded, #e0af68) 40%, transparent);
+        background-color: color-mix(in srgb, var(--status-degraded) 12%, transparent);
+        border: 1px solid var(--status-degraded-border);
         border-radius: var(--radius-md);
 
         & > svg {
             flex-shrink: 0;
             margin-top: 0.1em;
             font-size: var(--text-lg);
-            color: var(--status-degraded, #e0af68);
+            color: var(--status-degraded);
         }
     }
 

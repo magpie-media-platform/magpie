@@ -54,17 +54,17 @@
     }
 
     .button--primary {
-        background-color: var(--accent-primary);
-        color: var(--bg-primary);
-        border-color: var(--accent-primary);
+        background-color: var(--accent-fill);
+        color: var(--text-on-accent);
+        border-color: var(--accent-fill);
 
         &:hover:not(:disabled, [aria-disabled='true']) {
-            background-color: color-mix(in srgb, var(--accent-primary) 85%, white);
+            background-color: var(--accent-fill-hover);
             box-shadow: var(--shadow-glow);
         }
 
         &:active:not(:disabled, [aria-disabled='true']) {
-            background-color: color-mix(in srgb, var(--accent-primary) 90%, black);
+            background-color: color-mix(in srgb, var(--accent-fill) 90%, black);
         }
     }
 
@@ -98,31 +98,31 @@
     }
 
     .button--destructive {
-        background-color: var(--status-unhealthy);
-        color: var(--bg-primary);
-        border-color: var(--status-unhealthy);
+        background-color: var(--button-destructive-bg);
+        color: var(--button-destructive-text);
+        border-color: var(--button-destructive-bg);
 
         &:hover:not(:disabled, [aria-disabled='true']) {
-            background-color: color-mix(in srgb, var(--status-unhealthy) 85%, white);
+            background-color: color-mix(in srgb, var(--button-destructive-bg) 85%, white);
             box-shadow: var(--glow-error);
         }
 
         &:active:not(:disabled, [aria-disabled='true']) {
-            background-color: color-mix(in srgb, var(--status-unhealthy) 90%, black);
+            background-color: color-mix(in srgb, var(--button-destructive-bg) 90%, black);
         }
     }
 
     .button--warning {
-        background-color: var(--status-degraded);
-        color: var(--bg-primary);
-        border-color: var(--status-degraded);
+        background-color: var(--button-warning-bg);
+        color: var(--button-warning-text);
+        border-color: var(--button-warning-bg);
 
         &:hover:not(:disabled, [aria-disabled='true']) {
-            background-color: color-mix(in srgb, var(--status-degraded) 85%, white);
+            background-color: color-mix(in srgb, var(--button-warning-bg) 85%, white);
         }
 
         &:active:not(:disabled, [aria-disabled='true']) {
-            background-color: color-mix(in srgb, var(--status-degraded) 90%, black);
+            background-color: color-mix(in srgb, var(--button-warning-bg) 90%, black);
         }
     }
 

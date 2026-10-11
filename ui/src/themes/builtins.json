@@ -1,0 +1,52 @@
+[
+    {
+        "name": "Noir",
+        "fileName": "Themes/noir.css",
+        "variant": "Dark"
+    },
+    {
+        "name": "Tokyo Night",
+        "fileName": "Themes/tokyo-night.css",
+        "variant": "Dark"
+    },
+    {
+        "name": "Slate",
+        "fileName": "Themes/slate.css",
+        "variant": "Dark"
+    },
+    {
+        "name": "Ember",
+        "fileName": "Themes/ember.css",
+        "variant": "Dark"
+    },
+    {
+        "name": "Evergreen",
+        "fileName": "Themes/evergreen.css",
+        "variant": "Dark"
+    },
+    {
+        "name": "Frost",
+        "fileName": "Themes/frost.css",
+        "variant": "Light"
+    },
+    {
+        "name": "Parchment",
+        "fileName": "Themes/parchment.css",
+        "variant": "Light"
+    },
+    {
+        "name": "Seafoam",
+        "fileName": "Themes/seafoam.css",
+        "variant": "Light"
+    },
+    {
+        "name": "Banana Stand",
+        "fileName": "Themes/banana-stand.css",
+        "variant": "Light"
+    },
+    {
+        "name": "Bubblegum",
+        "fileName": "Themes/bubblegum.css",
+        "variant": "Light"
+    }
+]

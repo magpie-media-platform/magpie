@@ -121,7 +121,7 @@
         }
 
         &[data-state='on'] {
-            background-color: var(--accent-primary);
+            background-color: var(--accent-fill);
             color: var(--text-on-accent);
         }
 

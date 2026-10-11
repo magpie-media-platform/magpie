@@ -106,7 +106,7 @@
 
     .library-page__view-switch .tabs-trigger[data-state='active'] {
         color: var(--text-on-accent);
-        background-color: var(--accent-primary);
+        background-color: var(--accent-fill);
     }
 
     .library-page__gallery {
@@ -178,7 +178,7 @@
 
         &[aria-pressed='true'] {
             color: var(--text-on-accent);
-            background-color: var(--accent-primary);
+            background-color: var(--accent-fill);
         }
 
         @media (max-width: 767px) {
