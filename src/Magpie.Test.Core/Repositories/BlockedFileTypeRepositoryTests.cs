@@ -170,67 +170,6 @@ public sealed class BlockedFileTypeRepositoryTests
     }
 
     [Test]
-    public async Task UpdateAsync_UpdatesBlockedFileType_WhenEntityExists()
-    {
-        // Arrange
-        var entity = new BlockedFileType
-        {
-            Pattern = ".iso",
-            CreatedAt = DateTime.UtcNow,
-            CreatedByUserId = _userId
-        };
-        _context.BlockedFileTypes.Add(entity);
-        await _context.SaveChangesAsync().ConfigureAwait(false);
-
-        var model = new BlockedFileType
-        {
-            Id = entity.Id,
-            Pattern = ".img",
-            CreatedAt = entity.CreatedAt,
-            CreatedByUserId = entity.CreatedByUserId
-        };
-
-        // Act
-        var result = await _subject.UpdateAsync(model, _userId).ConfigureAwait(false);
-
-        // Assert
-        var reloaded = await _context.BlockedFileTypes
-            .AsNoTracking()
-            .FirstOrDefaultAsync(e => e.Id == entity.Id)
-            .ConfigureAwait(false);
-
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(result, Is.True);
-            Assert.That(reloaded, Has.Property(nameof(reloaded.Pattern)).EqualTo(".img"));
-            Assert.That(reloaded, Has.Property(nameof(reloaded.ModifiedAt)).Not.Null);
-            Assert.That(reloaded, Has.Property(nameof(reloaded.ModifiedByUserId)).EqualTo(_userId));
-        }
-    }
-
-    [Test]
-    public async Task UpdateAsync_ReturnsFalse_WhenRowDoesNotExist()
-    {
-        // Arrange
-        var model = new BlockedFileType
-        {
-            Id = Guid.NewGuid(),
-            Pattern = ".nope",
-        };
-
-        // Act
-        var result = await _subject.UpdateAsync(model, _userId).ConfigureAwait(false);
-
-        // Assert
-        var auditRecords = await _context.AuditRecords.ToListAsync().ConfigureAwait(false);
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(result, Is.False);
-            Assert.That(auditRecords, Is.Empty);
-        }
-    }
-
-    [Test]
     public async Task DeleteAsync_DeletesBlockedFileType_WhenEntityExists()
     {
         // Arrange

@@ -237,7 +237,7 @@ public sealed class ExtensionPackageSourceRepositoryTests
         _updateEvents.Verify(bus => bus.PublishAsync(
             It.Is<MagpieEvent>(e =>
                 e.Name == "extensionPackageSource.updated" &&
-                e.Context["extensionPackageSource.changedFields"] == "enabled"),
+                e.Context["extensionPackageSource.changedFields"] == "Enabled"),
             It.IsAny<CancellationToken>()), Times.Once);
     }
 

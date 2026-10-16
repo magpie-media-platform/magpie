@@ -15,10 +15,7 @@ using Magpie.Sdk.Http;
 
 namespace Magpie.Extensions.Wikidata;
 
-internal sealed class WikidataClient(
-    IHttpClientFactory httpClientFactory,
-    IUpstreamCooldown cooldown,
-    TimeProvider timeProvider) : IWikidataClient
+internal sealed class WikidataClient(IHttpClientFactory httpClientFactory) : IWikidataClient
 {
     public const string HttpClientName = "magpie.wikidata";
 
@@ -190,7 +187,6 @@ internal sealed class WikidataClient(
         var response = await SendAsync(message, context, request.Timeout, cancellationToken).ConfigureAwait(false);
         using (response)
         {
-            EnsureNotRateLimited(response);
             response.EnsureSuccessStatusCode();
             var body = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
             var envelope = Deserialize<SparqlResponseDto>(body, "SPARQL");
@@ -201,6 +197,20 @@ internal sealed class WikidataClient(
 
             return envelope.Results.Bindings;
         }
+    }
+
+    internal static async Task<bool> IsThrottledAsync(HttpResponseMessage response, CancellationToken cancellationToken)
+    {
+        if (!response.IsSuccessStatusCode || response.RequestMessage?.RequestUri?.AbsolutePath != "/w/api.php")
+        {
+            return false;
+        }
+
+        var body = await response.Content.ReadAsStringAsync()
+            .WaitAsync(Timeout.InfiniteTimeSpan, TimeProvider.System, cancellationToken).ConfigureAwait(false);
+        var error = ReadActionError(body);
+        return string.Equals(error?.Code, "maxlag", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(error?.Code, "ratelimited", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool IsMissing(EntityDto entity) => entity.Missing;
@@ -262,36 +272,19 @@ internal sealed class WikidataClient(
         return new Uri(builder.ToString(), UriKind.Absolute);
     }
 
-    private static void EnsureNotRateLimited(HttpResponseMessage response)
-    {
-        if (response.StatusCode != HttpStatusCode.TooManyRequests)
-        {
-            return;
-        }
-
-        var exception = new HttpRequestException("Wikidata request remained rate limited.");
-        exception.Data["wikidata.rate-limited"] = true;
-        throw exception;
-    }
-
     private async Task<HttpResponseMessage> SendAsync(
         HttpRequestMessage message,
         RequestContext context,
         TimeSpan requestTimeout,
         CancellationToken cancellationToken)
     {
-        cooldown.Check(message, null, cancellationToken);
         await _requestGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            cooldown.Check(message, null, cancellationToken);
-            using var timeoutSource = timeProvider.CreateCancellationTokenSource(requestTimeout);
-            using var linkedSource = CancellationTokenSource.CreateLinkedTokenSource(
-                cancellationToken,
-                timeoutSource.Token);
+            message.SetTransportTimeout(requestTimeout);
             using var client = httpClientFactory.CreateClient(HttpClientName);
-            UpstreamRequestAccounting.Record(context.UpstreamRequestObserver);
-            return await client.SendAsync(message, linkedSource.Token).ConfigureAwait(false);
+            message.Properties[WikidataHttpHandler.RequestObserver] = context.UpstreamRequestObserver;
+            return await client.SendAsync(message, cancellationToken).ConfigureAwait(false);
         }
         finally
         {
@@ -313,15 +306,9 @@ internal sealed class WikidataClient(
             return null;
         }
 
-        EnsureNotRateLimited(response);
         response.EnsureSuccessStatusCode();
         var body = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
         var error = ReadActionError(body);
-        if (string.Equals(error?.Code, "maxlag", StringComparison.OrdinalIgnoreCase))
-        {
-            throw cooldown.RecordThrottle(message, null, response);
-        }
-
         if (error is not null)
         {
             throw new HttpRequestException("Wikidata Action API returned an error.");

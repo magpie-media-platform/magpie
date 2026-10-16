@@ -127,6 +127,25 @@ internal sealed class ReleaseScopeRepository(
             return await transactionManager.ExecuteWithTransactionAsync(
                 async _ =>
                 {
+                    await context.Releases
+                        .Where(release => release.Id == model.ReleaseId)
+                        .ExecuteUpdateAsync(
+                            setters => setters.SetProperty(
+                                release => release.ObservedAt,
+                                release => release.ObservedAt),
+                            cancellationToken)
+                        .ConfigureAwait(false);
+                    var existing = await context.ReleaseScopes.AsNoTracking()
+                        .FirstOrDefaultAsync(
+                            scope => scope.ReleaseId == model.ReleaseId &&
+                                scope.ContentHierarchyItemId == model.ContentHierarchyItemId,
+                            cancellationToken)
+                        .ConfigureAwait(false);
+                    if (existing is not null)
+                    {
+                        return existing;
+                    }
+
                     context.ReleaseScopes.Add(model);
                     await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
                     await WriteAuditAsync("Create", model, createdByUserId, cancellationToken).ConfigureAwait(false);

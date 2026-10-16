@@ -28,10 +28,7 @@ public sealed class ReleaseSearchScanJobTests
 {
     private readonly IProgressReporter _progressReporter = Mock.Of<IProgressReporter>();
 
-    private const int DefaultBackpressureThreshold = 50;
-
     private Mock<IJobManager> _jobManager = null!;
-    private Mock<IJobExecutionRepository> _jobExecutionRepository = null!;
     private Mock<IContentHierarchyItemRepository> _hierarchyRepository = null!;
     private IReadOnlyDictionary<Guid, ContentHierarchyItemAncestry> _ancestry = null!;
     private IReadOnlyList<Guid> _unfulfilledLeafIds = null!;
@@ -48,15 +45,6 @@ public sealed class ReleaseSearchScanJobTests
         _jobManager
             .Setup(m => m.ExecuteAsync(It.IsAny<JobEnqueueRequest>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(Guid.NewGuid());
-
-        _jobExecutionRepository = new Mock<IJobExecutionRepository>();
-        _jobExecutionRepository
-            .Setup(r => r.QueryAsync(
-                It.IsAny<JobExecutionQuery>(),
-                It.IsAny<PagingParameter>(),
-                It.IsAny<SortParameter?>(),
-                It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new PagedList<JobExecution>());
 
         _unfulfilledLeafIds = [];
         _ancestry = new Dictionary<Guid, ContentHierarchyItemAncestry>();
@@ -83,7 +71,6 @@ public sealed class ReleaseSearchScanJobTests
 
         _subject = new ReleaseSearchScanJob(
             _jobManager.Object,
-            _jobExecutionRepository.Object,
             _hierarchyRepository.Object,
             TimeProvider.System,
             NullLogger<ReleaseSearchScanJob>.Instance,
@@ -396,162 +383,6 @@ public sealed class ReleaseSearchScanJobTests
                     r.UserId == _userId),
                 It.IsAny<CancellationToken>()),
             Times.Once);
-    }
-
-    [Test]
-    public async Task ExecuteAsync_Bails_WhenReleaseSearchBacklogIsOlderThanOneHour()
-    {
-        // Arrange
-        var rootId = Guid.NewGuid();
-        _unfulfilledLeafIds = [rootId];
-        _ancestry = new Dictionary<Guid, ContentHierarchyItemAncestry>
-        {
-            [rootId] = new() { Id = rootId, EffectiveMonitoring = MonitoringMode.Monitored }
-        };
-        var rows = Enumerable.Range(0, DefaultBackpressureThreshold + 1)
-            .Select(_ => new JobExecution
-            {
-                JobType = "ReleaseSearchItem",
-                Scope = JobScope.System,
-                Status = JobExecutionStatus.Queued,
-                CreatedAt = DateTime.UtcNow.AddHours(-2)
-            })
-            .ToList();
-        _jobExecutionRepository
-            .Setup(r => r.QueryAsync(
-                It.IsAny<JobExecutionQuery>(),
-                It.IsAny<PagingParameter>(),
-                It.IsAny<SortParameter?>(),
-                It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new PagedList<JobExecution> { Items = rows, TotalItems = rows.Count });
-
-        // Act
-        await _subject.ExecuteAsync(_jobContext).ConfigureAwait(false);
-
-        // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            _jobExecutionRepository.Verify(
-                r => r.QueryAsync(
-                    It.Is<JobExecutionQuery>(q =>
-                        q.JobType == "ReleaseSearchItem" &&
-                        q.Timestamp == null),
-                    It.IsAny<PagingParameter>(),
-                    It.IsAny<SortParameter?>(),
-                    It.IsAny<CancellationToken>()),
-                Times.Once);
-            _jobManager.Verify(
-                m => m.ExecuteAsync(It.IsAny<JobEnqueueRequest>(), It.IsAny<CancellationToken>()),
-                Times.Never);
-        }
-    }
-
-    [Test]
-    public async Task ExecuteAsync_Bails_WhenReleaseSearchBacklogExceedsThreshold()
-    {
-        // Arrange
-        var rootId = Guid.NewGuid();
-        _unfulfilledLeafIds = [rootId];
-        _ancestry = new Dictionary<Guid, ContentHierarchyItemAncestry>
-        {
-            [rootId] = new() { Id = rootId, EffectiveMonitoring = MonitoringMode.Monitored }
-        };
-        var rows = Enumerable.Range(0, DefaultBackpressureThreshold + 1)
-            .Select(_ => new JobExecution
-            {
-                JobType = "ReleaseSearchItem",
-                Scope = JobScope.System,
-                Status = JobExecutionStatus.Queued,
-                CreatedAt = DateTime.UtcNow
-            })
-            .ToList();
-        _jobExecutionRepository
-            .Setup(r => r.QueryAsync(
-                It.IsAny<JobExecutionQuery>(),
-                It.IsAny<PagingParameter>(),
-                It.IsAny<SortParameter?>(),
-                It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new PagedList<JobExecution> { Items = rows, TotalItems = rows.Count });
-
-        // Act
-        await _subject.ExecuteAsync(_jobContext).ConfigureAwait(false);
-
-        // Assert
-        _jobManager.Verify(
-            m => m.ExecuteAsync(It.IsAny<JobEnqueueRequest>(), It.IsAny<CancellationToken>()),
-            Times.Never);
-    }
-
-    [Test]
-    public async Task ExecuteAsync_ProceedsWithEnqueue_WhenReleaseSearchBacklogIsAtThreshold()
-    {
-        // Arrange
-        var rootId = Guid.NewGuid();
-        _unfulfilledLeafIds = [rootId];
-        _ancestry = new Dictionary<Guid, ContentHierarchyItemAncestry>
-        {
-            [rootId] = new() { Id = rootId, EffectiveMonitoring = MonitoringMode.Monitored }
-        };
-        var rows = Enumerable.Range(0, DefaultBackpressureThreshold)
-            .Select(_ => new JobExecution
-            {
-                JobType = "ReleaseSearchItem",
-                Scope = JobScope.System,
-                Status = JobExecutionStatus.Queued,
-                CreatedAt = DateTime.UtcNow
-            })
-            .ToList();
-        _jobExecutionRepository
-            .Setup(r => r.QueryAsync(
-                It.IsAny<JobExecutionQuery>(),
-                It.IsAny<PagingParameter>(),
-                It.IsAny<SortParameter?>(),
-                It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new PagedList<JobExecution> { Items = rows, TotalItems = rows.Count });
-
-        // Act
-        await _subject.ExecuteAsync(_jobContext).ConfigureAwait(false);
-
-        // Assert
-        _jobManager.Verify(
-            m => m.ExecuteAsync(
-                It.Is<JobEnqueueRequest>(r =>
-                    r.JobType == "ReleaseSearchItem" &&
-                    r.Mode == JobExecutionMode.Queue &&
-                    r.UserId == _userId),
-                It.IsAny<CancellationToken>()),
-            Times.Once);
-    }
-
-    [Test]
-    public async Task ExecuteAsync_Bails_WhenReleaseSearchBacklogExceedsAThresholdAboveThePageSizeLimit()
-    {
-        // Arrange
-        var rootId = Guid.NewGuid();
-        _unfulfilledLeafIds = [rootId];
-        _ancestry = new Dictionary<Guid, ContentHierarchyItemAncestry>
-        {
-            [rootId] = new() { Id = rootId, EffectiveMonitoring = MonitoringMode.Monitored }
-        };
-        var context = _jobContext with
-        {
-            Parameters = new Dictionary<string, string> { ["backpressureThreshold"] = "2000" }
-        };
-        _jobExecutionRepository
-            .Setup(r => r.QueryAsync(
-                It.IsAny<JobExecutionQuery>(),
-                It.IsAny<PagingParameter>(),
-                It.IsAny<SortParameter?>(),
-                It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new PagedList<JobExecution> { TotalItems = 2001 });
-
-        // Act
-        await _subject.ExecuteAsync(context).ConfigureAwait(false);
-
-        // Assert
-        _jobManager.Verify(
-            m => m.ExecuteAsync(It.IsAny<JobEnqueueRequest>(), It.IsAny<CancellationToken>()),
-            Times.Never);
     }
 
     [Test]

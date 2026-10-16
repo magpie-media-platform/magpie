@@ -114,57 +114,6 @@ internal sealed class BlockedFileTypeRepository(
         }
     }
 
-    public async Task<bool> UpdateAsync(
-        BlockedFileType model,
-        Guid? modifiedByUserId,
-        CancellationToken cancellationToken = default)
-    {
-        try
-        {
-            return await transactionManager.ExecuteWithTransactionAsync(
-                async _ =>
-                {
-                    var now = _time.GetUtcNow().UtcDateTime;
-                    var updated = await context.BlockedFileTypes
-                        .Where(e => e.Id == model.Id)
-                        .ExecuteUpdateAsync(
-                            s => s
-                                .SetProperty(e => e.Pattern, model.Pattern)
-                                .SetProperty(e => e.ModifiedAt, now)
-                                .SetProperty(e => e.ModifiedByUserId, modifiedByUserId),
-                            cancellationToken)
-                        .ConfigureAwait(false);
-
-                    if (updated > 0)
-                    {
-                        await auditRecordRepository.CreateAsync(
-                            new()
-                            {
-                                Category = AuditCategories.System,
-                                Operation = "Update",
-                                EntityId = model.Id.ToString(),
-                                EntityType = nameof(BlockedFileType),
-                                Detail = $"Updated blocked file type {model.Pattern}",
-                                Timestamp = now,
-                                UserId = modifiedByUserId
-                            },
-                            cancellationToken).ConfigureAwait(false);
-                    }
-
-                    return updated > 0;
-                },
-                cancellationToken).ConfigureAwait(false);
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(
-                ex,
-                "The blocked file type repository failed to update blocked file type {BlockedFileTypeId}.",
-                model.Id);
-            throw;
-        }
-    }
-
     public async Task<bool> DeleteAsync(Guid id, Guid? deletedByUserId, CancellationToken cancellationToken = default)
     {
         try

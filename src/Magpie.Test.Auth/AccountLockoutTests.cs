@@ -8,7 +8,6 @@ using Magpie.Models;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
 using Magpie.Models.Repositories;
-using Magpie.Sdk.Events;
 using Magpie.Sdk.Services;
 
 using Microsoft.Extensions.Logging.Abstractions;
@@ -24,7 +23,6 @@ public class AccountLockoutTests
 {
     private Mock<IUserService> _userService = null!;
     private Mock<IUserRepository> _userRepository = null!;
-    private Mock<IEventBus> _eventBus = null!;
     private LocalCredentialAuthenticationProvider _subject = null!;
     private AccountLockoutOptions _options = null!;
 
@@ -33,7 +31,6 @@ public class AccountLockoutTests
     {
         _userService = new Mock<IUserService>();
         _userRepository = new Mock<IUserRepository>();
-        _eventBus = new Mock<IEventBus>();
         var time = new Mock<TimeProvider>();
         time.Setup(value => value.GetUtcNow())
             .Returns(new DateTimeOffset(2026, 9, 9, 12, 0, 0, TimeSpan.Zero));
@@ -48,7 +45,6 @@ public class AccountLockoutTests
             _userService.Object,
             _userRepository.Object,
             _options,
-            _eventBus.Object,
             time.Object,
             NullLogger<LocalCredentialAuthenticationProvider>.Instance);
     }
@@ -118,13 +114,6 @@ public class AccountLockoutTests
 
         _userRepository.Verify(r => r.ResetLockoutAsync(user.Id, null, It.IsAny<CancellationToken>()), Times.Once);
         _userRepository.Verify(r => r.ClearFailedLoginsAsync(user.Id, It.IsAny<CancellationToken>()), Times.Once);
-        _eventBus.Verify(
-            b => b.PublishAsync(
-                It.Is<MagpieEvent>(e =>
-                    e.Name == MagpieEvents.Names.UserUnlocked &&
-                    e.Context[MagpieEvents.Keys.UserUnlockReason] == "expiry"),
-                It.IsAny<CancellationToken>()),
-            Times.Once);
     }
 
     [Test]

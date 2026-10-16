@@ -33,8 +33,7 @@ internal sealed class SQLiteDatabaseManagementProvider(
     TimeProvider timeProvider,
     ILogger<SQLiteDatabaseManagementProvider> logger) :
         IRecoverableDatabaseManagementProvider,
-        IOptimizingDatabaseManagementProvider,
-        IStartupValidationDatabaseManagementProvider
+        IOptimizingDatabaseManagementProvider
 {
     private const string SettingsGroupName = "SQLite.Database";
     private const string BackupDirectorySettingKey = "BackupDirectory";
@@ -81,64 +80,18 @@ internal sealed class SQLiteDatabaseManagementProvider(
         return await context.Database.CanConnectAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    public async Task<DatabaseStartupValidationResult> ValidateStartupAsync(
-        CancellationToken cancellationToken = default)
-    {
-        var connection = context.Database.GetDbConnection();
-        var closeConnection = connection.State is not ConnectionState.Open;
-        if (closeConnection)
-        {
-            await context.Database.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
-        }
-
-        try
-        {
-            using var tableCommand = connection.CreateCommand();
-
-            tableCommand.CommandText =
-                """
-                SELECT COUNT(*) FROM sqlite_master
-                WHERE type = 'table' AND name = '__EFMigrationsLock';
-                """;
-
-            var tableCount = await tableCommand.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
-            if (tableCount is not long count || count == 0)
-            {
-                return new(true);
-            }
-
-            using var lockCommand = connection.CreateCommand();
-
-            lockCommand.CommandText = "SELECT \"Timestamp\" FROM \"__EFMigrationsLock\" WHERE \"Id\" = 1 LIMIT 1;";
-
-            var lockCreatedAt = await lockCommand.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
-            if (lockCreatedAt is null)
-            {
-                return new(true);
-            }
-
-            return new(false, $"Another process is holding the SQLite database lock created at {lockCreatedAt}.");
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "SQLite database lock validation failed.");
-
-            return new(false, $"The SQLite database failed to initialize: {ex.Message}");
-        }
-        finally
-        {
-            if (closeConnection)
-            {
-                await context.Database.CloseConnectionAsync().ConfigureAwait(false);
-            }
-        }
-    }
-
     public async Task<IReadOnlyCollection<string>> GetAppliedMigrationsAsync(
         CancellationToken cancellationToken = default)
     {
         var applied = await context.Database.GetAppliedMigrationsAsync(cancellationToken).ConfigureAwait(false);
         return [.. applied];
+    }
+
+    public async Task<IReadOnlyCollection<string>> GetUnknownMigrationsAsync(
+        CancellationToken cancellationToken = default)
+    {
+        var applied = await context.Database.GetAppliedMigrationsAsync(cancellationToken).ConfigureAwait(false);
+        return [.. applied.Except(context.Database.GetMigrations(), StringComparer.Ordinal)];
     }
 
     private static string GetDataDirectory(string liveDatabasePath)

@@ -80,6 +80,28 @@ internal sealed class AuditHistoryService(
             cancellationToken).ConfigureAwait(false);
     }
 
+    /// <inheritdoc />
+    public Task<AuditRecord> WriteAsync(AuditRecord auditRecord, CancellationToken cancellationToken = default) =>
+        auditRecords.CreateAsync(auditRecord, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<IReadOnlyList<AuditRecord>> ListByContentAsync(
+        Guid contentId,
+        string category,
+        CancellationToken cancellationToken = default) =>
+        auditRecords.QueryAllAsync(
+            new AuditRecordQuery { EntityId = contentId.ToString(), Category = category },
+            cancellationToken: cancellationToken);
+
+    /// <inheritdoc />
+    public Task<IReadOnlyList<AuditRecord>> ListByJobExecutionAsync(
+        Guid jobExecutionId,
+        string category,
+        CancellationToken cancellationToken = default) =>
+        auditRecords.QueryAllAsync(
+            new AuditRecordQuery { JobExecutionId = jobExecutionId, Category = category },
+            cancellationToken: cancellationToken);
+
     private static AuditRecordQuery BuildAuditRecordPurgeQuery(DateTime cutoff) => new() { TimestampBefore = cutoff };
 
     private static JobExecutionQuery BuildJobExecutionPurgeQuery(DateTime cutoff) => new()

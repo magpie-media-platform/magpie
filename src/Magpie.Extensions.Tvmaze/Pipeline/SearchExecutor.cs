@@ -79,6 +79,8 @@ internal sealed class SearchExecutor(IClient client, ILogger<SearchExecutor> log
 
         internal bool Incomplete { get; set; }
 
+        internal bool Answered { get; set; }
+
         internal int RequiredCount { get; } = requiredCount;
 
         internal List<string> Warnings { get; } = [];
@@ -774,7 +776,7 @@ internal sealed class SearchExecutor(IClient client, ILogger<SearchExecutor> log
 
     private bool IsExecutionFailure(Exception exception)
     {
-        return exception is HttpRequestException or OperationCanceledException;
+        return exception is HttpRequestException or OperationCanceledException or TimeoutException;
     }
 
     private void AddVerificationWarnings(
@@ -841,6 +843,12 @@ internal sealed class SearchExecutor(IClient client, ILogger<SearchExecutor> log
 
             if (progress.ValidateOnly)
             {
+                if (!context.Answered && context.ResolveResults.Values.Any(result =>
+                    result.Status == NodeExecutionStatus.Failed))
+                {
+                    throw new InvalidOperationException("TVMaze search failed with no completed execution node.");
+                }
+
                 return new MetadataSearchPage
                 {
                     Supported = true,
@@ -915,7 +923,7 @@ internal sealed class SearchExecutor(IClient client, ILogger<SearchExecutor> log
                 JsonSerializer.Serialize(context.Outcome, ExecutionJsonOptions));
         }
 
-        if (execution.Status == NodeExecutionStatus.Failed && result.Matches.Count == 0)
+        if (execution.Status == NodeExecutionStatus.Failed && !context.Answered)
         {
             throw new InvalidOperationException("TVMaze search failed with no completed execution node.");
         }
@@ -1108,13 +1116,7 @@ internal sealed class SearchExecutor(IClient client, ILogger<SearchExecutor> log
         {
             throw;
         }
-        catch (OperationCanceledException exception)
-        {
-            logger.LogWarning(exception, "TVmaze plan node {NodeId} timed out", node.Id);
-            AddWarning(context, SearchWarnings.ExecutionFailed);
-            result = NodeExecutionResult.Failed;
-        }
-        catch (HttpRequestException exception)
+        catch (Exception exception) when (IsExecutionFailure(exception))
         {
             logger.LogWarning(exception, "TVmaze plan node {NodeId} failed", node.Id);
             AddWarning(context, SearchWarnings.ExecutionFailed);
@@ -1138,9 +1140,11 @@ internal sealed class SearchExecutor(IClient client, ILogger<SearchExecutor> log
         {
             SearchAnchorKind.NativeId or SearchAnchorKind.ExternalId => await ExecuteLookupFetchAsync(
                 (SearchSeed.IdLookup)node.Seed,
+                context,
                 cancellationToken).ConfigureAwait(false),
             SearchAnchorKind.Title => await ExecuteTitleFetchAsync(
                 (SearchSeed.FuzzyShow)node.Seed,
+                context,
                 cancellationToken).ConfigureAwait(false),
             SearchAnchorKind.Person => await ExecutePersonFetchAsync(node, context, cancellationToken)
                 .ConfigureAwait(false),
@@ -1151,46 +1155,82 @@ internal sealed class SearchExecutor(IClient client, ILogger<SearchExecutor> log
 
     private async Task<NodeExecutionResult> ExecuteLookupFetchAsync(
         SearchSeed.IdLookup seed,
+        PlanExecutionContext context,
         CancellationToken cancellationToken)
     {
         var shows = new List<ShowDto>();
         var showIds = new HashSet<int>();
         var rowsIn = 0;
+        var failed = false;
         foreach (var lookup in seed.Lookups)
         {
-            var show = lookup.ShowId is { } showId
-                ? await client.GetShowWithEmbedsAsync(showId, [], cancellationToken).ConfigureAwait(false)
-                : await client.LookupShowAsync(lookup.Source, lookup.Value, cancellationToken)
-                    .ConfigureAwait(false);
-            if (show is not null)
+            try
             {
-                rowsIn++;
-            }
+                var show = lookup.ShowId is { } showId
+                    ? await client.GetShowWithEmbedsAsync(showId, [], cancellationToken).ConfigureAwait(false)
+                    : await client.LookupShowAsync(lookup.Source, lookup.Value, cancellationToken)
+                        .ConfigureAwait(false);
+                context.Answered = true;
+                if (show is not null)
+                {
+                    rowsIn++;
+                }
 
-            AddShow(show, shows, showIds);
+                AddShow(show, shows, showIds);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception exception) when (IsExecutionFailure(exception))
+            {
+                logger.LogWarning(exception, "TVmaze show lookup failed for {Value}", lookup.Value);
+                AddWarning(context, SearchWarnings.ExecutionFailed);
+                failed = true;
+            }
         }
 
-        return NodeExecutionResult.From(shows, rowsIn);
+        return failed && shows.Count == 0
+            ? NodeExecutionResult.Failed
+            : NodeExecutionResult.From(shows, rowsIn);
     }
 
     private async Task<NodeExecutionResult> ExecuteTitleFetchAsync(
         SearchSeed.FuzzyShow seed,
+        PlanExecutionContext context,
         CancellationToken cancellationToken)
     {
         var shows = new List<ShowDto>();
         var showIds = new HashSet<int>();
         var rowsIn = 0;
+        var failed = false;
         foreach (var term in seed.Terms)
         {
-            var hits = await client.SearchShowsAsync(term, cancellationToken).ConfigureAwait(false);
-            rowsIn += hits.Count;
-            foreach (var hit in hits)
+            try
             {
-                AddShow(hit?.Show, shows, showIds);
+                var hits = await client.SearchShowsAsync(term, cancellationToken).ConfigureAwait(false);
+                context.Answered = true;
+                rowsIn += hits.Count;
+                foreach (var hit in hits)
+                {
+                    AddShow(hit?.Show, shows, showIds);
+                }
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception exception) when (IsExecutionFailure(exception))
+            {
+                logger.LogWarning(exception, "TVmaze title search failed for {Term}", term);
+                AddWarning(context, SearchWarnings.ExecutionFailed);
+                failed = true;
             }
         }
 
-        return NodeExecutionResult.From(shows, rowsIn);
+        return failed && shows.Count == 0
+            ? NodeExecutionResult.Failed
+            : NodeExecutionResult.From(shows, rowsIn);
     }
 
     private async Task<NodeExecutionResult> ExecutePersonFetchAsync(
@@ -1219,6 +1259,7 @@ internal sealed class SearchExecutor(IClient client, ILogger<SearchExecutor> log
                 {
                     var credits = await client.GetPersonCastCreditsAsync(identity.Person.Id, cancellationToken)
                         .ConfigureAwait(false);
+                    context.Answered = true;
                     rowsIn += credits.Count;
                     foreach (var credit in credits)
                     {
@@ -1256,6 +1297,7 @@ internal sealed class SearchExecutor(IClient client, ILogger<SearchExecutor> log
             {
                 var crewCredits = await client.GetPersonCrewCreditsAsync(identity.Person.Id, cancellationToken)
                     .ConfigureAwait(false);
+                context.Answered = true;
                 rowsIn += crewCredits.Count;
                 foreach (var credit in crewCredits)
                 {
@@ -1314,6 +1356,7 @@ internal sealed class SearchExecutor(IClient client, ILogger<SearchExecutor> log
             try
             {
                 var person = await client.GetPersonByIdAsync(personId, cancellationToken).ConfigureAwait(false);
+                context.Answered = true;
                 if (person is not null)
                 {
                     rowsIn++;
@@ -1340,6 +1383,7 @@ internal sealed class SearchExecutor(IClient client, ILogger<SearchExecutor> log
             try
             {
                 var hits = await client.SearchPeopleAsync(term, cancellationToken).ConfigureAwait(false);
+                context.Answered = true;
                 rowsIn += hits.Count;
                 foreach (var hit in hits)
                 {
@@ -1496,19 +1540,13 @@ internal sealed class SearchExecutor(IClient client, ILogger<SearchExecutor> log
             {
                 pageRequests++;
                 shows = await client.GetShowsPageAsync(page, cancellationToken).ConfigureAwait(false);
+                context.Answered = true;
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
                 throw;
             }
-            catch (OperationCanceledException exception)
-            {
-                logger.LogWarning(exception, "TVmaze show-index page {Page} request timed out", page);
-                AddWarning(context, SearchWarnings.ExecutionFailed);
-                status = MergeVerificationStatus(status, NodeExecutionStatus.Failed);
-                break;
-            }
-            catch (HttpRequestException exception)
+            catch (Exception exception) when (IsExecutionFailure(exception))
             {
                 logger.LogWarning(exception, "TVmaze show-index page {Page} request failed", page);
                 AddWarning(context, SearchWarnings.ExecutionFailed);
@@ -1685,6 +1723,7 @@ internal sealed class SearchExecutor(IClient client, ILogger<SearchExecutor> log
                             candidate.Id,
                             embeds,
                             cancellationToken).ConfigureAwait(false);
+                        context.Answered = true;
                         context.Details[(candidate.Id, embedKey)] = hydrated;
                     }
 

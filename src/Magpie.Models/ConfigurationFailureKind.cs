@@ -16,11 +16,6 @@ public enum ConfigurationFailureKind
     Transient,
 
     /// <summary>
-    /// The upstream service rejected the test because of a rate limit.
-    /// </summary>
-    RateLimited,
-
-    /// <summary>
     /// The upstream service does not hold the requested resource.
     /// </summary>
     NotFound,

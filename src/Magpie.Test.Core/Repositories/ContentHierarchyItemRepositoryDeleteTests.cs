@@ -17,6 +17,7 @@ using Magpie.Models.Data;
 using Magpie.Models.Enums;
 using Magpie.Models.Filtering;
 using Magpie.Models.Paging;
+using Magpie.Sdk.Events;
 using Magpie.Sdk.Services;
 
 using Microsoft.Data.Sqlite;
@@ -37,6 +38,8 @@ public sealed class ContentHierarchyItemRepositoryDeleteTests
     private MagpieDbContext _context = null!;
     private SqliteConnection _template = null!;
     private IContentHierarchyItemRepository _subject = null!;
+    private List<MagpieEvent> _events = null!;
+    private bool _publishedInTransaction;
     private Guid _metadataContainerId;
     private Guid _userId;
 
@@ -91,10 +94,20 @@ public sealed class ContentHierarchyItemRepositoryDeleteTests
         var metadataContainers = new MetadataContainerRepository(
             _context, auditRecords, subjects, transactions,
             NullLogger<MetadataContainerRepository>.Instance, TimeProvider.System);
+        _events = [];
+        _publishedInTransaction = false;
+        var eventBus = new Mock<IEventBus>();
+        eventBus.Setup(bus => bus.PublishAsync(It.IsAny<MagpieEvent>(), It.IsAny<CancellationToken>()))
+            .Callback((MagpieEvent magpieEvent, CancellationToken _) =>
+            {
+                _events.Add(magpieEvent);
+                _publishedInTransaction |= _context.Database.CurrentTransaction is not null;
+            })
+            .Returns(Task.CompletedTask);
         _subject = new ContentHierarchyItemRepository(
             _context, auditRecords, transactions,
             metadataContainers,
-            Mock.Of<IContentTypeRegistry>(), Mock.Of<IEventBus>(),
+            Mock.Of<IContentTypeRegistry>(), eventBus.Object,
             NullLogger<ContentHierarchyItemRepository>.Instance, TimeProvider.System, Mock.Of<IContentRepository>());
     }
 
@@ -693,6 +706,49 @@ public sealed class ContentHierarchyItemRepositoryDeleteTests
             Assert.That(remaining, Does.Not.Contain(a.Id));
             Assert.That(remaining, Does.Not.Contain(b.Id));
             Assert.That(remaining, Does.Contain(c.Id));
+        }
+    }
+
+    [Test]
+    public async Task BulkDeleteAsync_PublishesOneDeletedEventPerItemAfterCommit_WhenItemsAreDeleted()
+    {
+        // Arrange
+        ContentHierarchyItem[] items =
+        [
+            new()
+            {
+                MetadataContainer = new() { CreatedAt = DateTime.UtcNow },
+                ContentType = "type-a",
+                Level = "level-a",
+                Slug = "movie-a",
+                Name = "movie-a",
+                CreatedAt = DateTime.UtcNow
+            },
+            new()
+            {
+                MetadataContainer = new() { CreatedAt = DateTime.UtcNow },
+                ContentType = "type-a",
+                Level = "level-a",
+                Slug = "movie-b",
+                Name = "movie-b",
+                CreatedAt = DateTime.UtcNow
+            }
+        ];
+        _context.ContentHierarchyItems.AddRange(items);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        // Act
+        await _subject.BulkDeleteAsync(new() { Ids = [.. items.Select(item => item.Id)] }, _userId)
+            .ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(_publishedInTransaction, Is.False);
+            Assert.That(_events.Select(published => published.Name),
+                Is.All.EqualTo(MagpieEvents.Names.ContentHierarchyItemDeleted));
+            Assert.That(_events.Select(published => published.Context[MagpieEvents.Keys.ContentHierarchyItemId]),
+                Is.EquivalentTo(items.Select(item => item.Id.ToString("D"))));
         }
     }
 

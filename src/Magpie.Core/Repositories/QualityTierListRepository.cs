@@ -23,16 +23,19 @@ internal sealed class QualityTierListRepository(
     IAuditRecordRepository auditRecordRepository,
     ITransactionManager transactionManager,
     IContentHierarchyItemRepository contentHierarchyItemRepository,
+    IRootFolderRepository rootFolderRepository,
+    IWishlistRepository wishlistRepository,
     IEventBus eventBus,
     ILogger<QualityTierListRepository> logger,
     TimeProvider timeProvider) : IQualityTierListRepository
 {
     private static readonly (string Name, Func<QualityTierList, QualityTierList, bool> Changed)[] UpdateFields =
     [
-        ("name", (current, model) => !Equals(current.Name, model.Name)),
-        ("mimeTypes", (current, model) => !current.MimeTypes.SequenceEqual(model.MimeTypes)),
-        ("upgradeAllowed", (current, model) => !Equals(current.UpgradeAllowed, model.UpgradeAllowed)),
-        ("rules", (current, model) => !current.Rules.SequenceEqual(model.Rules)),
+        (nameof(QualityTierList.Name), (current, model) => !Equals(current.Name, model.Name)),
+        (nameof(QualityTierList.MimeTypes), (current, model) => !current.MimeTypes.SequenceEqual(model.MimeTypes)),
+        (nameof(QualityTierList.UpgradeAllowed), (current, model) =>
+            !Equals(current.UpgradeAllowed, model.UpgradeAllowed)),
+        (nameof(QualityTierList.Rules), (current, model) => !current.Rules.SequenceEqual(model.Rules)),
     ];
 
     private readonly TimeProvider _time = timeProvider;
@@ -42,27 +45,27 @@ internal sealed class QualityTierListRepository(
         var fields = new List<string>();
         if (patch.Name is not null)
         {
-            fields.Add(nameof(QualityTierListPatch.Name));
+            fields.Add(nameof(QualityTierList.Name));
         }
 
         if (patch.MimeTypes is not null)
         {
-            fields.Add(nameof(QualityTierListPatch.MimeTypes));
+            fields.Add(nameof(QualityTierList.MimeTypes));
         }
 
         if (patch.UpgradeAllowed is not null)
         {
-            fields.Add(nameof(QualityTierListPatch.UpgradeAllowed));
+            fields.Add(nameof(QualityTierList.UpgradeAllowed));
         }
 
         if (patch.Rules is not null)
         {
-            fields.Add(nameof(QualityTierListPatch.Rules));
+            fields.Add(nameof(QualityTierList.Rules));
         }
 
         if (patch.QualityTierRanks is not null)
         {
-            fields.Add(nameof(QualityTierListPatch.QualityTierRanks));
+            fields.Add(nameof(QualityTierList.QualityTierRanks));
         }
 
         if (patch.Tags is not null)
@@ -278,19 +281,7 @@ internal sealed class QualityTierListRepository(
                         .ExecuteDeleteAsync(cancellationToken)
                         .ConfigureAwait(false);
 
-                    var rootFolders = await context.RootFolders
-                        .ToListAsync(cancellationToken)
-                        .ConfigureAwait(false);
-
-                    foreach (var value in rootFolders.SelectMany(folder => folder.Defaults.Values))
-                    {
-                        if (value.QualityTierListId == id)
-                        {
-                            value.QualityTierListId = null;
-                        }
-                    }
-
-                    await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+                    await ClearReferencesAsync(id, deletedByUserId, cancellationToken).ConfigureAwait(false);
 
                     var deleted = await context.QualityTierLists
                         .Where(q => q.Id == id)
@@ -336,6 +327,62 @@ internal sealed class QualityTierListRepository(
                 "The quality tier list repository failed to delete quality tier list {QualityTierListId}.",
                 id);
             throw;
+        }
+    }
+
+    // The database would set these references to null without their events, so their owners clear them first.
+    private async Task ClearReferencesAsync(Guid id, Guid? modifiedByUserId, CancellationToken cancellationToken)
+    {
+        var rootFolders = await context.RootFolders
+            .AsNoTracking()
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+        foreach (var folder in rootFolders.Where(folder =>
+            folder.Defaults.Values.Any(value => value.QualityTierListId == id)))
+        {
+            await rootFolderRepository.PatchAsync(
+                new RootFolderPatch
+                {
+                    Id = folder.Id,
+                    Defaults = new()
+                    {
+                        Value = folder.Defaults.ToDictionary(
+                            entry => entry.Key,
+                            entry => entry.Value.QualityTierListId == id
+                                ? entry.Value with { QualityTierListId = null }
+                                : entry.Value),
+                    },
+                },
+                modifiedByUserId,
+                cancellationToken).ConfigureAwait(false);
+        }
+
+        var wishlistIds = await context.Wishlists
+            .AsNoTracking()
+            .Where(wishlist => wishlist.QualityTierListId == id)
+            .Select(wishlist => wishlist.Id)
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+        foreach (var wishlistId in wishlistIds)
+        {
+            await wishlistRepository.PatchAsync(
+                new WishlistPatch { Id = wishlistId, QualityTierListId = new() { Value = null } },
+                modifiedByUserId,
+                cancellationToken).ConfigureAwait(false);
+        }
+
+        var itemIds = await context.ContentHierarchyItems
+            .AsNoTracking()
+            .Where(item => item.QualityTierListId == id)
+            .Select(item => item.Id)
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+        if (itemIds.Count > 0)
+        {
+            await contentHierarchyItemRepository.BulkPatchAsync(
+                new() { Ids = itemIds, Patch = new() { QualityTierListId = new() { Value = null } } },
+                modifiedByUserId,
+                cancellationToken).ConfigureAwait(false);
         }
     }
 

@@ -106,9 +106,9 @@ public sealed class ReleaseServiceTests
             _acquisitionReleaseId = new("5e1ea5e0-0000-0000-0000-000000000001");
             _acquisitionLeafId = new("1eaf0000-0000-0000-0000-000000000001");
             _acquisitionShowId = Guid.NewGuid();
-            _acquisitionSeasonOneId = Guid.NewGuid();
+            _acquisitionSeasonOneId = new("1eaf0000-0000-0000-0000-000000000003");
             _acquisitionSeasonTwoId = Guid.NewGuid();
-            _acquisitionEpisodeTwoId = Guid.NewGuid();
+            _acquisitionEpisodeTwoId = new("1eaf0000-0000-0000-0000-000000000002");
             _acquisitionEpisodeThreeId = Guid.NewGuid();
             _acquisitionOrphanId = Guid.NewGuid();
             _acquisitionClientOneId = Guid.NewGuid();
@@ -2101,10 +2101,53 @@ public sealed class ReleaseServiceTests
         }
     }
 
-    [Test]
-    public async Task AcquireAsync_ScopesTheDownloadToTheWholeCoverage_WhenGrabbingAPackForOneEpisode()
+    [TestCase(
+        DownloadStatus.Failed,
+        new[] { "1eaf0000-0000-0000-0000-000000000002" },
+        new[]
+        {
+            "1eaf0000-0000-0000-0000-000000000001",
+            "1eaf0000-0000-0000-0000-000000000002",
+            "1eaf0000-0000-0000-0000-000000000003"
+        })]
+    [TestCase(
+        DownloadStatus.Imported,
+        new[] { "1eaf0000-0000-0000-0000-000000000002" },
+        new[] { "1eaf0000-0000-0000-0000-000000000001", "1eaf0000-0000-0000-0000-000000000003" })]
+    [TestCase(
+        DownloadStatus.Imported,
+        new[] { "1eaf0000-0000-0000-0000-000000000001" },
+        new[]
+        {
+            "1eaf0000-0000-0000-0000-000000000001",
+            "1eaf0000-0000-0000-0000-000000000002",
+            "1eaf0000-0000-0000-0000-000000000003"
+        })]
+    [TestCase(
+        DownloadStatus.Imported,
+        new string[] { },
+        new[] { "1eaf0000-0000-0000-0000-000000000001" })]
+    public async Task AcquireAsync_ExcludesImportedImplicitScopes_WhenGrabbingAPackForOneEpisode(
+        DownloadStatus previousStatus,
+        string[] previousScopeIds,
+        string[] expectedScopeIds)
     {
         // Arrange
+        var previousDownload = new Download
+        {
+            ReleaseId = _acquisitionReleaseId,
+            ExternalId = "previous-pack",
+            Title = "Show S01 pack",
+            Status = previousStatus,
+        };
+        foreach (var id in previousScopeIds)
+        {
+            previousDownload.Scope.Add(new DownloadScope { ContentHierarchyItemId = Guid.Parse(id) });
+        }
+
+        _acquisitionDownloadRepository
+            .Setup(r => r.ListByReleaseAsync(It.IsAny<IReadOnlyCollection<Release>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([previousDownload]);
         _acquisitionReleaseScopes
             .Setup(r => r.QueryAsync(
                 It.Is<ReleaseScopeQuery>(query => query.ReleaseId == _acquisitionReleaseId),
@@ -2152,19 +2195,23 @@ public sealed class ReleaseServiceTests
 
         // Act
         await _acquisitionSubject
-            .AcquireAsync(_acquisitionReleaseId, userId: null, grabTargetContentHierarchyItemId: _acquisitionLeafId)
+            .AcquireAsync(
+                _acquisitionReleaseId,
+                userId: null,
+                interactive: true,
+                grabTargetContentHierarchyItemId: _acquisitionLeafId)
             .ConfigureAwait(false);
 
         // Assert
-        _acquisitionDownloadScopes.Verify(
+        _acquisitionDownloadRepository.Verify(
             r => r.CreateAsync(
-                It.Is<DownloadScope>(scope =>
-                    scope.ContentHierarchyItemId == _acquisitionSeasonOneId ||
-                    scope.ContentHierarchyItemId == _acquisitionLeafId ||
-                    scope.ContentHierarchyItemId == _acquisitionEpisodeTwoId),
+                It.Is<Download>(download => download.Scope
+                    .Select(scope => scope.ContentHierarchyItemId)
+                    .Order()
+                    .SequenceEqual(expectedScopeIds.Select(Guid.Parse).Order())),
                 null,
                 It.IsAny<CancellationToken>()),
-            Times.Exactly(3));
+            Times.Once);
     }
 
     [Test]
@@ -2223,23 +2270,15 @@ public sealed class ReleaseServiceTests
             .ConfigureAwait(false);
 
         // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            _acquisitionDownloadScopes.Verify(
-                r => r.CreateAsync(
-                    It.Is<DownloadScope>(scope =>
-                        scope.ContentHierarchyItemId == _acquisitionSeasonOneId ||
-                        scope.ContentHierarchyItemId == _acquisitionLeafId),
-                    null,
-                    It.IsAny<CancellationToken>()),
-                Times.Exactly(2));
-            _acquisitionDownloadScopes.Verify(
-                r => r.CreateAsync(
-                    It.Is<DownloadScope>(scope => scope.ContentHierarchyItemId == _acquisitionEpisodeTwoId),
-                    null,
-                    It.IsAny<CancellationToken>()),
-                Times.Never);
-        }
+        _acquisitionDownloadRepository.Verify(
+            r => r.CreateAsync(
+                It.Is<Download>(download => download.Scope
+                    .Select(scope => scope.ContentHierarchyItemId)
+                    .Order()
+                    .SequenceEqual(new[] { _acquisitionSeasonOneId, _acquisitionLeafId }.Order())),
+                null,
+                It.IsAny<CancellationToken>()),
+            Times.Once);
     }
 
     [Test]
@@ -2332,14 +2371,15 @@ public sealed class ReleaseServiceTests
             .ConfigureAwait(false);
 
         // Assert
-        _acquisitionDownloadScopes.Verify(
+        _acquisitionDownloadRepository.Verify(
             r => r.CreateAsync(
-                It.Is<DownloadScope>(scope =>
-                    scope.ContentHierarchyItemId == _acquisitionSeasonOneId ||
-                    scope.ContentHierarchyItemId == _acquisitionLeafId),
+                It.Is<Download>(download => download.Scope
+                    .Select(scope => scope.ContentHierarchyItemId)
+                    .Order()
+                    .SequenceEqual(new[] { _acquisitionSeasonOneId, _acquisitionLeafId }.Order())),
                 null,
                 It.IsAny<CancellationToken>()),
-            Times.Exactly(2));
+            Times.Once);
     }
 
     [Test]

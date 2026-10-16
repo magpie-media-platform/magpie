@@ -33,17 +33,17 @@ internal sealed class RemotePathMappingRepository(
         var fields = new List<string>();
         if (patch.Host is not null)
         {
-            fields.Add("host");
+            fields.Add(nameof(RemotePathMapping.Host));
         }
 
         if (patch.RemotePath is not null)
         {
-            fields.Add("remotePath");
+            fields.Add(nameof(RemotePathMapping.RemotePath));
         }
 
         if (patch.LocalPath is not null)
         {
-            fields.Add("localPath");
+            fields.Add(nameof(RemotePathMapping.LocalPath));
         }
 
         return fields;
@@ -54,17 +54,17 @@ internal sealed class RemotePathMappingRepository(
         var fields = new List<string>();
         if (!string.Equals(current.Host, model.Host, StringComparison.Ordinal))
         {
-            fields.Add("host");
+            fields.Add(nameof(RemotePathMapping.Host));
         }
 
         if (!string.Equals(current.RemotePath, model.RemotePath, StringComparison.Ordinal))
         {
-            fields.Add("remotePath");
+            fields.Add(nameof(RemotePathMapping.RemotePath));
         }
 
         if (!string.Equals(current.LocalPath, model.LocalPath, StringComparison.Ordinal))
         {
-            fields.Add("localPath");
+            fields.Add(nameof(RemotePathMapping.LocalPath));
         }
 
         return fields;

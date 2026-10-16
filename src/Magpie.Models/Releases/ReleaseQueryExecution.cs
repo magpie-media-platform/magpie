@@ -1,4 +1,3 @@
-using System;
 using System.Collections.Generic;
 
 namespace Magpie.Models.Releases;
@@ -32,11 +31,6 @@ public sealed record ReleaseQueryExecution
     /// True if one or more connections failed and the run returned an incomplete set.
     /// </summary>
     public bool Partial { get; init; }
-
-    /// <summary>
-    /// The earliest time to resume branches that an upstream cooldown deferred.
-    /// </summary>
-    public DateTimeOffset? RetryAt { get; init; }
 
     /// <summary>
     /// The message that describes the failure of the run, or null if every connection answered.

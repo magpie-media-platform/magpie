@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
+using System.Net.Http;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
@@ -112,10 +113,6 @@ internal sealed class QueryEngine(
                     cancellationToken)
             };
         }
-        catch (Magpie.Models.UpstreamThrottledException)
-        {
-            throw;
-        }
         catch (Exception ex)
         {
             if (activity is not null)
@@ -187,7 +184,7 @@ internal sealed class QueryEngine(
                 {
                     hasNext = await enumerator.MoveNextAsync().ConfigureAwait(false);
                 }
-                catch (OperationCanceledException)
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                 {
                     throw;
                 }
@@ -195,12 +192,13 @@ internal sealed class QueryEngine(
                 {
                     throw;
                 }
-                catch (Magpie.Models.UpstreamThrottledException)
-                {
-                    throw;
-                }
                 catch (Exception ex)
                 {
+                    if (!diagnostics.ReceivedResponse)
+                    {
+                        throw;
+                    }
+
                     logger.LogWarning(
                         ex,
                         "TMDb query execution failed for plan root {PlanRoot}",
@@ -217,10 +215,16 @@ internal sealed class QueryEngine(
 
                 if (failed || !hasNext)
                 {
+                    if (!diagnostics.ReceivedResponse && diagnostics.StreamFaulted)
+                    {
+                        throw new HttpRequestException("TMDb could not complete the remote query.");
+                    }
+
                     yield break;
                 }
 
                 surviving++;
+                diagnostics.ReceivedResponse = true;
                 yield return enumerator.Current;
             }
         }

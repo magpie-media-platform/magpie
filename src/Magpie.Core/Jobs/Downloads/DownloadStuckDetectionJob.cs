@@ -40,7 +40,7 @@ internal sealed class DownloadStuckDetectionJob(
     {
         JobType = MagpieJobs.Types.DownloadStuckDetection,
         DisplayName = "Download stuck detection",
-        Description = "Marks downloads as stuck if they've stopped responding, allowing Magpie to try another release.",
+        Description = "Finds downloads that no longer make progress and marks them as stuck.",
         Category = "System",
         Scope = JobScope.Administrative,
         Enabled = true,

@@ -62,10 +62,11 @@ internal sealed class ContentMetadataSearcher(
         {
             throw;
         }
-        catch (Exception ex) when (ex is HttpRequestException or TimeoutException or InvalidOperationException)
+        catch (Exception ex) when (ex is HttpRequestException or OperationCanceledException or
+            TimeoutException or InvalidOperationException)
         {
             logger.LogWarning(ex, "Open Library ordinary search failed");
-            return [];
+            throw;
         }
     }
 

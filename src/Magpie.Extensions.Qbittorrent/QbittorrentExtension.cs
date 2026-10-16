@@ -26,14 +26,17 @@ public sealed class QbittorrentExtension : IExtension
     public void RegisterServices(IServiceCollection services)
     {
         services.AddHttpClient<IQbittorrentClient, QbittorrentClient>()
+            .AddUpstreamCooldown(request => request.Properties.TryGetValue(
+                QbittorrentClient.AuthenticationScopeKey,
+                out var scope) ? scope as string : null)
             .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
             {
                 UseCookies = true,
                 AllowAutoRedirect = false
             });
-        services.AddHttpClient(
-            QbittorrentDownloadClientIntegration.TorrentFileHttpClientName,
-            client => client.Timeout = TimeSpan.FromSeconds(30));
+        services.AddHttpClient(QbittorrentDownloadClientIntegration.TorrentFileHttpClientName)
+            .AddUpstreamCooldown(followRedirects: true, requestTimeout: TimeSpan.FromSeconds(30))
+            .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
 
         services.AddScoped<IDownloadClientIntegration, QbittorrentDownloadClientIntegration>();
 

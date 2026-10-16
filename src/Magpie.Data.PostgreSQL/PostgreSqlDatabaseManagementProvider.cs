@@ -6,6 +6,7 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -21,10 +22,11 @@ using Npgsql;
 
 namespace Magpie.Data.PostgreSQL;
 
-internal sealed class PostgreSqlDatabaseManagementProvider(
+internal sealed partial class PostgreSqlDatabaseManagementProvider(
     MagpieDbContext context,
     MagpieHostEnvironment hostEnvironment,
     TimeProvider timeProvider,
+    PostgreSqlToolOptions toolOptions,
     ILogger<PostgreSqlDatabaseManagementProvider> logger) :
         IRecoverableDatabaseManagementProvider,
         IOptimizingDatabaseManagementProvider
@@ -39,6 +41,11 @@ internal sealed class PostgreSqlDatabaseManagementProvider(
     private const string BackupIdFormat = "yyyyMMdd_HHmmss";
     private const string DumpTool = "pg_dump";
     private const string RestoreTool = "pg_restore";
+
+    private const UnixFileMode ExecuteModes =
+        UnixFileMode.UserExecute | UnixFileMode.GroupExecute | UnixFileMode.OtherExecute;
+
+    private static readonly TimeSpan ToolVersionTimeout = TimeSpan.FromSeconds(5);
 
     private const string RestorePrivilegesSql =
         """
@@ -82,9 +89,21 @@ internal sealed class PostgreSqlDatabaseManagementProvider(
         return [.. applied];
     }
 
+    public async Task<IReadOnlyCollection<string>> GetUnknownMigrationsAsync(
+        CancellationToken cancellationToken = default)
+    {
+        var applied = await context.Database.GetAppliedMigrationsAsync(cancellationToken).ConfigureAwait(false);
+        return [.. applied.Except(context.Database.GetMigrations(), StringComparer.Ordinal)];
+    }
+
     public async Task<string> BackupAsync(BackupCreateOptions options, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(options);
+
+        if (await GetBackupDeniedReasonAsync(cancellationToken).ConfigureAwait(false) is { } deniedReason)
+        {
+            throw new MagpieException(deniedReason);
+        }
 
         var backupDirectory = Path.Combine(hostEnvironment.DataRoot, BackupDirectoryName);
         Directory.CreateDirectory(backupDirectory);
@@ -290,9 +309,9 @@ internal sealed class PostgreSqlDatabaseManagementProvider(
         return Task.FromResult(TryParseBackupId(backupId, out _) && File.Exists(path) ? path : null);
     }
 
-    public Task<string?> GetBackupDeniedReasonAsync(CancellationToken cancellationToken = default)
+    public async Task<string?> GetBackupDeniedReasonAsync(CancellationToken cancellationToken = default)
     {
-        return Task.FromResult<string?>(null);
+        return await GetToolDeniedReasonAsync(DumpTool, cancellationToken).ConfigureAwait(false);
     }
 
     public async Task<string?> GetRestoreDeniedReasonAsync(CancellationToken cancellationToken = default)
@@ -304,7 +323,12 @@ internal sealed class PostgreSqlDatabaseManagementProvider(
             return "Restore needs the CREATEDB privilege on PostgreSQL";
         }
 
-        return (bool)privileges[1] ? null : "Restore needs the database owner role on PostgreSQL";
+        if (!(bool)privileges[1])
+        {
+            return "Restore needs the database owner role on PostgreSQL";
+        }
+
+        return await GetToolDeniedReasonAsync(RestoreTool, cancellationToken).ConfigureAwait(false);
     }
 
     public Task<string?> GetDeleteDeniedReasonAsync(CancellationToken cancellationToken = default)
@@ -336,6 +360,45 @@ internal sealed class PostgreSqlDatabaseManagementProvider(
 
     private static string Quote(string identifier) =>
         "\"" + identifier.Replace("\"", "\"\"", StringComparison.Ordinal) + "\"";
+
+    private static bool IsExecutable(string path)
+    {
+        return File.Exists(path) &&
+            (OperatingSystem.IsWindows() || (File.GetUnixFileMode(path) & ExecuteModes) != 0);
+    }
+
+    private static async Task<int?> GetToolMajorVersionAsync(string path, CancellationToken cancellationToken)
+    {
+        var startInfo = new ProcessStartInfo(path, "--version")
+        {
+            RedirectStandardOutput = true,
+            UseShellExecute = false
+        };
+        using var process = Process.Start(startInfo);
+        if (process is null)
+        {
+            return null;
+        }
+
+        var output = process.StandardOutput.ReadToEndAsync(cancellationToken);
+        var exit = process.WaitForExitAsync(cancellationToken);
+        if (await Task.WhenAny(exit, Task.Delay(ToolVersionTimeout, CancellationToken.None)).ConfigureAwait(false) !=
+            exit)
+        {
+            process.Kill(entireProcessTree: true);
+            return null;
+        }
+
+        await exit.ConfigureAwait(false);
+        var match = ToolVersionPattern().Match(await output.ConfigureAwait(false));
+
+        return process.ExitCode == 0 && match.Success
+            ? int.Parse(match.Groups[1].Value, CultureInfo.InvariantCulture)
+            : null;
+    }
+
+    [GeneratedRegex(@"\)\s+(\d+)")]
+    private static partial Regex ToolVersionPattern();
 
     private static async Task WriteJsonAsync<T>(string path, T value, CancellationToken cancellationToken)
     {
@@ -374,6 +437,54 @@ internal sealed class PostgreSqlDatabaseManagementProvider(
         return string.IsNullOrEmpty(database)
             ? throw new InvalidOperationException("The PostgreSQL connection string has no database.")
             : database;
+    }
+
+    private string? FindTool(string tool)
+    {
+        var fileName = OperatingSystem.IsWindows() ? tool + ".exe" : tool;
+
+        return (Environment.GetEnvironmentVariable("PATH") ?? string.Empty)
+            .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
+            .Prepend(toolOptions.Directory)
+            .Where(directory => !string.IsNullOrWhiteSpace(directory))
+            .Select(directory => Path.Combine(directory!, fileName))
+            .FirstOrDefault(IsExecutable);
+    }
+
+    private async Task<string?> GetToolDeniedReasonAsync(string tool, CancellationToken cancellationToken)
+    {
+        var path = FindTool(tool);
+        if (path is null)
+        {
+            return $"{tool} was not found on PATH or in the PostgreSQL tools directory";
+        }
+
+        var version = await GetToolMajorVersionAsync(path, cancellationToken).ConfigureAwait(false);
+        if (version is null)
+        {
+            return $"The version of {tool} at {path} cannot be read";
+        }
+
+        var serverVersion = await GetServerMajorVersionAsync(cancellationToken).ConfigureAwait(false);
+
+        return version < serverVersion
+            ? string.Create(
+                CultureInfo.InvariantCulture,
+                $"{tool} is version {version} but the PostgreSQL server is version {serverVersion}")
+            : null;
+    }
+
+    private async Task<int> GetServerMajorVersionAsync(CancellationToken cancellationToken)
+    {
+        await context.Database.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            return ((NpgsqlConnection)context.Database.GetDbConnection()).PostgreSqlVersion.Major;
+        }
+        finally
+        {
+            await context.Database.CloseConnectionAsync().ConfigureAwait(false);
+        }
     }
 
     private async Task DropDatabaseAsync(string database, CancellationToken cancellationToken)
@@ -440,7 +551,7 @@ internal sealed class PostgreSqlDatabaseManagementProvider(
     private async Task RunToolAsync(string tool, string[] arguments, CancellationToken cancellationToken)
     {
         var builder = new NpgsqlConnectionStringBuilder(context.Database.GetConnectionString());
-        var startInfo = new ProcessStartInfo(tool)
+        var startInfo = new ProcessStartInfo(FindTool(tool) ?? tool)
         {
             RedirectStandardOutput = true,
             RedirectStandardError = true,

@@ -94,8 +94,6 @@ internal static class MagpieJobs
 
         internal const string AuditRetentionDays = "auditRetentionDays";
 
-        internal const string BackpressureThreshold = "backpressureThreshold";
-
         internal const string BackupEnabled = "backupEnabled";
 
         internal const string BackupIntervalDays = "backupIntervalDays";
@@ -158,11 +156,17 @@ internal static class MagpieJobs
 
         internal const string OptimizeIntervalDays = "optimizeIntervalDays";
 
+        internal const string QualityTierId = "qualityTierId";
+
+        internal const string QualityTierListId = "qualityTierListId";
+
         internal const string ReleaseId = "releaseId";
 
         internal const string ReleaseObservationRetentionDays = "releaseObservationRetentionDays";
 
         internal const string RequireMissingMediaInfo = "requireMissingMediaInfo";
+
+        internal const string RescoreQuality = "rescoreQuality";
 
         internal const string RetryCooldownHours = "retryCooldownHours";
 
@@ -200,10 +204,5 @@ internal static class MagpieJobs
         internal const string AllMediaInfoPolicy = "All";
 
         internal const string NodeSearchKind = "node";
-    }
-
-    internal static class StatusMessages
-    {
-        internal const string UpstreamThrottled = "The work is incomplete while its upstream is throttled.";
     }
 }

@@ -1246,6 +1246,42 @@ public sealed class ContentHierarchyItemRepositoryPatchTests
     }
 
     [Test]
+    public async Task PatchAsync_AddsTheTagOnce_WhenThePatchAddsANewTagTwice()
+    {
+        // Arrange
+        var item = new ContentHierarchyItem
+        {
+            MetadataContainerId = _metadataContainerId,
+            ContentType = "type-a",
+            Level = "level-a",
+            Slug = "repeated-tag-movie",
+            Name = "Repeated Tag Movie",
+            CreatedAt = DateTime.UtcNow
+        };
+        _context.ContentHierarchyItems.Add(item);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.ChangeTracker.Clear();
+
+        // Act
+        var result = await _subject.PatchAsync(
+            new() { Id = item.Id, Tags = new() { Add = ["journey-follow", "journey-follow"] } },
+            _userId).ConfigureAwait(false);
+
+        // Assert
+        var tags = await _context.Tags.AsNoTracking().Include(t => t.MetadataContainers).ToListAsync()
+            .ConfigureAwait(false);
+        var tagAudits = await _context.AuditRecords.AsNoTracking().CountAsync(r => r.Operation == "AddTag")
+            .ConfigureAwait(false);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result, Is.True);
+            Assert.That(tags.Select(t => t.Name), Is.EqualTo(["journey-follow"]));
+            Assert.That(tags[0].MetadataContainers.Select(c => c.Id), Is.EqualTo([_metadataContainerId]));
+            Assert.That(tagAudits, Is.EqualTo(1));
+        }
+    }
+
+    [Test]
     public async Task PatchAsync_RemovesTags_WhenTagRemovalsAreSet()
     {
         // Arrange

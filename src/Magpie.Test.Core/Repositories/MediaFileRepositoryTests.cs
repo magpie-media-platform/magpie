@@ -29,6 +29,7 @@ public sealed class MediaFileRepositoryTests
     private MagpieDbContext _context = null!;
     private SqliteConnection _template = null!;
     private List<MagpieEvent> _events = null!;
+    private bool _publishedInTransaction;
     private IMediaFileRepository _subject = null!;
     private Guid _movieItemId;
     private Guid _firstEpisodeItemId;
@@ -156,9 +157,14 @@ public sealed class MediaFileRepositoryTests
         hierarchy.Setup(repository => repository.GetLineageAsync(hierarchyItem.Id,
                 Moq.It.IsAny<System.Threading.CancellationToken>())).ReturnsAsync([hierarchyItem]);
         _events = [];
+        _publishedInTransaction = false;
         var eventBus = new Mock<IEventBus>();
         eventBus.Setup(bus => bus.PublishAsync(It.IsAny<MagpieEvent>(), It.IsAny<CancellationToken>()))
-            .Callback((MagpieEvent magpieEvent, CancellationToken _) => _events.Add(magpieEvent))
+            .Callback((MagpieEvent magpieEvent, CancellationToken _) =>
+            {
+                _events.Add(magpieEvent);
+                _publishedInTransaction |= _context.Database.CurrentTransaction is not null;
+            })
             .Returns(Task.CompletedTask);
         _subject = new MediaFileRepository(_context, NullLogger<MediaFileRepository>.Instance,
             new Magpie.Core.TransactionManager(_context, NullLogger<Magpie.Core.TransactionManager>.Instance),
@@ -238,6 +244,115 @@ public sealed class MediaFileRepositoryTests
             Assert.That(published.Context[MagpieEvents.Keys.ContentItemId],
                 Is.EqualTo(original.ContentItemId.ToString("D")));
             Assert.That(published.Context[MagpieEvents.Keys.ContentChangedFields], Is.EqualTo("MediaInfo"));
+        }
+    }
+
+    [Test]
+    public async Task CreateAsync_PublishesContentUpdateAfterCommit_WhenTheFileHasMediaInfo()
+    {
+        // Arrange
+        var hierarchyItemId = await _context.ContentItems
+            .Where(item => item.Id == _movieItemId)
+            .Select(item => item.ContentHierarchyItemId)
+            .SingleAsync()
+            .ConfigureAwait(false);
+
+        // Act
+        await _subject.CreateAsync(
+            new MediaFile
+            {
+                ContentItemId = _movieItemId,
+                FileKind = "Video",
+                FilePath = "/media/Second.mkv",
+                MediaInfo = new() { Container = "matroska", DurationSeconds = 5_400 },
+                CreatedAt = DateTime.UtcNow
+            },
+            null).ConfigureAwait(false);
+
+        // Assert
+        var published = _events.Single();
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(_publishedInTransaction, Is.False);
+            Assert.That(published.Name, Is.EqualTo("content.hierarchyItem.updated"));
+            Assert.That(published.Context[MagpieEvents.Keys.ContentHierarchyItemId],
+                Is.EqualTo(hierarchyItemId.ToString("D")));
+            Assert.That(published.Context[MagpieEvents.Keys.ContentItemId],
+                Is.EqualTo(_movieItemId.ToString("D")));
+            Assert.That(published.Context[MagpieEvents.Keys.ContentChangedFields], Is.EqualTo("MediaFiles,MediaInfo"));
+        }
+    }
+
+    [Test]
+    public async Task DeleteAsync_PublishesContentUpdateAfterCommit_WhenTheFileIsDeleted()
+    {
+        // Arrange
+        var original = await _context.MediaFiles.AsNoTracking().SingleAsync().ConfigureAwait(false);
+
+        // Act
+        await _subject.DeleteAsync(original.Id, null).ConfigureAwait(false);
+
+        // Assert
+        var published = _events.Single();
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(_publishedInTransaction, Is.False);
+            Assert.That(published.Context[MagpieEvents.Keys.ContentItemId],
+                Is.EqualTo(_movieItemId.ToString("D")));
+            Assert.That(published.Context[MagpieEvents.Keys.ContentChangedFields], Is.EqualTo("MediaFiles"));
+        }
+    }
+
+    [Test]
+    public async Task UpdateAsync_PublishesContentUpdate_WhenTheFileIsRenamed()
+    {
+        // Arrange
+        var original = await _context.MediaFiles.AsNoTracking().SingleAsync().ConfigureAwait(false);
+
+        // Act
+        await _subject.UpdateAsync(original with { FilePath = "/media/Renamed.mkv" }, null).ConfigureAwait(false);
+
+        // Assert
+        var published = _events.Single();
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(_publishedInTransaction, Is.False);
+            Assert.That(published.Context[MagpieEvents.Keys.ContentItemId],
+                Is.EqualTo(_movieItemId.ToString("D")));
+            Assert.That(published.Context[MagpieEvents.Keys.ContentChangedFields], Is.EqualTo("MediaFiles"));
+        }
+    }
+
+    [Test]
+    public async Task UpdateAsync_PublishesContentUpdate_WhenTheFileIsReplacedInPlace()
+    {
+        // Arrange
+        var original = await _context.MediaFiles.AsNoTracking().SingleAsync().ConfigureAwait(false);
+
+        // Act
+        await _subject.UpdateAsync(original with { ReplacedAt = DateTime.UtcNow }, null).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(_events.Single().Context[MagpieEvents.Keys.ContentChangedFields], Is.EqualTo("MediaFiles"));
+    }
+
+    [Test]
+    public async Task UpdateAsync_PublishesContentUpdateForBothItems_WhenTheFileMovesToAnotherItem()
+    {
+        // Arrange
+        var original = await _context.MediaFiles.AsNoTracking().SingleAsync().ConfigureAwait(false);
+
+        // Act
+        await _subject.UpdateAsync(original with { ContentItemId = _firstEpisodeItemId }, null)
+            .ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(_events.Select(published => published.Context[MagpieEvents.Keys.ContentItemId]),
+                Is.EquivalentTo([_movieItemId.ToString("D"), _firstEpisodeItemId.ToString("D")]));
+            Assert.That(_events.Select(published => published.Context[MagpieEvents.Keys.ContentChangedFields]),
+                Is.All.EqualTo("MediaFiles"));
         }
     }
 

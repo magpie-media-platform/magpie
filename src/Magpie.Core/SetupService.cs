@@ -10,6 +10,7 @@ using System.Threading.Tasks;
 using Magpie.Abstractions;
 using Magpie.Abstractions.Database;
 using Magpie.Abstractions.Repositories;
+using Magpie.Core.Extensions;
 using Magpie.Models;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
@@ -88,6 +89,8 @@ internal sealed class SetupService(
     public async Task<DatabaseSetupResult> ConfigureDatabaseAsync(
         string provider,
         string? connectionString,
+        IReadOnlyList<NodeRole>? roles = null,
+        IReadOnlyList<string>? jobTypes = null,
         CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(provider))
@@ -112,6 +115,11 @@ internal sealed class SetupService(
             throw new MagpieException("A connection string is required.");
         }
 
+        if (roles is not null && providerSlug == "sqlite")
+        {
+            throw new MagpieException("A cluster requires the postgresql or sqlserver provider.");
+        }
+
         var path = Path.Combine(hostEnvironment.ConfigRoot, "appsettings.json");
         var root = await LoadSettingsAsync(path, cancellationToken).ConfigureAwait(false);
         var magpie = root["Magpie"] as JsonObject ?? new JsonObject();
@@ -121,6 +129,17 @@ internal sealed class SetupService(
             ["Provider"] = providerSlug,
             ["ConnectionString"] = normalizedConnectionString
         };
+        if (roles is not null)
+        {
+            var cluster = magpie["Cluster"] as JsonObject ?? new JsonObject();
+            magpie["Cluster"] = cluster;
+            cluster["Mode"] = nameof(ExtensionClusterMode.MultiNodeSharedExtensions);
+            cluster["Roles"] = new JsonArray([.. roles.Select(role => JsonValue.Create(role.ToString()))]);
+            var jobs = root["Jobs"] as JsonObject ?? new JsonObject();
+            root["Jobs"] = jobs;
+            jobs["JobTypes"] = new JsonArray([.. (jobTypes ?? []).Select(jobType => JsonValue.Create(jobType))]);
+        }
+
         await WriteSettingsAsync(path, root, cancellationToken).ConfigureAwait(false);
 
         return new() { Provider = providerSlug, RestartRequired = true };

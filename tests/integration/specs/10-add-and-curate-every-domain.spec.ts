@@ -11,7 +11,7 @@ import {
 } from '../helpers/api';
 import { restoreCheckpoint } from '../helpers/checkpoints';
 import { integrationEnvironment } from '../helpers/environment';
-import { FIXTURES_ROOT } from '../helpers/fixtures';
+import { FIXTURES_ROOT, writeScenarioFile } from '../helpers/fixtures';
 import {
     drainContentMetadataRefreshItems,
     drainDownloadRefresh,
@@ -97,7 +97,7 @@ interface IndexerConnection {
 }
 
 interface InteractiveCandidate {
-    release: ReleaseFixture & { externalId: string };
+    release: ReleaseFixture & { id: string; externalId: string };
 }
 
 interface Download {
@@ -401,7 +401,7 @@ test.describe.serial('Journey 10: bring four collections in and make the metadat
                 await page.goto('/library/add');
                 await selectContentType(page, 'Movie');
                 await page.locator('#sfb-title').fill('Curation Basic Fallback');
-                await page.getByRole('button', { name: /^search$/i }).click();
+                await page.getByRole('region', { name: 'Filter options' }).getByRole('button', { name: /^search$/i }).click();
                 await expect(page.getByTestId('library-add-page__empty-no-results')).toBeVisible();
                 await expect(page.getByRole('grid').locator('tbody tr')).toHaveCount(0);
                 await expect(page.locator('[data-component="toast"][data-variant="error"]')).toHaveCount(0);
@@ -535,14 +535,14 @@ test.describe.serial('Journey 10: bring four collections in and make the metadat
                     const season = await childNamed(api, television.topId, 'Curation Journey Season 1');
                     const episode4 = await childNamed(api, season.id, 'Curation Journey Episode 4');
                     await api.patch(`/api/content/${television.topId}`, { monitoring: { value: 'Unmonitored' } });
-                    await waitForNoActiveJobs(api, ['ReleaseAutoGrabScan', 'ReleaseAutoGrabItem']);
+                    await waitForNoReadyJobs(api, ['ReleaseAutoGrabScan', 'ReleaseAutoGrabItem']);
                     for (const number of [1, 2, 3]) {
                         expect(
                             await childNamed(api, season.id, `Curation Journey Episode ${number}`),
                         ).toMatchObject({ monitoring: null, effectiveMonitoring: 'Unmonitored' });
                     }
                     await api.patch(`/api/content/${episode4.id}`, { monitoring: { value: 'Monitored' } });
-                    await waitForNoActiveJobs(api, ['ReleaseAutoGrabScan', 'ReleaseAutoGrabItem']);
+                    await waitForNoReadyJobs(api, ['ReleaseAutoGrabScan', 'ReleaseAutoGrabItem']);
                     expect(await api.get<ContentItem>(`/api/content/${episode4.id}`)).toMatchObject({
                         monitoring: 'Monitored',
                         effectiveMonitoring: 'Monitored',
@@ -555,7 +555,7 @@ test.describe.serial('Journey 10: bring four collections in and make the metadat
                 const season = await childNamed(api, television.topId, 'Curation Journey Season 1');
                 const episode4 = await childNamed(api, season.id, 'Curation Journey Episode 4');
                 await api.patch(`/api/content/${episode4.id}`, { monitoring: { value: null } });
-                await waitForNoActiveJobs(api, ['ReleaseAutoGrabScan', 'ReleaseAutoGrabItem']);
+                await waitForNoReadyJobs(api, ['ReleaseAutoGrabScan', 'ReleaseAutoGrabItem']);
                 expect(await api.get<ContentItem>(`/api/content/${episode4.id}`)).toMatchObject({
                     monitoring: null,
                     effectiveMonitoring: 'Unmonitored',
@@ -600,7 +600,7 @@ test.describe.serial('Journey 10: bring four collections in and make the metadat
                     method: 'search',
                     predicate: (call) => call.request.search.title === defaultTitle,
                 });
-                await waitForNoActiveJobs(api, ['ReleaseAutoGrabScan', 'ReleaseAutoGrabItem']);
+                await waitForNoReadyJobs(api, ['ReleaseAutoGrabScan', 'ReleaseAutoGrabItem']);
             });
 
             await test.step('two sessions patch the same item and neither change is silently lost', async () => {
@@ -716,6 +716,9 @@ test.describe.serial('Journey 10: bring four collections in and make the metadat
 });
 
 async function armAllFixtures(): Promise<void> {
+    await writeScenarioFile(mocks.downloadClient.slug, downloadScenario, 'TestConnectionAsync.json', { success: true });
+    await writeScenarioFile(mocks.indexer.slug, indexerScenario, 'testConnection.json', { success: true });
+    await writeScenarioFile(mocks.mediaServer.slug, mediaScenario, 'TestConnectionAsync.json', { success: true });
     await mocks.downloadClient.useScenario(downloadScenario);
     for (const fixture of domains) {
         await armDownload(
@@ -1237,21 +1240,24 @@ async function proveRejectedConcurrentGrab(api: ApiClient, hierarchyItemId: stri
             kind: 'AuditRecord',
             label: 'GrabSkipped',
             category: 'Jobs',
-            entityId: item.contentItem!.id,
-            entityType: 'ContentItem',
+            entityId: hierarchyItemId,
+            entityType: 'ContentHierarchyItem',
             detail: expect.stringMatching(/already in flight on download/),
         }),
     );
 }
 
-async function waitForNoActiveJobs(api: ApiClient, jobTypes: string[]): Promise<void> {
+async function waitForNoReadyJobs(api: ApiClient, jobTypes: string[]): Promise<void> {
     await until(
-        `${jobTypes.join(', ')} executions to become terminal`,
+        `${jobTypes.join(', ')} runnable executions to become terminal`,
         async () => {
-            const active = await api.get<Paged<JobExecution>>(
+            const active = await api.get<Paged<JobExecution & { notBeforeAt: string | null }>>(
                 '/api/jobs?status=Queued&status=Running&pageSize=100',
             );
-            return active.items.every((job) => !jobTypes.includes(job.jobType)) ? true : undefined;
+            return active.items.every((job) =>
+                !jobTypes.includes(job.jobType) ||
+                (job.status === 'Queued' && job.notBeforeAt !== null && Date.parse(job.notBeforeAt) > Date.now()),
+            ) ? true : undefined;
         },
         60_000,
         250,
@@ -1267,7 +1273,7 @@ async function searchAddPage(page: Page, option: string, query: string): Promise
     await page.goto('/library/add');
     await selectContentType(page, option);
     await page.locator('#sfb-title').fill(query);
-    await page.getByRole('button', { name: /^search$/i }).click();
+    await page.getByRole('region', { name: 'Filter options' }).getByRole('button', { name: /^search$/i }).click();
 }
 
 async function selectContentType(page: Page, option: string): Promise<void> {

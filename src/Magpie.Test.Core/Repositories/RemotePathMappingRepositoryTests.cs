@@ -144,7 +144,7 @@ public sealed class RemotePathMappingRepositoryTests
             Assert.That(stored.ModifiedByUserId, Is.EqualTo(_userId));
             Assert.That(
                 published.Context["remotePathMapping.changedFields"],
-                Is.EqualTo("localPath"));
+                Is.EqualTo("LocalPath"));
         }
     }
 

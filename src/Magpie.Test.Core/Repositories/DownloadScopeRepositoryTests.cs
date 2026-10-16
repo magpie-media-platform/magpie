@@ -1,14 +1,19 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 
 using Magpie.Abstractions;
 using Magpie.Abstractions.Repositories;
+using Magpie.Abstractions.Security;
 using Magpie.Core;
 using Magpie.Core.Repositories;
 using Magpie.Data;
+using Magpie.Models;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
+using Magpie.Sdk.Services;
 
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
@@ -27,6 +32,8 @@ public sealed class DownloadScopeRepositoryTests
     private MagpieDbContext _context = null!;
     private SqliteConnection _template = null!;
     private IDownloadScopeRepository _subject = null!;
+    private ITransactionManager _transactionManager = null!;
+    private List<MagpieEvent> _publishedEvents = null!;
     private Guid _downloadClientId;
 
     [OneTimeSetUp]
@@ -68,12 +75,28 @@ public sealed class DownloadScopeRepositoryTests
         _context.SaveChanges();
         _downloadClientId = downloadClient.Id;
 
+        var time = new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero));
+        _transactionManager = new TransactionManager(_context, NullLogger<TransactionManager>.Instance);
+        _publishedEvents = [];
+        var eventBus = new Mock<IEventBus>();
+        eventBus
+            .Setup(bus => bus.PublishAsync(It.IsAny<MagpieEvent>(), It.IsAny<CancellationToken>()))
+            .Callback((MagpieEvent magpieEvent, CancellationToken _) => _publishedEvents.Add(magpieEvent))
+            .Returns(Task.CompletedTask);
         _subject = new DownloadScopeRepository(
             _context,
-            new TransactionManager(_context, NullLogger<TransactionManager>.Instance),
+            _transactionManager,
             Mock.Of<IAuditRecordRepository>(),
+            new DownloadRepository(
+                _context,
+                Mock.Of<IAuditRecordRepository>(),
+                _transactionManager,
+                eventBus.Object,
+                NullLogger<DownloadRepository>.Instance,
+                Mock.Of<IDataProtectionService>(),
+                time),
             NullLogger<DownloadScopeRepository>.Instance,
-            new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
+            time);
     }
 
     [TearDown]
@@ -181,6 +204,49 @@ public sealed class DownloadScopeRepositoryTests
         {
             Assert.That(firstStatus, Is.Null);
             Assert.That(secondStatus, Is.EqualTo(expected));
+        }
+    }
+
+    [Test]
+    public async Task CreateAsync_RaisesHierarchyItemUpdatedAfterCommit_WhenActiveAcquisitionStatusChanges()
+    {
+        // Arrange
+        var item = new ContentHierarchyItem
+        {
+            MetadataContainer = new(),
+            ContentType = "type-a",
+            Level = "level-a",
+            Slug = "item-a",
+            Name = "Item A",
+            ContentItem = new()
+        };
+        var download = new Download
+        {
+            DownloadClientId = _downloadClientId,
+            Title = "Scoped",
+            ExternalId = "scoped",
+            Status = DownloadStatus.Downloading
+        };
+        _context.AddRange(item, download);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        var eventsDuringTransaction = -1;
+
+        // Act
+        await _transactionManager.ExecuteWithTransactionAsync(async ct =>
+        {
+            await _subject.CreateAsync(
+                new() { DownloadId = download.Id, ContentHierarchyItemId = item.Id }, null, ct).ConfigureAwait(false);
+            eventsDuringTransaction = _publishedEvents.Count;
+        }).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(eventsDuringTransaction, Is.Zero);
+            Assert.That(_publishedEvents, Has.Count.EqualTo(1));
+            Assert.That(_publishedEvents[0].Name, Is.EqualTo("content.hierarchyItem.updated"));
+            Assert.That(_publishedEvents[0].Context["content.hierarchyItemId"], Is.EqualTo(item.Id.ToString("D")));
+            Assert.That(_publishedEvents[0].Context["content.changedFields"], Is.EqualTo("ActiveAcquisitionStatus"));
         }
     }
 

@@ -10,6 +10,7 @@ using Magpie.Abstractions;
 using Magpie.Abstractions.Jobs;
 using Magpie.Abstractions.Repositories;
 using Magpie.Core;
+using Magpie.Core.Config;
 using Magpie.Core.Jobs.Metadata;
 using Magpie.Core.Jobs.Runtime;
 using Magpie.Core.Repositories;
@@ -147,7 +148,7 @@ public sealed class MetadataWriteStageTests
             events,
             NullLogger<JobExecutionRepository>.Instance,
             TimeProvider.System,
-            new JobRegistry([], NullLogger<JobRegistry>.Instance));
+            new JobRegistry([], new JobRuntimeOptions(), NullLogger<JobRegistry>.Instance));
         var registry = new Mock<IJobRegistry>();
         registry.Setup(value => value.ListJobSpecs()).Returns([ContentMetadataRefreshItemJob.Spec]);
         var jobs = new JobManager(Mock.Of<IJobRuntime>(), registry.Object, executions,

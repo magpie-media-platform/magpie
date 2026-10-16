@@ -25,6 +25,8 @@ internal sealed class ContentFulfillmentReconciliationJob(
     IDownloadRepository downloadRepository,
     IQualityService qualityService,
     IReleaseEvaluationService releaseEvaluationService,
+    IContentTypeRegistry contentTypeRegistry,
+    IFileSystem fileSystem,
     TimeProvider timeProvider,
     ILogger<ContentFulfillmentReconciliationJob> logger,
     IProgressReporter progressReporter) : IJob
@@ -35,6 +37,10 @@ internal sealed class ContentFulfillmentReconciliationJob(
 
         public Guid? ParentId { get; set; }
 
+        public required string ContentType { get; set; }
+
+        public required string Level { get; set; }
+
         public Guid? EffectiveQualityTierListId { get; set; }
 
         public ContentItem? ContentItem { get; set; }
@@ -44,14 +50,45 @@ internal sealed class ContentFulfillmentReconciliationJob(
     {
         JobType = MagpieJobs.Types.ContentFulfillmentReconciliation,
         DisplayName = "Content fulfillment reconciliation",
-        Description = "Recalculates effective settings, completion status, and imported file quality.",
+        Description = "Updates the settings, completion status, and file quality of all content.",
         Category = "System",
         Scope = JobScope.Administrative,
         Enabled = true,
         OnDemand = true,
         SupportedTriggerModes = [JobTriggerMode.Manual, JobTriggerMode.Schedule, JobTriggerMode.Event],
         ConcurrencyScope = ConcurrencyScope.PerType,
-        Parameters = [],
+        CoalesceTrueWinsFields = [MagpieJobs.Parameters.RescoreQuality],
+        CoalesceWideningFields = [MagpieJobs.Parameters.QualityTierListId, MagpieJobs.Parameters.QualityTierId],
+        Parameters =
+        [
+            new(
+                MagpieJobs.Parameters.RescoreQuality,
+                "Whether the reconciliation re-scores the imported files.",
+                DataType.Boolean,
+                false,
+                "false"),
+            new(
+                MagpieJobs.Parameters.QualityTierListId,
+                "The quality tier list to re-score. Leave this parameter empty to re-score the files of every list.",
+                DataType.String,
+                false,
+                null)
+            {
+                ValidateValue = value => string.IsNullOrWhiteSpace(value) || Guid.TryParse(value, out _)
+                    ? null : "must be a valid GUID."
+            },
+            new(
+                MagpieJobs.Parameters.QualityTierId,
+                "The quality tier whose lists to re-score. Leave this parameter empty to re-score the files of " +
+                "every list.",
+                DataType.String,
+                false,
+                null)
+            {
+                ValidateValue = value => string.IsNullOrWhiteSpace(value) || Guid.TryParse(value, out _)
+                    ? null : "must be a valid GUID."
+            }
+        ],
     };
 
     private const int PageSize = 500;
@@ -83,6 +120,27 @@ internal sealed class ContentFulfillmentReconciliationJob(
 
         var qualityChanges = await ReconcileQualityStatusAsync(leaves, userId, cancellationToken)
             .ConfigureAwait(false);
+        var parameters = jobContext.Parameters;
+        if (bool.TryParse(parameters.GetValueOrDefault(MagpieJobs.Parameters.RescoreQuality), out var rescore) &&
+            rescore)
+        {
+            IReadOnlyCollection<Guid>? tierListIds = null;
+            if (Guid.TryParse(parameters.GetValueOrDefault(MagpieJobs.Parameters.QualityTierListId), out var listId))
+            {
+                tierListIds = [listId];
+            }
+            else if (Guid.TryParse(parameters.GetValueOrDefault(MagpieJobs.Parameters.QualityTierId), out var tierId))
+            {
+                tierListIds = (await qualityService.ListTierListsAsync(cancellationToken).ConfigureAwait(false))
+                    .Where(list => list.QualityTierRanks.Any(rank => rank.QualityTierId == tierId))
+                    .Select(list => list.Id)
+                    .ToList();
+            }
+
+            qualityChanges += await RescoreMediaQualityAsync(nodes, tierListIds, userId, cancellationToken)
+                .ConfigureAwait(false);
+        }
+
         progressReporter.Report(0.7, "The reconciliation updated the imported file quality.");
 
         var rollups = await RollUpFulfillmentAsync(nodes, childIdsByParent, userId, cancellationToken)
@@ -163,6 +221,8 @@ internal sealed class ContentFulfillmentReconciliationJob(
             {
                 Id = item.Id,
                 ParentId = item.ParentId,
+                ContentType = item.ContentType,
+                Level = item.Level,
                 EffectiveQualityTierListId = item.EffectiveQualityTierListId,
                 ContentItem = item.ContentItem
             }));
@@ -247,6 +307,77 @@ internal sealed class ContentFulfillmentReconciliationJob(
 
             await contentRepository.UpdateAsync(current, userId, cancellationToken).ConfigureAwait(false);
             changed++;
+        }
+
+        return changed;
+    }
+
+    private async Task<int> RescoreMediaQualityAsync(
+        IReadOnlyList<HierarchyNode> nodes,
+        IReadOnlyCollection<Guid>? tierListIds,
+        Guid? userId,
+        CancellationToken cancellationToken)
+    {
+        var nodesById = nodes.ToDictionary(node => node.Id);
+        var rootIds = new HashSet<Guid>();
+        var changed = 0;
+        foreach (var node in nodes)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (node.EffectiveQualityTierListId is not { } tierListId ||
+                (tierListIds is not null && !tierListIds.Contains(tierListId)))
+            {
+                continue;
+            }
+
+            var level = contentTypeRegistry.GetDefinitionFor(node.ContentType)?.LevelDefinitions
+                .FirstOrDefault(candidate => candidate.Slug == node.Level);
+            if (level is null || node.ContentItem is not { MediaReconciledAt: not null } contentItem)
+            {
+                continue;
+            }
+
+            var files = contentItem.MediaFiles.Concat(contentItem.CoveringMediaFiles)
+                .Where(file => FileSystem.IsPrimaryFile(fileSystem, level, file));
+            var (quality, rank) = await releaseEvaluationService
+                .ScoreMediaQualityAsync(files, tierListId, cancellationToken)
+                .ConfigureAwait(false);
+            if (contentItem.QualityStatus == quality && contentItem.CurrentFileQualityRank == rank)
+            {
+                continue;
+            }
+
+            var current = await contentRepository.GetByIdAsync(contentItem.Id, cancellationToken)
+                .ConfigureAwait(false);
+            if (current is null || current.QualityStatus == quality && current.CurrentFileQualityRank == rank)
+            {
+                continue;
+            }
+
+            await contentRepository.UpdateMediaStateAsync(
+                current with
+                {
+                    QualityStatus = quality,
+                    CurrentFileQualityRank = rank,
+                    ModifiedAt = timeProvider.GetUtcNow().UtcDateTime
+                },
+                userId,
+                cancellationToken).ConfigureAwait(false);
+            changed++;
+
+            var root = node;
+            while (root.ParentId is { } parentId && nodesById.TryGetValue(parentId, out var parent))
+            {
+                root = parent;
+            }
+
+            rootIds.Add(root.Id);
+        }
+
+        foreach (var rootId in rootIds)
+        {
+            await contentRepository.ReconcileMediaStateAsync(rootId, userId, cancellationToken).ConfigureAwait(false);
         }
 
         return changed;

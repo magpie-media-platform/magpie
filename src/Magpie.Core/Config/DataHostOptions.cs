@@ -9,4 +9,9 @@ public sealed record DataHostOptions
     /// The filesystem path to the mutable runtime data directory.
     /// </summary>
     public string? Path { get; init; }
+
+    /// <summary>
+    /// The directory that holds the PostgreSQL binaries.
+    /// </summary>
+    public string? PostgreSqlToolsDirectory { get; init; }
 }

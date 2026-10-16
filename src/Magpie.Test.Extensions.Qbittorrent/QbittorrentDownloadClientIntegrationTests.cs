@@ -782,8 +782,6 @@ public class QbittorrentDownloadClientIntegrationTests
         "The indexer returned an HTML page instead of a .torrent file (HTTP 403, text/plain).", false)]
     [TestCase(403, "text/plain", "Forbidden",
         "The indexer returned HTTP 403 instead of a .torrent file (text/plain).", false)]
-    [TestCase(429, "text/plain", "Too many requests",
-        "The indexer returned HTTP 429 instead of a .torrent file (text/plain).", true)]
     [TestCase(503, "text/html", "<html>Unavailable</html>",
         "The indexer returned HTTP 503 instead of a .torrent file (text/html).", true)]
     [TestCase(503, "text/plain", "",

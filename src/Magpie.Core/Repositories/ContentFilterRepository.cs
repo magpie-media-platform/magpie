@@ -36,22 +36,22 @@ internal sealed class ContentFilterRepository(
         var fields = new List<string>();
         if (patch.Name is not null)
         {
-            fields.Add("name");
+            fields.Add(nameof(ContentFilter.Name));
         }
 
         if (patch.Criteria is not null)
         {
-            fields.Add("criteria");
+            fields.Add(nameof(ContentFilter.Criteria));
         }
 
         if (patch.OwnerLock is not null)
         {
-            fields.Add("ownerLock");
+            fields.Add(nameof(ContentFilter.OwnerLock));
         }
 
         if (patch.Tags is not null)
         {
-            fields.Add("tags");
+            fields.Add(nameof(ContentFilterPatch.Tags));
         }
 
         return fields;

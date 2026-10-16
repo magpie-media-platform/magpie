@@ -95,6 +95,19 @@ internal static class ConfigurationEventBuilder
         return new(Guid.Empty, MagpieEvents.Names.QualityTierListUpdated, context, default, default, null);
     }
 
+    public static MagpieEvent BuildQualityTierUpdatedEvent(
+        Guid qualityTierId,
+        IReadOnlyCollection<string> changedFields)
+    {
+        var context = new Dictionary<string, string>
+        {
+            [MagpieEvents.Keys.QualityTierId] = qualityTierId.ToString("D", CultureInfo.InvariantCulture),
+            [MagpieEvents.Keys.QualityTierChangedFields] = string.Join(",", changedFields ?? []),
+        };
+
+        return new(Guid.Empty, MagpieEvents.Names.QualityTierUpdated, context, default, default, null);
+    }
+
     public static MagpieEvent BuildSettingsGroupUpdatedEvent(
         Guid? extensionId,
         string name,

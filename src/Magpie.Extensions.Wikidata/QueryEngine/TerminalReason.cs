@@ -10,8 +10,6 @@ internal static class TerminalReason
 
     internal const string IdentityEmpty = "identity_empty";
 
-    internal const string RateLimited = "rate_limited";
-
     internal const string Timeout = "timeout";
 
     internal const string Cancelled = "cancelled";

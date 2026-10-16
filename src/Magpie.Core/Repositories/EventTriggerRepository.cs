@@ -32,17 +32,17 @@ internal sealed class EventTriggerRepository(
 {
     private static readonly (string Name, Func<EventTrigger, EventTrigger, bool> Changed)[] UpdateFields =
     [
-        ("extensionId", (current, model) => !Equals(current.ExtensionId, model.ExtensionId)),
-        ("jobType", (current, model) => !Equals(current.JobType, model.JobType)),
-        ("scope", (current, model) => !Equals(current.Scope, model.Scope)),
-        ("eventFilter", (current, model) => !string.Equals(
+        (nameof(EventTrigger.ExtensionId), (current, model) => !Equals(current.ExtensionId, model.ExtensionId)),
+        (nameof(EventTrigger.JobType), (current, model) => !Equals(current.JobType, model.JobType)),
+        (nameof(EventTrigger.Scope), (current, model) => !Equals(current.Scope, model.Scope)),
+        (nameof(EventTrigger.EventFilter), (current, model) => !string.Equals(
             JsonSerializer.Serialize(current.EventFilter, JsonSerializerOptions.Default),
             JsonSerializer.Serialize(model.EventFilter, JsonSerializerOptions.Default),
             StringComparison.Ordinal)),
-        ("name", (current, model) => !Equals(current.Name, model.Name)),
-        ("enabled", (current, model) => !Equals(current.Enabled, model.Enabled)),
-        ("delaySeconds", (current, model) => !Equals(current.DelaySeconds, model.DelaySeconds)),
-        ("parameters", (current, model) => !ParametersEqual(current.Parameters, model.Parameters)),
+        (nameof(EventTrigger.Name), (current, model) => !Equals(current.Name, model.Name)),
+        (nameof(EventTrigger.Enabled), (current, model) => !Equals(current.Enabled, model.Enabled)),
+        (nameof(EventTrigger.DelaySeconds), (current, model) => !Equals(current.DelaySeconds, model.DelaySeconds)),
+        (nameof(EventTrigger.Parameters), (current, model) => !ParametersEqual(current.Parameters, model.Parameters)),
     ];
 
     private readonly TimeProvider _time = timeProvider;
@@ -99,27 +99,27 @@ internal sealed class EventTriggerRepository(
         var fields = new List<string>();
         if (patch.Name is not null)
         {
-            fields.Add("name");
+            fields.Add(nameof(EventTrigger.Name));
         }
 
         if (patch.EventFilter is not null)
         {
-            fields.Add("eventFilter");
+            fields.Add(nameof(EventTrigger.EventFilter));
         }
 
         if (patch.Enabled is not null)
         {
-            fields.Add("enabled");
+            fields.Add(nameof(EventTrigger.Enabled));
         }
 
         if (patch.DelaySeconds is not null)
         {
-            fields.Add("delaySeconds");
+            fields.Add(nameof(EventTrigger.DelaySeconds));
         }
 
         if (patch.Parameters is not null)
         {
-            fields.Add("parameters");
+            fields.Add(nameof(EventTrigger.Parameters));
         }
 
         return fields;

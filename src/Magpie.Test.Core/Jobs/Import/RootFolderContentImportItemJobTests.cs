@@ -482,34 +482,6 @@ public sealed class RootFolderContentImportItemJobTests
     }
 
     [Test]
-    public void ExecuteAsync_LeavesTheCandidateImporting_WhenTheUpstreamIsThrottled()
-    {
-        // Arrange
-        var retryAt = new DateTimeOffset(2026, 3, 1, 12, 30, 0, TimeSpan.Zero);
-        _importService
-            .Setup(s => s.ImportCandidateAsync(
-                It.IsAny<Guid>(), It.IsAny<int>(), It.IsAny<LibraryImportMonitoringMode>(), It.IsAny<Guid?>(),
-                It.IsAny<Guid?>(), It.IsAny<CancellationToken>()))
-            .ThrowsAsync(new UpstreamThrottledException(retryAt));
-        var context = new JobContext(
-            Guid.NewGuid(), null, null, UserId, JobExecutionMode.Queue,
-            new Dictionary<string, string> { ["candidateId"] = CandidateId.ToString("D") }, null, null);
-
-        // Act
-        var exception = Assert.ThrowsAsync<UpstreamThrottledException>(() => _subject.ExecuteAsync(context));
-
-        // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(exception!.RetryAt, Is.EqualTo(retryAt));
-            _candidateRepository.Verify(repository => repository.MarkImportFailedAsync(
-                It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<Guid?>(), It.IsAny<CancellationToken>()), Times.Never);
-            _candidateRepository.Verify(repository => repository.TryResetImportAsync(
-                It.IsAny<Guid>(), It.IsAny<string?>(), It.IsAny<Guid?>(), It.IsAny<CancellationToken>()), Times.Never);
-        }
-    }
-
-    [Test]
     public void ExecuteAsync_MarksCandidateFailed_WhenExecutionThrows()
     {
         // Arrange

@@ -90,9 +90,17 @@ public sealed class UserRepositoryTests
         var transactionManager = new TransactionManager(_context, NullLogger<TransactionManager>.Instance);
 
         _updateEvents = new Mock<IEventBus>();
+        var apiKeyRepository = new ApiKeyRepository(
+            _context,
+            auditRecordRepository,
+            transactionManager,
+            _updateEvents.Object,
+            NullLogger<ApiKeyRepository>.Instance,
+            timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
         _subject = new UserRepository(
             _context,
             auditRecordRepository,
+            apiKeyRepository,
             transactionManager,
             _updateEvents.Object,
             NullLogger<UserRepository>.Instance,
@@ -347,7 +355,7 @@ public sealed class UserRepositoryTests
             It.Is<MagpieEvent>(e =>
                 e.Name == "user.updated" &&
                 e.Context.ContainsKey("user.changedFields") &&
-                e.Context["user.changedFields"] == "username,email,enabled,role"),
+                e.Context["user.changedFields"] == "Username,Email,Enabled,Role"),
             It.IsAny<CancellationToken>()), Times.Once);
     }
 
@@ -466,6 +474,51 @@ public sealed class UserRepositoryTests
             Assert.That(deleted, Is.Null);
             Assert.That(apiKeys, Is.Empty);
         }
+    }
+
+    [Test]
+    public async Task DeleteAsync_PublishesApiKeyDeletedAfterCommit_WhenUserOwnsApiKey()
+    {
+        // Arrange
+        var created = await _subject.CreateAsync(new User
+        {
+            Username = "ApiKeyEventOwner",
+            ProviderType = "local",
+            Enabled = true,
+            Role = Role.Viewer
+        }, _adminUserId).ConfigureAwait(false);
+        var apiKey = new ApiKey
+        {
+            UserId = created.Id,
+            Name = "Deletion event key",
+            KeyHash = "api-key-event-hash",
+            KeyPrefix = "events",
+            Enabled = true,
+            CreatedAt = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc)
+        };
+        _context.ApiKeys.Add(apiKey);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        var publishedInsideTransaction = false;
+        _updateEvents
+            .Setup(bus => bus.PublishAsync(It.IsAny<MagpieEvent>(), It.IsAny<CancellationToken>()))
+            .Callback(() => publishedInsideTransaction |= _context.Database.CurrentTransaction is not null)
+            .Returns(Task.CompletedTask);
+
+        // Act
+        await _subject.DeleteAsync(created.Id, _adminUserId).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(publishedInsideTransaction, Is.False);
+        _updateEvents.Verify(
+            bus => bus.PublishAsync(
+                It.Is<MagpieEvent>(e => e.Name == "apiKey.deleted" &&
+                    e.Context["apiKey.id"] == apiKey.Id.ToString() &&
+                    e.Context["user.id"] == created.Id.ToString()),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
+        _updateEvents.Verify(
+            bus => bus.PublishAsync(It.Is<MagpieEvent>(e => e.Name == "user.deleted"), It.IsAny<CancellationToken>()),
+            Times.Once);
     }
 
     [Test]
@@ -1083,6 +1136,119 @@ public sealed class UserRepositoryTests
                 third,
                 Is.EqualTo(new FailedLoginResult(3, new DateTime(2026, 9, 8, 12, 15, 0, DateTimeKind.Utc))));
         }
+    }
+
+    [Test]
+    public async Task RecordFailedLoginAsync_PublishesLockedOutOnceAfterCommit_WhenTheFailureLocksTheUser()
+    {
+        // Arrange
+        var created = await _subject.CreateAsync(new User
+        {
+            Username = "LockoutEventUser",
+            ProviderType = "local",
+            Enabled = true,
+            Role = Role.Viewer
+        }, _adminUserId).ConfigureAwait(false);
+        var lockedUntil = new DateTime(2026, 9, 8, 12, 15, 0, DateTimeKind.Utc);
+        var publishedInsideTransaction = false;
+        _updateEvents
+            .Setup(bus => bus.PublishAsync(It.IsAny<MagpieEvent>(), It.IsAny<CancellationToken>()))
+            .Callback(() => publishedInsideTransaction |= _context.Database.CurrentTransaction is not null)
+            .Returns(Task.CompletedTask);
+
+        // Act
+        for (var attempt = 0; attempt < 4; attempt++)
+        {
+            await _subject.RecordFailedLoginAsync(created.Id, 3, lockedUntil).ConfigureAwait(false);
+        }
+
+        // Assert
+        Assert.That(publishedInsideTransaction, Is.False);
+        _updateEvents.Verify(
+            bus => bus.PublishAsync(
+                It.Is<MagpieEvent>(e => e.Name == "user.lockedOut" &&
+                    e.Context["user.id"] == created.Id.ToString() &&
+                    e.Context["user.username"] == "LockoutEventUser" &&
+                    e.Context["user.failedAttemptCount"] == "3" &&
+                    e.Context["user.lockedUntil"] == "2026-09-08T12:15:00.0000000Z"),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
+        _updateEvents.Verify(
+            bus => bus.PublishAsync(It.Is<MagpieEvent>(e => e.Name == "user.lockedOut"), It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [TestCase(true, "admin")]
+    [TestCase(false, "expiry")]
+    public async Task ResetLockoutAsync_PublishesUnlockedOnceAfterCommit_WhenTheUserIsLocked(
+        bool byAdministrator,
+        string expectedReason)
+    {
+        // Arrange
+        var created = await _subject.CreateAsync(new User
+        {
+            Username = "UnlockEventUser",
+            ProviderType = "local",
+            Enabled = true,
+            Role = Role.Viewer,
+            FailedLoginAttempts = 3,
+            LockedUntil = new DateTime(2026, 9, 8, 11, 0, 0, DateTimeKind.Utc)
+        }, _adminUserId).ConfigureAwait(false);
+        var publishedInsideTransaction = false;
+        _updateEvents
+            .Setup(bus => bus.PublishAsync(It.IsAny<MagpieEvent>(), It.IsAny<CancellationToken>()))
+            .Callback(() => publishedInsideTransaction |= _context.Database.CurrentTransaction is not null)
+            .Returns(Task.CompletedTask);
+
+        // Act
+        await _subject.ResetLockoutAsync(created.Id, byAdministrator ? _adminUserId : null).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(publishedInsideTransaction, Is.False);
+        _updateEvents.Verify(
+            bus => bus.PublishAsync(
+                It.Is<MagpieEvent>(e => e.Name == "user.unlocked" &&
+                    e.Context["user.id"] == created.Id.ToString() &&
+                    e.Context["user.username"] == "UnlockEventUser" &&
+                    e.Context["user.unlockReason"] == expectedReason),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [TestCase(true)]
+    [TestCase(false)]
+    public async Task SetPasswordAsync_PublishesUnlockedAfterCommit_OnlyWhenTheUserIsLocked(bool locked)
+    {
+        // Arrange
+        var created = await _subject.CreateAsync(new User
+        {
+            Username = "PasswordUnlockUser",
+            ProviderType = "local",
+            Enabled = true,
+            Role = Role.Viewer,
+            PasswordHash = "old-hash",
+            PasswordSalt = "old-salt",
+            FailedLoginAttempts = locked ? 3 : 0,
+            LockedUntil = locked ? new DateTime(2030, 1, 1, 0, 0, 0, DateTimeKind.Utc) : null
+        }, _adminUserId).ConfigureAwait(false);
+        var publishedInsideTransaction = false;
+        _updateEvents
+            .Setup(bus => bus.PublishAsync(It.IsAny<MagpieEvent>(), It.IsAny<CancellationToken>()))
+            .Callback(() => publishedInsideTransaction |= _context.Database.CurrentTransaction is not null)
+            .Returns(Task.CompletedTask);
+
+        // Act
+        await _subject.SetPasswordAsync(created.Id, "new-hash", "new-salt", _adminUserId).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(publishedInsideTransaction, Is.False);
+        _updateEvents.Verify(
+            bus => bus.PublishAsync(
+                It.Is<MagpieEvent>(e => e.Name == "user.unlocked" &&
+                    e.Context["user.id"] == created.Id.ToString() &&
+                    e.Context["user.unlockReason"] == "password"),
+                It.IsAny<CancellationToken>()),
+            locked ? Times.Once() : Times.Never());
     }
 
     [Test]

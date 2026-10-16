@@ -31,8 +31,8 @@ internal sealed class SubjectFilterRepository(
 {
     private static readonly (string Name, Func<SubjectFilter, SubjectFilter, bool> Changed)[] UpdateFields =
     [
-        ("name", (current, model) => !Equals(current.Name, model.Name)),
-        ("criteria", (current, model) =>
+        (nameof(SubjectFilter.Name), (current, model) => !Equals(current.Name, model.Name)),
+        (nameof(SubjectFilter.Criteria), (current, model) =>
             !string.Equals(
                 JsonSerializer.Serialize(current.Criteria, JsonSerializerOptions.Default),
                 JsonSerializer.Serialize(model.Criteria, JsonSerializerOptions.Default),
@@ -46,17 +46,17 @@ internal sealed class SubjectFilterRepository(
         var fields = new List<string>();
         if (patch.Name is not null)
         {
-            fields.Add("name");
+            fields.Add(nameof(SubjectFilter.Name));
         }
 
         if (patch.Criteria is not null)
         {
-            fields.Add("criteria");
+            fields.Add(nameof(SubjectFilter.Criteria));
         }
 
         if (patch.Tags is not null)
         {
-            fields.Add("tags");
+            fields.Add(nameof(SubjectFilterPatch.Tags));
         }
 
         return fields;

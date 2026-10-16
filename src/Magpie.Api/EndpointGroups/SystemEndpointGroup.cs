@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -32,17 +33,6 @@ internal sealed class SystemEndpointGroup : IApiEndpointGroup
             .WithName(nameof(GetDiskSpaceAsync))
             .Produces<DiskSpaceResult>()
             .RequireViewer();
-
-        builder.MapGet("health", GetSystemHealthAsync)
-            .WithName(nameof(GetSystemHealthAsync))
-            .Produces<SystemHealth>()
-            .AllowAnonymous();
-
-        builder.MapGet("ready", GetSystemReadiness)
-            .WithName(nameof(GetSystemReadiness))
-            .Produces(StatusCodes.Status200OK)
-            .ProducesProblem(StatusCodes.Status503ServiceUnavailable)
-            .AllowAnonymous();
 
         builder.MapGet("instance-name", GetInstanceNameAsync)
             .WithName(nameof(GetInstanceNameAsync))
@@ -104,20 +94,6 @@ internal sealed class SystemEndpointGroup : IApiEndpointGroup
         var diskSpace = await rootFolderService.GetDiskSpaceAsync(cancellationToken).ConfigureAwait(false);
 
         return Results.Ok(diskSpace);
-    }
-
-    internal async Task<IResult> GetSystemHealthAsync(
-        [FromServices] IMagpieSystem magpieSystem,
-        CancellationToken cancellationToken)
-    {
-        var health = await magpieSystem.CheckHealthAsync(cancellationToken).ConfigureAwait(false);
-
-        return Results.Ok(health);
-    }
-
-    internal IResult GetSystemReadiness()
-    {
-        return Results.Ok();
     }
 
     internal async Task<IResult> GetInstanceNameAsync(
@@ -205,17 +181,23 @@ internal sealed class SystemEndpointGroup : IApiEndpointGroup
 
     internal async Task<IResult> GetDatabaseSetupStatusAsync(
         [FromServices] ISetupService setupService,
+        [FromServices] IJobManager jobManager,
         CancellationToken cancellationToken)
     {
         var canConnect = await setupService.CanConnectAsync(cancellationToken).ConfigureAwait(false);
         var appliedMigrations = canConnect
             ? await setupService.GetAppliedMigrationsAsync(cancellationToken).ConfigureAwait(false)
             : [];
+        var setupComplete = appliedMigrations.Count > 0 &&
+            await setupService.IsCompleteAsync(cancellationToken).ConfigureAwait(false);
 
         return Results.Ok(new SetupDatabaseStatusResponse
         {
             Initialized = appliedMigrations.Count > 0,
-            Provider = setupService.DatabaseProvider
+            Provider = setupService.DatabaseProvider,
+            JobTypes = setupComplete
+                ? new Dictionary<string, string>()
+                : jobManager.GetSpecs(null).ToDictionary(spec => spec.JobType, spec => spec.DisplayName)
         });
     }
 
@@ -225,7 +207,12 @@ internal sealed class SystemEndpointGroup : IApiEndpointGroup
         CancellationToken cancellationToken)
     {
         var result = await setupService
-            .ConfigureDatabaseAsync(request.Provider, request.ConnectionString, cancellationToken)
+            .ConfigureDatabaseAsync(
+                request.Provider,
+                request.ConnectionString,
+                request.Roles,
+                request.JobTypes,
+                cancellationToken)
             .ConfigureAwait(false);
 
         return Results.Ok(result);

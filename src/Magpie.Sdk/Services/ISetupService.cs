@@ -4,6 +4,7 @@ using System.Threading.Tasks;
 
 using Magpie.Models;
 using Magpie.Models.Data;
+using Magpie.Models.Enums;
 
 namespace Magpie.Sdk.Services;
 
@@ -46,10 +47,14 @@ public interface ISetupService
     /// </summary>
     /// <param name="provider">The database provider id</param>
     /// <param name="connectionString">The connection string, or <see langword="null"/> when unused</param>
+    /// <param name="roles">The roles of the node, or <see langword="null"/> for a new installation</param>
+    /// <param name="jobTypes">The job types that the node runs, or empty for every job type</param>
     /// <param name="cancellationToken">The token that cancels the operation</param>
     Task<DatabaseSetupResult> ConfigureDatabaseAsync(
         string provider,
         string? connectionString,
+        IReadOnlyList<NodeRole>? roles = null,
+        IReadOnlyList<string>? jobTypes = null,
         CancellationToken cancellationToken = default);
 
     /// <summary>

@@ -25,7 +25,7 @@ internal sealed class IndexerFeedSyncScanJob(
     {
         JobType = MagpieJobs.Types.IndexerFeedSyncScan,
         DisplayName = "Indexer feed sync scan",
-        Description = "Queues a sync for every enabled indexer feed.",
+        Description = "Queues a sync of all enabled indexer feeds.",
         Category = "Integrations",
         Scope = JobScope.Administrative,
         Enabled = true,

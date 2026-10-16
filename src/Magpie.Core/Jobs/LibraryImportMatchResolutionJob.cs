@@ -58,8 +58,7 @@ internal sealed class LibraryImportMatchResolutionJob(
     {
         JobType = MagpieJobs.Types.LibraryImportMatchResolution,
         DisplayName = "Library import match resolution",
-        Description = "Resolves metadata matches for library import candidates a scan queued, in a bounded " +
-            "batch, and requeues itself while unresolved candidates remain.",
+        Description = "Finds metadata matches for files found in root folders.",
         Category = "Content",
         Scope = JobScope.Content,
         Enabled = true,
@@ -75,8 +74,6 @@ internal sealed class LibraryImportMatchResolutionJob(
     private const double MinimumTitleCoverage = 0.75d;
 
     private const int MaximumFailureNoteLength = 512;
-
-    private const int BatchSize = 200;
 
     private static readonly TimeSpan ProviderRetryDelay = TimeSpan.FromMinutes(1);
 
@@ -409,7 +406,10 @@ internal sealed class LibraryImportMatchResolutionJob(
 
         progressReporter.Report(0, "The match resolution will load unresolved candidates.");
 
-        var batch = await LoadUnresolvedBatchAsync(cancellationToken).ConfigureAwait(false);
+        var batch = await libraryImportCandidateRepository.QueryAllAsync(
+            new LibraryImportCandidateQuery { Status = LibraryImportCandidateStatus.MatchingPending },
+            new() { PropertyName = nameof(LibraryImportCandidate.CreatedAt), Direction = SortDirection.Ascending },
+            cancellationToken).ConfigureAwait(false);
 
         var searchCache = new Dictionary<(string ContentType, string Query), MetadataSearchPage>();
         var total = batch.Count;
@@ -585,16 +585,6 @@ internal sealed class LibraryImportMatchResolutionJob(
         {
             logger.LogWarning(ex, "The match resolution failed to queue automatic associations");
         }
-    }
-
-    private async Task<List<LibraryImportCandidate>> LoadUnresolvedBatchAsync(CancellationToken cancellationToken)
-    {
-        var page = await libraryImportCandidateRepository.QueryAsync(
-            new LibraryImportCandidateQuery { Status = LibraryImportCandidateStatus.MatchingPending },
-            new() { PageNumber = 1, PageSize = BatchSize },
-            new() { PropertyName = nameof(LibraryImportCandidate.CreatedAt), Direction = SortDirection.Ascending },
-            cancellationToken).ConfigureAwait(false);
-        return page.Items.ToList();
     }
 
     private async Task<bool> HasUnresolvedCandidatesAsync(CancellationToken cancellationToken)

@@ -38,6 +38,8 @@ public sealed class ContentFulfillmentReconciliationJobTests
     private Mock<IDownloadRepository> _downloadRepository = null!;
     private Mock<IQualityService> _qualityService = null!;
     private Mock<IReleaseEvaluationService> _releaseEvaluationService = null!;
+    private Mock<IContentTypeRegistry> _contentTypeRegistry = null!;
+    private Mock<IFileSystem> _fileSystem = null!;
     private IJob _subject = null!;
     private JobContext _jobContext = null!;
     private Guid _userId;
@@ -93,6 +95,8 @@ public sealed class ContentFulfillmentReconciliationJobTests
 
         _qualityService = new Mock<IQualityService>();
         _releaseEvaluationService = new Mock<IReleaseEvaluationService>();
+        _contentTypeRegistry = new Mock<IContentTypeRegistry>();
+        _fileSystem = new Mock<IFileSystem>(MockBehavior.Strict);
 
         _jobContext = new JobContext(
             ExecutionId: Guid.NewGuid(),
@@ -110,6 +114,8 @@ public sealed class ContentFulfillmentReconciliationJobTests
             _downloadRepository.Object,
             _qualityService.Object,
             _releaseEvaluationService.Object,
+            _contentTypeRegistry.Object,
+            _fileSystem.Object,
             TimeProvider.System,
             NullLogger<ContentFulfillmentReconciliationJob>.Instance,
             _progressReporter);
@@ -686,6 +692,259 @@ public sealed class ContentFulfillmentReconciliationJobTests
                 It.Is<ContentItem>(item => item.Id == contentItemId && item.QualityStatus == null),
                 _userId,
                 It.IsAny<CancellationToken>()),
+            Times.Exactly(expectedUpdateCount));
+    }
+
+    [Test]
+    public async Task ExecuteAsync_RescoresStoredFilesWithoutTheDisk_WhenATierListOfAReconciledLeafChanges()
+    {
+        // Arrange
+        var tierListId = Guid.NewGuid();
+        var leafId = Guid.NewGuid();
+        var otherLeafId = Guid.NewGuid();
+        var file = new MediaFile
+        {
+            Id = Guid.NewGuid(),
+            FileKind = "Video",
+            FilePath = "/movies/A (2026)/A (2026).mkv",
+            FileSize = 4_000_000_000
+        };
+        var stored = new ContentItem
+        {
+            Id = Guid.NewGuid(),
+            ContentHierarchyItemId = leafId,
+            Fulfillment = FulfillmentStatus.Fulfilled,
+            QualityStatus = QualityStatus.Met,
+            CurrentFileQualityRank = 2,
+            MediaReconciledAt = new(2026, 10, 1, 3, 0, 0, DateTimeKind.Utc),
+            MediaFiles = { file }
+        };
+        var otherStored = stored with { Id = Guid.NewGuid(), ContentHierarchyItemId = otherLeafId };
+        _hierarchyRepository
+            .Setup(r => r.QueryAsync(
+                It.IsAny<ContentHierarchyItemCriteria>(),
+                It.IsAny<PagingParameter>(),
+                It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<ContentHierarchyItem>
+            {
+                Items =
+                [
+                    new ContentHierarchyItem
+                    {
+                        Id = leafId,
+                        ContentType = "movie",
+                        Level = "movie",
+                        Slug = "a",
+                        Name = "A",
+                        EffectiveQualityTierListId = tierListId,
+                        ContentItem = stored
+                    },
+                    new ContentHierarchyItem
+                    {
+                        Id = otherLeafId,
+                        ContentType = "movie",
+                        Level = "movie",
+                        Slug = "b",
+                        Name = "B",
+                        EffectiveQualityTierListId = Guid.NewGuid(),
+                        ContentItem = otherStored
+                    }
+                ],
+                TotalItems = 2
+            });
+        _contentRepository
+            .Setup(r => r.GetByIdAsync(stored.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(stored);
+        _contentTypeRegistry
+            .Setup(registry => registry.GetDefinitionFor("movie"))
+            .Returns(new ContentTypeDefinition
+            {
+                Slug = "movie",
+                DisplayName = "Movie",
+                LevelDefinitions = [new() { Slug = "movie", DisplayName = "Movie", CustomMetadataFields = [] }]
+            });
+        _fileSystem
+            .Setup(fs => fs.MatchesAnyFileType(
+                It.IsAny<string>(),
+                It.IsAny<string?>(),
+                It.IsAny<IReadOnlyList<string>?>()))
+            .Returns(false);
+        _releaseEvaluationService
+            .Setup(s => s.ScoreMediaQualityAsync(
+                It.Is<IEnumerable<MediaFile>>(files => files.Single() == file),
+                tierListId,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync((QualityStatus.UpgradeWanted, 1));
+        var context = _jobContext with
+        {
+            EventTriggerId = Guid.NewGuid(),
+            ManualTriggerUserId = null,
+            Parameters = new Dictionary<string, string>
+            {
+                ["rescoreQuality"] = "true",
+                ["qualityTierListId"] = tierListId.ToString("D")
+            }
+        };
+
+        // Act
+        await _subject.ExecuteAsync(context).ConfigureAwait(false);
+
+        // Assert
+        _contentRepository.Verify(
+            r => r.UpdateMediaStateAsync(
+                It.Is<ContentItem>(item => item.Id == stored.Id &&
+                    item.QualityStatus == QualityStatus.UpgradeWanted &&
+                    item.CurrentFileQualityRank == 1 &&
+                    item.Fulfillment == FulfillmentStatus.Fulfilled),
+                null,
+                It.IsAny<CancellationToken>()),
+            Times.Once);
+        _contentRepository.Verify(
+            r => r.UpdateMediaStateAsync(It.IsAny<ContentItem>(), It.IsAny<Guid?>(), It.IsAny<CancellationToken>()),
+            Times.Once);
+        _contentRepository.Verify(
+            r => r.ReconcileMediaStateAsync(leafId, null, It.IsAny<CancellationToken>()),
+            Times.Once);
+        _downloadRepository.Verify(
+            r => r.QueryAsync(
+                It.IsAny<DownloadQuery>(),
+                It.IsAny<PagingParameter>(),
+                It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [TestCase("2e5beb2d-31dc-4c23-b084-b65575f7e146", 1)]
+    [TestCase("", 2)]
+    public async Task ExecuteAsync_RescoresTheListsOfTheTierOrEveryList_WhenRescoreQualityIsSet(
+        string qualityTierId,
+        int expectedUpdateCount)
+    {
+        // Arrange
+        var tierListId = Guid.NewGuid();
+        var otherTierListId = Guid.NewGuid();
+        var leafId = Guid.NewGuid();
+        var otherLeafId = Guid.NewGuid();
+        var file = new MediaFile
+        {
+            Id = Guid.NewGuid(),
+            FileKind = "Video",
+            FilePath = "/movies/A (2026)/A (2026).mkv",
+            FileSize = 4_000_000_000
+        };
+        var stored = new ContentItem
+        {
+            Id = Guid.NewGuid(),
+            ContentHierarchyItemId = leafId,
+            Fulfillment = FulfillmentStatus.Fulfilled,
+            QualityStatus = QualityStatus.Met,
+            CurrentFileQualityRank = 2,
+            MediaReconciledAt = new(2026, 10, 1, 3, 0, 0, DateTimeKind.Utc),
+            MediaFiles = { file }
+        };
+        var otherStored = stored with { Id = Guid.NewGuid(), ContentHierarchyItemId = otherLeafId };
+        _hierarchyRepository
+            .Setup(r => r.QueryAsync(
+                It.IsAny<ContentHierarchyItemCriteria>(),
+                It.IsAny<PagingParameter>(),
+                It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<ContentHierarchyItem>
+            {
+                Items =
+                [
+                    new ContentHierarchyItem
+                    {
+                        Id = leafId,
+                        ContentType = "movie",
+                        Level = "movie",
+                        Slug = "a",
+                        Name = "A",
+                        EffectiveQualityTierListId = tierListId,
+                        ContentItem = stored
+                    },
+                    new ContentHierarchyItem
+                    {
+                        Id = otherLeafId,
+                        ContentType = "movie",
+                        Level = "movie",
+                        Slug = "b",
+                        Name = "B",
+                        EffectiveQualityTierListId = otherTierListId,
+                        ContentItem = otherStored
+                    }
+                ],
+                TotalItems = 2
+            });
+        _contentRepository
+            .Setup(r => r.GetByIdAsync(stored.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(stored);
+        _contentRepository
+            .Setup(r => r.GetByIdAsync(otherStored.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(otherStored);
+        _qualityService
+            .Setup(s => s.ListTierListsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(
+            [
+                new QualityTierList
+                {
+                    Id = tierListId,
+                    Name = "Ranks the tier",
+                    QualityTierRanks = [new() { QualityTierId = Guid.Parse("2e5beb2d-31dc-4c23-b084-b65575f7e146") }]
+                },
+                new QualityTierList
+                {
+                    Id = otherTierListId,
+                    Name = "Ranks another tier",
+                    QualityTierRanks = [new() { QualityTierId = Guid.Parse("f2226eae-4f67-4256-9048-d187c1748255") }]
+                }
+            ]);
+        _contentTypeRegistry
+            .Setup(registry => registry.GetDefinitionFor("movie"))
+            .Returns(new ContentTypeDefinition
+            {
+                Slug = "movie",
+                DisplayName = "Movie",
+                LevelDefinitions = [new() { Slug = "movie", DisplayName = "Movie", CustomMetadataFields = [] }]
+            });
+        _fileSystem
+            .Setup(fs => fs.MatchesAnyFileType(
+                It.IsAny<string>(),
+                It.IsAny<string?>(),
+                It.IsAny<IReadOnlyList<string>?>()))
+            .Returns(false);
+        _releaseEvaluationService
+            .Setup(s => s.ScoreMediaQualityAsync(
+                It.IsAny<IEnumerable<MediaFile>>(),
+                It.IsAny<Guid>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync((QualityStatus.UpgradeWanted, 1));
+        var context = _jobContext with
+        {
+            EventTriggerId = Guid.NewGuid(),
+            ManualTriggerUserId = null,
+            Parameters = new Dictionary<string, string>
+            {
+                ["rescoreQuality"] = "true",
+                ["qualityTierId"] = qualityTierId
+            }
+        };
+
+        // Act
+        await _subject.ExecuteAsync(context).ConfigureAwait(false);
+
+        // Assert
+        _contentRepository.Verify(
+            r => r.UpdateMediaStateAsync(
+                It.Is<ContentItem>(item => item.Id == stored.Id &&
+                    item.QualityStatus == QualityStatus.UpgradeWanted &&
+                    item.CurrentFileQualityRank == 1),
+                null,
+                It.IsAny<CancellationToken>()),
+            Times.Once);
+        _contentRepository.Verify(
+            r => r.UpdateMediaStateAsync(It.IsAny<ContentItem>(), It.IsAny<Guid?>(), It.IsAny<CancellationToken>()),
             Times.Exactly(expectedUpdateCount));
     }
 

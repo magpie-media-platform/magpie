@@ -31,9 +31,8 @@ public sealed class MusicBrainzExtension : IExtension
             client =>
             {
                 client.BaseAddress = new Uri(MusicBrainzClient.DefaultBaseUrl, UriKind.Absolute);
-                client.Timeout = TimeSpan.FromSeconds(20);
             })
-            .AddUpstreamCooldown(followRedirects: true)
+            .AddUpstreamCooldown(followRedirects: true, requestTimeout: MusicBrainzClient.RequestTimeout)
             .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
             {
                 AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate,
@@ -45,9 +44,8 @@ public sealed class MusicBrainzExtension : IExtension
             client =>
             {
                 client.BaseAddress = new Uri(CoverArtArchiveClient.DefaultBaseUrl, UriKind.Absolute);
-                client.Timeout = TimeSpan.FromSeconds(15);
             })
-            .AddUpstreamCooldown()
+            .AddUpstreamCooldown(requestTimeout: TimeSpan.FromSeconds(15))
             .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
 
         services.AddSingleton<IQueryCoordinator, QueryCoordinator>();

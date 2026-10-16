@@ -30,7 +30,7 @@ internal sealed class SubjectMetadataRefreshScanJob(
     {
         JobType = MagpieJobs.Types.SubjectMetadataRefreshScan,
         DisplayName = "Subject metadata refresh scan",
-        Description = "Refreshes metadata for subjects whose records are stale or never enriched.",
+        Description = "Finds and queues subjects that need a metadata refresh.",
         Category = "Content",
         Scope = JobScope.Administrative,
         Enabled = true,

@@ -84,8 +84,8 @@ public sealed class ReleaseSearchQueryExecutorTests
             ]);
 
         _eventBus = new Mock<IEventBus>();
-        _indexerConnections
-            .Setup(repository => repository.PatchAsync(
+        _indexers
+            .Setup(repository => repository.PatchConnectionAsync(
                 It.IsAny<IndexerConnectionPatch>(),
                 It.IsAny<Guid?>(),
                 It.IsAny<CancellationToken>()))
@@ -232,48 +232,72 @@ public sealed class ReleaseSearchQueryExecutorTests
         }
     }
 
-    [TestCase(false, 0)]
-    [TestCase(true, 1)]
-    public async Task ExecutePlanAsync_ReturnsIncompleteCooldown_WhenEveryConnectionIsThrottled(bool sent,
-        int expectedAttempts)
+    [TestCase(false)]
+    [TestCase(true)]
+    public void ExecutePlanAsync_Fails_WhenTheOnlyProviderCallFails(bool beforeRequest)
     {
         // Arrange
-        _indexerIntegration.Setup(integration => integration.SearchAsync(It.IsAny<ReleaseSearchRequest>(),
-                It.IsAny<IReadOnlyDictionary<string, string>>(), It.IsAny<CancellationToken>()))
-            .ThrowsAsync(new UpstreamThrottledException(new DateTimeOffset(2027, 1, 1, 0, 0, 0, TimeSpan.Zero), sent));
+        _indexerIntegration.Setup(integration => integration.SearchAsync(
+                It.IsAny<ReleaseSearchRequest>(),
+                It.IsAny<IReadOnlyDictionary<string, string>>(),
+                It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("Provider unavailable."));
+        Action<int, string>? onStarted = beforeRequest
+            ? (_, _) => throw new InvalidOperationException("Could not start the request.")
+            : null;
+
+        // Act
+        // Assert
+        Assert.ThrowsAsync<InvalidOperationException>(() => _subject.ExecutePlanAsync(
+            [new ReleaseSearchPhase { Request = new ReleaseSearchRequest { Title = "Dune" }, ReleaseFacts = [] }],
+            [],
+            new HashSet<Guid> { _indexerId },
+            new ReleaseEvaluationContext { ContentHierarchyItemId = Guid.NewGuid() },
+            automatic: true,
+            maximumResults: 20,
+            onConnectionStarted: onStarted,
+            useCache: false));
+    }
+
+    [Test]
+    public async Task ExecutePlanAsync_SucceedsWithNoMatches_WhenTheProviderAnswersWithNoReleases()
+    {
+        // Arrange
+        _indexerIntegration.Setup(integration => integration.SearchAsync(
+                It.IsAny<ReleaseSearchRequest>(),
+                It.IsAny<IReadOnlyDictionary<string, string>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
 
         // Act
         var result = await _subject.ExecutePlanAsync(
             [new ReleaseSearchPhase { Request = new ReleaseSearchRequest { Title = "Dune" }, ReleaseFacts = [] }],
-            [], new HashSet<Guid> { _indexerId },
+            [],
+            new HashSet<Guid> { _indexerId },
             new ReleaseEvaluationContext { ContentHierarchyItemId = Guid.NewGuid() },
-            automatic: true, maximumResults: 20, useCache: false).ConfigureAwait(false);
+            automatic: true,
+            maximumResults: 20,
+            useCache: false).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
         {
             Assert.That(result.Results, Is.Empty);
-            Assert.That(result.Partial, Is.True);
-            Assert.That(result.ConnectionsAttempted, Is.EqualTo(expectedAttempts));
-            Assert.That(result.ConnectionsSucceeded, Is.EqualTo(0));
-            Assert.That(result.RetryAt, Is.EqualTo(new DateTimeOffset(2027, 1, 1, 0, 0, 0, TimeSpan.Zero)));
-            Assert.That(result.Warning, Does.Contain("throttled"));
+            Assert.That(result.ConnectionsSucceeded, Is.EqualTo(1));
+            Assert.That(result.Partial, Is.False);
         }
-
-        _indexerConnections.Verify(repository => repository.PatchAsync(It.IsAny<IndexerConnectionPatch>(),
-            It.IsAny<Guid?>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Test]
-    public async Task ExecutePlanAsync_RetainsHealthyResults_WhenAnotherConnectionIsThrottled()
+    public async Task ExecutePlanAsync_RetainsHealthyResults_WhenAnotherConnectionFails()
     {
         // Arrange
         _indexerConnections.Setup(repository => repository.ListAllAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync([
                 new IndexerConnection
                 {
-                    Id = _connectionId, IndexerId = _indexerId, Name = "Throttled", Enabled = true,
-                    Settings = new() { ["throttled"] = "true" }
+                    Id = _connectionId, IndexerId = _indexerId, Name = "Failing", Enabled = true,
+                    Settings = new() { ["failing"] = "true" }
                 },
                 new IndexerConnection
                 {
@@ -281,11 +305,11 @@ public sealed class ReleaseSearchQueryExecutorTests
                 }
             ]);
         _indexerIntegration.Setup(integration => integration.SearchAsync(It.IsAny<ReleaseSearchRequest>(),
-                It.Is<IReadOnlyDictionary<string, string>>(settings => settings.ContainsKey("throttled")),
+                It.Is<IReadOnlyDictionary<string, string>>(settings => settings.ContainsKey("failing")),
                 It.IsAny<CancellationToken>()))
-            .ThrowsAsync(new UpstreamThrottledException(new DateTimeOffset(2027, 1, 1, 0, 0, 0, TimeSpan.Zero)));
+            .ThrowsAsync(new InvalidOperationException("Provider unavailable."));
         _indexerIntegration.Setup(integration => integration.SearchAsync(It.IsAny<ReleaseSearchRequest>(),
-                It.Is<IReadOnlyDictionary<string, string>>(settings => !settings.ContainsKey("throttled")),
+                It.Is<IReadOnlyDictionary<string, string>>(settings => !settings.ContainsKey("failing")),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync([new Release { Title = "Dune healthy", Protocol = "torrent", ExternalId = "healthy" }]);
 
@@ -302,12 +326,11 @@ public sealed class ReleaseSearchQueryExecutorTests
             Assert.That(result.Results.Select(value => value.Release.ExternalId), Is.EqualTo(["healthy"]));
             Assert.That(result.Partial, Is.True);
             Assert.That(result.ConnectionsSucceeded, Is.EqualTo(1));
-            Assert.That(result.RetryAt, Is.EqualTo(new DateTimeOffset(2027, 1, 1, 0, 0, 0, TimeSpan.Zero)));
         }
     }
 
     [Test]
-    public async Task ExecutePlanAsync_PreservesCooldownForBothCallers_WhenTheyShareAnInFlightRoute()
+    public async Task ExecutePlanAsync_WaitsForTheResponseForBothCallers_WhenTheyShareAnInFlightRoute()
     {
         // Arrange
         using var store = new MemoryCacheStore(TimeProvider.System);
@@ -335,15 +358,19 @@ public sealed class ReleaseSearchQueryExecutorTests
         await entered.Task.WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
         var follower = subject.ExecutePlanAsync(phases, [], new HashSet<Guid> { _indexerId }, context,
             automatic: true, maximumResults: 20);
-        response.SetException(new UpstreamThrottledException(new DateTimeOffset(2027, 1, 1, 0, 0, 0, TimeSpan.Zero)));
+        var firstCompletedBeforeResponse = first.IsCompleted;
+        var followerCompletedBeforeResponse = follower.IsCompleted;
+        response.SetResult([new Release { Title = "Dune", Protocol = "torrent", ExternalId = "result" }]);
         var results = await Task.WhenAll(first, follower).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(results.Select(result => result.Partial), Is.EqualTo([true, true]));
-            Assert.That(results.Select(result => result.RetryAt), Has.All.EqualTo(
-                new DateTimeOffset(2027, 1, 1, 0, 0, 0, TimeSpan.Zero)));
+            Assert.That(firstCompletedBeforeResponse, Is.False);
+            Assert.That(followerCompletedBeforeResponse, Is.False);
+            Assert.That(results.Select(result => result.Partial), Is.EqualTo([false, false]));
+            Assert.That(results.Select(result => result.Results.Single().Release.ExternalId),
+                Is.EqualTo(["result", "result"]));
             _indexerIntegration.Verify(integration => integration.SearchAsync(It.IsAny<ReleaseSearchRequest>(),
                 It.IsAny<IReadOnlyDictionary<string, string>>(), It.IsAny<CancellationToken>()), Times.Once);
         }
@@ -610,7 +637,7 @@ public sealed class ReleaseSearchQueryExecutorTests
                 {
                     Id = _indexerId,
                     ProviderType = "test-indexer",
-                    Name = "Rate Limited Indexer",
+                    Name = "Failing Indexer",
                     CreatedAt = new DateTime(2026, 8, 2, 12, 0, 0, DateTimeKind.Utc),
                 },
                 new Indexer
@@ -629,7 +656,7 @@ public sealed class ReleaseSearchQueryExecutorTests
                 {
                     Id = _connectionId,
                     IndexerId = _indexerId,
-                    Name = "Rate Limited Connection",
+                    Name = "Failing Connection",
                     Enabled = true,
                     CreatedAt = new DateTime(2026, 8, 2, 12, 0, 0, DateTimeKind.Utc),
                 },
@@ -2759,7 +2786,7 @@ public sealed class ReleaseSearchQueryExecutorTests
     }
 
     [Test]
-    public void ExecutePlanAsync_StopsConnectionAndFailsSearch_WhenRequestFailsAfterAcceptedObservation()
+    public async Task ExecutePlanAsync_RetainsResultsAndContinues_WhenARequestFailsAfterAcceptedObservation()
     {
         // Arrange
         _indexerIntegration
@@ -2794,7 +2821,7 @@ public sealed class ReleaseSearchQueryExecutorTests
         };
 
         // Act
-        async Task Act() => await _subject.ExecutePlanAsync(
+        var result = await _subject.ExecutePlanAsync(
             routes,
             [],
             new HashSet<Guid> { _indexerId },
@@ -2805,7 +2832,9 @@ public sealed class ReleaseSearchQueryExecutorTests
         // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.ThrowsAsync<InvalidOperationException>(Act);
+            Assert.That(result.Partial, Is.True);
+            Assert.That(result.ConnectionsSucceeded, Is.EqualTo(1));
+            Assert.That(result.Results.Select(value => value.Release.ExternalId), Is.EqualTo(["accepted"]));
             _releaseEvaluation.Verify(service => service.AssessMatch(
                 It.Is<Release>(release => release.ExternalId == "accepted"),
                 It.IsAny<IReadOnlyList<ContentFact>>(),
@@ -2813,7 +2842,7 @@ public sealed class ReleaseSearchQueryExecutorTests
             _indexerIntegration.Verify(integration => integration.SearchAsync(
                 It.Is<ReleaseSearchRequest>(request => request.Title == "third"),
                 It.IsAny<IReadOnlyDictionary<string, string>>(),
-                It.IsAny<CancellationToken>()), Times.Never);
+                It.IsAny<CancellationToken>()), Times.Once);
         }
     }
 
@@ -3068,7 +3097,7 @@ public sealed class ReleaseSearchQueryExecutorTests
         {
             Assert.That(traceText, Does.Contain("https://tracker.example/query?passkey=secret-value"));
             Assert.That(logText, Does.Contain("https://tracker.example/query?passkey=secret-value"));
-            _indexerConnections.Verify(repository => repository.PatchAsync(
+            _indexers.Verify(repository => repository.PatchConnectionAsync(
                 It.Is<IndexerConnectionPatch>(patch =>
                     patch.Id == _connectionId &&
                     patch.LastError != null &&

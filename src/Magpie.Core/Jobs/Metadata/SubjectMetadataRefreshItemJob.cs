@@ -37,7 +37,7 @@ internal sealed class SubjectMetadataRefreshItemJob(
     {
         JobType = MagpieJobs.Types.SubjectMetadataRefreshItem,
         DisplayName = "Subject metadata refresh item",
-        Description = "Refreshes metadata for a subject.",
+        Description = "Refreshes the metadata of a subject.",
         Category = "Content",
         Scope = JobScope.Content,
         Enabled = true,
@@ -255,8 +255,6 @@ internal sealed class SubjectMetadataRefreshItemJob(
         }
 
         var fetchResults = await Task.WhenAll(providerTasks).ConfigureAwait(false);
-        var retryAt = fetchResults.Select(result => result.Exception).OfType<UpstreamThrottledException>()
-            .Select(throttle => (DateTimeOffset?)throttle.RetryAt).Max();
 
         var replacements = new List<ContributionReplacement>();
         var completed = 0;
@@ -310,18 +308,8 @@ internal sealed class SubjectMetadataRefreshItemJob(
         }
 
         cancellationToken.ThrowIfCancellationRequested();
-        if (retryAt is not null && replacements.Count == 0)
-        {
-            throw new UpstreamThrottledException(retryAt.Value);
-        }
-
         await ApplyRefreshWritesAsync(container.Id, replacements, subject, userId, correlationId, cancellationToken)
             .ConfigureAwait(false);
-
-        if (retryAt is not null)
-        {
-            throw new UpstreamThrottledException(retryAt.Value);
-        }
 
         progress.Report(1, "The subject metadata refresh completed.");
     }

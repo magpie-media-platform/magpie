@@ -139,6 +139,41 @@ internal sealed class LibraryImportCandidateRepository(
             ? values.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value))
             : null;
 
+    private static bool IsUnderAnyRoot(string filePath, IReadOnlyCollection<string> rootPaths)
+    {
+        if (string.IsNullOrWhiteSpace(filePath))
+        {
+            return false;
+        }
+
+        var normalizedFile = NormalizePath(filePath);
+        foreach (var rootPath in rootPaths)
+        {
+            if (string.IsNullOrWhiteSpace(rootPath))
+            {
+                continue;
+            }
+
+            var normalizedRoot = NormalizePath(rootPath);
+            if (normalizedFile.Equals(normalizedRoot, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            if (normalizedFile.StartsWith(normalizedRoot + '/', StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static string NormalizePath(string path)
+    {
+        return path.Replace('\\', '/').TrimEnd('/');
+    }
+
     public async Task<IEnumerable<LibraryImportCandidate>> ListAllAsync(CancellationToken cancellationToken)
     {
         try
@@ -669,6 +704,147 @@ internal sealed class LibraryImportCandidateRepository(
                 ex,
                 "The library import repository failed to delete library import matches for root folder {RootFolderId}.",
                 rootFolderId);
+            throw;
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task<int> DeleteAllByRootFolderAsync(
+        Guid rootFolderId,
+        Guid? deletedByUserId,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var deletedIds = await transactionManager.ExecuteWithTransactionAsync(
+                async _ =>
+                {
+                    var ids = await context.LibraryImportCandidates
+                        .Where(m => m.RootFolderId == rootFolderId)
+                        .Select(m => m.Id)
+                        .ToListAsync(cancellationToken)
+                        .ConfigureAwait(false);
+                    if (ids.Count == 0)
+                    {
+                        return ids;
+                    }
+
+                    await context.LibraryImportCandidates
+                        .Where(m => ids.Contains(m.Id))
+                        .ExecuteDeleteAsync(cancellationToken)
+                        .ConfigureAwait(false);
+                    await auditRecordRepository.CreateAsync(
+                        new()
+                        {
+                            Category = AuditCategories.Content,
+                            Operation = "Delete",
+                            EntityId = rootFolderId.ToString(),
+                            EntityType = nameof(LibraryImportCandidate),
+                            Detail = $"Deleted {ids.Count} import candidates with root folder {rootFolderId}.",
+                            Timestamp = _time.GetUtcNow().UtcDateTime,
+                            UserId = deletedByUserId
+                        },
+                        cancellationToken).ConfigureAwait(false);
+
+                    return ids;
+                },
+                cancellationToken).ConfigureAwait(false);
+
+            foreach (var id in deletedIds)
+            {
+                await transactionManager.OnCommittedAsync(
+                    token => eventBus.PublishAsync(
+                        ContentEventBuilder.BuildLibraryImportCandidateUpdatedEvent(id),
+                        token),
+                    cancellationToken).ConfigureAwait(false);
+            }
+
+            return deletedIds.Count;
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(
+                ex,
+                "The library import repository failed to delete the import candidates of root folder {RootFolderId}.",
+                rootFolderId);
+            throw;
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task InvalidateOutsideRootFoldersAsync(Guid? modifiedByUserId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var orphanedIds = await transactionManager.ExecuteWithTransactionAsync(
+                async _ =>
+                {
+                    var rootPaths = await context.RootFolders
+                        .AsNoTracking()
+                        .Select(r => r.Path)
+                        .ToListAsync(cancellationToken)
+                        .ConfigureAwait(false);
+                    var pending = await (
+                        from m in context.LibraryImportCandidates.AsNoTracking()
+                        where m.Status == LibraryImportCandidateStatus.Pending ||
+                            m.Status == LibraryImportCandidateStatus.MatchingPending
+                        select new { m.Id, m.FilePath })
+                        .ToListAsync(cancellationToken)
+                        .ConfigureAwait(false);
+
+                    var ids = (from m in pending where !IsUnderAnyRoot(m.FilePath, rootPaths) select m.Id).ToList();
+                    if (ids.Count == 0)
+                    {
+                        return ids;
+                    }
+
+                    var now = _time.GetUtcNow().UtcDateTime;
+                    await context.LibraryImportCandidates
+                        .Where(m => ids.Contains(m.Id))
+                        .ExecuteUpdateAsync(
+                            s => s
+                                .SetProperty(m => m.Status, LibraryImportCandidateStatus.Invalidated)
+                                .SetProperty(m => m.ModifiedAt, now)
+                                .SetProperty(m => m.ModifiedByUserId, modifiedByUserId),
+                            cancellationToken)
+                        .ConfigureAwait(false);
+
+                    await auditRecordRepository.CreateAsync(
+                        new()
+                        {
+                            Category = AuditCategories.Content,
+                            Operation = "Invalidate",
+                            EntityType = nameof(LibraryImportCandidate),
+                            Detail = $"Invalidated {ids.Count} library import candidates " +
+                                "left outside all configured root folders after a root-folder change",
+                            Timestamp = now,
+                            UserId = modifiedByUserId
+                        },
+                        cancellationToken).ConfigureAwait(false);
+
+                    logger.LogInformation(
+                        "The root folder change invalidated {Count} library import candidates outside all configured " +
+                        "roots",
+                        ids.Count);
+
+                    return ids;
+                },
+                cancellationToken).ConfigureAwait(false);
+
+            foreach (var id in orphanedIds)
+            {
+                await transactionManager.OnCommittedAsync(
+                    token => eventBus.PublishAsync(
+                        ContentEventBuilder.BuildLibraryImportCandidateUpdatedEvent(id),
+                        token),
+                    cancellationToken).ConfigureAwait(false);
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(
+                ex,
+                "The library import repository failed to invalidate the candidates outside all root folders.");
             throw;
         }
     }

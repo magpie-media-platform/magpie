@@ -351,7 +351,7 @@ internal sealed class QbittorrentDownloadClientIntegration(
         var details = $"(HTTP {statusCode}, {contentType ?? "no content type"})";
         var start = Encoding.UTF8.GetString(bytes, 0, Math.Min(bytes.Length, 512))
             .TrimStart('\uFEFF', ' ', '\t', '\r', '\n');
-        var transientStatus = statusCode is 429 or >= 500;
+        var transientStatus = statusCode >= 500;
         if (bytes.Length > 0 && !transientStatus &&
             (contentType?.Contains("html", StringComparison.OrdinalIgnoreCase) == true || start.StartsWith('<')))
         {

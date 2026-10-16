@@ -440,6 +440,7 @@ public sealed class JobManagerTests
         var scheduler = new MlfqJobConcurrencyScheduler(
             options,
             TimeProvider.System,
+            Mock.Of<IJobRegistry>(registry => registry.ListJobSpecs() == Array.Empty<JobSpec>()),
             NullLogger<MlfqJobConcurrencyScheduler>.Instance);
         var subject = new JobManager(
             _runtime.Object,
@@ -1195,12 +1196,6 @@ public sealed class JobManagerTests
                 userId,
                 It.IsAny<CancellationToken>()),
             Times.Once);
-        _scheduleTriggerRepository.Verify(
-            r => r.UpdateAsync(
-                It.IsAny<ScheduleTrigger>(),
-                It.IsAny<Guid?>(),
-                It.IsAny<CancellationToken>()),
-            Times.Never);
     }
 
     [Test]
@@ -1238,9 +1233,6 @@ public sealed class JobManagerTests
 
         // Assert
         Assert.That(result, Is.False);
-        _scheduleTriggerRepository.Verify(
-            m => m.UpdateAsync(It.IsAny<ScheduleTrigger>(), userId, It.IsAny<CancellationToken>()),
-            Times.Never);
     }
 
     [Test]
@@ -2250,6 +2242,7 @@ public sealed class JobManagerTests
                     new JobRegistration(first, typeof(WishlistRefreshItemJob)),
                     new JobRegistration(second, typeof(WishlistRefreshItemJob)),
                 ],
+                new JobRuntimeOptions(),
                 NullLogger<JobRegistry>.Instance),
             _executionRepository.Object,
             _scheduleTriggerRepository.Object,

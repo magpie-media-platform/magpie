@@ -33,8 +33,7 @@ internal sealed class DownloadImportScanJob(
     {
         JobType = MagpieJobs.Types.DownloadImportScan,
         DisplayName = "Download import scan",
-        Description = "Finds downloads that remain in Downloaded when Magpie misses their DownloadImportItem " +
-            "event. Queues one DownloadImportItem job for each download.",
+        Description = "Retries download imports that are waiting or were interrupted.",
         Category = "System",
         Scope = JobScope.Administrative,
         Enabled = true,

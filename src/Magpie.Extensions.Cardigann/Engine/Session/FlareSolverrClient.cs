@@ -38,8 +38,6 @@ internal sealed class FlareSolverrClient(
     private const int SolverTimeoutMilliseconds = 60000;
     private const int SessionTtlMinutes = 60;
 
-    public static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(120);
-
     public static readonly TimeSpan ReuseWindow = TimeSpan.FromSeconds(60);
 
     public static readonly TimeSpan FailureBackoff = TimeSpan.FromMinutes(10);
@@ -98,6 +96,10 @@ internal sealed class FlareSolverrClient(
         }
 
         var (endpoint, session) = solver.Value;
+        using var timeout = timeProvider.CreateCancellationTokenSource(
+            clientFactory.CreateClient(HttpClientName).Timeout);
+        using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeout.Token);
+        var operationToken = lifetime.Token;
 
         using var activity = Telemetry.Source.StartActivity("cardigann.cloudflare.solve");
         activity?.SetTag("magpie.request.role", "cloudflareClearance");
@@ -123,9 +125,7 @@ internal sealed class FlareSolverrClient(
                 return null;
             }
 
-            using var upstream = new HttpRequestMessage(HttpMethod.Get, target);
-            cooldown.Check(upstream, authenticationScope, cancellationToken);
-            if (!await queue.EnterAsync(cancellationToken).ConfigureAwait(false))
+            if (!await queue.EnterAsync(operationToken).ConfigureAwait(false))
             {
                 outcome = "busy";
                 logger.LogWarning(
@@ -140,9 +140,9 @@ internal sealed class FlareSolverrClient(
             (CloudflareClearance? Clearance, string Outcome) solved;
             try
             {
-                solved = await solving.WaitAsync(cancellationToken).ConfigureAwait(false);
+                solved = await solving.WaitAsync(operationToken).ConfigureAwait(false);
             }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            catch (OperationCanceledException) when (operationToken.IsCancellationRequested)
             {
                 outcome = "cancelled";
                 _ = solving.ContinueWith(LogAbandoned, target.GetLeftPart(UriPartial.Authority),
@@ -178,6 +178,7 @@ internal sealed class FlareSolverrClient(
 
         async Task<(CloudflareClearance? Clearance, string Outcome)> SolveAdmittedAsync()
         {
+            var sending = false;
             try
             {
                 if (reuse && TryReuse(target) is { } shared)
@@ -191,12 +192,29 @@ internal sealed class FlareSolverrClient(
                 using var request = new HttpRequestMessage(HttpMethod.Get, target);
                 using var admitted = await cooldown.SendAsync(request, authenticationScope, async token =>
                 {
+                    token.ThrowIfCancellationRequested();
+                    sending = true;
                     using var content = BuildCommand("request.get", session, target);
                     using var response = await clientFactory
                         .CreateClient(HttpClientName)
-                        .PostAsync(endpoint, content, token)
+                        .PostAsync(endpoint, content, CancellationToken.None)
                         .ConfigureAwait(false);
-                    var payload = await response.Content.ReadAsStringAsync(token).ConfigureAwait(false);
+                    var payload = await response.Content.ReadAsStringAsync(CancellationToken.None)
+                        .ConfigureAwait(false);
+                    sending = false;
+                    if (response.StatusCode == HttpStatusCode.TooManyRequests ||
+                        response.StatusCode == HttpStatusCode.ServiceUnavailable &&
+                        response.Headers.Contains("Retry-After"))
+                    {
+                        var throttled = new HttpResponseMessage(response.StatusCode);
+                        if (response.Headers.TryGetValues("Retry-After", out var retryAfter))
+                        {
+                            throttled.Headers.TryAddWithoutValidation("Retry-After", retryAfter);
+                        }
+
+                        return throttled;
+                    }
+
                     if (!response.IsSuccessStatusCode)
                     {
                         solverFailed = true;
@@ -240,7 +258,7 @@ internal sealed class FlareSolverrClient(
                     clearance = ParseClearance(payload, endpoint);
                     challengeFailed = clearance is null && IsChallengeFailure(payload);
                     return new HttpResponseMessage(HttpStatusCode.OK);
-                }, CancellationToken.None).ConfigureAwait(false);
+                }, operationToken).ConfigureAwait(false);
 
                 if (challengeFailed)
                 {
@@ -264,7 +282,7 @@ internal sealed class FlareSolverrClient(
 
                 return (clearance, clearance is null ? "rejected" : "solved");
             }
-            catch (TaskCanceledException)
+            catch (TaskCanceledException) when (sending)
             {
                 await DestroySessionAsync(endpoint, session).ConfigureAwait(false);
                 throw;
@@ -303,11 +321,15 @@ internal sealed class FlareSolverrClient(
     {
         try
         {
-            using var content = BuildCommand("sessions.destroy", session);
-            using var response = await clientFactory
-                .CreateClient(HttpClientName)
-                .PostAsync(endpoint, content, CancellationToken.None)
-                .ConfigureAwait(false);
+            using var timeout = timeProvider.CreateCancellationTokenSource(
+                clientFactory.CreateClient(HttpClientName).Timeout);
+            using var request = new HttpRequestMessage(HttpMethod.Post, endpoint);
+            using var response = await cooldown.SendAsync(request, null, async token =>
+            {
+                using var content = BuildCommand("sessions.destroy", session);
+                return await clientFactory.CreateClient(HttpClientName).PostAsync(endpoint, content, token)
+                    .ConfigureAwait(false);
+            }, timeout.Token).ConfigureAwait(false);
             if (!response.IsSuccessStatusCode)
             {
                 logger.LogDebug(
@@ -329,6 +351,11 @@ internal sealed class FlareSolverrClient(
 
     private void LogAbandoned(Task<(CloudflareClearance? Clearance, string Outcome)> solving, object? target)
     {
+        if (solving.IsCanceled)
+        {
+            return;
+        }
+
         if (solving.Exception is { } exception)
         {
             logger.LogWarning(

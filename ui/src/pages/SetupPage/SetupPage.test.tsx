@@ -272,6 +272,113 @@ describe('SetupPage', () => {
         expect(vi.mocked(apiModule.apiGet)).not.toHaveBeenCalledWith('/settings/groups');
     });
 
+    it('writes the roles and the job list of a node that joins a cluster and then opens login', async () => {
+        const user = userEvent.setup();
+        vi.mocked(setupApiModule.fetchSetupStatus).mockResolvedValue({
+            isRequired: true,
+            isComplete: false,
+            requiresAdminClaim: true,
+        });
+        vi.mocked(setupApiModule.fetchSetupDatabaseStatus).mockResolvedValue({
+            initialized: true,
+            provider: 'SQLite',
+            jobTypes: { MediaInfoExtractItem: 'Media info extraction', DownloadCleanup: 'Download cleanup' },
+        });
+        vi.mocked(setupApiModule.configureSetupDatabase).mockResolvedValue({
+            provider: 'postgresql',
+            restartRequired: true,
+        });
+
+        renderSetupPage();
+
+        await waitForStep('admin');
+        await user.click(screen.getByRole('button', { name: 'Join an existing cluster' }));
+        await waitForStep('join');
+        await user.type(screen.getByLabelText(/connection string/i), 'Host=db;Database=magpie');
+        await user.click(screen.getByLabelText('API'));
+        await user.click(screen.getByText('Job types'));
+        await user.click(screen.getByLabelText('Download cleanup'));
+        await user.click(screen.getByRole('button', { name: /save and continue/i }));
+        vi.mocked(setupApiModule.fetchSetupStatus).mockResolvedValue({
+            isRequired: false,
+            isComplete: true,
+            requiresAdminClaim: false,
+        });
+        await user.click(await screen.findByRole('button', { name: /i have restarted magpie/i }));
+
+        expect(await screen.findByText('Login page')).toBeInTheDocument();
+        expect(screen.queryByLabelText(/sqlite/i)).not.toBeInTheDocument();
+        expect(vi.mocked(setupApiModule.configureSetupDatabase).mock.calls[0][0]).toEqual({
+            provider: 'postgresql',
+            connectionString: 'Host=db;Database=magpie',
+            roles: ['Ui', 'JobRunner'],
+            jobTypes: ['MediaInfoExtractItem'],
+        });
+    });
+
+    it('keeps save disabled while a joining job runner has no job type selected', async () => {
+        const user = userEvent.setup();
+        vi.mocked(setupApiModule.fetchSetupStatus).mockResolvedValue({
+            isRequired: true,
+            isComplete: false,
+            requiresAdminClaim: true,
+        });
+        vi.mocked(setupApiModule.fetchSetupDatabaseStatus).mockResolvedValue({
+            initialized: true,
+            provider: 'SQLite',
+            jobTypes: { MediaInfoExtractItem: 'Media info extraction', DownloadCleanup: 'Download cleanup' },
+        });
+
+        renderSetupPage();
+
+        await waitForStep('admin');
+        await user.click(screen.getByRole('button', { name: 'Join an existing cluster' }));
+        await waitForStep('join');
+        await user.click(screen.getByText('Job types'));
+        await user.click(screen.getByLabelText('All job types'));
+
+        expect(screen.getByRole('button', { name: /save and continue/i })).toBeDisabled();
+        await user.click(screen.getByLabelText('Download cleanup'));
+        expect(screen.getByRole('button', { name: /save and continue/i })).toBeEnabled();
+    });
+
+    it('asks only for a restart after a node without the UI role joins a cluster', async () => {
+        const user = userEvent.setup();
+        vi.mocked(setupApiModule.fetchSetupStatus).mockResolvedValue({
+            isRequired: true,
+            isComplete: false,
+            requiresAdminClaim: true,
+        });
+        vi.mocked(setupApiModule.fetchSetupDatabaseStatus).mockResolvedValue({
+            initialized: true,
+            provider: 'SQLite',
+            jobTypes: { MediaInfoExtractItem: 'Media info extraction', DownloadCleanup: 'Download cleanup' },
+        });
+        vi.mocked(setupApiModule.configureSetupDatabase).mockResolvedValue({
+            provider: 'postgresql',
+            restartRequired: true,
+        });
+
+        renderSetupPage();
+
+        await waitForStep('admin');
+        await user.click(screen.getByRole('button', { name: 'Join an existing cluster' }));
+        await waitForStep('join');
+        await user.type(screen.getByLabelText(/connection string/i), 'Host=db;Database=magpie');
+        await user.click(screen.getByLabelText('UI'));
+        await user.click(screen.getByLabelText('API'));
+        await user.click(screen.getByRole('button', { name: /^save$/i }));
+
+        expect(await screen.findByText(/so the new database provider takes effect\.$/)).toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: /i have restarted magpie/i })).not.toBeInTheDocument();
+        expect(vi.mocked(setupApiModule.configureSetupDatabase).mock.calls[0][0]).toEqual({
+            provider: 'postgresql',
+            connectionString: 'Host=db;Database=magpie',
+            roles: ['JobRunner'],
+            jobTypes: [],
+        });
+    });
+
     it('redirects unauthenticated users to /login when setup is already complete', async () => {
         vi.mocked(setupApiModule.fetchSetupStatus).mockResolvedValue({
             isRequired: false,

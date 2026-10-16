@@ -28,6 +28,7 @@ public sealed class JellyfinExtension : IExtension
         ArgumentNullException.ThrowIfNull(services);
 
         services.AddHttpClient<IJellyfinClient, JellyfinClient>()
+            .AddUpstreamCooldown(request => request.Headers.Authorization?.ToString())
             .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
             {
                 AllowAutoRedirect = false

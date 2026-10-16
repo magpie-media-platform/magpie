@@ -29,4 +29,18 @@ public interface IExtensionRepository :
         IReadOnlyList<IExtension> loaded,
         IReadOnlyDictionary<Guid, string> packageVersions,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Sets the lifecycle version of an extension if it has the expected version.
+    /// </summary>
+    /// <param name="id">The extension id</param>
+    /// <param name="expectedVersion">The expected version, or null for none</param>
+    /// <param name="version">The new version, or null for none</param>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
+    /// <returns><see langword="true"/> if the version changed</returns>
+    Task<bool> TrySetLifecycleVersionAsync(
+        Guid id,
+        string? expectedVersion,
+        string? version,
+        CancellationToken cancellationToken = default);
 }

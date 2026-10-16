@@ -27,7 +27,7 @@ internal sealed class DatabaseMaintenanceJob(
     {
         JobType = MagpieJobs.Types.DatabaseMaintenance,
         DisplayName = "Database maintenance",
-        Description = "Runs scheduled backups, removes expired backups, and optimizes the database.",
+        Description = "Backs up and optimizes the database, and removes old backups.",
         Category = "System",
         Scope = JobScope.Administrative,
         Enabled = true,

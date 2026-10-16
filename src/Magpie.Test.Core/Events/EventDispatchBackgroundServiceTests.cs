@@ -248,6 +248,66 @@ public sealed class EventDispatchBackgroundServiceTests
             "The additional scopes of a pack rely on the auto-grab scan schedule.");
     }
 
+    [TestCase("content.hierarchyItem.updated", "content.changedFields", "MediaInfo,MediaFiles",
+        "MediaInfoExtractScan,MediaServerRefresh")]
+    [TestCase("content.hierarchyItem.updated", "content.changedFields", "MediaInfo", "")]
+    [TestCase("content.fulfillment.changed", "content.fulfillment.to", "Missing", "ReleaseAutoGrabScan")]
+    [TestCase("content.fulfillment.changed", "content.fulfillment.to", "Upgradable", "ReleaseAutoGrabScan")]
+    [TestCase("content.fulfillment.changed", "content.fulfillment.to", "Fulfilled", "")]
+    [TestCase("download.updated", "download.changedFields", "Progress,HeldByPolicy", "DownloadCleanup")]
+    [TestCase("download.updated", "download.changedFields", "Progress", "")]
+    [TestCase("indexerFeed.created", "indexerFeed.id", "00000000-0000-0000-0000-000000000002", "IndexerFeedSyncItem")]
+    [TestCase("indexerFeed.updated", "indexerFeed.changedFields", "LastSync", "")]
+    public async Task ExecuteAsync_QueuesTheDefaultFollowUps_WhenAChangeEventArrives(
+        string eventName,
+        string key,
+        string value,
+        string expectedJobTypes)
+    {
+        // Arrange
+        _eventTriggers
+            .Setup(repository => repository.QueryAllAsync(
+                It.IsAny<EventTriggerQuery>(),
+                It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync([.. DefaultJobTriggerCatalog.EventTriggers, _marker]);
+        await _subject.StartAsync(CancellationToken.None).ConfigureAwait(false);
+
+        // Act
+        await _eventBus.PublishAsync(new MagpieEvent(
+            new Guid("00000000-0000-0000-0000-000000000010"),
+            eventName,
+            new Dictionary<string, string>
+            {
+                [EventCatalog.Keys.ContentHierarchyItemId] = "00000000-0000-0000-0000-000000000002",
+                [key] = value
+            },
+            new DateTime(2026, 9, 28, 10, 0, 0, DateTimeKind.Utc),
+            new DateTime(2026, 9, 28, 10, 0, 0, DateTimeKind.Utc),
+            null)).ConfigureAwait(false);
+        await _marked.Task.WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+
+        // Assert
+        var requests = _jobManager.Invocations
+            .Where(invocation => invocation.Method.Name == nameof(IJobManager.ExecuteAsync))
+            .Select(invocation => (JobEnqueueRequest)invocation.Arguments[0])
+            .Where(request => request.JobType != "Marker")
+            .ToList();
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(
+                requests.Select(request => request.JobType),
+                Is.EquivalentTo(expectedJobTypes.Split(',', StringSplitOptions.RemoveEmptyEntries)));
+            Assert.That(
+                requests.SelectMany(request => request.Parameters!.Values),
+                Has.None.Matches<string>(parameter => parameter.Contains("${", StringComparison.Ordinal)));
+            Assert.That(
+                requests.Where(request => request.JobType == "MediaServerRefresh")
+                    .Select(request => request.NotBeforeAt),
+                Has.All.Not.Null);
+        }
+    }
+
     [TestCase("${event.content.hierarchyItemId}", 0)]
     [TestCase("00000000-0000-0000-0000-000000000001", 0)]
     [TestCase("00000000-0000-0000-0000-000000000002", 1)]

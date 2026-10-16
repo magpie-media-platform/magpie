@@ -66,27 +66,27 @@ internal sealed class IndexerFeedRepository(
         var fields = new List<string>();
         if (patch.ProviderType is not null)
         {
-            fields.Add("providerType");
+            fields.Add(nameof(IndexerFeed.ProviderType));
         }
 
         if (patch.Name is not null)
         {
-            fields.Add("name");
+            fields.Add(nameof(IndexerFeed.Name));
         }
 
         if (patch.Description is not null)
         {
-            fields.Add("description");
+            fields.Add(nameof(IndexerFeed.Description));
         }
 
         if (patch.Settings is not null)
         {
-            fields.Add("settings");
+            fields.Add(nameof(IndexerFeed.Settings));
         }
 
         if (patch.Enabled is not null)
         {
-            fields.Add("enabled");
+            fields.Add(nameof(IndexerFeed.Enabled));
         }
 
         return fields;
@@ -97,37 +97,37 @@ internal sealed class IndexerFeedRepository(
         var fields = new List<string>();
         if (current.ExtensionId != model.ExtensionId)
         {
-            fields.Add("extensionId");
+            fields.Add(nameof(IndexerFeed.ExtensionId));
         }
 
         if (!string.Equals(current.ProviderType, model.ProviderType, StringComparison.Ordinal))
         {
-            fields.Add("providerType");
+            fields.Add(nameof(IndexerFeed.ProviderType));
         }
 
         if (!string.Equals(current.Name, model.Name, StringComparison.Ordinal))
         {
-            fields.Add("name");
+            fields.Add(nameof(IndexerFeed.Name));
         }
 
         if (!string.Equals(current.Description, model.Description, StringComparison.Ordinal))
         {
-            fields.Add("description");
+            fields.Add(nameof(IndexerFeed.Description));
         }
 
         if (!SettingsEqual(current.Settings, model.Settings))
         {
-            fields.Add("settings");
+            fields.Add(nameof(IndexerFeed.Settings));
         }
 
         if (current.Enabled != model.Enabled)
         {
-            fields.Add("enabled");
+            fields.Add(nameof(IndexerFeed.Enabled));
         }
 
         if (current.LastSync != model.LastSync)
         {
-            fields.Add("lastSync");
+            fields.Add(nameof(IndexerFeed.LastSync));
         }
 
         return fields;

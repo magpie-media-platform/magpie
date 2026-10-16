@@ -1,14 +1,10 @@
 using System;
-using System.Collections.Generic;
-using System.Globalization;
 using System.Threading;
 using System.Threading.Tasks;
 
 using Magpie.Abstractions.Repositories;
-using Magpie.Models;
 using Magpie.Models.Data;
 using Magpie.Sdk.Auth;
-using Magpie.Sdk.Events;
 using Magpie.Sdk.Services;
 
 using Microsoft.AspNetCore.Http;
@@ -20,7 +16,6 @@ internal sealed class LocalCredentialAuthenticationProvider(
     IUserService userService,
     IUserRepository userRepository,
     AccountLockoutOptions lockoutOptions,
-    IEventBus eventBus,
     TimeProvider timeProvider,
     ILogger<LocalCredentialAuthenticationProvider> logger) : ICredentialAuthenticationProvider
 {
@@ -32,21 +27,7 @@ internal sealed class LocalCredentialAuthenticationProvider(
         PasswordSalt = Convert.ToBase64String(new byte[32]),
     };
 
-    private const string UnlockReasonExpiry = "expiry";
-
     public string ProviderType => CredentialProviderTypes.Local;
-
-    private static MagpieEvent BuildUserUnlocked(Guid userId, string username, string unlockReason)
-    {
-        var context = new Dictionary<string, string>
-        {
-            [MagpieEvents.Keys.UserId] = userId.ToString("D", CultureInfo.InvariantCulture),
-            [MagpieEvents.Keys.UserUsername] = username ?? string.Empty,
-            [MagpieEvents.Keys.UserUnlockReason] = unlockReason,
-        };
-
-        return new MagpieEvent(Guid.Empty, MagpieEvents.Names.UserUnlocked, context, default, default, null);
-    }
 
     public Task<AuthenticationAttempt> TryAuthenticateAsync(
         HttpContext context,
@@ -110,10 +91,6 @@ internal sealed class LocalCredentialAuthenticationProvider(
 
             user.FailedLoginAttempts = 0;
             user.LockedUntil = null;
-
-            await eventBus
-                .PublishAsync(BuildUserUnlocked(user.Id, user.Username, UnlockReasonExpiry), cancellationToken)
-                .ConfigureAwait(false);
         }
 
         var verified = await userService.VerifyPasswordAsync(user, password, cancellationToken).ConfigureAwait(false);
@@ -150,6 +127,7 @@ internal sealed class LocalCredentialAuthenticationProvider(
 
         if (result.LockedUntil is not null)
         {
+            Telemetry.Lockouts.Add(1);
             logger.LogInformation(
                 "Locked user {Username} until {LockedUntil} after {Attempts} failed attempts",
                 username,

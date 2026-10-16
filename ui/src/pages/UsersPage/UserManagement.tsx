@@ -529,7 +529,8 @@ function UserRow({
     const lockedUntil = user.lockedUntil ? parseUtcInstant(user.lockedUntil) : null;
     const isLocked = lockedUntil !== null && lockedUntil > new Date();
 
-    const isProtected = isCurrentUser || isSystem;
+    const protectedReason = isSystem ? SYSTEM_ACCOUNT_TOOLTIP : isCurrentUser ? 'Cannot modify your own account' : null;
+    const isProtected = protectedReason !== null;
 
     return (
         <div
@@ -602,15 +603,7 @@ function UserRow({
                 </div>
                 <div className="users-page__item-actions card-actions">
                     {isLocked && (
-                        <Tooltip
-                            content={
-                                isSystem
-                                    ? SYSTEM_ACCOUNT_TOOLTIP
-                                    : isCurrentUser
-                                      ? 'Cannot modify your own account'
-                                      : 'Clear the lockout'
-                            }
-                        >
+                        <Tooltip content={protectedReason ?? 'Clear the lockout'}>
                             <button
                                 type="button"
                                 className="users-page__action-btn card-actions__btn"
@@ -648,15 +641,7 @@ function UserRow({
                             />
                         </div>
                     </Tooltip>
-                    <Tooltip
-                        content={
-                            isSystem
-                                ? SYSTEM_ACCOUNT_TOOLTIP
-                                : isCurrentUser
-                                  ? 'Cannot modify your own account'
-                                  : 'Edit'
-                        }
-                    >
+                    <Tooltip content={protectedReason ?? 'Edit'}>
                         <button
                             type="button"
                             className="users-page__action-btn card-actions__btn"
@@ -670,15 +655,7 @@ function UserRow({
                             <PencilSimpleIcon weight="bold" />
                         </button>
                     </Tooltip>
-                    <Tooltip
-                        content={
-                            isSystem
-                                ? SYSTEM_ACCOUNT_TOOLTIP
-                                : isCurrentUser
-                                  ? 'Cannot modify your own account'
-                                  : 'Delete'
-                        }
-                    >
+                    <Tooltip content={protectedReason ?? 'Delete'}>
                         <button
                             type="button"
                             className="users-page__action-btn users-page__action-btn--danger card-actions__btn card-actions__btn--danger"

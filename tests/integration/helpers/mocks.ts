@@ -15,7 +15,7 @@ import {
 export interface ConnectionResult {
     success: boolean;
     message?: string;
-    failureKind?: 'None' | 'Transient' | 'RateLimited' | 'NotFound' | 'Auth' | 'Fatal';
+    failureKind?: 'None' | 'Transient' | 'NotFound' | 'Auth' | 'Fatal';
 }
 
 export interface ReleaseFixture {

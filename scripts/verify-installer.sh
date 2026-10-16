@@ -33,7 +33,7 @@ serves() {
     done
     sc.exe queryex Magpie >&2 || true
     curl --verbose --max-time 5 http://127.0.0.1:8080/api/system/ready >&2 || true
-    wevtutil qe Application "/q:*[System[Provider[@Name='Magpie.App']]]" /f:text /c:20 /rd:true >&2 || true
+    wevtutil qe Application "/q:*[System[Provider[@Name='magpie']]]" /f:text /c:20 /rd:true >&2 || true
     return 1
 }
 

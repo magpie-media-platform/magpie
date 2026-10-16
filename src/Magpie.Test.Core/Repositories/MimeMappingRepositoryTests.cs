@@ -108,7 +108,7 @@ public sealed class MimeMappingRepositoryTests
                 _publishedEvents,
                 Has.All.Matches<MagpieEvent>(magpieEvent =>
                     magpieEvent.Context.Values.Contains(mapping.Extension, StringComparer.Ordinal)));
-            Assert.That(_publishedEvents[1].Context.Values, Does.Contain("mimeType"));
+            Assert.That(_publishedEvents[1].Context.Values, Does.Contain("MimeType"));
         }
     }
 }

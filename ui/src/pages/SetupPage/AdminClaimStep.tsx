@@ -10,6 +10,7 @@ import { isApiError } from '@/lib/api';
 
 interface AdminClaimStepProps {
     onAdvance: () => void | Promise<void>;
+    onJoinCluster?: () => void;
 }
 
 function getErrorMessage(error: unknown): string {
@@ -27,7 +28,7 @@ function getErrorMessage(error: unknown): string {
     return 'Failed to create the administrator account. Try again.';
 }
 
-export function AdminClaimStep({ onAdvance }: AdminClaimStepProps): ReactNode {
+export function AdminClaimStep({ onAdvance, onJoinCluster }: AdminClaimStepProps): ReactNode {
     const statusQuery = useSetupStatus();
     const createAdmin = useCreateSetupAdmin();
     const { isAuthenticated, login } = useAuth();
@@ -184,6 +185,20 @@ export function AdminClaimStep({ onAdvance }: AdminClaimStepProps): ReactNode {
                 <UserPlusIcon weight="bold" aria-hidden="true" />
                 {isAdminCreated ? 'Continue setup' : 'Create administrator'}
             </Button>
+
+            {onJoinCluster && !isAdminCreated && (
+                <Button
+                    type="button"
+                    variant="ghost"
+                    size="lg"
+                    disabled={isSubmitting}
+                    onClick={onJoinCluster}
+                    className="setup-page__submit"
+                    data-action="join-cluster"
+                >
+                    Join an existing cluster
+                </Button>
+            )}
         </form>
     );
 }

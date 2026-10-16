@@ -199,7 +199,6 @@ test.describe.serial('Journey 18: search, acquire and import each current conten
 
         const added: AddedDomain[] = [];
         let concurrentGrabStatus: number | undefined;
-        let mediaRefreshObserved = false;
 
         for (const fixture of domains) {
             const root = roots.find((candidate) => candidate.contentType === fixture.contentType)!;
@@ -209,7 +208,7 @@ test.describe.serial('Journey 18: search, acquire and import each current conten
                 await page.getByRole('combobox', { name: 'Content Type' }).click();
                 await page.getByRole('option', { name: fixture.option, exact: true }).click();
                 await page.locator('#sfb-title').fill(fixture.title);
-                await page.getByRole('button', { name: /^search$/i }).click();
+                await page.getByRole('region', { name: 'Filter options' }).getByRole('button', { name: /^search$/i }).click();
 
                 const row = page.getByRole('grid').getByRole('row').filter({ hasText: fixture.title });
                 await expect(row).toBeVisible();
@@ -362,7 +361,6 @@ test.describe.serial('Journey 18: search, acquire and import each current conten
                     id: target.id,
                     contentItem: { fulfillment: fixture.expectedFulfillment },
                 });
-                mediaRefreshObserved ||= (await mocks.mediaServer.calls('RefreshForContentAsync')).length > 0;
                 return acquired;
             });
             added.push({ fixture, root, topId, targetId: target.id, result });
@@ -466,7 +464,16 @@ test.describe.serial('Journey 18: search, acquire and import each current conten
                 expect.objectContaining({ type: 'Audio' }),
             );
 
-            expect(mediaRefreshObserved).toBe(true);
+            const mediaRefreshCalls = await until(
+                'media server refresh after content imports',
+                async () => {
+                    const calls = await mocks.mediaServer.calls('RefreshForContentAsync');
+                    return calls.length > 0 ? calls : undefined;
+                },
+                60_000,
+                500,
+            );
+            expect(mediaRefreshCalls.length).toBeGreaterThan(0);
             const jobs = await api.get<Paged<{
                 id: string;
                 status: string;

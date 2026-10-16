@@ -672,7 +672,7 @@ public sealed class ExtensionRepositoryTests
                 Is.EqualTo(extension.Id.ToString("D")));
             Assert.That(
                 _publishedEvents[0].Context["extension.changedFields"],
-                Is.EqualTo("nuGetId,packageRepository,autoUpgrade,loadOrder"));
+                Is.EqualTo("NuGetId,PackageRepository,AutoUpgrade,LoadOrder"));
         }
     }
 
@@ -779,6 +779,133 @@ public sealed class ExtensionRepositoryTests
             Assert.That(notLoaded.Name, Is.EqualTo("Not loaded"));
             Assert.That(notLoaded.Version, Is.EqualTo("1.0.0"));
             Assert.That(notLoaded.TargetABI, Is.Null);
+        }
+    }
+
+    [Test]
+    public async Task RegisterLoadedExtensionsAsync_KeepsTheExistingRowAndId_WhenAnotherNodeRegisteredThePackage()
+    {
+        // Arrange
+        var winnerId = new Guid("00000000-0000-0000-0000-0000000000a1");
+        _context.Extensions.Add(
+            new Extension
+            {
+                Id = winnerId,
+                PackageId = "Magpie.Test.Core",
+                Name = "Winner",
+                Version = "1.0.0",
+                FilePath = "/app/data/extensions/loaded/Magpie.Test.Core.dll",
+                AssemblyName = "Magpie.Test.Core",
+                Installed = true,
+                Enabled = true,
+            });
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.ChangeTracker.Clear();
+        var loser = new Extension
+        {
+            Id = new Guid("00000000-0000-0000-0000-0000000000b2"),
+            PackageId = "Magpie.Test.Core",
+            Name = "Loser",
+            Version = "1.0.0",
+            FilePath = "/app/data/extensions/loaded/Magpie.Test.Core.dll",
+            AssemblyName = "Magpie.Test.Core",
+            Installed = true,
+            Enabled = true,
+        };
+
+        // Act
+        await _subject.RegisterLoadedExtensionsAsync([loser], [new LoadedExtension()], new Dictionary<Guid, string>())
+            .ConfigureAwait(false);
+
+        // Assert
+        var rows = await _context.Extensions.AsNoTracking().ToListAsync().ConfigureAwait(false);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(rows, Has.Count.EqualTo(1));
+            Assert.That(rows[0].Id, Is.EqualTo(winnerId));
+            Assert.That(loser.Id, Is.EqualTo(winnerId));
+        }
+    }
+
+    [Test]
+    public async Task TrySetLifecycleVersionAsync_ClaimsOnceAndResets_WhenTwoNodesClaimTheSameVersion()
+    {
+        // Arrange
+        var extensionId = new Guid("00000000-0000-0000-0000-0000000000d4");
+        _context.Extensions.Add(
+            new Extension
+            {
+                Id = extensionId,
+                PackageId = "Magpie.Test.Core",
+                Name = "Test extension",
+                Version = "1.0.1",
+                FilePath = "/app/data/extensions/loaded/Magpie.Test.Core.dll",
+                AssemblyName = "Magpie.Test.Core",
+                Installed = true,
+                Enabled = true,
+            });
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.ChangeTracker.Clear();
+
+        // Act
+        var firstClaim = await _subject.TrySetLifecycleVersionAsync(extensionId, null, "1.0.1").ConfigureAwait(false);
+        var secondClaim = await _subject.TrySetLifecycleVersionAsync(extensionId, null, "1.0.1").ConfigureAwait(false);
+        var reset = await _subject.TrySetLifecycleVersionAsync(extensionId, "1.0.1", null).ConfigureAwait(false);
+
+        // Assert
+        var stored = await _context.Extensions.AsNoTracking().SingleAsync(e => e.Id == extensionId)
+            .ConfigureAwait(false);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(firstClaim, Is.True);
+            Assert.That(secondClaim, Is.False);
+            Assert.That(reset, Is.True);
+            Assert.That(stored.LifecycleVersion, Is.Null);
+        }
+    }
+
+    [TestCase(null, null, "1.0.1", true, "1.0.1")]
+    [TestCase("", null, "1.0.1", true, "1.0.1")]
+    [TestCase("1.0.1", null, "1.0.1", false, "1.0.1")]
+    [TestCase("1.0.0", "1.0.0", "1.0.1", true, "1.0.1")]
+    [TestCase("1.0.1", "1.0.0", "1.0.1", false, "1.0.1")]
+    [TestCase("1.0.1", "1.0.1", null, true, null)]
+    public async Task TrySetLifecycleVersionAsync_ChangesTheVersion_WhenTheStoredVersionIsTheExpectedVersion(
+        string? storedVersion,
+        string? expectedVersion,
+        string? version,
+        bool expectedResult,
+        string? expectedStoredVersion)
+    {
+        // Arrange
+        var extensionId = new Guid("00000000-0000-0000-0000-0000000000c3");
+        _context.Extensions.Add(
+            new Extension
+            {
+                Id = extensionId,
+                PackageId = "Magpie.Test.Core",
+                Name = "Test extension",
+                Version = "1.0.1",
+                LifecycleVersion = storedVersion,
+                FilePath = "/app/data/extensions/loaded/Magpie.Test.Core.dll",
+                AssemblyName = "Magpie.Test.Core",
+                Installed = true,
+                Enabled = true,
+            });
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.ChangeTracker.Clear();
+
+        // Act
+        var result = await _subject.TrySetLifecycleVersionAsync(extensionId, expectedVersion, version)
+            .ConfigureAwait(false);
+
+        // Assert
+        var stored = await _context.Extensions.AsNoTracking().SingleAsync(e => e.Id == extensionId)
+            .ConfigureAwait(false);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result, Is.EqualTo(expectedResult));
+            Assert.That(stored.LifecycleVersion, Is.EqualTo(expectedStoredVersion));
         }
     }
 

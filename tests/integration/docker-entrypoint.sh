@@ -41,8 +41,8 @@ for package_id in "${required_extension_packages[@]}"; do
     else
         extension_package="$(find /app/test-packages -maxdepth 1 -name "${package_id}.*.nupkg" -print -quit)"
     fi
-    /app/Magpie.App extensions upload --file "$extension_package" >/dev/null
+    /app/magpie extensions upload --file "$extension_package" >/dev/null
 done
 
 echo "[entrypoint] starting host"
-exec /app/Magpie.App sentinel
+exec /app/magpie sentinel

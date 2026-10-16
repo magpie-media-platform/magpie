@@ -8,13 +8,11 @@ using System.Threading.Tasks;
 using Magpie.Abstractions;
 using Magpie.Abstractions.Releases;
 using Magpie.Abstractions.Repositories;
-using Magpie.Core.Events;
 using Magpie.Models;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
 using Magpie.Models.Jobs;
-using Magpie.Models.Releases;
 using Magpie.Models.Storage;
 using Magpie.Sdk.Events;
 using Magpie.Sdk.Jobs;
@@ -34,11 +32,9 @@ internal sealed class MediaFileReconciliationJob(
     IContentTypeRegistry contentTypeRegistry,
     IContentService contentService,
     IReleaseEvaluationService releaseEvaluationService,
-    IQualityTierListRepository qualityTierListRepository,
     IFileSystem fileSystem,
     ITransactionManager transactionManager,
     IAuditRecordRepository auditRecordRepository,
-    IEventBus eventBus,
     IJobManager jobManager,
     IProgressReporter progressReporter,
     TimeProvider timeProvider,
@@ -49,7 +45,7 @@ internal sealed class MediaFileReconciliationJob(
     {
         JobType = MagpieJobs.Types.MediaFileReconciliation,
         DisplayName = "Media file reconciliation",
-        Description = "Checks existing library files and reconciles missing or replaced media.",
+        Description = "Checks library files for missing or replaced media and updates the library.",
         Category = "Content",
         Scope = JobScope.Administrative,
         Enabled = true,
@@ -264,6 +260,7 @@ internal sealed class MediaFileReconciliationJob(
             return false;
         }
 
+        using var paths = state is null ? fileSystem.AcquireImportPaths([file.FilePath]) : null;
         return await transactionManager.ExecuteWithTransactionAsync(
             async ct =>
             {
@@ -592,24 +589,9 @@ internal sealed class MediaFileReconciliationJob(
                         now,
                         context.ManualTriggerUserId,
                         cancellationToken: ct).ConfigureAwait(false);
-                    var scores = new List<ReleaseAssessment>();
-                    foreach (var file in files)
-                    {
-                        var score = await releaseEvaluationService.ScoreFileForContentAsync(file, node.Id, ct)
-                            .ConfigureAwait(false);
-                        if (score?.MatchedRankOrdinal is not null)
-                        {
-                            scores.Add(score);
-                        }
-                    }
-
-                    var profile = node.EffectiveQualityTierListId is { } profileId
-                        ? await qualityTierListRepository.GetByIdAsync(profileId, ct).ConfigureAwait(false) : null;
-                    var quality = files.Count == 0 || scores.Count == 0 ? (QualityStatus?)null
-                        : profile?.UpgradeAllowed == true &&
-                            !scores.Any(score => score.IsAcceptable == true && score.IsCutoffMet == true)
-                            ? QualityStatus.UpgradeWanted : QualityStatus.Met;
-                    var rank = scores.Select(score => score.MatchedRankOrdinal).Min();
+                    var (quality, rank) = await releaseEvaluationService
+                        .ScoreMediaQualityAsync(files, node.EffectiveQualityTierListId, ct)
+                        .ConfigureAwait(false);
                     if (current.QualityStatus == quality && current.CurrentFileQualityRank == rank)
                     {
                         continue;
@@ -624,32 +606,6 @@ internal sealed class MediaFileReconciliationJob(
                         },
                         context.ManualTriggerUserId,
                         ct).ConfigureAwait(false);
-                    var fulfillment = current.Fulfillment;
-                    var impact = new ContentEventImpact
-                    {
-                        HierarchyItemId = node.Id,
-                        ItemId = current.Id,
-                        MetadataContainerId = node.MetadataContainerId,
-                        ParentId = node.ParentId,
-                        ContentType = node.ContentType,
-                        Level = node.Level,
-                        TopLevel = node.ParentId is null,
-                        RootFolderId = node.EffectiveRootFolderId,
-                        QualityTierListId = node.EffectiveQualityTierListId,
-                        Monitoring = node.EffectiveMonitoring != MonitoringMode.Unmonitored,
-                        Fulfillment = fulfillment.ToString()
-                    };
-                    await transactionManager.OnCommittedAsync(
-                        token => eventBus.PublishAsync(
-                            ContentEventBuilder.BuildContentHierarchyItemUpdatedEvent(impact,
-                                [
-                                    nameof(ContentItem.FulfilledAt),
-                                    nameof(ContentItem.PrimaryMediaSize),
-                                    nameof(ContentItem.PrimaryMediaFileCount),
-                                    nameof(ContentItem.QualityStatus)]),
-                            token),
-                        ct)
-                        .ConfigureAwait(false);
                 }
 
                 await contentRepository.ReconcileMediaStateAsync(hierarchyId, context.ManualTriggerUserId, ct)

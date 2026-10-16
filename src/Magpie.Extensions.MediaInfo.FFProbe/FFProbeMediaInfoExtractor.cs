@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
@@ -83,6 +84,24 @@ public sealed class FFProbeMediaInfoExtractor(ILogger<FFProbeMediaInfoExtractor>
         return properties;
     }
 
+    internal static int? BitDepthFromPixelFormat(string? pixelFormat)
+    {
+        var planes = pixelFormat?.LastIndexOf('p') ?? -1;
+        if (planes < 0)
+        {
+            return null;
+        }
+
+        var depth = pixelFormat!.Substring(planes + 1);
+        if (depth.EndsWith("le", StringComparison.Ordinal) || depth.EndsWith("be", StringComparison.Ordinal))
+        {
+            depth = depth.Substring(0, depth.Length - 2);
+        }
+
+        return depth.Length == 0 ? 8 :
+            int.TryParse(depth, NumberStyles.None, CultureInfo.InvariantCulture, out var bits) ? bits : null;
+    }
+
     internal static bool IsUnreadableFormat(string? errorOutput) =>
         errorOutput?.TrimEnd().EndsWith(InvalidDataError, StringComparison.Ordinal) == true;
 
@@ -160,7 +179,7 @@ public sealed class FFProbeMediaInfoExtractor(ILogger<FFProbeMediaInfoExtractor>
                 Height = stream.Height > 0 ? stream.Height : null,
                 FrameRate = stream.FrameRate > 0 ? stream.FrameRate : null,
                 VideoRange = DetermineVideoRange(stream.ColorTransfer),
-                BitDepth = stream.BitDepth,
+                BitDepth = stream.BitDepth ?? BitDepthFromPixelFormat(stream.PixelFormat),
                 Language = NullIfEmpty(stream.Language),
                 Forced = DispositionFlag(stream.Disposition, "forced"),
                 Default = DispositionFlag(stream.Disposition, "default"),

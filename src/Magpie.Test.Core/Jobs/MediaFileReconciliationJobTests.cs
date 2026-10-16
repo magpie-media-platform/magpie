@@ -15,7 +15,6 @@ using Magpie.Models.Data;
 using Magpie.Models.Enums;
 using Magpie.Models.Jobs;
 using Magpie.Models.Paging;
-using Magpie.Models.Releases;
 using Magpie.Models.Storage;
 using Magpie.Sdk.Jobs;
 using Magpie.Sdk.Media;
@@ -164,14 +163,12 @@ public sealed class MediaFileReconciliationJobTests
         ]
     ];
 
-    [TestCase(null, false, false, QualityStatus.UpgradeWanted, null)]
-    [TestCase(null, false, false, QualityStatus.Met, null)]
-    [TestCase(2, true, false, QualityStatus.Met, QualityStatus.UpgradeWanted)]
-    [TestCase(1, true, true, QualityStatus.UpgradeWanted, QualityStatus.Met)]
+    [TestCase(null, QualityStatus.UpgradeWanted, null)]
+    [TestCase(null, QualityStatus.Met, null)]
+    [TestCase(2, QualityStatus.Met, QualityStatus.UpgradeWanted)]
+    [TestCase(1, QualityStatus.UpgradeWanted, QualityStatus.Met)]
     public async Task ExecuteAsync_SavesQualityStatus_WhenTheStoredQualityStatusDiffers(
         int? matchedRankOrdinal,
-        bool isAcceptable,
-        bool isCutoffMet,
         QualityStatus? storedQualityStatus,
         QualityStatus? expectedQualityStatus)
     {
@@ -187,14 +184,6 @@ public sealed class MediaFileReconciliationJobTests
             FileSize = 4_000_000_000,
             CreatedAt = new(2026, 9, 21, 0, 0, 0, DateTimeKind.Utc)
         };
-        var unrankedFile = new MediaFile
-        {
-            Id = Guid.NewGuid(),
-            FileKind = "Video",
-            FilePath = "/movies/Super Troopers 3 (2026)/Super Troopers 3 (2026).mp4",
-            FileSize = 3_000_000_000,
-            CreatedAt = new(2026, 9, 23, 0, 0, 0, DateTimeKind.Utc)
-        };
         var content = new ContentItem
         {
             Id = Guid.NewGuid(),
@@ -202,7 +191,7 @@ public sealed class MediaFileReconciliationJobTests
             Fulfillment = FulfillmentStatus.Upgradable,
             QualityStatus = storedQualityStatus,
             MediaReconciledAt = new(2026, 9, 26, 3, 0, 0, DateTimeKind.Utc),
-            MediaFiles = { file, unrankedFile }
+            MediaFiles = { file }
         };
         var node = new ContentHierarchyItem
         {
@@ -280,38 +269,11 @@ public sealed class MediaFileReconciliationJobTests
             });
         var evaluation = new Mock<IReleaseEvaluationService>();
         evaluation
-            .Setup(service => service.ScoreFileForContentAsync(file, hierarchyId, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new ReleaseAssessment
-            {
-                MatchResult = ReleaseMatchResult.Indeterminate,
-                MatchedRankOrdinal = matchedRankOrdinal,
-                IsAcceptable = isAcceptable,
-                IsExcluded = false,
-                IsCutoffMet = isCutoffMet
-            });
-        evaluation
-            .Setup(service => service.ScoreFileForContentAsync(
-                unrankedFile,
-                hierarchyId,
+            .Setup(service => service.ScoreMediaQualityAsync(
+                It.Is<IEnumerable<MediaFile>>(files => files.Single() == file),
+                tierListId,
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new ReleaseAssessment
-            {
-                MatchResult = ReleaseMatchResult.Indeterminate,
-                MatchedRankOrdinal = null,
-                IsAcceptable = false,
-                IsExcluded = false,
-                IsCutoffMet = false
-            });
-        var tierLists = new Mock<IQualityTierListRepository>();
-        tierLists
-            .Setup(repository => repository.GetByIdAsync(tierListId, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new QualityTierList
-            {
-                Id = tierListId,
-                Name = "Video - HD",
-                UpgradeAllowed = true,
-                CreatedAt = new(2026, 9, 1, 0, 0, 0, DateTimeKind.Utc)
-            });
+            .ReturnsAsync((expectedQualityStatus, matchedRankOrdinal));
         var transactions = new Mock<ITransactionManager>();
         transactions
             .Setup(manager => manager.ExecuteWithTransactionAsync(
@@ -328,11 +290,9 @@ public sealed class MediaFileReconciliationJobTests
             contentTypes.Object,
             Mock.Of<IContentService>(),
             evaluation.Object,
-            tierLists.Object,
             Mock.Of<IFileSystem>(),
             transactions.Object,
             Mock.Of<IAuditRecordRepository>(),
-            Mock.Of<IEventBus>(),
             Mock.Of<IJobManager>(),
             Mock.Of<IProgressReporter>(),
             new FakeTimeProvider(new DateTimeOffset(2026, 9, 27, 3, 0, 0, TimeSpan.Zero)),
@@ -358,10 +318,12 @@ public sealed class MediaFileReconciliationJobTests
         }
     }
 
-    [TestCase(true, 1)]
-    [TestCase(false, 0)]
-    public async Task ExecuteAsync_DeletesTheRecordOfAMissingFile_WhenTheRootFolderIsListable(
+    [TestCase(true, false, 1)]
+    [TestCase(false, false, 0)]
+    [TestCase(true, true, 0)]
+    public async Task ExecuteAsync_DeletesTheRecordOfAMissingFile_WhenTheRootIsListableAndNoPlacementHoldsThePath(
         bool rootListable,
+        bool pathLocked,
         int expectedDeletes)
     {
         // Arrange
@@ -469,6 +431,10 @@ public sealed class MediaFileReconciliationJobTests
         fileSystem
             .Setup(system => system.ReadFileState(file.FilePath))
             .Throws(new FileNotFoundException("The file is gone.", file.FilePath));
+        fileSystem
+            .Setup(system => system.AcquireImportPaths(
+                It.Is<IReadOnlyList<string>>(paths => paths.Single() == file.FilePath)))
+            .Returns(() => pathLocked ? throw new IOException("A placement holds the path.") : Mock.Of<IDisposable>());
         var transactions = new Mock<ITransactionManager>();
         transactions
             .Setup(manager => manager.ExecuteWithTransactionAsync(
@@ -491,11 +457,9 @@ public sealed class MediaFileReconciliationJobTests
             contentTypes.Object,
             Mock.Of<IContentService>(),
             Mock.Of<IReleaseEvaluationService>(),
-            Mock.Of<IQualityTierListRepository>(),
             fileSystem.Object,
             transactions.Object,
             Mock.Of<IAuditRecordRepository>(),
-            Mock.Of<IEventBus>(),
             Mock.Of<IJobManager>(),
             Mock.Of<IProgressReporter>(),
             new FakeTimeProvider(new DateTimeOffset(2026, 9, 27, 3, 0, 0, TimeSpan.Zero)),
@@ -671,25 +635,11 @@ public sealed class MediaFileReconciliationJobTests
             });
         var evaluation = new Mock<IReleaseEvaluationService>();
         evaluation
-            .Setup(service => service.ScoreFileForContentAsync(file, It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new ReleaseAssessment
-            {
-                MatchResult = ReleaseMatchResult.Indeterminate,
-                MatchedRankOrdinal = 1,
-                IsAcceptable = true,
-                IsExcluded = false,
-                IsCutoffMet = true
-            });
-        var tierLists = new Mock<IQualityTierListRepository>();
-        tierLists
-            .Setup(repository => repository.GetByIdAsync(tierListId, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new QualityTierList
-            {
-                Id = tierListId,
-                Name = "Video - HD",
-                UpgradeAllowed = true,
-                CreatedAt = new(2026, 9, 1, 0, 0, 0, DateTimeKind.Utc)
-            });
+            .Setup(service => service.ScoreMediaQualityAsync(
+                It.Is<IEnumerable<MediaFile>>(files => files.Single() == file),
+                tierListId,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync((QualityStatus.Met, 1));
         var transactions = new Mock<ITransactionManager>();
         transactions
             .Setup(manager => manager.ExecuteWithTransactionAsync(
@@ -706,11 +656,9 @@ public sealed class MediaFileReconciliationJobTests
             contentTypes.Object,
             Mock.Of<IContentService>(),
             evaluation.Object,
-            tierLists.Object,
             fileSystem.Object,
             transactions.Object,
             Mock.Of<IAuditRecordRepository>(),
-            Mock.Of<IEventBus>(),
             Mock.Of<IJobManager>(),
             Mock.Of<IProgressReporter>(),
             new FakeTimeProvider(new DateTimeOffset(2026, 9, 27, 3, 0, 0, TimeSpan.Zero)),
@@ -921,11 +869,9 @@ public sealed class MediaFileReconciliationJobTests
             contentTypes.Object,
             Mock.Of<IContentService>(),
             Mock.Of<IReleaseEvaluationService>(),
-            Mock.Of<IQualityTierListRepository>(),
             fileSystem.Object,
             transactions.Object,
             Mock.Of<IAuditRecordRepository>(),
-            Mock.Of<IEventBus>(),
             Mock.Of<IJobManager>(),
             Mock.Of<IProgressReporter>(),
             new FakeTimeProvider(new DateTimeOffset(2026, 9, 27, 3, 0, 0, TimeSpan.Zero)),
@@ -1100,11 +1046,9 @@ public sealed class MediaFileReconciliationJobTests
             contentTypes.Object,
             Mock.Of<IContentService>(),
             Mock.Of<IReleaseEvaluationService>(),
-            Mock.Of<IQualityTierListRepository>(),
             fileSystem.Object,
             transactions.Object,
             Mock.Of<IAuditRecordRepository>(),
-            Mock.Of<IEventBus>(),
             Mock.Of<IJobManager>(),
             Mock.Of<IProgressReporter>(),
             new FakeTimeProvider(new DateTimeOffset(2026, 9, 27, 3, 0, 0, TimeSpan.Zero)),

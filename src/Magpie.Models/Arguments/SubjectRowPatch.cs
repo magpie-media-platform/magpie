@@ -14,4 +14,9 @@ public sealed record SubjectRowPatch : TagsPatch
     /// The patch for <see cref="Subject.DateLastRefreshed"/>.
     /// </summary>
     public ScalarPatch<DateTime?>? DateLastRefreshed { get; init; }
+
+    /// <summary>
+    /// The id of the image to make primary.
+    /// </summary>
+    public ScalarPatch<Guid>? PrimaryImageId { get; init; }
 }

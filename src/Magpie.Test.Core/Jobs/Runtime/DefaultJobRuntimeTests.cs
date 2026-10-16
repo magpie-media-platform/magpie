@@ -15,6 +15,7 @@ using Magpie.Sdk.Jobs;
 using Magpie.Sdk.Services;
 
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
 
@@ -36,8 +37,11 @@ public sealed class DefaultJobRuntimeTests
     private Mock<IJob> _handler = null!;
     private TaskCompletionSource _handlerEntered = null!;
     private TaskCompletionSource _handlerRelease = null!;
+    private CancellationTokenSource _hostStopping = null!;
     private Mock<IJobExecutionScope> _jobScope = null!;
     private Mock<IJobRegistry> _registry = null!;
+    private DatabaseMigrationState _migrationState = null!;
+    private Mock<IServiceProvider> _serviceProvider = null!;
     private JobShutdownSignal _shutdownSignal = null!;
     private JobSpec _spec = null!;
     private IJobRuntime _subject = null!;
@@ -45,7 +49,11 @@ public sealed class DefaultJobRuntimeTests
     [SetUp]
     public void SetUp()
     {
-        _shutdownSignal = new JobShutdownSignal();
+        _hostStopping = new CancellationTokenSource();
+        _shutdownSignal = new JobShutdownSignal(
+            Mock.Of<IHostApplicationLifetime>(lifetime => lifetime.ApplicationStopping == _hostStopping.Token));
+        _migrationState = new DatabaseMigrationState();
+        _migrationState.RecordSchemaCheck([]);
         _execution = new JobExecution
         {
             Id = Guid.NewGuid(),
@@ -77,14 +85,20 @@ public sealed class DefaultJobRuntimeTests
             .Setup(repository => repository.CreateAsync(It.IsAny<AuditRecord>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((AuditRecord record, CancellationToken _) => record);
 
-        var serviceProvider = new Mock<IServiceProvider>();
-        serviceProvider
+        _serviceProvider = new Mock<IServiceProvider>();
+        _serviceProvider
             .Setup(provider => provider.GetService(typeof(IJobExecutionRepository)))
             .Returns(_executions.Object);
-        serviceProvider
+        _serviceProvider
             .Setup(provider => provider.GetService(typeof(IJobRetryPolicy)))
             .Returns(Mock.Of<IJobRetryPolicy>());
-        serviceProvider
+        _serviceProvider
+            .Setup(provider => provider.GetService(typeof(DefaultJobRetryPolicy)))
+            .Returns(new DefaultJobRetryPolicy(
+                Mock.Of<ISettingsRepository>(),
+                new FakeTimeProvider(),
+                NullLogger<DefaultJobRetryPolicy>.Instance));
+        _serviceProvider
             .Setup(provider => provider.GetService(typeof(IAuditRecordRepository)))
             .Returns(_audits.Object);
         var transactionManager = new Mock<ITransactionManager>();
@@ -93,11 +107,11 @@ public sealed class DefaultJobRuntimeTests
                 It.IsAny<Func<CancellationToken, Task>>(),
                 It.IsAny<CancellationToken>()))
             .Returns((Func<CancellationToken, Task> operation, CancellationToken token) => operation(token));
-        serviceProvider
+        _serviceProvider
             .Setup(provider => provider.GetService(typeof(ITransactionManager)))
             .Returns(transactionManager.Object);
         var serviceScope = new Mock<IServiceScope>();
-        serviceScope.Setup(scope => scope.ServiceProvider).Returns(serviceProvider.Object);
+        serviceScope.Setup(scope => scope.ServiceProvider).Returns(_serviceProvider.Object);
         var scopeFactory = new Mock<IServiceScopeFactory>();
         scopeFactory.Setup(factory => factory.CreateScope()).Returns(serviceScope.Object);
 
@@ -142,6 +156,7 @@ public sealed class DefaultJobRuntimeTests
             hostEnvironment,
             Mock.Of<IEventBus>(),
             _shutdownSignal,
+            _migrationState,
             new FakeTimeProvider(),
             NullLogger<DefaultJobRuntime>.Instance);
     }
@@ -151,6 +166,25 @@ public sealed class DefaultJobRuntimeTests
     {
         _handlerRelease.TrySetResult();
         _subject.Dispose();
+        _hostStopping.Dispose();
+    }
+
+    [Test]
+    public async Task ExecuteAsync_LeavesTheExecutionQueued_WhenTheDatabaseHasUnknownMigrations()
+    {
+        // Arrange
+        _migrationState.RecordSchemaCheck(["20991231000000_Future"]);
+        _executions
+            .Setup(repository => repository.GetByIdAsync(_execution.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(_execution);
+
+        // Act
+        await _subject.ExecuteAsync(_execution.Id).ConfigureAwait(false);
+
+        // Assert
+        _executions.Verify(
+            repository => repository.TryStartAsync(_execution.Id, NodeId, It.IsAny<CancellationToken>()),
+            Times.Never);
     }
 
     [Test]
@@ -190,31 +224,38 @@ public sealed class DefaultJobRuntimeTests
     }
 
     [Test]
-    public async Task ExecuteAsync_DefersWithoutFailureOrCompletion_WhenUpstreamIsThrottled()
+    public async Task ExecuteAsync_CompletesOnce_WhenTheHandlerWaitsForAResponse()
     {
         // Arrange
-        var retryAt = new DateTimeOffset(2099, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var response = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         _executions.SetupSequence(repository => repository.GetByIdAsync(_execution.Id, It.IsAny<CancellationToken>()))
             .ReturnsAsync(_execution)
             .ReturnsAsync(_execution with { Status = JobExecutionStatus.Running, NodeId = NodeId });
         _handler.Setup(handler => handler.ExecuteAsync(It.IsAny<JobContext>(), It.IsAny<CancellationToken>()))
-            .ThrowsAsync(new UpstreamThrottledException(retryAt));
-        _executions.Setup(repository => repository.TryDeferRunningAsync(_execution.Id, NodeId,
-                It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(true);
+            .Callback(() => entered.SetResult())
+            .Returns(response.Task);
 
         // Act
-        await _subject.ExecuteAsync(_execution.Id).ConfigureAwait(false);
+        var execution = _subject.ExecuteAsync(_execution.Id);
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+        var completedBeforeResponse = execution.IsCompleted;
+        _executions.Verify(repository => repository.TryMarkRunningCompletedAsync(
+            _execution.Id, It.IsAny<CancellationToken>()), Times.Never);
+        response.SetResult();
+        await execution.WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
 
         // Assert
-        _executions.Verify(repository => repository.TryDeferRunningAsync(_execution.Id, NodeId,
-            It.Is<DateTime>(value => value >= new DateTime(2099, 1, 1, 0, 0, 0, DateTimeKind.Utc) &&
-                value < new DateTime(2099, 1, 1, 0, 0, 30, DateTimeKind.Utc)),
-            It.IsAny<CancellationToken>()), Times.Once);
-        _executions.Verify(repository => repository.TryMarkRunningFailedAsync(It.IsAny<Guid>(), It.IsAny<string>(),
-            It.IsAny<CancellationToken>()), Times.Never);
-        _executions.Verify(repository => repository.TryMarkRunningCompletedAsync(It.IsAny<Guid>(),
-            It.IsAny<CancellationToken>()), Times.Never);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(completedBeforeResponse, Is.False);
+            _handler.Verify(handler => handler.ExecuteAsync(
+                It.IsAny<JobContext>(), It.IsAny<CancellationToken>()), Times.Once);
+            _executions.Verify(repository => repository.TryMarkRunningFailedAsync(
+                It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+            _executions.Verify(repository => repository.TryMarkRunningCompletedAsync(
+                _execution.Id, It.IsAny<CancellationToken>()), Times.Once);
+        }
     }
 
     [Test]
@@ -283,18 +324,25 @@ public sealed class DefaultJobRuntimeTests
         }
     }
 
-    [Test]
-    public async Task ExecuteAsync_MarksHostShutdown_WhenTheShutdownSignalCancelsARunWithNoCallerToken()
+    [TestCase(JobExecutionMode.Queue)]
+    [TestCase(JobExecutionMode.Immediate)]
+    public async Task ExecuteAsync_RequeuesWithoutUsingAnAttempt_WhenTheHostShutdownInterruptsAFailPolicyRun(
+        JobExecutionMode mode)
     {
         // Arrange
-        var running = _execution with
+        var queued = _execution with
+        {
+            ExecutionMode = mode,
+            Attempt = 2
+        };
+        var running = queued with
         {
             Status = JobExecutionStatus.Running,
             NodeId = NodeId
         };
         _executions
             .SetupSequence(repository => repository.GetByIdAsync(_execution.Id, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(_execution)
+            .ReturnsAsync(queued)
             .ReturnsAsync(running);
         _executions
             .Setup(repository => repository.TryMarkRunningFailedAsync(
@@ -328,10 +376,127 @@ public sealed class DefaultJobRuntimeTests
                     "Interrupted by host shutdown",
                     It.IsAny<CancellationToken>()),
                 Times.Once);
+            _executions.Verify(
+                repository => repository.CreateAsync(
+                    It.Is<JobExecution>(requeue =>
+                        requeue.OriginalExecutionId == _execution.Id &&
+                        requeue.Status == JobExecutionStatus.Queued &&
+                        requeue.ExecutionMode == JobExecutionMode.Queue &&
+                        requeue.Attempt == 2 &&
+                        requeue.NotBeforeAt == null),
+                    null,
+                    It.IsAny<CancellationToken>()),
+                Times.Once);
             _audits.Verify(
                 repository => repository.CreateAsync(It.IsAny<AuditRecord>(), It.IsAny<CancellationToken>()),
                 Times.Never);
         }
+    }
+
+    [Test]
+    public async Task ExecuteAsync_RequeuesWithoutUsingAnAttempt_WhenTheHostStartsToStopDuringAnImmediateRun()
+    {
+        // Arrange
+        var queued = _execution with
+        {
+            ExecutionMode = JobExecutionMode.Immediate,
+            Attempt = 2
+        };
+        _executions
+            .SetupSequence(repository => repository.GetByIdAsync(_execution.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(queued)
+            .ReturnsAsync(queued with
+            {
+                Status = JobExecutionStatus.Running,
+                NodeId = NodeId
+            });
+        _executions
+            .Setup(repository => repository.TryMarkRunningFailedAsync(
+                _execution.Id,
+                It.IsAny<string>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        _handler
+            .Setup(handler => handler.ExecuteAsync(It.IsAny<JobContext>(), It.IsAny<CancellationToken>()))
+            .Returns(async (JobContext _, CancellationToken cancellationToken) =>
+            {
+                _handlerEntered.TrySetResult();
+                await _handlerRelease.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+            });
+        var run = _subject.ExecuteAsync(_execution.Id);
+        await _handlerEntered.Task.WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+
+        // Act
+        await _hostStopping.CancelAsync().ConfigureAwait(false);
+        await run.WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            _executions.Verify(
+                repository => repository.TryMarkRunningFailedAsync(
+                    _execution.Id,
+                    "Interrupted by host shutdown",
+                    It.IsAny<CancellationToken>()),
+                Times.Once);
+            _executions.Verify(
+                repository => repository.CreateAsync(
+                    It.Is<JobExecution>(requeue =>
+                        requeue.OriginalExecutionId == _execution.Id &&
+                        requeue.Status == JobExecutionStatus.Queued &&
+                        requeue.Attempt == 2 &&
+                        requeue.NotBeforeAt == null),
+                    null,
+                    It.IsAny<CancellationToken>()),
+                Times.Once);
+        }
+    }
+
+    [Test]
+    public async Task ExecuteAsync_Requeues_WhenTheScopeResolvesNothingAfterTheHostShutdownStarts()
+    {
+        // Arrange
+        var running = _execution with
+        {
+            Status = JobExecutionStatus.Running,
+            NodeId = NodeId
+        };
+        _executions
+            .SetupSequence(repository => repository.GetByIdAsync(_execution.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(_execution)
+            .ReturnsAsync(running);
+        _executions
+            .Setup(repository => repository.TryMarkRunningFailedAsync(
+                _execution.Id,
+                It.IsAny<string>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        _handler
+            .Setup(handler => handler.ExecuteAsync(It.IsAny<JobContext>(), It.IsAny<CancellationToken>()))
+            .Returns(async (JobContext _, CancellationToken cancellationToken) =>
+            {
+                _handlerEntered.TrySetResult();
+                await _handlerRelease.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+            });
+        var run = _subject.ExecuteAsync(_execution.Id);
+        await _handlerEntered.Task.WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+        _serviceProvider
+            .Setup(provider => provider.GetService(typeof(DefaultJobRetryPolicy)))
+            .Throws(new ObjectDisposedException(nameof(IServiceProvider)));
+
+        // Act
+        await _shutdownSignal.Cancellation.CancelAsync().ConfigureAwait(false);
+        await run.WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+
+        // Assert
+        _executions.Verify(
+            repository => repository.CreateAsync(
+                It.Is<JobExecution>(requeue =>
+                    requeue.OriginalExecutionId == _execution.Id &&
+                    requeue.Status == JobExecutionStatus.Queued),
+                null,
+                It.IsAny<CancellationToken>()),
+            Times.Once);
     }
 
     [Test]
@@ -582,6 +747,12 @@ public sealed class DefaultJobRuntimeTests
                     It.IsAny<CancellationToken>()),
                 Times.Never);
             _executions.Verify(
+                repository => repository.CreateAsync(
+                    It.IsAny<JobExecution>(),
+                    It.IsAny<Guid?>(),
+                    It.IsAny<CancellationToken>()),
+                Times.Never);
+            _executions.Verify(
                 repository => repository.TryMarkCancellationRequestedCancelledAsync(
                     _execution.Id,
                     It.IsAny<string?>(),
@@ -657,6 +828,12 @@ public sealed class DefaultJobRuntimeTests
             .Setup(provider => provider.GetService(typeof(IJobRetryPolicy)))
             .Returns(retryPolicy.Object);
         serviceProvider
+            .Setup(provider => provider.GetService(typeof(DefaultJobRetryPolicy)))
+            .Returns(new DefaultJobRetryPolicy(
+                Mock.Of<ISettingsRepository>(),
+                new FakeTimeProvider(),
+                NullLogger<DefaultJobRetryPolicy>.Instance));
+        serviceProvider
             .Setup(provider => provider.GetService(typeof(IAuditRecordRepository)))
             .Returns(Mock.Of<IAuditRecordRepository>());
         var transactionManager = new Mock<ITransactionManager>();
@@ -718,6 +895,7 @@ public sealed class DefaultJobRuntimeTests
             hostEnvironment,
             Mock.Of<IEventBus>(),
             _shutdownSignal,
+            _migrationState,
             new FakeTimeProvider(),
             NullLogger<DefaultJobRuntime>.Instance);
 

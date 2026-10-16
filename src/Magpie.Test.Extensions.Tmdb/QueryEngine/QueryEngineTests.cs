@@ -458,6 +458,83 @@ public class QueryEngineTests
     }
 
     [Test]
+    public async Task SearchAsync_ReturnsPartialEmptyPage_WhenAnAnsweredSourceHasNoMatchesAndLaterSourceFails()
+    {
+        // Arrange
+        static async IAsyncEnumerable<SearchHit> Faulting(bool fail)
+        {
+            await Task.CompletedTask.ConfigureAwait(false);
+            if (fail)
+            {
+                throw new InvalidOperationException("remote boom");
+            }
+
+            yield break;
+        }
+
+        _planner.Setup(planner => planner.Plan(It.IsAny<QueryRequest>()))
+            .Returns(new QueryPlan
+            {
+                Root = new FetchPlanNode
+                {
+                    Id = 1,
+                    Precondition = PlanPrecondition.None,
+                    Contributes = "movie search",
+                    Route = ContentRoute.Movie,
+                    AnchorKind = QueryAnchorKind.Search,
+                    SubjectBindings = [],
+                    PushedFilters = [],
+                    RequestedPage = 1,
+                    Fingerprint = "plan"
+                },
+                Warnings = [],
+                RequestedPage = 1,
+                MaximumResults = 25,
+                DefaultLanguagePreference = "en-US",
+                Fingerprint = "plan"
+            });
+        _settingsResolver.Setup(resolver => resolver.AcquireContextAsync(
+                It.IsAny<string?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new RequestContext { ApiKey = "key", Language = "en-US" });
+        _executor.Setup(executor => executor.ExecuteAsync(
+                It.IsAny<QueryPlan>(),
+                It.IsAny<RequestContext>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new QueryExecution
+            {
+                Supported = true,
+                Hits = Faulting(true),
+                Diagnostics = new QueryExecutionDiagnostics { ReceivedResponse = true },
+                Warnings = [],
+                RequestedPage = 1,
+                PagingMode = QueryPagingMode.LogicalStream
+            });
+
+        // Act
+        var execution = await _subject.SearchAsync(
+            new QueryRequest
+            {
+                Route = ContentRoute.Movie,
+                Criteria = new MetadataCriteria(),
+                Page = 1,
+                DefaultLanguagePreference = "en-US"
+            },
+            default).ConfigureAwait(false);
+        var hits = await execution.Hits.ToListAsync().ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(hits, Is.Empty);
+            Assert.That(
+                execution.Warnings.Select(warning => warning),
+                Is.EqualTo(["TMDb could not complete the remote query."]));
+            Assert.That(execution.Diagnostics.StreamFaulted, Is.True);
+        }
+    }
+
+    [Test]
     public async Task SearchAsync_DoesNotRepeatTheFailureWarning_WhenTheExecutionAlreadyReportedIt()
     {
         // Arrange

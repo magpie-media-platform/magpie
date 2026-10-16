@@ -66,7 +66,6 @@ public class AuthServiceTests
 
     private Mock<ITokenService> _tokenService = null!;
     private Mock<IUserService> _userService = null!;
-    private Mock<IEventBus> _eventBus = null!;
     private AuthService _subject = null!;
 
     [SetUp]
@@ -74,13 +73,10 @@ public class AuthServiceTests
     {
         _tokenService = new Mock<ITokenService>();
         _userService = new Mock<IUserService>();
-        _eventBus = new Mock<IEventBus>();
         _subject = new AuthService(
             [],
             _tokenService.Object,
             _userService.Object,
-            _eventBus.Object,
-            new AccountLockoutOptions(),
             TimeProvider.System,
             NullLogger<AuthService>.Instance,
             Mock.Of<ITransactionManager>(),
@@ -201,8 +197,6 @@ public class AuthServiceTests
             [ldap.Object, local.Object],
             _tokenService.Object,
             _userService.Object,
-            _eventBus.Object,
-            new AccountLockoutOptions(),
             TimeProvider.System,
             NullLogger<AuthService>.Instance,
             Mock.Of<ITransactionManager>(),
@@ -249,8 +243,6 @@ public class AuthServiceTests
             [ldap.Object, local.Object],
             _tokenService.Object,
             _userService.Object,
-            _eventBus.Object,
-            new AccountLockoutOptions(),
             TimeProvider.System,
             NullLogger<AuthService>.Instance,
             Mock.Of<ITransactionManager>(),
@@ -289,8 +281,6 @@ public class AuthServiceTests
             [ldap.Object, local.Object],
             _tokenService.Object,
             _userService.Object,
-            _eventBus.Object,
-            new AccountLockoutOptions(),
             TimeProvider.System,
             NullLogger<AuthService>.Instance,
             Mock.Of<ITransactionManager>(),

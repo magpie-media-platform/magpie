@@ -1264,7 +1264,7 @@ public sealed class DownloadServiceTests
     }
 
     [Test]
-    public async Task UpdateRefreshedClientStateAsync_ReturnsTrue_WhenTheRepositoryUpdatesTheClientState()
+    public async Task UpdateRefreshedClientStateAsync_ReturnsTheChangedFields_WhenTheRepositoryUpdatesTheClientState()
     {
         // Arrange
         var download = new Download
@@ -1297,7 +1297,7 @@ public sealed class DownloadServiceTests
                 It.IsAny<DateTime>(),
                 It.IsAny<Guid?>(),
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(true);
+            .ReturnsAsync(["StatusReason"]);
 
         // Act
         var updated = await _subject.UpdateRefreshedClientStateAsync(download, info, null, CancellationToken.None)
@@ -1306,7 +1306,7 @@ public sealed class DownloadServiceTests
         // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(updated, Is.True);
+            Assert.That(updated, Is.EqualTo(["StatusReason"]));
             _downloadRepository.Verify(
                 r => r.UpdateRefreshedStatusAsync(
                     It.IsAny<Guid>(),
@@ -1327,7 +1327,7 @@ public sealed class DownloadServiceTests
     }
 
     [Test]
-    public async Task UpdateRefreshedClientStateAsync_ReturnsFalseAndAppliesTheStatus_WhenTheStatusChanged()
+    public async Task UpdateRefreshedClientStateAsync_ReturnsNoFieldsAndAppliesTheStatus_WhenTheStatusChanged()
     {
         // Arrange
         var download = new Download
@@ -1382,7 +1382,7 @@ public sealed class DownloadServiceTests
         // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(updated, Is.False);
+            Assert.That(updated, Is.Empty);
             Assert.That(_refreshedDownloadId, Is.Null);
             _downloadRepository.Verify(
                 r => r.UpdateRefreshedStatusAsync(
@@ -1404,19 +1404,22 @@ public sealed class DownloadServiceTests
     }
 
     [Test]
-    public async Task PublishRefreshedStatusAsync_PublishesThroughTheRepository_WhenDownloadIdsAreGiven()
+    public async Task PublishRefreshedStatusAsync_PublishesThroughTheRepository_WhenChangedFieldsAreGiven()
     {
         // Arrange
-        var downloadIds = new[] { Guid.Parse("88888888-8888-8888-8888-888888888885") };
+        var changedFields = new Dictionary<Guid, IReadOnlyList<string>>
+        {
+            [Guid.Parse("88888888-8888-8888-8888-888888888885")] = ["Progress"]
+        };
         var userId = Guid.Parse("88888888-8888-8888-8888-888888888886");
 
         // Act
-        await _subject.PublishRefreshedStatusAsync(downloadIds, userId, CancellationToken.None)
+        await _subject.PublishRefreshedStatusAsync(changedFields, userId, CancellationToken.None)
             .ConfigureAwait(false);
 
         // Assert
         _downloadRepository.Verify(
-            r => r.PublishRefreshedStatusAsync(downloadIds, userId, CancellationToken.None),
+            r => r.PublishRefreshedStatusAsync(changedFields, userId, CancellationToken.None),
             Times.Once);
     }
 

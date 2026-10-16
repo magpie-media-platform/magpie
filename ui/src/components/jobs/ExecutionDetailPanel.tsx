@@ -5,7 +5,7 @@ import { Link } from 'react-router-dom';
 
 import { Alert } from '@/components/ui/Alert';
 import { Button } from '@/components/ui/Button';
-import type { ApiJobExecution } from '@/hooks/useJobs';
+import { useJobExecution, type ApiJobExecution } from '@/hooks/useJobs';
 import { useJobExecutionAudits, useJobExecutionTreeActivity } from '@/hooks/useMagpieActivity';
 import { useScheduleTrigger } from '@/hooks/useScheduleTriggers';
 import { humanizeCustomKey } from '@/lib/contentTypeDisplay';
@@ -17,7 +17,12 @@ import {
     mapStatusToDisplay,
     type JobExecutionStatusDisplay,
 } from '@/lib/jobExecution';
-import { CORRELATION_ID_PARAM, JOB_PARAM, ROOTS_ONLY_PARAM } from '@/pages/JobsPage/jobsSearchParams';
+import {
+    CORRELATION_ID_PARAM,
+    JOB_PARAM,
+    ORIGINAL_EXECUTION_ID_PARAM,
+    ROOTS_ONLY_PARAM,
+} from '@/pages/JobsPage/jobsSearchParams';
 import { isGuid } from '@/lib/isGuid';
 
 import './ExecutionDetailPanel.css';
@@ -221,6 +226,8 @@ function ExecutionDetails({ execution, displayStatus, active }: ExecutionSection
         execution.scheduleTriggerId ?? '',
         active && Boolean(execution.scheduleTriggerId),
     );
+    const parentId = !execution.eventTriggerId && !execution.scheduleTriggerId ? execution.parentExecutionId : null;
+    const { job: parent } = useJobExecution(parentId ?? '', active && Boolean(parentId));
 
     const rows: { key: string; label: string; value: ReactNode }[] = [];
 
@@ -244,8 +251,16 @@ function ExecutionDetails({ execution, displayStatus, active }: ExecutionSection
                 <span className="execution-details__accent">{schedule?.name ?? ''}</span>
             </>
         );
+    } else if (parentId) {
+        trigger = (
+            <Button asChild variant="outline" size="sm" className="execution-details__action">
+                <Link to={{ search: `?${JOB_PARAM}=${parentId}` }}>
+                    {parent ? humanizeJobType(parent.jobType) : 'Parent job'}
+                </Link>
+            </Button>
+        );
     }
-    rows.push({ key: 'trigger', label: 'Trigger', value: trigger });
+    rows.push({ key: 'trigger', label: parentId ? 'Created by' : 'Trigger', value: trigger });
 
     if (displayStatus !== 'running' && execution.startedAt && execution.completedAt) {
         rows.push({
@@ -266,7 +281,7 @@ function ExecutionDetails({ execution, displayStatus, active }: ExecutionSection
                     <Button asChild variant="outline" size="sm" className="execution-details__action">
                         <Link
                             to={{
-                                search: `?${CORRELATION_ID_PARAM}=${execution.correlationId ?? ''}&${ROOTS_ONLY_PARAM}=0`,
+                                search: `?${ORIGINAL_EXECUTION_ID_PARAM}=${execution.originalExecutionId}&${ROOTS_ONLY_PARAM}=0`,
                             }}
                         >
                             View all attempts

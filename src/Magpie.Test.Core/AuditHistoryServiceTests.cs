@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using Magpie.Abstractions.Jobs;
 using Magpie.Abstractions.Repositories;
 using Magpie.Core;
+using Magpie.Core.Config;
 using Magpie.Core.Jobs;
 using Magpie.Core.Jobs.Runtime;
 using Magpie.Core.Repositories;
@@ -192,6 +193,7 @@ public sealed class AuditHistoryServiceTests
         var transactionManager = new TransactionManager(_context, NullLogger<TransactionManager>.Instance);
         var jobRegistry = new JobRegistry(
             [new(DownloadImportItemJob.Spec, typeof(DownloadImportItemJob))],
+            new JobRuntimeOptions(),
             NullLogger<JobRegistry>.Instance);
         var auditRecords = new AuditRecordRepository(
             _context,
@@ -378,5 +380,33 @@ public sealed class AuditHistoryServiceTests
             Assert.That(record.Timestamp, Is.EqualTo(Now));
             Assert.That(record.Detail, Is.EqualTo("Purged 3 events and 3 job runs from before Sep 7, 2026."));
         }
+    }
+
+    [Test]
+    public async Task ListByContentAsync_ReturnsTheRecordsOfTheCategoryNewestFirst_WhenRecordsNameTheContent()
+    {
+        // Arrange
+        _context.AuditRecords.AddRange(
+            new AuditRecord
+            {
+                Category = "Processing",
+                Operation = "Older",
+                EntityId = ContentId.ToString("D"),
+                Timestamp = Now.AddHours(-2)
+            },
+            new AuditRecord
+            {
+                Category = "Processing",
+                Operation = "Newer",
+                EntityId = ContentId.ToString("D"),
+                Timestamp = Now.AddHours(-1)
+            });
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        // Act
+        var records = await _subject.ListByContentAsync(ContentId, "Processing").ConfigureAwait(false);
+
+        // Assert
+        Assert.That(records.Select(record => record.Operation), Is.EqualTo(["Newer", "Older"]));
     }
 }

@@ -25,4 +25,10 @@ public interface IDatabaseManagementProvider
     /// </summary>
     /// <param name="cancellationToken">The token that cancels the operation</param>
     Task<IReadOnlyCollection<string>> GetAppliedMigrationsAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Gets the applied migrations that this host does not know.
+    /// </summary>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
+    Task<IReadOnlyCollection<string>> GetUnknownMigrationsAsync(CancellationToken cancellationToken = default);
 }

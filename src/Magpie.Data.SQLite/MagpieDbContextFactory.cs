@@ -2,12 +2,14 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 
+using Magpie.Models;
 using Magpie.Models.Data;
 
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Design;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 
 namespace Magpie.Data.SQLite;
 
@@ -41,7 +43,8 @@ public sealed class MagpieDbContextFactory : IDesignTimeDbContextFactory<MagpieD
         DbContextOptionsBuilder optionsBuilder,
         string connectionString,
         IReadOnlyList<ScheduleTrigger> defaultScheduleTriggers,
-        IReadOnlyList<EventTrigger> defaultEventTriggers)
+        IReadOnlyList<EventTrigger> defaultEventTriggers,
+        DatabaseMigrationState? migrationState = null)
     {
         optionsBuilder
             .UseSqlite(
@@ -51,8 +54,9 @@ public sealed class MagpieDbContextFactory : IDesignTimeDbContextFactory<MagpieD
                     .MigrationsAssembly(typeof(MagpieDbContextFactory).Assembly.GetName().Name)
                     .UseQuerySplittingBehavior(QuerySplittingBehavior.SplitQuery))
             .ReplaceService<IModelCustomizer, SqliteModelCustomizer>()
+            .ReplaceService<IHistoryRepository, MigrationLockSqliteHistoryRepository>()
             .AddInterceptors(new SqlitePragmaConnectionInterceptor())
-            .UseMagpieSeeding(defaultScheduleTriggers, defaultEventTriggers);
+            .UseMagpieSeeding(defaultScheduleTriggers, defaultEventTriggers, migrationState);
     }
 
     private static string GetDesignTimeConnectionString()

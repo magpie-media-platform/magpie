@@ -1913,75 +1913,88 @@ public sealed class CardigannSessionManagerTests
         Assert.That(result, Is.Null);
     }
 
-    [TestCase(false)]
-    [TestCase(true)]
-    public async Task SolveAsync_RejectsBeforeSend_WhenUpstreamThrottlesWhileWaitingForSolver(bool interactive)
+    [TestCase(429, false)]
+    [TestCase(503, false)]
+    [TestCase(429, true)]
+    [TestCase(503, true)]
+    public async Task SolveAsync_RetriesInternally_WhenHttpBoundaryIsThrottled(int status, bool envelope)
     {
         // Arrange
-        var cooldown = _cooldownServices.GetRequiredService<IUpstreamCooldown>();
-        var request = _http.When(HttpMethod.Post, "http://solver.test:8191/v1")
+        var time = new FakeTimeProvider { AutoAdvanceAmount = TimeSpan.FromSeconds(2) };
+        using var services = new ServiceCollection().AddSingleton<TimeProvider>(time)
+            .AddHttpClient("cooldown").AddUpstreamCooldown().Services.BuildServiceProvider();
+        var first = _http.Expect(HttpMethod.Post, "http://solver.test:8191/v1")
+            .Respond(_ => new HttpResponseMessage(envelope ? HttpStatusCode.OK : (HttpStatusCode)status)
+            {
+                Headers =
+                {
+                    RetryAfter = new System.Net.Http.Headers.RetryConditionHeaderValue(TimeSpan.FromSeconds(1))
+                },
+                Content = new StringContent(envelope
+                    ? "{\"status\":\"ok\",\"solution\":{\"status\":" + status +
+                        ",\"headers\":{\"Retry-After\":\"1\"}}}"
+                    : string.Empty)
+            });
+        var second = _http.Expect(HttpMethod.Post, "http://solver.test:8191/v1")
             .Respond("application/json", SolvedResponse);
-        var queue = new SolverQueue();
-        using var scope = new SolverRequestScope(interactive
-            ? SolverRequestKind.Interactive : SolverRequestKind.Background);
-        await queue.EnterAsync(default).ConfigureAwait(false);
-        var solver = new FlareSolverrClient(_clientFactory, _settingsService, _memoFactory,
-            NullLogger<FlareSolverrClient>.Instance, cooldown, queue,
-            Mock.Of<IMagpieSystem>(system => system.NodeId == "node-a"),
-            TimeProvider.System);
-        var waiting = solver.SolveAsync(BaseUri, reuse: false, default, "account-a");
-        using var upstream = new HttpRequestMessage(HttpMethod.Get, BaseUri);
-        using var response = new HttpResponseMessage(HttpStatusCode.TooManyRequests);
-        response.Headers.TryAddWithoutValidation("Retry-After", "120");
+        var solver = new FlareSolverrClient(
+            _clientFactory, _settingsService, _memoFactory,
+            NullLogger<FlareSolverrClient>.Instance, services.GetRequiredService<IUpstreamCooldown>(),
+            new SolverQueue(), Mock.Of<IMagpieSystem>(system => system.NodeId == "node-a"), time);
 
         // Act
-        cooldown.RecordThrottle(upstream, "account-a", response);
-        queue.Leave();
-        var rejected = Assert.ThrowsAsync<UpstreamThrottledException>(async () =>
-            await waiting.ConfigureAwait(false));
-        var healthy = await solver.SolveAsync(BaseUri, reuse: false, default, "account-b").ConfigureAwait(false);
+        var result = await solver.SolveAsync(BaseUri, reuse: false, default).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(rejected!.RequestSent, Is.False);
-            Assert.That(healthy, Is.Not.Null);
-            Assert.That(_http.GetMatchCount(request), Is.EqualTo(1));
+            Assert.That(result, Is.Not.Null);
+            Assert.That(_http.GetMatchCount(first), Is.EqualTo(1));
+            Assert.That(_http.GetMatchCount(second), Is.EqualTo(1));
         }
     }
 
     [Test]
-    public void SendAsync_SharesSolverThrottle_WhenAuthenticatedSessionRetries()
+    public async Task SolveAsync_ReleasesQueueWithoutRetry_WhenCancelledSolveReturnsThrottle()
     {
         // Arrange
-        _http.When(HttpMethod.Get, "https://tracker.test/*")
+        var time = new FakeTimeProvider();
+        using var services = new ServiceCollection().AddSingleton<TimeProvider>(time)
+            .AddHttpClient("cooldown").AddUpstreamCooldown().Services.BuildServiceProvider();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var answer = new TaskCompletionSource<HttpResponseMessage>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var request = _http.Expect(HttpMethod.Post, "http://solver.test:8191/v1")
             .Respond(_ =>
             {
-                var response = new HttpResponseMessage(HttpStatusCode.Forbidden)
-                {
-                    Content = new StringContent(ChallengePage)
-                };
-                response.Headers.TryAddWithoutValidation("CF-RAY", "test");
-                return response;
+                entered.SetResult();
+                return answer.Task;
             });
-        var solverRequest = _http.When(HttpMethod.Post, "http://solver.test:8191/v1")
-            .Respond("application/json",
-                """{"status":"ok","solution":{"status":429,"headers":{"Retry-After":"120"}}}""");
+        var queue = new SolverQueue { WaitForBackground = true };
+        var solver = new FlareSolverrClient(
+            _clientFactory, _settingsService, _memoFactory,
+            NullLogger<FlareSolverrClient>.Instance, services.GetRequiredService<IUpstreamCooldown>(),
+            queue, Mock.Of<IMagpieSystem>(system => system.NodeId == "node-a"), time);
+        using var cancellation = new CancellationTokenSource();
+        var pending = solver.SolveAsync(BaseUri, reuse: false, cancellation.Token);
+        await entered.Task.ConfigureAwait(false);
 
         // Act
-        var first = Assert.ThrowsAsync<UpstreamThrottledException>(() => _sessions.SendAsync(
-            SessionKey + "#account-a", BaseUri, HttpMethod.Get, new Uri(BaseUri, "search"),
-            null, "test", false, default));
-        var second = Assert.ThrowsAsync<UpstreamThrottledException>(() => _sessions.SendAsync(
-            SessionKey + "#account-a", BaseUri, HttpMethod.Get, new Uri(BaseUri, "other"),
-            null, "test", false, default));
+        await cancellation.CancelAsync().ConfigureAwait(false);
+        Assert.CatchAsync<OperationCanceledException>(async () => await pending.ConfigureAwait(false));
+        var nextSlot = queue.EnterAsync(default);
+        answer.SetResult(new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(
+                "{\"status\":\"ok\",\"solution\":{\"status\":429,\"headers\":{\"Retry-After\":\"120\"}}}")
+        });
+        var released = await nextSlot.WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+        queue.Leave();
 
         // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(first!.RequestSent, Is.True);
-            Assert.That(second!.RequestSent, Is.False);
-            Assert.That(_http.GetMatchCount(solverRequest), Is.EqualTo(1));
+            Assert.That(released, Is.True);
+            Assert.That(_http.GetMatchCount(request), Is.EqualTo(1));
         }
     }
 
@@ -2758,11 +2771,13 @@ public sealed class CardigannSessionManagerTests
         }
     }
 
-    [Test]
-    public void RegisterServices_PreservesSolverLimits_WhenContentionAdmissionIsEnabled()
+    [TestCase(30)]
+    [TestCase(60)]
+    public void RegisterServices_UsesGlobalTimeout_WhenContentionAdmissionIsEnabled(int timeoutSeconds)
     {
         // Arrange
         var services = new ServiceCollection();
+        services.AddSingleton(new HttpOptions { Timeout = TimeSpan.FromSeconds(timeoutSeconds) });
         new CardigannExtension().RegisterServices(services);
         using var provider = services.BuildServiceProvider();
 
@@ -2774,7 +2789,7 @@ public sealed class CardigannSessionManagerTests
         // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(client.Timeout.TotalSeconds, Is.EqualTo(120));
+            Assert.That(client.Timeout.TotalSeconds, Is.EqualTo(timeoutSeconds));
             Assert.That(FlareSolverrClient.ReuseWindow.TotalSeconds, Is.EqualTo(60));
             Assert.That(queue.Wait.TotalSeconds, Is.EqualTo(20));
         }

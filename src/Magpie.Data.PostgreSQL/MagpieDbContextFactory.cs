@@ -1,11 +1,13 @@
 using System;
 using System.Collections.Generic;
 
+using Magpie.Models;
 using Magpie.Models.Data;
 
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Design;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 
 using Npgsql;
 
@@ -41,7 +43,8 @@ public sealed class MagpieDbContextFactory : IDesignTimeDbContextFactory<MagpieD
         DbContextOptionsBuilder optionsBuilder,
         string connectionString,
         IReadOnlyList<ScheduleTrigger> defaultScheduleTriggers,
-        IReadOnlyList<EventTrigger> defaultEventTriggers)
+        IReadOnlyList<EventTrigger> defaultEventTriggers,
+        DatabaseMigrationState? migrationState = null)
     {
         optionsBuilder
             .UseNpgsql(
@@ -51,7 +54,8 @@ public sealed class MagpieDbContextFactory : IDesignTimeDbContextFactory<MagpieD
                     .MigrationsAssembly(typeof(MagpieDbContextFactory).Assembly.GetName().Name)
                     .UseQuerySplittingBehavior(QuerySplittingBehavior.SplitQuery))
             .ReplaceService<IModelCustomizer, PostgreSqlModelCustomizer>()
-            .UseMagpieSeeding(defaultScheduleTriggers, defaultEventTriggers);
+            .ReplaceService<IHistoryRepository, MigrationLockPostgreSqlHistoryRepository>()
+            .UseMagpieSeeding(defaultScheduleTriggers, defaultEventTriggers, migrationState);
     }
 
     private static string GetDesignTimeConnectionString()

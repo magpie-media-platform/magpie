@@ -175,9 +175,16 @@ internal sealed class MetadataService(
         CancellationToken cancellationToken = default)
     {
         var subject = await subjectRepository.GetByIdAsync(subjectId, cancellationToken).ConfigureAwait(false);
-        return subject is not null && await containerRepository.PatchAsync(
-            patch with { ContainerId = subject.MetadataContainerId },
-            actingUserId,
+        return subject is not null && await transactionManager.ExecuteWithTransactionAsync(
+            async ct =>
+                (patch.PrimaryImageId is null || await subjectRepository.PatchAsync(
+                    new SubjectRowPatch { Id = subjectId, PrimaryImageId = patch.PrimaryImageId },
+                    actingUserId,
+                    ct).ConfigureAwait(false)) &&
+                await containerRepository.PatchAsync(
+                    patch with { ContainerId = subject.MetadataContainerId, PrimaryImageId = null },
+                    actingUserId,
+                    ct).ConfigureAwait(false),
             cancellationToken).ConfigureAwait(false);
     }
 

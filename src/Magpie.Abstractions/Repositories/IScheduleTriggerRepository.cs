@@ -12,9 +12,33 @@ namespace Magpie.Abstractions.Repositories;
 /// </summary>
 public interface IScheduleTriggerRepository :
     IQueryRepository<ScheduleTrigger, ScheduleTriggerQuery>,
-    ICrudRepository<Guid, ScheduleTrigger>,
     IPatchRepository<Guid, ScheduleTrigger, ScheduleTriggerPatch>
 {
+    /// <summary>
+    /// Creates a schedule trigger.
+    /// </summary>
+    /// <param name="model">The trigger to create</param>
+    /// <param name="createdByUserId">
+    /// The id of the user that creates the record, or <c>null</c> when no user started it.
+    /// </param>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
+    /// <returns>The new trigger</returns>
+    Task<ScheduleTrigger> CreateAsync(
+        ScheduleTrigger model,
+        Guid? createdByUserId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Deletes a schedule trigger by id.
+    /// </summary>
+    /// <param name="id">The id of the trigger to delete</param>
+    /// <param name="deletedByUserId">
+    /// The id of the user that deletes the record, or <c>null</c> when no user started it.
+    /// </param>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
+    /// <returns><see langword="true"/> when the trigger exists, otherwise <see langword="false"/></returns>
+    Task<bool> DeleteAsync(Guid id, Guid? deletedByUserId, CancellationToken cancellationToken = default);
+
     /// <summary>
     /// Locks a schedule trigger until the current transaction ends.
     /// </summary>

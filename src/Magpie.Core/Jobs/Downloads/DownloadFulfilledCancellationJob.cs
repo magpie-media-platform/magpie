@@ -20,7 +20,7 @@ internal sealed class DownloadFulfilledCancellationJob(
     {
         JobType = MagpieJobs.Types.DownloadFulfilledCancellation,
         DisplayName = "Cancel fulfilled downloads",
-        Description = "Cancels downloads whose scopes are all fulfilled after a successful import.",
+        Description = "Cancels downloads for content that is already imported.",
         Category = "Integrations",
         Scope = JobScope.Administrative,
         Enabled = true,

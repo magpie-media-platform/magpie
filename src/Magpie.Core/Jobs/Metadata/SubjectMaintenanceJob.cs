@@ -30,8 +30,7 @@ internal sealed class SubjectMaintenanceJob(
     {
         JobType = MagpieJobs.Types.SubjectMaintenance,
         DisplayName = "Subject maintenance",
-        Description = "Merges subjects that share an external id, then removes subjects that have no content " +
-            "relationships or user-specified metadata.",
+        Description = "Merges duplicate subjects and removes unused subjects.",
         Category = "Metadata",
         Scope = JobScope.Administrative,
         Enabled = true,

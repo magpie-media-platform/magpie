@@ -67,7 +67,6 @@ internal sealed class CardigannIndexerIntegration(
                 or HttpStatusCode.BadGateway
                 or HttpStatusCode.ServiceUnavailable
                 or HttpStatusCode.GatewayTimeout => ConfigurationFailureKind.Transient,
-            (HttpStatusCode)429 => ConfigurationFailureKind.RateLimited,
             _ => ConfigurationFailureKind.Fatal,
         };
     }
@@ -503,15 +502,6 @@ internal sealed class CardigannIndexerIntegration(
             {
                 Success = false,
                 Message = "The challenge solver is busy.",
-                FailureKind = ConfigurationFailureKind.Transient
-            };
-        }
-        catch (UpstreamThrottledException)
-        {
-            return new ConfigurationTestResult
-            {
-                Success = false,
-                Message = "The tracker is throttled.",
                 FailureKind = ConfigurationFailureKind.Transient
             };
         }

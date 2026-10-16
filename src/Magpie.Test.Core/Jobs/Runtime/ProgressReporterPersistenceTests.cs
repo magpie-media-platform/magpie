@@ -77,7 +77,7 @@ public sealed class ProgressReporterPersistenceTests
             Mock.Of<IEventBus>(),
             NullLogger<JobExecutionRepository>.Instance,
             TimeProvider.System,
-            new JobRegistry([], NullLogger<JobRegistry>.Instance));
+            new JobRegistry([], new JobRuntimeOptions(), NullLogger<JobRegistry>.Instance));
         _services = new ServiceCollection().AddSingleton(_executions).BuildServiceProvider();
         _subject = new ProgressReporter(factory.Object, _services.GetRequiredService<IServiceScopeFactory>(),
             NullLogger<ProgressReporter>.Instance, new JobRuntimeOptions());

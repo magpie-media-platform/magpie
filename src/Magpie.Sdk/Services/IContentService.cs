@@ -184,6 +184,28 @@ public interface IContentService
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Replaces a media file with a staged output file.
+    /// </summary>
+    /// <param name="contentHierarchyItemId">The id of the content hierarchy item</param>
+    /// <param name="mediaFileId">The id of the media file to replace</param>
+    /// <param name="stagedPath">
+    /// The full path of the staged output file, named <c>&lt;outputFileName&gt;.&lt;lineage&gt;.partial</c>
+    /// </param>
+    /// <param name="outputFileName">The file name of the output</param>
+    /// <param name="mediaInfo">The media information of the output</param>
+    /// <param name="actingUserId">The user to record as the actor, or <see langword="null"/> for the system</param>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
+    /// <returns>The media file of the output, or <see langword="null"/> when the content item does not exist</returns>
+    Task<MediaFile?> ReplaceFileAsync(
+        Guid contentHierarchyItemId,
+        Guid mediaFileId,
+        string stagedPath,
+        string outputFileName,
+        MediaInfo mediaInfo,
+        Guid? actingUserId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Removes a file association and keeps the host file.
     /// </summary>
     /// <param name="contentHierarchyItemId">The id of the content hierarchy item</param>

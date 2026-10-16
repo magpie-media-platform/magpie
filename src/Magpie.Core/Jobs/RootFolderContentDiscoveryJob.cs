@@ -55,8 +55,7 @@ internal sealed class RootFolderContentDiscoveryJob(
     {
         JobType = MagpieJobs.Types.RootFolderContentDiscovery,
         DisplayName = "Root folder content discovery",
-        Description = "Discovers files in a root folder, or in every root folder, and creates library import " +
-            "candidates.",
+        Description = "Scans root folders for files to import.",
         Category = "Content",
         Scope = JobScope.Content,
         Enabled = true,

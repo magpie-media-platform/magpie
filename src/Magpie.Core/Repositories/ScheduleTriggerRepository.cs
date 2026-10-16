@@ -66,32 +66,32 @@ internal sealed class ScheduleTriggerRepository(
         var fields = new List<string>();
         if (patch.Name is not null)
         {
-            fields.Add("name");
+            fields.Add(nameof(ScheduleTrigger.Name));
         }
 
         if (patch.Schedule is not null)
         {
-            fields.Add("schedule");
+            fields.Add(nameof(ScheduleTrigger.Schedule));
         }
 
         if (patch.ExecutionMode is not null)
         {
-            fields.Add("executionMode");
+            fields.Add(nameof(ScheduleTrigger.ExecutionMode));
         }
 
         if (patch.Enabled is not null)
         {
-            fields.Add("enabled");
+            fields.Add(nameof(ScheduleTrigger.Enabled));
         }
 
         if (patch.Parameters is not null)
         {
-            fields.Add("parameters");
+            fields.Add(nameof(ScheduleTrigger.Parameters));
         }
 
         if (patch.NextRunAt is not null)
         {
-            fields.Add("nextRunAt");
+            fields.Add(nameof(ScheduleTrigger.NextRunAt));
         }
 
         return fields;
@@ -273,65 +273,6 @@ internal sealed class ScheduleTriggerRepository(
                 ex,
                 "The schedule trigger repository failed to create schedule trigger {TriggerName}.",
                 model.Name);
-            throw;
-        }
-    }
-
-    public async Task<bool> UpdateAsync(
-        ScheduleTrigger model,
-        Guid? modifiedByUserId,
-        CancellationToken cancellationToken)
-    {
-        try
-        {
-            return await transactionManager.ExecuteWithTransactionAsync(
-                async _ =>
-                {
-                    var now = _time.GetUtcNow().UtcDateTime;
-                    var updated = await context.ScheduleTriggers
-                        .Where(t => t.Id == model.Id)
-                        .ExecuteUpdateAsync(
-                            s => s
-                                .SetProperty(t => t.ExtensionId, model.ExtensionId)
-                                .SetProperty(t => t.JobType, model.JobType)
-                                .SetProperty(t => t.Scope, model.Scope)
-                                .SetProperty(t => t.Name, model.Name)
-                                .SetProperty(t => t.Schedule, model.Schedule)
-                                .SetProperty(t => t.ExecutionMode, model.ExecutionMode)
-                                .SetProperty(t => t.Enabled, model.Enabled)
-                                .SetProperty(t => t.Parameters, model.Parameters)
-                                .SetProperty(t => t.LastRunAt, model.LastRunAt)
-                                .SetProperty(t => t.NextRunAt, model.NextRunAt)
-                                .SetProperty(t => t.ModifiedAt, now)
-                                .SetProperty(t => t.ModifiedByUserId, modifiedByUserId),
-                            cancellationToken)
-                        .ConfigureAwait(false);
-                    if (updated > 0)
-                    {
-                        await auditRecordRepository.CreateAsync(
-                            new()
-                            {
-                                Category = AuditCategories.System,
-                                Operation = "Update",
-                                EntityId = model.Id.ToString(),
-                                EntityType = nameof(ScheduleTrigger),
-                                Detail = $"Updated schedule trigger {model.Name}",
-                                Timestamp = now,
-                                UserId = modifiedByUserId
-                            },
-                            cancellationToken).ConfigureAwait(false);
-                    }
-
-                    return updated > 0;
-                },
-                cancellationToken).ConfigureAwait(false);
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(
-                ex,
-                "The schedule trigger repository failed to update schedule trigger {TriggerId}.",
-                model.Id);
             throw;
         }
     }

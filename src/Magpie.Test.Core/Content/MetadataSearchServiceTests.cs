@@ -128,6 +128,202 @@ public sealed class MetadataSearchServiceTests
         _cacheStore.Dispose();
     }
 
+    [TestCase(false, false, false, false)]
+    [TestCase(false, true, false, false)]
+    [TestCase(false, true, true, false)]
+    [TestCase(false, false, true, false)]
+    [TestCase(true, false, false, false)]
+    [TestCase(true, true, false, false)]
+    [TestCase(true, true, true, false)]
+    [TestCase(true, false, true, false)]
+    [TestCase(true, true, true, true)]
+    public async Task SearchAsync_UsesProviderOutcomes_WhenNoProviderReturnsMatches(
+        bool advanced,
+        bool includeHealthy,
+        bool includeFailing,
+        bool healthyWarning)
+    {
+        // Arrange
+        var healthy = new Mock<IContentHierarchyMetadataAdvancedSearcher>();
+        healthy.SetupGet(provider => provider.ProviderType).Returns("healthy");
+        healthy.SetupGet(provider => provider.SupportedContentTypes).Returns(["type-a"]);
+        healthy.Setup(provider => provider.SearchAsync(
+                It.IsAny<ContentHierarchyLevelDefinition>(),
+                It.IsAny<string>(),
+                It.IsAny<string>(),
+                It.IsAny<int>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
+        healthy.Setup(provider => provider.ContinueSearchAsync(
+                It.IsAny<string>(),
+                It.IsAny<ContentHierarchyItemCriteria>(),
+                It.IsAny<int>(),
+                It.IsAny<string>(),
+                It.IsAny<object?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new MetadataSearchBatch
+            {
+                Page = new MetadataSearchPage
+                {
+                    Supported = true,
+                    Matches = [],
+                    Warnings = healthyWarning ? ["The provider returned no matches."] : [],
+                    PageInfo = new() { RequestedPage = 1, HasMore = false }
+                }
+            });
+        var failing = new Mock<IContentHierarchyMetadataAdvancedSearcher>();
+        failing.SetupGet(provider => provider.ProviderType).Returns("failing");
+        failing.SetupGet(provider => provider.SupportedContentTypes).Returns(["type-a"]);
+        failing.Setup(provider => provider.SearchAsync(
+                It.IsAny<ContentHierarchyLevelDefinition>(),
+                It.IsAny<string>(),
+                It.IsAny<string>(),
+                It.IsAny<int>(),
+                It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new HttpRequestException("Provider unavailable."));
+        failing.Setup(provider => provider.ContinueSearchAsync(
+                It.IsAny<string>(),
+                It.IsAny<ContentHierarchyItemCriteria>(),
+                It.IsAny<int>(),
+                It.IsAny<string>(),
+                It.IsAny<object?>(),
+                It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new HttpRequestException("Provider unavailable."));
+        var providers = new[] { (includeHealthy, healthy.Object), (includeFailing, failing.Object) }
+            .Where(provider => provider.Item1)
+            .Select(provider => provider.Item2)
+            .ToArray();
+        var subject = new MetadataSearchService(
+            [],
+            providers,
+            _registry,
+            Mock.Of<IContentHierarchyItemRepository>(),
+            TimeProvider.System,
+            NullLogger<MetadataSearchService>.Instance,
+            _cacheFactory);
+
+        // Act
+        // Assert
+        if (advanced)
+        {
+            if (includeFailing && !includeHealthy)
+            {
+                Assert.ThrowsAsync<InvalidOperationException>(() => subject.SearchCandidatesAsync(new(), "type-a", 1));
+                return;
+            }
+
+            var result = await subject.SearchCandidatesAsync(new(), "type-a", 1).ConfigureAwait(false);
+            using (Assert.EnterMultipleScope())
+            {
+                Assert.That(result.Matches, Is.Empty);
+                Assert.That(result.Warnings, Has.Count.EqualTo((includeFailing ? 1 : 0) + (healthyWarning ? 1 : 0)));
+            }
+        }
+        else
+        {
+            if (includeFailing && !includeHealthy)
+            {
+                Assert.ThrowsAsync<InvalidOperationException>(() => subject.SearchAsync("Title", "type-a"));
+                return;
+            }
+
+            var result = await subject.SearchAsync("Title", "type-a").ConfigureAwait(false);
+            using (Assert.EnterMultipleScope())
+            {
+                Assert.That(result.Matches, Is.Empty);
+                Assert.That(result.Warnings, Has.Count.EqualTo(includeFailing ? 1 : 0));
+            }
+        }
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task SearchCandidatesAsync_DistinguishesProviderFailure_WhenContinuationValidationReturns(bool warning)
+    {
+        // Arrange
+        var searcher = new Mock<IContentHierarchyMetadataAdvancedSearcher>();
+        searcher.SetupGet(provider => provider.ProviderType).Returns("provider-a");
+        searcher.SetupGet(provider => provider.SupportedContentTypes).Returns(["type-a"]);
+        searcher.Setup(provider => provider.ContinueSearchAsync(
+                "type-a",
+                It.IsAny<ContentHierarchyItemCriteria>(),
+                25,
+                string.Empty,
+                null,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new MetadataSearchBatch
+            {
+                Continuation = "next",
+                Page = new MetadataSearchPage
+                {
+                    Supported = true,
+                    Matches = [.. Enumerable.Range(1, 25).Select(id => new MetadataSearchCandidate
+                    {
+                        ProviderType = "provider-a",
+                        ExternalIdSource = "source-a",
+                        ExternalId = $"c{id}",
+                        ContentType = "type-a",
+                        Level = "type-a",
+                        Title = "Candidate"
+                    })],
+                    PageInfo = new() { RequestedPage = 1, HasMore = true }
+                }
+            });
+        searcher.Setup(provider => provider.ContinueSearchAsync(
+                "type-a",
+                It.IsAny<ContentHierarchyItemCriteria>(),
+                0,
+                string.Empty,
+                "next",
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new MetadataSearchBatch
+            {
+                Continuation = "next",
+                Page = new MetadataSearchPage
+                {
+                    Supported = true,
+                    Warnings = warning ? ["Continuation is temporarily unavailable."] : [],
+                    Matches = [],
+                    PageInfo = new() { RequestedPage = 2, HasMore = true }
+                }
+            });
+        searcher.Setup(provider => provider.ContinueSearchAsync(
+                "type-a",
+                It.IsAny<ContentHierarchyItemCriteria>(),
+                25,
+                string.Empty,
+                "next",
+                It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new HttpRequestException("Provider unavailable."));
+        var repository = new Mock<IContentHierarchyItemRepository>();
+        repository.Setup(value => value.FindByExternalIdentitiesAsync(
+                It.IsAny<IReadOnlyCollection<(string, string, string, string)>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Dictionary<(string, string, string, string), Guid>());
+        var subject = new MetadataSearchService(
+            [],
+            [searcher.Object],
+            _registry,
+            repository.Object,
+            TimeProvider.System,
+            NullLogger<MetadataSearchService>.Instance,
+            _cacheFactory);
+        var first = await subject.SearchCandidatesAsync(new(), "type-a", 1).ConfigureAwait(false);
+
+        // Act and Assert
+        if (warning)
+        {
+            var result = await subject.SearchCandidatesAsync(new(), "type-a", 2, first.NextContinuation)
+                .ConfigureAwait(false);
+            Assert.That(result.Warnings, Has.Count.EqualTo(1));
+        }
+        else
+        {
+            Assert.ThrowsAsync<InvalidOperationException>(() =>
+                subject.SearchCandidatesAsync(new(), "type-a", 2, first.NextContinuation));
+        }
+    }
+
     [Test]
     public async Task SearchAsync_FansOutToEverySearcher_WhenProvidersSupportTheContentType()
     {
@@ -621,7 +817,7 @@ public sealed class MetadataSearchServiceTests
     }
 
     [Test]
-    public async Task SearchAsync_ReturnsWarnings_WhenIndividualOperationsTimeOut()
+    public void SearchAsync_Fails_WhenEveryProviderOperationTimesOut()
     {
         // Arrange
         var first = new Mock<IContentHierarchyMetadataSearcher>();
@@ -662,18 +858,14 @@ public sealed class MetadataSearchServiceTests
         // Act
         var pending = subject.SearchAsync("Jackass 3D 2010", "type-a", cancellationToken: default);
         timeProvider.Advance(TimeSpan.FromSeconds(46));
-        var results = await pending.ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(results.Matches, Is.Empty);
-            Assert.That(
-                results.Warnings,
-                Is.EquivalentTo([
-                    "provider-a did not answer the search in time.",
-                    "provider-d did not answer the search in time."
-                ]));
+            var exception = Assert.ThrowsAsync<InvalidOperationException>(async () =>
+                await pending.ConfigureAwait(false));
+            Assert.That(exception!.Message, Does.Contain("provider-a did not answer the search in time."));
+            Assert.That(exception.Message, Does.Contain("provider-d did not answer the search in time."));
         }
     }
 
@@ -2302,7 +2494,7 @@ public sealed class MetadataSearchServiceTests
     }
 
     [Test]
-    public async Task SearchCandidatesAsync_SkipsTheProviderWithAWarning_WhenThreeSearchesFailedInARow()
+    public void SearchCandidatesAsync_FailsWithoutCallingTheUnavailableProvider_WhenThreeSearchesFailedInARow()
     {
         // Arrange
         var searcher = new Mock<IContentHierarchyMetadataAdvancedSearcher>();
@@ -2343,23 +2535,22 @@ public sealed class MetadataSearchServiceTests
         };
 
         // Act
-        var first = await subject.SearchCandidatesAsync(criteria, "type-a", page: 1, cancellationToken: default)
-            .ConfigureAwait(false);
-        var second = await subject.SearchCandidatesAsync(criteria, "type-a", page: 1, cancellationToken: default)
-            .ConfigureAwait(false);
-        var third = await subject.SearchCandidatesAsync(criteria, "type-a", page: 1, cancellationToken: default)
-            .ConfigureAwait(false);
-        var fourth = await subject.SearchCandidatesAsync(criteria, "type-a", page: 1, cancellationToken: default)
-            .ConfigureAwait(false);
+        var first = Assert.ThrowsAsync<InvalidOperationException>(() =>
+            subject.SearchCandidatesAsync(criteria, "type-a", page: 1, cancellationToken: default));
+        var second = Assert.ThrowsAsync<InvalidOperationException>(() =>
+            subject.SearchCandidatesAsync(criteria, "type-a", page: 1, cancellationToken: default));
+        var third = Assert.ThrowsAsync<InvalidOperationException>(() =>
+            subject.SearchCandidatesAsync(criteria, "type-a", page: 1, cancellationToken: default));
+        var fourth = Assert.ThrowsAsync<InvalidOperationException>(() =>
+            subject.SearchCandidatesAsync(criteria, "type-a", page: 1, cancellationToken: default));
 
         // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(first.Warnings.Single(), Is.EqualTo("provider-a could not finish the search."));
-            Assert.That(second.Warnings.Single(), Is.EqualTo("provider-a could not finish the search."));
-            Assert.That(third.Warnings.Single(), Is.EqualTo("provider-a could not finish the search."));
-            Assert.That(fourth.Matches, Is.Empty);
-            Assert.That(fourth.Warnings, Has.Some.Contains("skipped after repeated failed searches"));
+            Assert.That(first!.Message, Does.Contain("provider-a could not finish the search."));
+            Assert.That(second!.Message, Does.Contain("provider-a could not finish the search."));
+            Assert.That(third!.Message, Does.Contain("provider-a could not finish the search."));
+            Assert.That(fourth!.Message, Does.Contain("skipped after repeated failed searches"));
         }
 
         searcher.Verify(
@@ -2374,7 +2565,7 @@ public sealed class MetadataSearchServiceTests
     }
 
     [Test]
-    public async Task SearchCandidatesAsync_ProbesTheSkippedProvider_WhenTheFailureCooldownExpires()
+    public void SearchCandidatesAsync_ProbesTheSkippedProvider_WhenTheFailureCooldownExpires()
     {
         // Arrange
         var searcher = new Mock<IContentHierarchyMetadataAdvancedSearcher>();
@@ -2418,23 +2609,23 @@ public sealed class MetadataSearchServiceTests
         };
 
         // Act
-        await subject.SearchCandidatesAsync(criteria, "type-a", page: 1, cancellationToken: default)
-            .ConfigureAwait(false);
-        await subject.SearchCandidatesAsync(criteria, "type-a", page: 1, cancellationToken: default)
-            .ConfigureAwait(false);
-        await subject.SearchCandidatesAsync(criteria, "type-a", page: 1, cancellationToken: default)
-            .ConfigureAwait(false);
-        var skipped = await subject.SearchCandidatesAsync(criteria, "type-a", page: 1, cancellationToken: default)
-            .ConfigureAwait(false);
+        Assert.ThrowsAsync<InvalidOperationException>(() =>
+            subject.SearchCandidatesAsync(criteria, "type-a", page: 1, cancellationToken: default));
+        Assert.ThrowsAsync<InvalidOperationException>(() =>
+            subject.SearchCandidatesAsync(criteria, "type-a", page: 1, cancellationToken: default));
+        Assert.ThrowsAsync<InvalidOperationException>(() =>
+            subject.SearchCandidatesAsync(criteria, "type-a", page: 1, cancellationToken: default));
+        var skipped = Assert.ThrowsAsync<InvalidOperationException>(() =>
+            subject.SearchCandidatesAsync(criteria, "type-a", page: 1, cancellationToken: default));
         timeProvider.Advance(TimeSpan.FromMinutes(5) + TimeSpan.FromSeconds(1));
-        var probed = await subject.SearchCandidatesAsync(criteria, "type-a", page: 1, cancellationToken: default)
-            .ConfigureAwait(false);
+        var probed = Assert.ThrowsAsync<InvalidOperationException>(() =>
+            subject.SearchCandidatesAsync(criteria, "type-a", page: 1, cancellationToken: default));
 
         // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(skipped.Warnings, Has.Some.Contains("skipped after repeated failed searches"));
-            Assert.That(probed.Warnings.Single(), Is.EqualTo("provider-a could not finish the search."));
+            Assert.That(skipped!.Message, Does.Contain("skipped after repeated failed searches"));
+            Assert.That(probed!.Message, Does.Contain("provider-a could not finish the search."));
         }
 
         searcher.Verify(
@@ -4018,7 +4209,15 @@ public sealed class MetadataSearchServiceTests
                 Page = new MetadataSearchPage
                 {
                     Supported = true,
-                    Matches = [],
+                    Matches = [new MetadataSearchCandidate
+                    {
+                        ProviderType = "provider-a",
+                        ExternalIdSource = "source-a",
+                        ExternalId = "healthy",
+                        ContentType = "type-a",
+                        Level = "type-a",
+                        Title = "Healthy"
+                    }],
                     PageInfo = new() { RequestedPage = 1, HasMore = false },
                     Warnings = ["The remote request failed."]
                 }
@@ -4036,7 +4235,11 @@ public sealed class MetadataSearchServiceTests
         var result = await subject.SearchCandidatesAsync(new(), "type-a", 1).ConfigureAwait(false);
 
         // Assert
-        Assert.That(result.Warnings, Is.EqualTo(["provider-a: The remote request failed."]));
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.Matches.Select(match => match.Candidate.ExternalId), Is.EqualTo(["healthy"]));
+            Assert.That(result.Warnings, Is.EqualTo(["provider-a: The remote request failed."]));
+        }
     }
 
     [Test]
@@ -4684,10 +4887,10 @@ public sealed class MetadataSearchServiceTests
     }
 
     [Test]
-    public async Task SearchCandidatesAsync_RetainsUnreadRows_WhenIndependentSearchesShareCooldown()
+    public async Task SearchCandidatesAsync_RetainsUnreadRows_WhenIndependentSearchesEncounterProviderFailures()
     {
         // Arrange
-        var throttled = false;
+        var unavailable = false;
         var searcher = new Mock<IContentHierarchyMetadataAdvancedSearcher>();
         searcher.SetupGet(provider => provider.ProviderType).Returns("provider-a");
         searcher.SetupGet(provider => provider.SupportedContentTypes).Returns(["type-a"]);
@@ -4698,9 +4901,9 @@ public sealed class MetadataSearchServiceTests
                 object? checkpoint, CancellationToken token) =>
             {
                 token.ThrowIfCancellationRequested();
-                if (throttled && count > 0)
+                if (unavailable && count > 0)
                 {
-                    throw new UpstreamThrottledException(new DateTimeOffset(2027, 1, 1, 0, 0, 0, TimeSpan.Zero));
+                    throw new InvalidOperationException("Provider unavailable.");
                 }
 
                 return new MetadataSearchBatch
@@ -4730,17 +4933,17 @@ public sealed class MetadataSearchServiceTests
         var independent = await subject.SearchCandidatesAsync(new(), "type-a", 1).ConfigureAwait(false);
 
         // Act
-        throttled = true;
-        var blocked = await subject.SearchCandidatesAsync(new(), "type-a", 2, first.NextContinuation)
-            .ConfigureAwait(false);
-        var alsoBlocked = await subject.SearchCandidatesAsync(new(), "type-a", 2, independent.NextContinuation)
-            .ConfigureAwait(false);
+        unavailable = true;
+        Assert.ThrowsAsync<InvalidOperationException>(() =>
+            subject.SearchCandidatesAsync(new(), "type-a", 2, first.NextContinuation));
+        Assert.ThrowsAsync<InvalidOperationException>(() =>
+            subject.SearchCandidatesAsync(new(), "type-a", 2, independent.NextContinuation));
         using var cancellation = new CancellationTokenSource();
         await cancellation.CancelAsync().ConfigureAwait(false);
         Assert.ThrowsAsync<OperationCanceledException>(() => subject.SearchCandidatesAsync(
             new(), "type-a", 2, first.NextContinuation, cancellation.Token));
-        throttled = false;
-        var resumed = await subject.SearchCandidatesAsync(new(), "type-a", 3, blocked.NextContinuation)
+        unavailable = false;
+        var resumed = await subject.SearchCandidatesAsync(new(), "type-a", 2, first.NextContinuation)
             .ConfigureAwait(false);
         var retried = await subject.SearchCandidatesAsync(new(), "type-a", 2, independent.NextContinuation)
             .ConfigureAwait(false);
@@ -4750,10 +4953,6 @@ public sealed class MetadataSearchServiceTests
         // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(blocked.Matches, Is.Empty);
-            Assert.That(blocked.PageInfo.HasMore, Is.True);
-            Assert.That(blocked.Warnings, Has.Some.Contains("throttled"));
-            Assert.That(alsoBlocked.PageInfo.HasMore, Is.True);
             Assert.That(resumed.Matches, Has.Count.EqualTo(15));
             Assert.That(resumed.Matches[0].Candidate.ExternalId, Is.EqualTo("c26"));
             Assert.That(resumed.Matches[^1].Candidate.ExternalId, Is.EqualTo("c40"));

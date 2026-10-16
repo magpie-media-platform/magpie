@@ -3,9 +3,12 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 
+using Magpie.Abstractions.Jobs;
 using Magpie.Core.Config;
+using Magpie.Core.Jobs.Runtime;
 using Magpie.Core.Jobs.Runtime.Scheduling;
 using Magpie.Models;
+using Magpie.Models.Enums;
 
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
@@ -17,6 +20,51 @@ namespace Magpie.Test.Core.Jobs.Runtime.Scheduling;
 [TestFixture]
 public sealed class MlfqJobConcurrencySchedulerTests
 {
+    private readonly IJobRegistry _registry = new JobRegistry([], new(), NullLogger<JobRegistry>.Instance);
+
+    [Test]
+    public void TrySelectAdmission_SkipsTheJobType_WhileItRunsTheMaxOfItsNodeConcurrencyLimit()
+    {
+        // Arrange
+        var registry = new JobRegistry(
+            [
+                new(
+                    new()
+                    {
+                        JobType = "Encode",
+                        DisplayName = "Encode",
+                        Category = "Test",
+                        Scope = JobScope.System,
+                        SupportsImmediate = false,
+                        ConcurrencyLimit = new() { Max = 1, PerNode = true },
+                    },
+                    typeof(object))
+            ],
+            new(),
+            NullLogger<JobRegistry>.Instance);
+        var scheduler = new MlfqJobConcurrencyScheduler(
+            new JobRuntimeOptions { PoolSize = 15 },
+            TimeProvider.System,
+            registry,
+            NullLogger<MlfqJobConcurrencyScheduler>.Instance);
+        var first = new JobClaimCandidate(new("6a1f3a52-0d8e-4c55-9e1c-0b4c2b1f1d01"), "Encode", null);
+        var second = new JobClaimCandidate(new("6a1f3a52-0d8e-4c55-9e1c-0b4c2b1f1d02"), "Encode", null);
+        scheduler.CommitAdmission(first);
+
+        // Act
+        var selectedWhileRunning = scheduler.TrySelectAdmission([second], new HashSet<Guid>(), out _);
+        scheduler.Release(first.Id);
+        var selectedAfterRelease = scheduler.TrySelectAdmission([second], new HashSet<Guid>(), out var selected);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(selectedWhileRunning, Is.False);
+            Assert.That(selectedAfterRelease, Is.True);
+            Assert.That(selected, Is.EqualTo(second));
+        }
+    }
+
     [Test]
     public void TrySelectAdmission_AdmitsTheMinorityTypeInTheFirstTwoSlots_WhenTheBacklogIsLarger()
     {
@@ -24,6 +72,7 @@ public sealed class MlfqJobConcurrencySchedulerTests
         var scheduler = new MlfqJobConcurrencyScheduler(
             new JobRuntimeOptions { PoolSize = 15 },
             TimeProvider.System,
+            _registry,
             NullLogger<MlfqJobConcurrencyScheduler>.Instance);
 
         var candidates = new List<JobClaimCandidate>();
@@ -62,6 +111,7 @@ public sealed class MlfqJobConcurrencySchedulerTests
                 MlfqQuanta = [TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1), null, null],
             },
             time,
+            _registry,
             NullLogger<MlfqJobConcurrencyScheduler>.Instance);
 
         var job = new JobClaimCandidate(Guid.NewGuid(), "ReleaseSearchItem", "rs:1");
@@ -91,6 +141,7 @@ public sealed class MlfqJobConcurrencySchedulerTests
                 MlfqQuanta = [TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1), null, null],
             },
             time,
+            _registry,
             NullLogger<MlfqJobConcurrencyScheduler>.Instance);
 
         var job = new JobClaimCandidate(Guid.NewGuid(), "ReleaseSearchItem", "rs:1");
@@ -120,6 +171,7 @@ public sealed class MlfqJobConcurrencySchedulerTests
                 MlfqQuanta = [TimeSpan.FromSeconds(1), TimeSpan.FromHours(1), TimeSpan.FromHours(1), null],
             },
             time,
+            _registry,
             NullLogger<MlfqJobConcurrencyScheduler>.Instance);
         var jobOld = new JobClaimCandidate(Guid.NewGuid(), "Old", "p:old");
         var jobYoung = new JobClaimCandidate(Guid.NewGuid(), "Young", "p:young");
@@ -152,6 +204,7 @@ public sealed class MlfqJobConcurrencySchedulerTests
                 MlfqQuanta = [TimeSpan.FromSeconds(1), TimeSpan.FromHours(1), TimeSpan.FromHours(1), null],
             },
             time,
+            _registry,
             NullLogger<MlfqJobConcurrencyScheduler>.Instance);
 
         for (var i = 0; i < 8; i++)
@@ -192,6 +245,7 @@ public sealed class MlfqJobConcurrencySchedulerTests
                 ],
             },
             time,
+            _registry,
             NullLogger<MlfqJobConcurrencyScheduler>.Instance);
 
         var candidates = new List<JobClaimCandidate>();
@@ -240,6 +294,7 @@ public sealed class MlfqJobConcurrencySchedulerTests
                 ],
             },
             time,
+            _registry,
             NullLogger<MlfqJobConcurrencyScheduler>.Instance);
 
         var candidates = new List<JobClaimCandidate>();
@@ -277,6 +332,7 @@ public sealed class MlfqJobConcurrencySchedulerTests
         var scheduler = new MlfqJobConcurrencyScheduler(
             new JobRuntimeOptions { PoolSize = 15 },
             TimeProvider.System,
+            _registry,
             NullLogger<MlfqJobConcurrencyScheduler>.Instance);
 
         // Act
@@ -314,6 +370,7 @@ public sealed class MlfqJobConcurrencySchedulerTests
         var scheduler = new MlfqJobConcurrencyScheduler(
             new JobRuntimeOptions { PoolSize = 5 },
             TimeProvider.System,
+            _registry,
             NullLogger<MlfqJobConcurrencyScheduler>.Instance);
         var candidate = new JobClaimCandidate(Guid.NewGuid(), "ReleaseSearchItem", "rs:1");
         var fast = await scheduler.AcquireImmediateSlotAsync(default).ConfigureAwait(false);
@@ -351,6 +408,7 @@ public sealed class MlfqJobConcurrencySchedulerTests
         var scheduler = new MlfqJobConcurrencyScheduler(
             options,
             time,
+            _registry,
             NullLogger<MlfqJobConcurrencyScheduler>.Instance);
         Assert.That(scheduler.FastLaneCapacity, Is.EqualTo(1));
 
@@ -407,6 +465,7 @@ public sealed class MlfqJobConcurrencySchedulerTests
         var scheduler = new MlfqJobConcurrencyScheduler(
             options,
             TimeProvider.System,
+            _registry,
             NullLogger<MlfqJobConcurrencyScheduler>.Instance);
         Assert.That(scheduler.FastLaneCapacity, Is.EqualTo(1));
 
@@ -442,6 +501,7 @@ public sealed class MlfqJobConcurrencySchedulerTests
         var scheduler = new MlfqJobConcurrencyScheduler(
             options,
             time,
+            _registry,
             NullLogger<MlfqJobConcurrencyScheduler>.Instance);
         Assert.That(scheduler.FastLaneCapacity, Is.EqualTo(1));
 
@@ -506,6 +566,7 @@ public sealed class MlfqJobConcurrencySchedulerTests
         var scheduler = new MlfqJobConcurrencyScheduler(
             options,
             time,
+            _registry,
             NullLogger<MlfqJobConcurrencyScheduler>.Instance);
 
         var firstFast = await scheduler.AcquireImmediateSlotAsync(default).ConfigureAwait(false);
@@ -568,6 +629,7 @@ public sealed class MlfqJobConcurrencySchedulerTests
         var scheduler = new MlfqJobConcurrencyScheduler(
             options,
             time,
+            _registry,
             NullLogger<MlfqJobConcurrencyScheduler>.Instance);
 
         var candidates = Enumerable
@@ -618,6 +680,7 @@ public sealed class MlfqJobConcurrencySchedulerTests
         var scheduler = new MlfqJobConcurrencyScheduler(
             options,
             TimeProvider.System,
+            _registry,
             NullLogger<MlfqJobConcurrencyScheduler>.Instance);
 
         // Assert
@@ -639,6 +702,7 @@ public sealed class MlfqJobConcurrencySchedulerTests
         var scheduler = new MlfqJobConcurrencyScheduler(
             options,
             TimeProvider.System,
+            _registry,
             NullLogger<MlfqJobConcurrencyScheduler>.Instance);
 
         // Assert
@@ -660,6 +724,7 @@ public sealed class MlfqJobConcurrencySchedulerTests
         var scheduler = new MlfqJobConcurrencyScheduler(
             options,
             TimeProvider.System,
+            _registry,
             NullLogger<MlfqJobConcurrencyScheduler>.Instance);
 
         // Assert

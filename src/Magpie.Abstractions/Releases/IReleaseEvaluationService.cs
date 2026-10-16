@@ -4,6 +4,7 @@ using System.Threading;
 using System.Threading.Tasks;
 
 using Magpie.Models.Data;
+using Magpie.Models.Enums;
 using Magpie.Models.Releases;
 using Magpie.Sdk.Releases;
 
@@ -86,6 +87,18 @@ public interface IReleaseEvaluationService
     Task<ReleaseAssessment?> ScoreFileForContentAsync(
         MediaFile mediaFile,
         Guid contentHierarchyItemId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Scores the primary files of a content item from their stored media information, without reading the disk.
+    /// </summary>
+    /// <param name="primaryFiles">The primary files of the content item</param>
+    /// <param name="qualityTierListId">The id of the effective quality tier list of the content item, if any</param>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
+    /// <returns>The quality status and the best matched rank, or nulls when no file matches a tier</returns>
+    Task<(QualityStatus? Quality, int? Rank)> ScoreMediaQualityAsync(
+        IEnumerable<MediaFile> primaryFiles,
+        Guid? qualityTierListId,
         CancellationToken cancellationToken = default);
 
     /// <summary>

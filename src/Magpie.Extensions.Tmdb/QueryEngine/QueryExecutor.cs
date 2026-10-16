@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Linq;
+using System.Net.Http;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Threading;
@@ -35,6 +36,8 @@ internal sealed class QueryExecutor(
 
     private sealed class ExecutionState
     {
+        internal QueryExecutionDiagnostics Diagnostics { get; } = new();
+
         internal HashSet<int> ResolvedNodeIds { get; } = [];
 
         internal SubjectResolutionSet SubjectSet { get; set; } = EmptySubjectSet;
@@ -70,14 +73,15 @@ internal sealed class QueryExecutor(
             }
 
             var state = new ExecutionState();
+            context = context with { Diagnostics = state.Diagnostics };
             if (context.Progress is { } progress)
             {
                 await EnsurePrerequisitesAsync(plan.Root, plan, context, state, warnings, cancellationToken)
                     .ConfigureAwait(false);
-                if (state.SubjectSet.HadRemoteFailure)
+                if (state.SubjectSet.HadRemoteFailure && !state.Diagnostics.ReceivedResponse &&
+                    state.SubjectSet.Groups.All(group => group.Subjects.Count == 0))
                 {
-                    warnings.Add("TMDb could not resolve every search source. More results may remain.");
-                    return LogicalResult([], warnings, plan.RequestedPage);
+                    throw new HttpRequestException("TMDb could not resolve every search source.");
                 }
 
                 var resolved = JsonSerializer.Serialize(new
@@ -106,15 +110,16 @@ internal sealed class QueryExecutor(
                 return LogicalResult([], warnings, plan.RequestedPage);
             }
 
-            return await ExecuteNodeAsync(
+            var result = await ExecuteNodeAsync(
                 plan.Root,
                 plan,
                 context,
                 state,
                 warnings,
                 cancellationToken).ConfigureAwait(false);
+            return result with { Diagnostics = state.Diagnostics };
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             throw;
         }
@@ -122,17 +127,10 @@ internal sealed class QueryExecutor(
         {
             throw;
         }
-        catch (Magpie.Models.UpstreamThrottledException)
-        {
-            throw;
-        }
         catch (Exception ex)
         {
             logger.LogWarning(ex, "TMDb query execution failed for plan root {PlanRoot}", plan.Root.GetType().Name);
-            warnings.Add("TMDb could not complete the remote query.");
-            var failure = LogicalResult([], warnings, plan.RequestedPage);
-            failure.Diagnostics.StreamFaulted = true;
-            return failure;
+            throw;
         }
     }
 
@@ -1036,13 +1034,13 @@ internal sealed class QueryExecutor(
         RequestContext context,
         CancellationToken cancellationToken)
     {
+        var resolved = new List<SubjectResolution>();
         try
         {
             var requestedName = identity.Name!;
             var exact = !identity.Negate &&
                 identity.Operator is CriteriaValueOperator.Equals or CriteriaValueOperator.In;
             var normalized = NormalizeName(requestedName);
-            var resolved = new List<SubjectResolution>();
             var truncated = false;
             for (var page = 1; page <= QueryLimits.MaximumNameSearchPages; page++)
             {
@@ -1051,6 +1049,7 @@ internal sealed class QueryExecutor(
                     context,
                     request,
                     cancellationToken).ConfigureAwait(false);
+                context.Diagnostics!.ReceivedResponse = true;
                 var matches = envelope?.Results?
                     .Where(hit => hit.Id > 0 &&
                         !string.IsNullOrWhiteSpace(hit.Name) &&
@@ -1093,17 +1092,13 @@ internal sealed class QueryExecutor(
 
             return unique;
         }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch (Magpie.Models.UpstreamThrottledException)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             throw;
         }
         catch (Exception)
         {
-            return [new SubjectResolution
+            return [.. resolved.Select(result => result with { Incomplete = true }), new SubjectResolution
             {
                 Kind = SubjectResolutionKind.Failed,
                 Warning = string.Format(
@@ -1126,6 +1121,7 @@ internal sealed class QueryExecutor(
         {
             var envelope = await client.GetAsync<FindEnvelopeDto>(context, request, cancellationToken)
                 .ConfigureAwait(false);
+            context.Diagnostics!.ReceivedResponse = true;
             var matches = envelope?.PersonResults?
                 .Where(result => result.Id > 0 && !string.IsNullOrWhiteSpace(result.Name))
                 .GroupBy(result => result.Id)
@@ -1158,11 +1154,7 @@ internal sealed class QueryExecutor(
                 ExternalId = externalId
             };
         }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch (Magpie.Models.UpstreamThrottledException)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             throw;
         }
@@ -1292,7 +1284,7 @@ internal sealed class QueryExecutor(
                         cancellationToken).ConfigureAwait(false);
                     return child with
                     {
-                        Hits = FilterHitsAsync(filter, child.Hits, context, state, cancellationToken)
+                        Hits = FilterHitsAsync(filter, child.Hits, context, state, warnings, cancellationToken)
                     };
                 }
             case UnionPlanNode union:
@@ -1565,6 +1557,7 @@ internal sealed class QueryExecutor(
         IAsyncEnumerable<SearchHit> hits,
         RequestContext context,
         ExecutionState state,
+        List<string> warnings,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         context.Telemetry?.TryVisitNode(filter.Id);
@@ -1599,12 +1592,27 @@ internal sealed class QueryExecutor(
                 var hit = sourceHit;
                 if (needsDetails)
                 {
-                    hit = await EnrichAsync(
-                        filter,
-                        filterContext,
-                        sourceHit,
-                        appendCredits: NeedsCreditsForHit(sourceHit, state.SubjectSet.Groups),
-                        cancellationToken).ConfigureAwait(false);
+                    try
+                    {
+                        hit = await EnrichAsync(
+                            filter,
+                            filterContext,
+                            sourceHit,
+                            appendCredits: NeedsCreditsForHit(sourceHit, state.SubjectSet.Groups),
+                            cancellationToken).ConfigureAwait(false);
+                    }
+                    catch (Exception exception) when (exception is not OperationCanceledException ||
+                        !cancellationToken.IsCancellationRequested)
+                    {
+                        state.Diagnostics.StreamFaulted = true;
+                        if (!warnings.Contains("TMDb could not verify every result; some results may be missing."))
+                        {
+                            warnings.Add("TMDb could not verify every result; some results may be missing.");
+                        }
+
+                        continue;
+                    }
+
                     if (hit is null ||
                         !hit.Matches(
                             filter,
@@ -1665,25 +1673,75 @@ internal sealed class QueryExecutor(
         activity?.SetTag("magpie.query.branch_count", union.Children.Count);
         var emitted = new HashSet<(ContentRoute Route, int Id)>();
         var visitedChildren = 0;
+        var answered = false;
+        Exception? failure = null;
         try
         {
             foreach (var childNode in union.Children)
             {
                 visitedChildren++;
-                var child = await ExecuteNodeAsync(
-                    childNode,
-                    plan,
-                    context,
-                    state,
-                    warnings,
-                    cancellationToken).ConfigureAwait(false);
-                await foreach (var hit in child.Hits.WithCancellation(cancellationToken).ConfigureAwait(false))
+                QueryExecution child;
+                try
                 {
+                    child = await ExecuteNodeAsync(
+                        childNode,
+                        plan,
+                        context,
+                        state,
+                        warnings,
+                        cancellationToken).ConfigureAwait(false);
+                }
+                catch (Exception exception) when (exception is not MetadataSearchContinuationException &&
+                    (exception is not OperationCanceledException || !cancellationToken.IsCancellationRequested))
+                {
+                    failure = exception;
+                    state.Diagnostics.StreamFaulted = true;
+                    if (!warnings.Contains("TMDb could not complete the remote query."))
+                    {
+                        warnings.Add("TMDb could not complete the remote query.");
+                    }
+
+                    continue;
+                }
+
+                await using var enumerator = child.Hits.GetAsyncEnumerator(cancellationToken);
+                while (true)
+                {
+                    SearchHit hit;
+                    try
+                    {
+                        if (!await enumerator.MoveNextAsync().ConfigureAwait(false))
+                        {
+                            answered = true;
+                            break;
+                        }
+
+                        hit = enumerator.Current;
+                        answered = true;
+                    }
+                    catch (Exception exception) when (exception is not MetadataSearchContinuationException &&
+                        (exception is not OperationCanceledException || !cancellationToken.IsCancellationRequested))
+                    {
+                        failure = exception;
+                        state.Diagnostics.StreamFaulted = true;
+                        if (!warnings.Contains("TMDb could not complete the remote query."))
+                        {
+                            warnings.Add("TMDb could not complete the remote query.");
+                        }
+
+                        break;
+                    }
+
                     if (emitted.Add((hit.Route, hit.Id)))
                     {
                         yield return hit;
                     }
                 }
+            }
+
+            if (!answered && !state.Diagnostics.ReceivedResponse && failure is not null)
+            {
+                throw new HttpRequestException("TMDb could not complete any search branch.", failure);
             }
         }
         finally
@@ -1759,6 +1817,7 @@ internal sealed class QueryExecutor(
             : await ResolveAsync(resolve, resolveContext, cancellationToken).ConfigureAwait(false);
         warnings.AddRange(subjectSet.Warnings);
         state.SubjectSet = subjectSet;
+        state.Diagnostics.StreamFaulted |= subjectSet.HadRemoteFailure;
         if (resolve.GenreFilters.Count > 0)
         {
             state.GenreIds = await ResolveGenresAsync(resolve, resolveContext, cancellationToken)
@@ -1892,6 +1951,8 @@ internal sealed class QueryExecutor(
         var positivePersonGroups = subjects.Where(group => !group.Excluded &&
             group.Subjects.Any(subject =>
                 subject.Role is not SubjectRole.Company and not SubjectRole.Network)).ToList();
+        Exception? failure = null;
+        var answered = false;
         var groupHits = new List<IReadOnlyList<SearchHit>>();
         foreach (var group in positivePersonGroups)
         {
@@ -1899,12 +1960,31 @@ internal sealed class QueryExecutor(
             foreach (var subject in group.Subjects.Where(subject =>
                 subject.Role is not SubjectRole.Company and not SubjectRole.Network))
             {
-                var credits = await GetCreditsAsync(subject, context, cancellationToken)
-                    .ConfigureAwait(false);
-                alternatives.AddRange(MapCredits(credits, subject));
+                try
+                {
+                    var credits = await GetCreditsAsync(subject, context, cancellationToken).ConfigureAwait(false);
+                    alternatives.AddRange(MapCredits(credits, subject));
+                    answered = true;
+                    context.Diagnostics!.ReceivedResponse = true;
+                }
+                catch (Exception exception) when (exception is not OperationCanceledException ||
+                    !cancellationToken.IsCancellationRequested)
+                {
+                    failure = exception;
+                    context.Diagnostics!.StreamFaulted = true;
+                    if (!warnings.Contains("TMDb could not complete the remote query."))
+                    {
+                        warnings.Add("TMDb could not complete the remote query.");
+                    }
+                }
             }
 
             groupHits.Add(MergeHits(alternatives));
+        }
+
+        if (!answered && failure is not null)
+        {
+            throw new HttpRequestException("TMDb could not complete any credits lookup.", failure);
         }
 
         var hits = groupHits.Count == 0
@@ -1932,6 +2012,7 @@ internal sealed class QueryExecutor(
                 fetch,
                 context,
                 positive,
+                warnings,
                 appendCredits: HasPersonSubjects(fetch.SubjectBindings, []),
                 cancellationToken)
                 .ConfigureAwait(false);
@@ -1947,6 +2028,7 @@ internal sealed class QueryExecutor(
         FetchPlanNode fetch,
         RequestContext context,
         ContentIdFilter filter,
+        List<string> warnings,
         bool appendCredits,
         CancellationToken cancellationToken)
     {
@@ -1956,8 +2038,14 @@ internal sealed class QueryExecutor(
             await concurrency.WaitAsync(cancellationToken).ConfigureAwait(false);
             try
             {
-                return await FetchContentIdAsync(fetch, context, id, order, appendCredits, cancellationToken)
+                var hit = await FetchContentIdAsync(fetch, context, id, order, appendCredits, cancellationToken)
                     .ConfigureAwait(false);
+                return (Hit: hit, Failure: (Exception?)null);
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException ||
+                !cancellationToken.IsCancellationRequested)
+            {
+                return (Hit: (SearchHit?)null, Failure: exception);
             }
             finally
             {
@@ -1965,7 +2053,18 @@ internal sealed class QueryExecutor(
             }
         }).ToList();
         var lookups = await Task.WhenAll(tasks).ConfigureAwait(false);
-        var resolved = lookups
+        if (lookups.Length > 0 && lookups.All(lookup => lookup.Failure is not null))
+        {
+            throw new HttpRequestException("TMDb could not complete any content lookup.", lookups[0].Failure);
+        }
+
+        if (lookups.Any(lookup => lookup.Failure is not null))
+        {
+            warnings.Add("TMDb could not complete the remote query.");
+            context.Diagnostics!.StreamFaulted = true;
+        }
+
+        var resolved = lookups.Select(lookup => lookup.Hit)
             .OfType<SearchHit>()
             .ToList();
         var hits = resolved
@@ -2012,9 +2111,13 @@ internal sealed class QueryExecutor(
         var searchTerms = discover ? [] : SearchTerms(fetch);
         var discoverSources = discover ? DiscoverSources(fetch, subjects, genreIds) : [];
         var sourceCount = discover ? discoverSources.Count : searchTerms.Count;
+        (int Index, int Page)? failedCursor = null;
+        Exception? failure = null;
         await state.Gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            context.Diagnostics!.ReceivedResponse |= state.Hits.Count > 0 || state.NextSourcePage > 1 ||
+                state.ExhaustedSourceIndexes.Count > 0;
             var yielded = 0;
             while (true)
             {
@@ -2065,8 +2168,28 @@ internal sealed class QueryExecutor(
                         searchTerms[state.NextSourceIndex]);
                 }
 
-                var remote = await FetchPageAsync(fetch.Route, context, request, cancellationToken)
-                    .ConfigureAwait(false);
+                PageResult remote;
+                var succeeded = false;
+                try
+                {
+                    remote = await FetchPageAsync(fetch.Route, context, request, cancellationToken)
+                        .ConfigureAwait(false);
+                    succeeded = true;
+                }
+                catch (Exception exception) when (exception is not OperationCanceledException ||
+                    !cancellationToken.IsCancellationRequested)
+                {
+                    failedCursor ??= (state.NextSourceIndex, state.NextSourcePage);
+                    failure = exception;
+                    context.Diagnostics!.StreamFaulted = true;
+                    if (!warnings.Contains("TMDb could not complete the remote query."))
+                    {
+                        warnings.Add("TMDb could not complete the remote query.");
+                    }
+
+                    remote = new PageResult([], state.NextSourcePage, 0);
+                }
+
                 var hits = remote.Hits.Select(hit => AttachAppliedSubjects(hit, appliedCriteria) with
                 {
                     AppliedCriteria = appliedCriteria
@@ -2087,7 +2210,7 @@ internal sealed class QueryExecutor(
                     }
                 }
 
-                if (remote.Hits.Count == 0 || state.NextSourcePage >= remote.TotalPages)
+                if (succeeded && (remote.Hits.Count == 0 || state.NextSourcePage >= remote.TotalPages))
                 {
                     state.ExhaustedSourceIndexes.Add(state.NextSourceIndex);
                 }
@@ -2102,10 +2225,32 @@ internal sealed class QueryExecutor(
 
                     state.RoundBatches.Clear();
                 }
+
+                if (roundComplete && failure is not null)
+                {
+                    if (!context.Diagnostics!.ReceivedResponse)
+                    {
+                        throw new HttpRequestException("TMDb could not complete any search source.", failure);
+                    }
+
+                    while (yielded < state.Hits.Count)
+                    {
+                        yield return state.Hits[yielded++];
+                    }
+
+                    yield break;
+                }
             }
         }
         finally
         {
+            if (failedCursor is { } retry)
+            {
+                state.NextSourceIndex = retry.Index;
+                state.NextSourcePage = retry.Page;
+                state.Exhausted = false;
+            }
+
             state.Gate.Release();
         }
     }
@@ -2154,6 +2299,7 @@ internal sealed class QueryExecutor(
                 yield break;
             }
 
+            Exception? failure = null;
             var batches = new List<IReadOnlyList<SearchHit>>();
             var hasMore = false;
             var ended = new HashSet<int>(state.ExhaustedSources);
@@ -2185,8 +2331,31 @@ internal sealed class QueryExecutor(
                 }
 
                 var request = applied?.Request ?? BuildSearch(fetch, context.Language, state.Page, searchTerms[index]);
-                var remote = await FetchPageAsync(fetch.Route, context, request, cancellationToken)
-                    .ConfigureAwait(false);
+                PageResult remote;
+                try
+                {
+                    remote = await FetchPageAsync(fetch.Route, context, request, cancellationToken)
+                        .ConfigureAwait(false);
+                }
+                catch (Exception exception) when (exception is not OperationCanceledException ||
+                    !cancellationToken.IsCancellationRequested)
+                {
+                    failure = exception;
+                    context.Diagnostics!.StreamFaulted = true;
+                    if (!warnings.Contains("TMDb could not complete the remote query."))
+                    {
+                        warnings.Add("TMDb could not complete the remote query.");
+                    }
+
+                    batches.Add([]);
+                    if (state.Consumed == index)
+                    {
+                        state.Consumed++;
+                    }
+
+                    continue;
+                }
+
                 hasMore |= state.Page < remote.TotalPages;
                 if (state.Page >= remote.TotalPages)
                 {
@@ -2221,6 +2390,18 @@ internal sealed class QueryExecutor(
                 }
 
                 state.Consumed++;
+            }
+
+            if (failure is not null)
+            {
+                state.Consumed = 0;
+                state.ExhaustedSources = ended;
+                if (!context.Diagnostics!.ReceivedResponse)
+                {
+                    throw new HttpRequestException("TMDb could not complete any search source.", failure);
+                }
+
+                yield break;
             }
 
             if (!hasMore)
@@ -2342,6 +2523,7 @@ internal sealed class QueryExecutor(
                 cancellationToken).ConfigureAwait(false);
             var hits = envelope?.Results?.Select((hit, index) => hit.ToSearchHit(index)).ToList() ??
                 [];
+            context.Diagnostics!.ReceivedResponse = true;
             return new PageResult(
                 hits,
                 Math.Max(0, envelope?.TotalPages ?? 0),
@@ -2354,6 +2536,7 @@ internal sealed class QueryExecutor(
             cancellationToken).ConfigureAwait(false);
         var tvHits = tvEnvelope?.Results?.Select((hit, index) => hit.ToSearchHit(index)).ToList() ??
             [];
+        context.Diagnostics!.ReceivedResponse = true;
         return new PageResult(
             tvHits,
             Math.Max(0, tvEnvelope?.TotalPages ?? 0),
@@ -2402,10 +2585,12 @@ internal sealed class QueryExecutor(
         {
             var detail = await client.GetAsync<MovieDetailDto>(context, request, cancellationToken)
                 .ConfigureAwait(false);
+            context.Diagnostics!.ReceivedResponse = true;
             return detail is null ? null : MergeHit(hit, detail.FromMovieDetail());
         }
 
         var tv = await client.GetAsync<TvDetailDto>(context, request, cancellationToken).ConfigureAwait(false);
+        context.Diagnostics!.ReceivedResponse = true;
         return tv is null ? null : MergeHit(hit, tv.FromTvDetail());
     }
 
@@ -2440,12 +2625,14 @@ internal sealed class QueryExecutor(
             {
                 var detail = await client.GetAsync<MovieDetailDto>(context, request, cancellationToken)
                     .ConfigureAwait(false);
+                context.Diagnostics!.ReceivedResponse = true;
                 return detail is null
                     ? null
                     : detail.FromMovieDetail() with { SourceOrder = sourceOrder };
             }
 
             var tv = await client.GetAsync<TvDetailDto>(context, request, cancellationToken).ConfigureAwait(false);
+            context.Diagnostics!.ReceivedResponse = true;
             return tv is null ? null : tv.FromTvDetail() with { SourceOrder = sourceOrder };
         }
 
@@ -2456,6 +2643,7 @@ internal sealed class QueryExecutor(
 
         var find = BuildFind(contentId.Value, externalSource, context.Language);
         var envelope = await client.GetAsync<FindEnvelopeDto>(context, find, cancellationToken).ConfigureAwait(false);
+        context.Diagnostics!.ReceivedResponse = true;
         var hit = fetch.Route == ContentRoute.Movie
             ? envelope?.MovieResults?.Select((item, index) => item.ToSearchHit(sourceOrder + index))
                 .FirstOrDefault()
@@ -2760,6 +2948,7 @@ internal sealed class QueryExecutor(
                     state.Context,
                     token),
                 cancellationToken).ConfigureAwait(false);
+            context.Diagnostics!.ReceivedResponse |= external.Kind != SubjectResolutionKind.Failed;
             return [external];
         }
 
@@ -2782,6 +2971,7 @@ internal sealed class QueryExecutor(
             (Role: role, Identity: identity, Context: context),
             (state, token) => ResolveNameAsync(state.Role, state.Identity, state.Context, token),
             cancellationToken).ConfigureAwait(false);
+        context.Diagnostics!.ReceivedResponse |= resolutions.Any(result => result.Kind != SubjectResolutionKind.Failed);
         return role == SubjectRole.Network
             ? [.. resolutions.Select(resolution => resolution.Kind == SubjectResolutionKind.Resolved
                 ? resolution with { ViaCompanySearch = true }

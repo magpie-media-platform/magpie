@@ -86,6 +86,11 @@ internal sealed class QueryExecutor(
             activity.SetTag("magpie.query.terminal_reason", terminalReason);
         }
 
+        if (result.Failed)
+        {
+            throw new HttpRequestException("MusicBrainz could not complete the remote query.");
+        }
+
         return result;
     }
 
@@ -259,6 +264,7 @@ internal sealed class QueryExecutor(
         return new()
         {
             Supported = true,
+            Failed = true,
             Hits = [],
             PageInfo = new ProviderSearchPageInfo { RequestedPage = plan.RequestedPage, HasMore = true },
             Warnings = [.. plan.Warnings, FailureWarning(outcome)]
@@ -1343,7 +1349,7 @@ internal sealed class QueryExecutor(
             if (anchor.Hits.Count == 0)
             {
                 RecordNodeSkipped(search, "required anchor returned no ids");
-                return EmptyWithWarnings(plan, anchor.Warnings.Concat(warnings));
+                return EmptyWithWarnings(plan, anchor.Warnings.Concat(warnings)) with { Failed = anchor.Failed };
             }
         }
 
@@ -1403,7 +1409,7 @@ internal sealed class QueryExecutor(
             required.Hits.Count == 0)
         {
             RecordNodeSkipped(fetch, "required dependency returned no ids");
-            return EmptyWithWarnings(plan, required.Warnings);
+            return EmptyWithWarnings(plan, required.Warnings) with { Failed = required.Failed };
         }
 
         var fetchFilters = ApplyResolvedRelationships(fetch.Filters, fetch.Resolvers, resolved);
@@ -1411,7 +1417,10 @@ internal sealed class QueryExecutor(
         if (fetchFilters is null || localFilters is null)
         {
             RecordNodeSkipped(fetch, "required resolver returned no ids");
-            return EmptyWithWarnings(plan, resolved.Values.SelectMany(outcome => outcome.Warnings));
+            return EmptyWithWarnings(plan, resolved.Values.SelectMany(outcome => outcome.Warnings)) with
+            {
+                Failed = resolved.Count > 0 && resolved.Values.All(outcome => outcome.Failed)
+            };
         }
 
         var executionFetch = fetch with { Filters = fetchFilters };
@@ -1530,20 +1539,29 @@ internal sealed class QueryExecutor(
         }
 
         var artists = new List<ArtistDto>();
+        var warnings = new List<string>(plan.Warnings);
+        var answered = false;
+        var failed = false;
         foreach (var mbid in resolvedMbids)
         {
             var expansion = await ExpandArtistCompositionAsync(plan, composition, mbid, cancellationToken)
                 .ConfigureAwait(false);
             if (expansion.Outcome == FetchOutcome.NotFound)
             {
+                answered = true;
                 continue;
             }
 
             if (expansion.Outcome != FetchOutcome.Success)
             {
-                return Failure(plan, expansion.Outcome);
+                failed = true;
+                warnings.Add(FailureWarning(expansion.Outcome));
+                continue;
             }
 
+            answered = true;
+            warnings.AddRange(expansion.Warnings);
+            failed |= expansion.Warnings.Count > 0;
             artists.AddRange(expansion.Artists);
         }
 
@@ -1554,9 +1572,10 @@ internal sealed class QueryExecutor(
         return new QueryResult
         {
             Supported = true,
+            Failed = failed && !answered,
             Hits = hits,
-            PageInfo = new ProviderSearchPageInfo { RequestedPage = plan.RequestedPage, HasMore = false },
-            Warnings = plan.Warnings
+            PageInfo = new ProviderSearchPageInfo { RequestedPage = plan.RequestedPage, HasMore = failed },
+            Warnings = [.. warnings.Distinct()]
         };
     }
 
@@ -1581,6 +1600,9 @@ internal sealed class QueryExecutor(
         var hits = new List<SearchHit>();
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var survivorCount = 0;
+        var receivedResponse = false;
+        var warnings = new List<string>(plan.Warnings);
+        var failed = false;
         foreach (var artistMbid in artistMbids.Distinct(StringComparer.OrdinalIgnoreCase))
         {
             var offset = 0;
@@ -1592,9 +1614,12 @@ internal sealed class QueryExecutor(
                     .ConfigureAwait(false);
                 if (fetched is not { Outcome: FetchOutcome.Success, Value: { } page })
                 {
-                    return Failure(plan, fetched.Outcome);
+                    failed = true;
+                    warnings.Add(FailureWarning(fetched.Outcome));
+                    break;
                 }
 
+                receivedResponse = true;
                 count = Math.Max(0, page.Count);
                 var rawHitCount = RawHitCount(fetch.Target, page);
                 var filters = filter?.Filters ?? fetch.Filters;
@@ -1612,7 +1637,16 @@ internal sealed class QueryExecutor(
                         survivorCount++;
                         if (survivorCount >= bound.MaximumRows)
                         {
-                            return RawCandidates(plan, hits);
+                            return RawCandidates(plan, hits) with
+                            {
+                                Failed = failed && !receivedResponse,
+                                Warnings = [.. warnings.Distinct()],
+                                PageInfo = new ProviderSearchPageInfo
+                                {
+                                    RequestedPage = plan.RequestedPage,
+                                    HasMore = failed
+                                }
+                            };
                         }
                     }
                 }
@@ -1626,7 +1660,12 @@ internal sealed class QueryExecutor(
             }
         }
 
-        return RawCandidates(plan, hits);
+        return RawCandidates(plan, hits) with
+        {
+            Failed = failed && !receivedResponse,
+            Warnings = [.. warnings.Distinct()],
+            PageInfo = new ProviderSearchPageInfo { RequestedPage = plan.RequestedPage, HasMore = failed }
+        };
     }
 
     private async Task<QueryResult> ExecuteUnionNodeAsync(
@@ -1709,6 +1748,7 @@ internal sealed class QueryExecutor(
         return new QueryResult
         {
             Supported = results.All(result => result.Supported),
+            Failed = results.All(result => result.Failed),
             Hits = hits,
             PageInfo = new ProviderSearchPageInfo
             {
@@ -1821,6 +1861,7 @@ internal sealed class QueryExecutor(
         return new QueryResult
         {
             Supported = true,
+            Failed = faulted && !diagnostics.ReceivedResponse,
             Hits = hits,
             PageInfo = new ProviderSearchPageInfo { RequestedPage = page, HasMore = hasMore },
             Warnings = [.. plan.Warnings
@@ -1879,10 +1920,12 @@ internal sealed class QueryExecutor(
             if (fetched is not { Outcome: FetchOutcome.Success, Value: { } scan })
             {
                 diagnostics.Outcome = fetched.Outcome;
+                diagnostics.ReceivedResponse |= fetched.Value is not null;
                 yield break;
             }
 
             var snapshot = scan.Read();
+            diagnostics.ReceivedResponse = true;
             diagnostics.Truncated = snapshot.Truncated;
             diagnostics.Warnings = snapshot.Warnings;
             while (yielded < snapshot.HitCount)
@@ -1970,6 +2013,7 @@ internal sealed class QueryExecutor(
                 }
 
                 scan = updated;
+                diagnostics.ReceivedResponse = true;
                 loaded = true;
                 diagnostics.Warnings = scan.Read().Warnings;
             }
@@ -2374,7 +2418,7 @@ internal sealed class QueryExecutor(
         };
         var fetched = await FetchArtistResolutionAsync(plan, composition, cacheKey, cancellationToken)
             .ConfigureAwait(false);
-        if (fetched is not { Outcome: FetchOutcome.Success, Value: { } response })
+        if (fetched.Value is not { } response)
         {
             return new ResolvedArtistComposition { Outcome = fetched.Outcome };
         }
@@ -2391,6 +2435,7 @@ internal sealed class QueryExecutor(
         return new ResolvedArtistComposition
         {
             Outcome = FetchOutcome.Success,
+            Warnings = fetched.Outcome == FetchOutcome.Success ? [] : [FailureWarning(fetched.Outcome)],
             Artists = [.. exact
                 .Where(candidate =>
                     composition.RelatedMbid is null ||
@@ -2501,7 +2546,15 @@ internal sealed class QueryExecutor(
             EndRequest(activity, "resolve", !loaded, fetched.Value?.ReturnedCount ?? 0, fetched.Outcome);
             if (fetched is not { Outcome: FetchOutcome.Success, Value: { } response })
             {
-                return fetched;
+                return offset == 0 ? fetched : fetched with
+                {
+                    Value = new ArtistResolutionResponse
+                    {
+                        Count = count,
+                        ReturnedCount = returnedCount,
+                        Candidates = candidates
+                    }
+                };
             }
 
             statusCode = fetched.StatusCode;
@@ -2565,7 +2618,14 @@ internal sealed class QueryExecutor(
             EndRequest(activity, "browse", !loaded, fetched.Value?.Artists?.Count ?? 0, fetched.Outcome);
             if (fetched is not { Outcome: FetchOutcome.Success, Value: { } response })
             {
-                return new ExpandedArtistComposition { Outcome = fetched.Outcome };
+                return offset == 0
+                    ? new ExpandedArtistComposition { Outcome = fetched.Outcome }
+                    : new ExpandedArtistComposition
+                    {
+                        Outcome = FetchOutcome.Success,
+                        Artists = NormalizeArtists(artists),
+                        Warnings = [FailureWarning(fetched.Outcome)]
+                    };
             }
 
             var page = response.Artists ?? [];
@@ -3651,7 +3711,7 @@ internal sealed class QueryExecutor(
                 RecordResolution(plan.Progress, resolver, resolved);
                 outcomes[resolver.Id] = resolved;
                 warnings.AddRange(resolved.Warnings);
-                if (resolved.PageInfo.HasMore)
+                if (resolved.PageInfo.HasMore && plan.Progress.ValidateOnly)
                 {
                     throw new IncompleteEvaluationException();
                 }
@@ -3681,6 +3741,11 @@ internal sealed class QueryExecutor(
         }
         catch (HttpRequestException)
         {
+            if (!outcomes.Values.Any(result => !result.Failed))
+            {
+                throw;
+            }
+
             warnings.Add("MusicBrainz could not complete the search. More results may remain.");
             exhausted = false;
         }
@@ -3689,11 +3754,16 @@ internal sealed class QueryExecutor(
             exhausted = false;
         }
 
+        var fetchResults = plan.Root.Flatten().OfType<FetchPlanNode>()
+            .Select(node => outcomes.GetValueOrDefault(node.Id)).OfType<QueryResult>().ToArray();
         return new QueryResult
         {
             Supported = true,
             Hits = hits,
             PageInfo = new ProviderSearchPageInfo { RequestedPage = 1, HasMore = !exhausted || warnings.Count > 0 },
+            Failed = fetchResults.Length > 0
+                ? fetchResults.All(result => result.Failed)
+                : outcomes.Count > 0 && outcomes.Values.All(result => result.Failed),
             Warnings = [.. warnings.Distinct()]
         };
     }
@@ -3774,10 +3844,26 @@ internal sealed class QueryExecutor(
             case UnionPlanNode union:
                 foreach (var child in union.Children)
                 {
-                    await foreach (var hit in ContinueNodeAsync(plan, child, outcomes, warnings, cancellationToken)
-                        .ConfigureAwait(false))
+                    await using var enumerator = ContinueNodeAsync(plan, child, outcomes, warnings, cancellationToken)
+                        .GetAsyncEnumerator(cancellationToken);
+                    while (true)
                     {
-                        yield return hit;
+                        bool hasNext;
+                        try
+                        {
+                            hasNext = await enumerator.MoveNextAsync().ConfigureAwait(false);
+                        }
+                        catch (IncompleteEvaluationException)
+                        {
+                            break;
+                        }
+
+                        if (!hasNext)
+                        {
+                            break;
+                        }
+
+                        yield return enumerator.Current;
                     }
                 }
 
@@ -3869,6 +3955,7 @@ internal sealed class QueryExecutor(
             if (result.PageInfo.HasMore || result.Warnings.Count > 0)
             {
                 warnings.Add("MusicBrainz could not resolve every search source. More results may remain.");
+                outcomes[fetch.Id] = result with { Hits = [] };
                 throw new IncompleteEvaluationException();
             }
 
@@ -3881,6 +3968,7 @@ internal sealed class QueryExecutor(
         if (fetch.Precondition is { Kind: PlanPreconditionKind.NodeNonEmpty, NodeId: { } required } &&
             outcomes.TryGetValue(required, out var requiredOutcome) && requiredOutcome.Hits.Count == 0)
         {
+            outcomes[fetch.Id] = requiredOutcome;
             yield break;
         }
 
@@ -3896,6 +3984,7 @@ internal sealed class QueryExecutor(
         var localFilters = filter is null ? [] : ApplyResolvedRelationships(filter.Filters, fetch.Resolvers, resolved);
         if (filters is null || localFilters is null)
         {
+            outcomes[fetch.Id] = EmptyWithWarnings(plan, resolved.Values.SelectMany(result => result.Warnings));
             yield break;
         }
 
@@ -3949,6 +4038,10 @@ internal sealed class QueryExecutor(
             }
             finally
             {
+                outcomes[fetch.Id] = RawCandidates(plan, []) with
+                {
+                    Failed = diagnostics.Outcome != FetchOutcome.Success && !diagnostics.ReceivedResponse
+                };
                 warnings.AddRange(diagnostics.Warnings);
                 if (diagnostics.Outcome != FetchOutcome.Success)
                 {
@@ -3991,10 +4084,12 @@ internal sealed class QueryExecutor(
                         cancellationToken).ConfigureAwait(false);
                     if (response is not { Outcome: FetchOutcome.Success, Value: { } page })
                     {
+                        outcomes.TryAdd(fetch.Id, Failure(plan, response.Outcome));
                         warnings.Add(FailureWarning(response.Outcome));
-                        yield break;
+                        break;
                     }
 
+                    outcomes[fetch.Id] = RawCandidates(plan, []);
                     var hits = ApplyResolvedArtistTypes(filter?.Filters ?? fetch.Filters, MapPage(fetch.Target, page))
                         .ToArray();
                     while (source.Consumed < hits.Length)
@@ -4013,6 +4108,7 @@ internal sealed class QueryExecutor(
                 }
             }
 
+            outcomes.TryAdd(fetch.Id, RawCandidates(plan, []));
             yield break;
         }
 
@@ -4043,10 +4139,12 @@ internal sealed class QueryExecutor(
                         .ConfigureAwait(false);
                     if (response is not { Outcome: FetchOutcome.Success, Value: { } page })
                     {
+                        outcomes.TryAdd(fetch.Id, Failure(plan, response.Outcome));
                         warnings.Add(FailureWarning(response.Outcome));
-                        yield break;
+                        break;
                     }
 
+                    outcomes[fetch.Id] = RawCandidates(plan, []);
                     var artists = NormalizeArtists(page.Artists ?? []);
                     while (source.Consumed < artists.Count)
                     {
@@ -4068,6 +4166,7 @@ internal sealed class QueryExecutor(
                 }
             }
 
+            outcomes.TryAdd(fetch.Id, RawCandidates(plan, []));
             yield break;
         }
 
@@ -4084,6 +4183,7 @@ internal sealed class QueryExecutor(
             _ => throw new ArgumentOutOfRangeException(nameof(fetch))
         };
         warnings.AddRange(finite.Warnings);
+        outcomes[fetch.Id] = finite;
         foreach (var hit in finite.Hits)
         {
             yield return hit;
@@ -4127,6 +4227,8 @@ internal sealed class QueryExecutor(
         public required FetchOutcome Outcome { get; init; }
 
         public IReadOnlyList<ArtistDto> Artists { get; init; } = [];
+
+        public IReadOnlyList<string> Warnings { get; init; } = [];
     }
 
     private sealed record RowBound
@@ -4163,6 +4265,8 @@ internal sealed class QueryExecutor(
 
     private sealed class VerifiedScanDiagnostics
     {
+        public bool ReceivedResponse { get; set; }
+
         public FetchOutcome Outcome { get; set; } = FetchOutcome.Success;
 
         public bool Truncated { get; set; }

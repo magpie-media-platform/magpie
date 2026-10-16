@@ -110,7 +110,7 @@ const mockJobs: ApiJobExecution[] = [
         createdAt: '2024-01-15T08:30:00Z',
         startedAt: '2024-01-15T08:30:00Z',
         completedAt: '2024-01-15T08:31:12Z',
-        statusMessage: 'API error: Rate limit exceeded',
+        statusMessage: 'API error: Service unavailable',
     },
     {
         id: 'exec-8',
@@ -241,7 +241,7 @@ const mockJobSpecs: ApiJobSpec[] = [
     {
         jobType: 'ContentMetadataRefreshItem',
         displayName: 'Content metadata refresh item',
-        description: 'Refreshes metadata for one content item.',
+        description: 'Refreshes the metadata of a content item.',
         category: 'Content',
         scope: 'Content' as JobScopeValue,
         enabled: false,
@@ -252,7 +252,7 @@ const mockJobSpecs: ApiJobSpec[] = [
     {
         jobType: 'ReleaseSearchItem',
         displayName: 'Release search item',
-        description: 'Searches available releases for one content item.',
+        description: 'Searches the indexers for releases of a content item.',
         category: 'Content',
         scope: 'Content' as JobScopeValue,
         enabled: false,
@@ -319,6 +319,7 @@ function pageJobs(url: string, source: ApiJobExecution[]) {
     const jobType = query.get('jobType');
     const wireStatuses = query.getAll('status');
     const correlationId = query.get('correlationId');
+    const originalExecutionId = query.get('originalExecutionId');
     const pageNumber = Number.parseInt(query.get('pageNumber') ?? '1', 10) || 1;
     const pageSize = Number.parseInt(query.get('pageSize') ?? String(EXECUTIONS_PAGE_SIZE), 10) || EXECUTIONS_PAGE_SIZE;
 
@@ -332,6 +333,11 @@ function pageJobs(url: string, source: ApiJobExecution[]) {
     }
     if (correlationId) {
         filtered = filtered.filter((job) => job.correlationId === correlationId);
+    }
+    if (originalExecutionId) {
+        filtered = filtered.filter(
+            (job) => job.id === originalExecutionId || job.originalExecutionId === originalExecutionId,
+        );
     }
     filtered.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
@@ -727,7 +733,7 @@ describe('JobsPage Executions tab', () => {
 
         await waitFor(() => {
             expect(screen.getByText('Checking feed: NZBgeek')).toBeInTheDocument();
-            expect(screen.getByText(/API error: Rate limit exceeded/)).toBeInTheDocument();
+            expect(screen.getByText(/API error: Service unavailable/)).toBeInTheDocument();
         });
     });
 });
@@ -1409,6 +1415,52 @@ describe('JobsPage roots-only toggle', () => {
 
         const toggle = await screen.findByRole('switch', { name: /show top level only/i });
         expect(toggle).toHaveAttribute('data-state', 'unchecked');
+    });
+});
+
+describe('JobsPage attempts filter', () => {
+    it('opens only the selected retry family and can return to all jobs', async () => {
+        // Arrange
+        const user = userEvent.setup();
+        const retry: ApiJobExecution = { ...mockJobs[0], id: 'retry', originalExecutionId: 'exec-1', attempt: 2 };
+        mockApiGet.mockImplementation((url) => {
+            if (url.startsWith('/jobs?')) return Promise.resolve(pageJobs(url, [...mockJobs, retry]));
+            if (url === '/jobs/retry') return Promise.resolve(retry);
+            if (url.endsWith('/execution-tree?include-siblings=false'))
+                return Promise.resolve({ root: null, totalCount: 0 });
+            if (url.startsWith('/audit-history'))
+                return Promise.resolve({ items: [], pageNumber: 1, pageSize: 100, totalItems: 0 });
+            return defaultApiGetResponse(url);
+        });
+        render(
+            <TestWrapper initialRoute="/?job=retry">
+                <JobsPage />
+            </TestWrapper>,
+        );
+
+        // Act
+        await user.click(await screen.findByRole('link', { name: 'View all attempts' }));
+
+        // Assert
+        await waitFor(() => {
+            const list = screen.getByRole('list', { name: /job history/i });
+            expect(within(list).getAllByRole('listitem')).toHaveLength(2);
+            expect(list.querySelector('[data-execution-id="exec-1"]')).toBeInTheDocument();
+            expect(list.querySelector('[data-execution-id="retry"]')).toBeInTheDocument();
+            expect(list.querySelector('[data-execution-id="exec-2"]')).not.toBeInTheDocument();
+        });
+        expect(mockApiGet).toHaveBeenCalledWith(
+            '/jobs?rootsOnly=false&pageNumber=1&pageSize=50&originalExecutionId=exec-1',
+        );
+        expect(screen.getByText('All attempts')).toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: 'Clear chain filter' })).not.toBeInTheDocument();
+        expect(screen.getByRole('switch', { name: 'Show top level only' })).toBeDisabled();
+
+        await user.click(screen.getByRole('button', { name: 'Clear attempts filter' }));
+        await waitFor(() =>
+            expect(within(screen.getByRole('list', { name: /job history/i })).getAllByRole('listitem')).toHaveLength(9),
+        );
+        expect(screen.queryByText('All attempts')).not.toBeInTheDocument();
     });
 });
 

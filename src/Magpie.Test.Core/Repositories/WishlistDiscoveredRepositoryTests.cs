@@ -547,4 +547,59 @@ public sealed class WishlistDiscoveredRepositoryTests
             Assert.That(counts.Missing, Is.EqualTo(1));
         }
     }
+
+    [Test]
+    public async Task ListEnrichedAsync_LinksTheLowestLibraryItemId_WhenTwoLibraryItemsShareTheExternalId()
+    {
+        // Arrange
+        var laterContainer = new MetadataContainer();
+        var laterContribution = new MetadataContribution { ProviderType = "tmdb", MetadataContainer = laterContainer };
+        laterContribution.ExternalIds.Add(new() { Source = "tmdb", Value = "617126", Ordinal = 0 });
+        var earlierContainer = new MetadataContainer();
+        var earlierContribution = new MetadataContribution
+        {
+            ProviderType = "tmdb",
+            MetadataContainer = earlierContainer
+        };
+        earlierContribution.ExternalIds.Add(new() { Source = "tmdb", Value = "617126", Ordinal = 0 });
+        _context.MetadataContributions.AddRange(laterContribution, earlierContribution);
+        _context.ContentHierarchyItems.AddRange(
+            new()
+            {
+                Id = new Guid("22222222-2222-2222-2222-222222222222"),
+                ContentType = "movie",
+                Level = "movie",
+                Slug = "the-fantastic-4-first-steps-copy",
+                Name = "The Fantastic 4: First Steps",
+                MetadataContainer = laterContainer
+            },
+            new()
+            {
+                Id = new Guid("11111111-1111-1111-1111-111111111111"),
+                ContentType = "movie",
+                Level = "movie",
+                Slug = "the-fantastic-4-first-steps",
+                Name = "The Fantastic 4: First Steps",
+                MetadataContainer = earlierContainer
+            });
+        _context.WishlistDiscovered.Add(new()
+        {
+            WishlistId = _wishlistId,
+            ExternalIdSource = "tmdb",
+            ExternalId = "617126",
+            Title = "The Fantastic 4: First Steps",
+            DiscoveredAt = new DateTime(2026, 8, 24, 2, 42, 30, DateTimeKind.Utc)
+        });
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        // Act
+        var page = await _subject.ListEnrichedAsync(
+            _wishlistId,
+            new() { Paging = new() { PageNumber = 1, PageSize = 10 } }).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(
+            page.Items.Select(row => row.LinkId),
+            Is.EqualTo([new Guid("11111111-1111-1111-1111-111111111111")]));
+    }
 }

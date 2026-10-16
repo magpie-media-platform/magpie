@@ -4,6 +4,7 @@ using System.Threading.Tasks;
 
 using Magpie.Abstractions.Jobs;
 using Magpie.Abstractions.Repositories;
+using Magpie.Abstractions.Security;
 using Magpie.Core;
 using Magpie.Core.Repositories;
 using Magpie.Data;
@@ -89,6 +90,7 @@ public sealed class IndexerRepositoryTests
             transactionManager,
             Mock.Of<IEventBus>(),
             NullLogger<IndexerRepository>.Instance,
+            Mock.Of<IDataProtectionService>(),
             timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
     }
 

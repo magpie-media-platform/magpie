@@ -133,7 +133,7 @@ public static class DefaultJobTriggerCatalog
                     JobType = MagpieJobs.Types.DownloadCleanup,
                     Scope = JobScope.Administrative,
                     Name = "Download cleanup schedule",
-                    Schedule = "*/30 * * * *",
+                    Schedule = "0 */6 * * *",
                     ExecutionMode = JobExecutionMode.Queue,
                     Enabled = true,
                     CreatedAt = now,
@@ -174,6 +174,10 @@ public static class DefaultJobTriggerCatalog
                     Scope = JobScope.Administrative,
                     Name = "Media info extract scan schedule",
                     Schedule = "0 2 * * *",
+                    Parameters = new Dictionary<string, string>
+                    {
+                        [MagpieJobs.Parameters.MediaInfoPolicy] = MagpieJobs.ParameterValues.MissingMediaInfoPolicy
+                    },
                     ExecutionMode = JobExecutionMode.Queue,
                     Enabled = true,
                     CreatedAt = now,
@@ -247,8 +251,8 @@ public static class DefaultJobTriggerCatalog
                 {
                     JobType = MagpieJobs.Types.MediaInfoExtractScan,
                     Scope = JobScope.Content,
-                    Name = "Media info extract on import",
-                    EventFilter = SingleEventFilter(MagpieEvents.Names.ContentImported),
+                    Name = "Media info extract on file change",
+                    EventFilter = MediaFilesChangedEventFilter(),
                     Parameters = new Dictionary<string, string>
                     {
                         [MagpieJobs.Parameters.ContentHierarchyItemId] =
@@ -262,8 +266,9 @@ public static class DefaultJobTriggerCatalog
                 {
                     JobType = MagpieJobs.Types.MediaServerRefresh,
                     Scope = JobScope.Administrative,
-                    Name = "Media server refresh on download import",
-                    EventFilter = SingleEventFilter(MagpieEvents.Names.DownloadImported),
+                    Name = "Media server refresh on file change",
+                    EventFilter = MediaFilesChangedEventFilter(),
+                    DelaySeconds = 30,
                     Enabled = true,
                     CreatedAt = now,
                 },
@@ -288,6 +293,18 @@ public static class DefaultJobTriggerCatalog
                     EventFilter = ManyEventFilter(
                         MagpieEvents.Names.DownloadImported,
                         MagpieEvents.Names.DownloadFailed),
+                    Enabled = true,
+                    CreatedAt = now,
+                },
+                new()
+                {
+                    JobType = MagpieJobs.Types.DownloadCleanup,
+                    Scope = JobScope.Administrative,
+                    Name = "Download cleanup on hold change",
+                    EventFilter = ChangedFieldEventFilter(
+                        MagpieEvents.Names.DownloadUpdated,
+                        MagpieEvents.Keys.DownloadChangedFields,
+                        nameof(Download.HeldByPolicy)),
                     Enabled = true,
                     CreatedAt = now,
                 },
@@ -340,6 +357,15 @@ public static class DefaultJobTriggerCatalog
                 },
                 new()
                 {
+                    JobType = MagpieJobs.Types.ReleaseAutoGrabScan,
+                    Scope = JobScope.Content,
+                    Name = "Release auto-grab scan on fulfillment change",
+                    EventFilter = NeedsReleaseEventFilter(),
+                    Enabled = true,
+                    CreatedAt = now,
+                },
+                new()
+                {
                     JobType = MagpieJobs.Types.ContentFulfillmentReconciliation,
                     Scope = JobScope.Administrative,
                     Name = "Content fulfillment reconciliation on quality tier list change",
@@ -347,6 +373,26 @@ public static class DefaultJobTriggerCatalog
                         MagpieEvents.Names.QualityTierListCreated,
                         MagpieEvents.Names.QualityTierListUpdated,
                         MagpieEvents.Names.QualityTierListDeleted),
+                    Parameters = new Dictionary<string, string>
+                    {
+                        [MagpieJobs.Parameters.QualityTierListId] =
+                            $"${{event.{MagpieEvents.Keys.QualityTierListId}}}",
+                        [MagpieJobs.Parameters.RescoreQuality] = "true"
+                    },
+                    Enabled = true,
+                    CreatedAt = now,
+                },
+                new()
+                {
+                    JobType = MagpieJobs.Types.ContentFulfillmentReconciliation,
+                    Scope = JobScope.Administrative,
+                    Name = "Content fulfillment reconciliation on quality tier change",
+                    EventFilter = SingleEventFilter(MagpieEvents.Names.QualityTierUpdated),
+                    Parameters = new Dictionary<string, string>
+                    {
+                        [MagpieJobs.Parameters.QualityTierId] = $"${{event.{MagpieEvents.Keys.QualityTierId}}}",
+                        [MagpieJobs.Parameters.RescoreQuality] = "true"
+                    },
                     Enabled = true,
                     CreatedAt = now,
                 },
@@ -389,6 +435,19 @@ public static class DefaultJobTriggerCatalog
                     Enabled = true,
                     CreatedAt = now,
                 },
+                new()
+                {
+                    JobType = MagpieJobs.Types.IndexerFeedSyncItem,
+                    Scope = JobScope.Administrative,
+                    Name = "Indexer feed sync on creation",
+                    EventFilter = SingleEventFilter(MagpieEvents.Names.IndexerFeedCreated),
+                    Parameters = new Dictionary<string, string>
+                    {
+                        [MagpieJobs.Parameters.FeedId] = $"${{event.{MagpieEvents.Keys.IndexerFeedId}}}"
+                    },
+                    Enabled = true,
+                    CreatedAt = now,
+                },
             ];
         }
     }
@@ -419,21 +478,60 @@ public static class DefaultJobTriggerCatalog
 
     private static EventFilter MonitoringChangedEventFilter()
     {
+        return ChangedFieldEventFilter(
+            MagpieEvents.Names.ContentHierarchyItemUpdated,
+            MagpieEvents.Keys.ContentChangedFields,
+            nameof(ContentHierarchyItem.EffectiveMonitoring));
+    }
+
+    private static EventFilter MediaFilesChangedEventFilter()
+    {
+        return ChangedFieldEventFilter(
+            MagpieEvents.Names.ContentHierarchyItemUpdated,
+            MagpieEvents.Keys.ContentChangedFields,
+            nameof(ContentItem.MediaFiles));
+    }
+
+    private static EventFilter ChangedFieldEventFilter(string eventName, string changedFieldsKey, string field)
+    {
         return new EventFilter
         {
             EventName = new PropertyCriterion<string>
             {
                 Operator = CriteriaValueOperator.Equals,
-                Value = MagpieEvents.Names.ContentHierarchyItemUpdated,
+                Value = eventName,
             },
             EventContext = new DictionaryCriteria<PropertyCriterion<string>>
             {
                 Items = new()
                 {
-                    [MagpieEvents.Keys.ContentChangedFields] = new()
+                    [changedFieldsKey] = new()
                     {
                         Operator = CriteriaValueOperator.ContainsString,
-                        Value = nameof(ContentHierarchyItem.EffectiveMonitoring),
+                        Value = field,
+                    },
+                },
+            },
+        };
+    }
+
+    private static EventFilter NeedsReleaseEventFilter()
+    {
+        return new EventFilter
+        {
+            EventName = new PropertyCriterion<string>
+            {
+                Operator = CriteriaValueOperator.Equals,
+                Value = MagpieEvents.Names.ContentFulfillmentChanged,
+            },
+            EventContext = new DictionaryCriteria<PropertyCriterion<string>>
+            {
+                Items = new()
+                {
+                    [MagpieEvents.Keys.ContentFulfillmentTo] = new()
+                    {
+                        Operator = CriteriaValueOperator.In,
+                        Values = [nameof(FulfillmentStatus.Missing), nameof(FulfillmentStatus.Upgradable)],
                     },
                 },
             },

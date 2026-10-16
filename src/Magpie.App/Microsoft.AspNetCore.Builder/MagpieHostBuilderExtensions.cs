@@ -23,7 +23,9 @@ using Magpie.Core.Jobs;
 using Magpie.Data;
 using Magpie.Models;
 using Magpie.Models.Data;
+using Magpie.Models.Enums;
 using Magpie.Sdk.Extensions;
+using Magpie.Sdk.Http;
 
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.Routing;
@@ -144,9 +146,15 @@ public static class MagpieHostBuilderExtensions
         await PrepareDatabaseAsync(builder, logger, cancellationToken).ConfigureAwait(false);
     }
 
-    private static ForwardedHeadersOptions BuildForwardedHeadersOptions(IReadOnlyList<string> knownProxies)
+    private static bool Serves(MagpieHostOptions options, NodeRole role) =>
+        options.Cluster.Roles.Count == 0 || options.Cluster.Roles.Contains(role);
+
+    internal static ForwardedHeadersOptions BuildForwardedHeadersOptions(IReadOnlyList<string> knownProxies)
     {
-        var options = new ForwardedHeadersOptions { ForwardedHeaders = ForwardedHeaders.XForwardedProto };
+        var options = new ForwardedHeadersOptions
+        {
+            ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto
+        };
         options.KnownIPNetworks.Clear();
         options.KnownProxies.Clear();
 
@@ -167,6 +175,11 @@ public static class MagpieHostBuilderExtensions
         }
 
         return options;
+    }
+
+    internal static bool IsNewInstance(bool hasSchema, long activationGeneration, bool hasExtensions)
+    {
+        return !hasSchema || (activationGeneration == 0 && !hasExtensions);
     }
 
     internal static WebApplication UseMagpieRequestPipeline(this WebApplication app)
@@ -199,13 +212,29 @@ public static class MagpieHostBuilderExtensions
         }
 
         app.UseMagpieDatabaseMigrationGate();
-        app.UseStaticFiles();
+        if (Serves(hostOptions, NodeRole.Ui))
+        {
+            app.UseStaticFiles();
+        }
+
         app.UseAuthentication();
         app.UseAuthorization();
         app.UseMagpieSetupRedirect();
-        app.MapMagpieEndpoints();
-        app.MapGet(WebManifest.RequestPath, WebManifest.GetAsync).AllowAnonymous();
-        app.MapFallbackToFile("index.html").AllowAnonymous();
+        if (Serves(hostOptions, NodeRole.Api))
+        {
+            app.MapMagpieEndpoints();
+        }
+        else
+        {
+            app.MapMagpieHealthEndpoints();
+        }
+
+        if (Serves(hostOptions, NodeRole.Ui))
+        {
+            app.MapGet(WebManifest.RequestPath, WebManifest.GetAsync).AllowAnonymous();
+            app.MapFallbackToFile("index.html").AllowAnonymous();
+        }
+
         return app;
     }
 
@@ -270,7 +299,16 @@ public static class MagpieHostBuilderExtensions
         var context = CreateBootstrapDbContext(builder.Configuration, builder.Environment.ContentRootPath);
         await using var contextHandle = context.ConfigureAwait(false);
 
-        var newInstance = !await HasSchemaAsync(context, cancellationToken).ConfigureAwait(false);
+        var hasSchema = await HasSchemaAsync(context, cancellationToken).ConfigureAwait(false);
+
+        var activationGeneration = hasSchema
+            ? await ReadActivationGenerationAsync(context, cancellationToken).ConfigureAwait(false)
+            : 0;
+
+        var newInstance = IsNewInstance(
+            hasSchema,
+            activationGeneration,
+            hasSchema && await context.Extensions.AnyAsync(cancellationToken).ConfigureAwait(false));
         var extensions = newInstance
             ? DiscoverExtensions(extensionsRoot, logger)
             : await ReadInstalledExtensionsAsync(context, cancellationToken).ConfigureAwait(false);
@@ -290,7 +328,11 @@ public static class MagpieHostBuilderExtensions
 
         builder.Services.AddDefaultProviders();
         builder.AddMagpieClusterBackplane();
-        builder.Services.AddSingleton(new LoadedExtensionSet(newInstance ? extensions : [], loaded, packageVersions));
+        builder.Services.AddSingleton(new LoadedExtensionSet(
+            newInstance ? extensions : [],
+            loaded,
+            packageVersions,
+            activationGeneration));
         builder.Services.AddSingleton<DatabaseStartupService>();
     }
 
@@ -370,10 +412,16 @@ public static class MagpieHostBuilderExtensions
             ?? new();
         var searchOptions = builder.Configuration.GetSection(SearchOptions.SectionName).Get<SearchOptions>()
             ?? new();
+        var httpOptions = builder.Configuration.GetSection(HttpOptions.SectionName).Get<HttpOptions>()
+            ?? new();
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(httpOptions.Timeout, TimeSpan.Zero);
 
         builder.Services.AddSingleton(hostOptions);
         builder.Services.AddSingleton(jobRuntimeOptions);
         builder.Services.AddSingleton(searchOptions);
+        builder.Services.AddSingleton(httpOptions);
+        builder.Services.ConfigureHttpClientDefaults(http =>
+            http.ConfigureHttpClient(client => client.Timeout = httpOptions.Timeout));
 
         builder.Services.ConfigureHttpJsonOptions(o => ConfigureApiJsonOptions(o.SerializerOptions));
         builder.Services.Configure<RouteHandlerOptions>(options => options.ThrowOnBadRequest = true);
@@ -382,7 +430,7 @@ public static class MagpieHostBuilderExtensions
         builder.Services.AddProblemDetails();
         builder.Services.AddExceptionHandler<MagpieExceptionHandler>();
 
-        builder.Services.AddMagpieCore(startHostedServices);
+        builder.Services.AddMagpieCore(startHostedServices, Serves(hostOptions, NodeRole.JobRunner));
 
         if (startHostedServices)
         {
@@ -408,7 +456,8 @@ public static class MagpieHostBuilderExtensions
                 builder.Services.AddMagpieDataPostgreSql(
                     connectionString,
                     DefaultJobTriggerCatalog.ScheduleTriggers,
-                    DefaultJobTriggerCatalog.EventTriggers);
+                    DefaultJobTriggerCatalog.EventTriggers,
+                    hostOptions.Data.PostgreSqlToolsDirectory);
                 break;
             case "sqlserver":
                 builder.Services.AddMagpieDataSqlServer(
@@ -526,6 +575,16 @@ public static class MagpieHostBuilderExtensions
                 LoadOrder = extension.LoadOrder
             })
             .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    private static async Task<long> ReadActivationGenerationAsync(
+        MagpieDbContext context,
+        CancellationToken cancellationToken)
+    {
+        return await context.ExtensionActivationStates.AsNoTracking()
+            .Select(state => state.Generation)
+            .FirstOrDefaultAsync(cancellationToken)
             .ConfigureAwait(false);
     }
 

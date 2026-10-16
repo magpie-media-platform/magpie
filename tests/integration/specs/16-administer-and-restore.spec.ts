@@ -98,7 +98,9 @@ test.describe.serial('Journey 16: administer and restore the application', () =>
             await page.getByLabel('Instance Name').fill('Journey administration');
             await page.getByLabel('Base URL').fill('https://admin.journey.invalid');
             await page.locator('[data-action="save-settings"]').click();
-            await expect(page.getByText(/ updated the general settings\.$/)).toBeVisible();
+            await expect(
+                page.locator('[data-component="toast"]').getByText(/ updated the general settings\.$/),
+            ).toBeVisible();
 
             expect(settingsRecord(await cli.json<SettingsGroup>(['settings', 'get-system', 'general']))).toMatchObject({
                 instanceName: 'Journey administration',

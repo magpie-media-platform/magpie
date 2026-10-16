@@ -76,6 +76,11 @@ public sealed record JobSpec
     public ConcurrencyScope ConcurrencyScope { get; init; } = ConcurrencyScope.PerType;
 
     /// <summary>
+    /// The limit on the executions of the job type that run at once.
+    /// </summary>
+    public ConcurrencyLimit? ConcurrencyLimit { get; set; }
+
+    /// <summary>
     /// The parameter names that form the lock partition.
     /// </summary>
     public IReadOnlyList<string> LockPartitionFields { get; init; } = [];

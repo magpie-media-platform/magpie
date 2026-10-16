@@ -858,6 +858,36 @@ internal sealed class ReleaseEvaluationService(
             : (await ScoreFileAsync(mediaFile, list, cancellationToken).ConfigureAwait(false)).Score;
     }
 
+    /// <inheritdoc />
+    public async Task<(QualityStatus? Quality, int? Rank)> ScoreMediaQualityAsync(
+        IEnumerable<MediaFile> primaryFiles,
+        Guid? qualityTierListId,
+        CancellationToken cancellationToken = default)
+    {
+        var list = qualityTierListId is { } id
+            ? await GetQualityTierListAsync(id, cancellationToken).ConfigureAwait(false)
+            : null;
+        if (list is null)
+        {
+            return (null, null);
+        }
+
+        var scores = new List<ReleaseAssessment>();
+        foreach (var file in primaryFiles)
+        {
+            var (score, _) = await ScoreFileAsync(file, list, cancellationToken).ConfigureAwait(false);
+            if (score.MatchedRankOrdinal is not null)
+            {
+                scores.Add(score);
+            }
+        }
+
+        var quality = scores.Count == 0 ? (QualityStatus?)null
+            : list.UpgradeAllowed && !scores.Any(score => score.IsAcceptable == true && score.IsCutoffMet == true)
+                ? QualityStatus.UpgradeWanted : QualityStatus.Met;
+        return (quality, scores.Select(score => score.MatchedRankOrdinal).Min());
+    }
+
     private async Task<(ReleaseAssessment Score, string Title)> ScoreFileAsync(
         MediaFile mediaFile,
         QualityTierList list,

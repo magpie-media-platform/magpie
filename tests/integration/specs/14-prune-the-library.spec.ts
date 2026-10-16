@@ -166,6 +166,7 @@ test.describe.serial('Journey 14: make room', () => {
 
         await test.step('unlink a file from its item and leave it on disk', async () => {
             await page.goto(`/library/${movie.id}?tab=files`);
+            await page.locator(`[data-action="file-menu"][data-file-id="${movieSubtitle.id}"]`).click();
             await page.locator(`[data-action="unlink-file"][data-file-id="${movieSubtitle.id}"]`).click();
             const dialog = page.locator('[data-component="delete-confirm-dialog"]');
             await expect(dialog).toContainText('The host file stays on disk.');
@@ -186,6 +187,7 @@ test.describe.serial('Journey 14: make room', () => {
 
         await test.step('delete another file from its item and prove it is gone from disk', async () => {
             await page.goto(`/library/${series.id}/${season.id}/${episode.id}?tab=files`);
+            await page.locator(`[data-action="file-menu"][data-file-id="${episodeFile.id}"]`).click();
             await page.locator(`[data-action="delete-file"][data-file-id="${episodeFile.id}"]`).click();
             const dialog = page.locator('[data-component="delete-confirm-dialog"]');
             await expect(dialog).toContainText('This removes the file from disk and the library.');

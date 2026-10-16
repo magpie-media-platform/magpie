@@ -1,3 +1,4 @@
+using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -54,6 +55,17 @@ public sealed class ContentMetadataSearcherTests
             });
         _subject = new ContentMetadataSearcher(
             [_definitionProvider.Object], _searchEngine.Object, NullLogger<ContentMetadataSearcher>.Instance);
+    }
+
+    [Test]
+    public void SearchAsync_Throws_WhenTheProviderFails()
+    {
+        // Arrange
+        _searchEngine.Setup(value => value.SearchAsync(It.IsAny<QueryRequest>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new HttpRequestException("Provider unavailable."));
+
+        // Act and Assert
+        Assert.ThrowsAsync<HttpRequestException>(() => _subject.SearchAsync(_ebook, "Book", ""));
     }
 
     [Test]

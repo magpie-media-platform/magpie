@@ -8,8 +8,10 @@ using Magpie.Models.Enums;
 using Magpie.Sdk.Auth;
 using Magpie.Sdk.Services;
 
+using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.IdentityModel.Tokens;
 
 #pragma warning disable IDE0130
@@ -59,8 +61,10 @@ public static class MagpieAuthServiceCollectionExtensions
     /// <param name="services">The service collection to register into</param>
     public static IServiceCollection AddMagpieAuthenticationScheme(this IServiceCollection services)
     {
-        services
-            .AddAuthentication(MagpieAuthSchemes.Magpie)
+        services.AddAuthenticationCore(options => options.DefaultScheme = MagpieAuthSchemes.Magpie);
+        services.AddWebEncoders();
+        services.TryAddSingleton(TimeProvider.System);
+        new AuthenticationBuilder(services)
             .AddScheme<MagpieSchemeOptions, MagpieAuthenticationHandler>(MagpieAuthSchemes.Magpie, _ => { });
 
         return services;

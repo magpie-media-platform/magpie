@@ -121,7 +121,12 @@ internal sealed class QueryCoordinator : IQueryCoordinator, IDisposable
             }
 
             var result = await AwaitAsync(shared, cancellationToken).ConfigureAwait(false);
-            if (result.Outcome != FetchOutcome.Success || result.Value is null || isSufficient(result.Value))
+            if (result.Outcome != FetchOutcome.Success)
+            {
+                return result with { Value = existing };
+            }
+
+            if (result.Value is null || isSufficient(result.Value))
             {
                 return result;
             }

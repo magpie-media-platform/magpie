@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 
 using Magpie.Abstractions;
 using Magpie.Abstractions.Repositories;
+using Magpie.Abstractions.Security;
 using Magpie.Core.Events;
 using Magpie.Data;
 using Magpie.Models;
@@ -26,8 +27,17 @@ internal sealed class IndexerRepository(
     ITransactionManager transactionManager,
     IEventBus eventBus,
     ILogger<IndexerRepository> logger,
+    IDataProtectionService protector,
     TimeProvider timeProvider) : IIndexerRepository
 {
+    private static readonly HashSet<string> ConnectionHealthFields =
+    [
+        nameof(IndexerConnection.Status),
+        nameof(IndexerConnection.LastChecked),
+        nameof(IndexerConnection.LastError),
+        nameof(IndexerConnection.ConsecutiveFailures),
+    ];
+
     private readonly TimeProvider _time = timeProvider;
 
     private static IReadOnlyCollection<string> ChangedFields(IndexerPatch patch)
@@ -35,32 +45,32 @@ internal sealed class IndexerRepository(
         var fields = new List<string>();
         if (patch.ProviderType is not null)
         {
-            fields.Add("providerType");
+            fields.Add(nameof(Indexer.ProviderType));
         }
 
         if (patch.Name is not null)
         {
-            fields.Add("name");
+            fields.Add(nameof(Indexer.Name));
         }
 
         if (patch.Description is not null)
         {
-            fields.Add("description");
+            fields.Add(nameof(Indexer.Description));
         }
 
         if (patch.Availability is not null)
         {
-            fields.Add("availability");
+            fields.Add(nameof(Indexer.Availability));
         }
 
         if (patch.Categories is not null)
         {
-            fields.Add("categories");
+            fields.Add(nameof(Indexer.Categories));
         }
 
         if (patch.Languages is not null)
         {
-            fields.Add("languages");
+            fields.Add(nameof(Indexer.Languages));
         }
 
         return fields;
@@ -71,57 +81,57 @@ internal sealed class IndexerRepository(
         var fields = new List<string>();
         if (current.FeedId != model.FeedId)
         {
-            fields.Add("feedId");
+            fields.Add(nameof(Indexer.FeedId));
         }
 
         if (current.ExtensionId != model.ExtensionId)
         {
-            fields.Add("extensionId");
+            fields.Add(nameof(Indexer.ExtensionId));
         }
 
         if (!string.Equals(current.ProviderType, model.ProviderType, StringComparison.Ordinal))
         {
-            fields.Add("providerType");
+            fields.Add(nameof(Indexer.ProviderType));
         }
 
         if (!string.Equals(current.Name, model.Name, StringComparison.Ordinal))
         {
-            fields.Add("name");
+            fields.Add(nameof(Indexer.Name));
         }
 
         if (!string.Equals(current.Description, model.Description, StringComparison.Ordinal))
         {
-            fields.Add("description");
+            fields.Add(nameof(Indexer.Description));
         }
 
         if (current.Availability != model.Availability)
         {
-            fields.Add("availability");
+            fields.Add(nameof(Indexer.Availability));
         }
 
         if (!current.Categories.SequenceEqual(model.Categories))
         {
-            fields.Add("categories");
+            fields.Add(nameof(Indexer.Categories));
         }
 
         if (!current.Languages.SequenceEqual(model.Languages))
         {
-            fields.Add("languages");
+            fields.Add(nameof(Indexer.Languages));
         }
 
         if (!current.SupportedContentTypes.SequenceEqual(model.SupportedContentTypes))
         {
-            fields.Add("supportedContentTypes");
+            fields.Add(nameof(Indexer.SupportedContentTypes));
         }
 
         if (!string.Equals(current.DefinitionType, model.DefinitionType, StringComparison.Ordinal))
         {
-            fields.Add("definitionType");
+            fields.Add(nameof(Indexer.DefinitionType));
         }
 
         if (!string.Equals(current.SchemaData, model.SchemaData, StringComparison.Ordinal))
         {
-            fields.Add("schemaData");
+            fields.Add(nameof(Indexer.SchemaData));
         }
 
         return fields;
@@ -372,6 +382,300 @@ internal sealed class IndexerRepository(
         }
     }
 
+    /// <inheritdoc />
+    public async Task<IndexerConnection> CreateConnectionAsync(
+        IndexerConnection connection,
+        Guid? createdByUserId,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var created = await transactionManager.ExecuteWithTransactionAsync(
+                async _ =>
+                {
+                    var now = _time.GetUtcNow().UtcDateTime;
+                    connection.CreatedAt = now;
+                    connection.CreatedByUserId = createdByUserId;
+
+                    var plaintext = connection.Settings;
+                    connection.Settings = protector.Protect(plaintext);
+
+                    context.IndexerConnections.Add(connection);
+                    await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+
+                    context.Entry(connection).State = EntityState.Detached;
+                    connection.Settings = plaintext;
+
+                    await auditRecordRepository.CreateAsync(
+                        new()
+                        {
+                            Category = AuditCategories.Integrations,
+                            Operation = "Create",
+                            EntityId = connection.Id.ToString(),
+                            EntityType = nameof(IndexerConnection),
+                            Detail = $"Created indexer connection {connection.Name}",
+                            Timestamp = now,
+                            UserId = createdByUserId
+                        },
+                        cancellationToken).ConfigureAwait(false);
+
+                    return connection;
+                },
+                cancellationToken).ConfigureAwait(false);
+
+            await PublishConnectionsUpdatedAsync(created.IndexerId, cancellationToken).ConfigureAwait(false);
+            return created;
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(
+                ex,
+                "The indexer repository failed to create indexer connection {IndexerConnectionName}.",
+                connection.Name);
+            throw;
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task<bool> PatchConnectionAsync(
+        IndexerConnectionPatch patch,
+        Guid? modifiedByUserId,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var indexerId = Guid.Empty;
+            var configurationChanged = false;
+            var patched = await transactionManager.ExecuteWithTransactionAsync(
+                async _ =>
+                {
+                    var model = await context.IndexerConnections
+                        .FirstOrDefaultAsync(c => c.Id == patch.Id, cancellationToken)
+                        .ConfigureAwait(false);
+
+                    if (model is null)
+                    {
+                        return false;
+                    }
+
+                    indexerId = model.IndexerId;
+                    var now = _time.GetUtcNow().UtcDateTime;
+                    if (patch.Name is not null)
+                    {
+                        model.Name = patch.Name.Value;
+                    }
+
+                    if (patch.Enabled is not null)
+                    {
+                        model.Enabled = patch.Enabled.Value;
+                    }
+
+                    if (patch.Status is not null)
+                    {
+                        model.Status = patch.Status.Value;
+                    }
+
+                    if (patch.LastChecked is not null)
+                    {
+                        model.LastChecked = patch.LastChecked.Value;
+                    }
+
+                    if (patch.LastError is not null)
+                    {
+                        var error = patch.LastError.Value;
+                        model.LastError = error is { Length: > 1024 } ? error[..1024] : error;
+                    }
+
+                    if (patch.ConsecutiveFailures is not null)
+                    {
+                        model.ConsecutiveFailures = patch.ConsecutiveFailures.Value;
+                    }
+
+                    if (patch.Settings is not null)
+                    {
+                        var settings = protector.Unprotect(model.Settings);
+                        if (patch.Settings.Add is not null)
+                        {
+                            foreach (var (key, value) in patch.Settings.Add)
+                            {
+                                settings[key] = value ?? string.Empty;
+                            }
+                        }
+
+                        if (patch.Settings.Update is not null)
+                        {
+                            foreach (var (key, value) in patch.Settings.Update)
+                            {
+                                if (settings.ContainsKey(key))
+                                {
+                                    settings[key] = value ?? string.Empty;
+                                }
+                            }
+                        }
+
+                        if (patch.Settings.Remove is not null)
+                        {
+                            foreach (var key in patch.Settings.Remove)
+                            {
+                                settings.Remove(key);
+                            }
+                        }
+
+                        model.Settings = protector.Protect(settings);
+                        context.Entry(model).Property(m => m.Settings).IsModified = true;
+                    }
+
+                    var tagsAdded = new List<string>();
+                    var tagsRemoved = new List<string>();
+
+                    if (patch.Tags is not null)
+                    {
+                        if (patch.Tags.Add is not null)
+                        {
+                            foreach (var tagName in patch.Tags.Add)
+                            {
+                                var tag = await context.Tags
+                                    .Include(t => t.IndexerConnections)
+                                    .FirstOrDefaultAsync(t => t.Name == tagName, cancellationToken)
+                                    .ConfigureAwait(false);
+
+                                if (tag is null)
+                                {
+                                    tag = new() { Name = tagName };
+                                    context.Tags.Add(tag);
+                                }
+
+                                if (!tag.IndexerConnections.Contains(model))
+                                {
+                                    tag.IndexerConnections.Add(model);
+                                    tagsAdded.Add(tagName);
+                                }
+                            }
+                        }
+
+                        if (patch.Tags.Remove is not null)
+                        {
+                            foreach (var tagName in patch.Tags.Remove)
+                            {
+                                var tag = await context.Tags
+                                    .Include(t => t.IndexerConnections)
+                                    .FirstOrDefaultAsync(t => t.Name == tagName, cancellationToken)
+                                    .ConfigureAwait(false);
+
+                                if (tag is not null && tag.IndexerConnections.Remove(model))
+                                {
+                                    tagsRemoved.Add(tagName);
+                                }
+                            }
+                        }
+                    }
+
+                    // Health has its own event, so only a configuration change updates the indexer.
+                    configurationChanged = tagsAdded.Count + tagsRemoved.Count > 0 ||
+                        context.Entry(model).Properties.Any(property =>
+                            property.IsModified && !ConnectionHealthFields.Contains(property.Metadata.Name));
+                    model.ModifiedAt = now;
+                    model.ModifiedByUserId = modifiedByUserId;
+
+                    var updated = await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+                    if (updated > 0)
+                    {
+                        await auditRecordRepository.CreateAsync(
+                            new()
+                            {
+                                Category = AuditCategories.Integrations,
+                                Operation = "Patch",
+                                EntityId = patch.Id.ToString(),
+                                EntityType = nameof(IndexerConnection),
+                                Detail = $"Updated indexer connection {model.Name}.",
+                                Timestamp = now,
+                                UserId = modifiedByUserId
+                            },
+                            cancellationToken).ConfigureAwait(false);
+
+                        foreach (var tagName in tagsAdded)
+                        {
+                            await auditRecordRepository.CreateAsync(
+                                new()
+                                {
+                                    Category = AuditCategories.Integrations,
+                                    Operation = "AddTag",
+                                    EntityId = patch.Id.ToString(),
+                                    EntityType = nameof(IndexerConnection),
+                                    Detail = $"Added tag {tagName} to indexer connection {model.Name}",
+                                    Timestamp = now,
+                                    UserId = modifiedByUserId
+                                },
+                                cancellationToken).ConfigureAwait(false);
+                        }
+
+                        foreach (var tagName in tagsRemoved)
+                        {
+                            await auditRecordRepository.CreateAsync(
+                                new()
+                                {
+                                    Category = AuditCategories.Integrations,
+                                    Operation = "RemoveTag",
+                                    EntityId = patch.Id.ToString(),
+                                    EntityType = nameof(IndexerConnection),
+                                    Detail = $"Removed tag {tagName} from indexer connection {model.Name}",
+                                    Timestamp = now,
+                                    UserId = modifiedByUserId
+                                },
+                                cancellationToken).ConfigureAwait(false);
+                        }
+                    }
+
+                    return updated > 0;
+                },
+                cancellationToken).ConfigureAwait(false);
+
+            if (patched && configurationChanged)
+            {
+                await PublishConnectionsUpdatedAsync(indexerId, cancellationToken).ConfigureAwait(false);
+            }
+
+            return patched;
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(
+                ex,
+                "The indexer repository failed to patch indexer connection {IndexerConnectionId}.",
+                patch.Id);
+            throw;
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task<bool> DeleteConnectionAsync(
+        Guid connectionId,
+        Guid? deletedByUserId,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var indexerId = await transactionManager.ExecuteWithTransactionAsync(
+                _ => DeleteConnectionCoreAsync(connectionId, deletedByUserId, cancellationToken),
+                cancellationToken).ConfigureAwait(false);
+            if (indexerId is null)
+            {
+                return false;
+            }
+
+            await PublishConnectionsUpdatedAsync(indexerId.Value, cancellationToken).ConfigureAwait(false);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(
+                ex,
+                "The indexer repository failed to delete indexer connection {IndexerConnectionId}.",
+                connectionId);
+            throw;
+        }
+    }
+
     public async Task<bool> DeleteAsync(Guid id, Guid? deletedByUserId, CancellationToken cancellationToken)
     {
         try
@@ -393,10 +697,16 @@ internal sealed class IndexerRepository(
                         return false;
                     }
 
-                    await context.IndexerConnections
+                    var connectionIds = await context.IndexerConnections.AsNoTracking()
                         .Where(c => c.IndexerId == id)
-                        .ExecuteDeleteAsync(cancellationToken)
+                        .Select(c => c.Id)
+                        .ToListAsync(cancellationToken)
                         .ConfigureAwait(false);
+                    foreach (var connectionId in connectionIds)
+                    {
+                        await DeleteConnectionCoreAsync(connectionId, deletedByUserId, cancellationToken)
+                            .ConfigureAwait(false);
+                    }
 
                     var deleted = await context.Indexers
                         .Where(i => i.Id == id)
@@ -494,4 +804,51 @@ internal sealed class IndexerRepository(
             throw;
         }
     }
+
+    private async Task<Guid?> DeleteConnectionCoreAsync(
+        Guid connectionId,
+        Guid? deletedByUserId,
+        CancellationToken cancellationToken)
+    {
+        var model = await (
+            from c in context.IndexerConnections.AsNoTracking()
+            where c.Id == connectionId
+            select new { c.Name, c.IndexerId })
+            .FirstOrDefaultAsync(cancellationToken)
+            .ConfigureAwait(false);
+        if (model is null)
+        {
+            return null;
+        }
+
+        var deleted = await context.IndexerConnections
+            .Where(c => c.Id == connectionId)
+            .ExecuteDeleteAsync(cancellationToken)
+            .ConfigureAwait(false);
+        if (deleted == 0)
+        {
+            return null;
+        }
+
+        await auditRecordRepository.CreateAsync(
+            new()
+            {
+                Category = AuditCategories.Integrations,
+                Operation = "Delete",
+                EntityId = connectionId.ToString(),
+                EntityType = nameof(IndexerConnection),
+                Detail = $"Deleted indexer connection {model.Name}",
+                Timestamp = _time.GetUtcNow().UtcDateTime,
+                UserId = deletedByUserId
+            },
+            cancellationToken).ConfigureAwait(false);
+        return model.IndexerId;
+    }
+
+    private Task PublishConnectionsUpdatedAsync(Guid indexerId, CancellationToken cancellationToken) =>
+        transactionManager.OnCommittedAsync(
+            token => eventBus.PublishAsync(
+                IndexerEventBuilder.BuildIndexerUpdatedEvent(indexerId, [nameof(Indexer.Connections)]),
+                token),
+            cancellationToken);
 }

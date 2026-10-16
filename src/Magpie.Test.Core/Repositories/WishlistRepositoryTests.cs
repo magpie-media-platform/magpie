@@ -501,7 +501,7 @@ public sealed class WishlistRepositoryTests
             It.Is<MagpieEvent>(e =>
                 e.Name == "wishlist.updated" &&
                 e.Context.ContainsKey("wishlist.changedFields") &&
-                e.Context["wishlist.changedFields"] == "name,enabled"),
+                e.Context["wishlist.changedFields"] == "Name,Enabled"),
             It.IsAny<CancellationToken>()), Times.Once);
     }
 

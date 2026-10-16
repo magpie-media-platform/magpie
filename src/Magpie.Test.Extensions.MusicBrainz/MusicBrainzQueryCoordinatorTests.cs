@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -764,6 +765,58 @@ public class MusicBrainzQueryCoordinatorTests
             Assert.That(warm.Value!.ArtistCount, Is.EqualTo(1));
             Assert.That(enriched.Value!.ArtistCount, Is.EqualTo(1));
             Assert.That(enrichedWarm.Value!.ArtistCount, Is.EqualTo(1));
+        }
+    }
+
+    [Test]
+    public async Task GetVerifiedScanAsync_PreservesAnsweredEmptyScan_WhenSharedNextRequestFails()
+    {
+        // Arrange
+        var cache = new QueryCoordinator(_scopeFactory);
+        var scan = new VerifiedScan();
+        scan.AppendAccepted([], 100, sourceExhausted: false, truncated: false);
+        await cache.GetVerifiedScanAsync(
+            "answered-empty",
+            _ => true,
+            (_, _) => Task.FromResult(new FetchResult<VerifiedScan>
+            {
+                Outcome = FetchOutcome.Success,
+                Value = scan
+            }),
+            default).ConfigureAwait(false);
+        var completion = new TaskCompletionSource<FetchResult<VerifiedScan>>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var calls = 0;
+
+        // Act
+        var first = cache.GetVerifiedScanAsync(
+            "answered-empty",
+            _ => false,
+            (_, _) =>
+            {
+                Interlocked.Increment(ref calls);
+                return completion.Task;
+            },
+            default);
+        var second = cache.GetVerifiedScanAsync(
+            "answered-empty",
+            _ => false,
+            (_, _) =>
+            {
+                Interlocked.Increment(ref calls);
+                return completion.Task;
+            },
+            default);
+        completion.SetResult(new FetchResult<VerifiedScan> { Outcome = FetchOutcome.Unavailable });
+        var results = await Task.WhenAll(first, second).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(calls, Is.EqualTo(1));
+            Assert.That(results.All(result => result.Outcome == FetchOutcome.Unavailable), Is.True);
+            Assert.That(results.All(result => ReferenceEquals(result.Value, scan)), Is.True);
+            Assert.That(scan.Read().HitCount, Is.Zero);
         }
     }
 

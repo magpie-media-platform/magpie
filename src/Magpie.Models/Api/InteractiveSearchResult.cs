@@ -1,4 +1,3 @@
-using System;
 using System.Collections.Generic;
 
 namespace Magpie.Models.Api;
@@ -22,9 +21,4 @@ public sealed record InteractiveSearchResult
     /// The reason that the search is incomplete.
     /// </summary>
     public string? Warning { get; set; }
-
-    /// <summary>
-    /// The earliest time to retry throttled provider branches.
-    /// </summary>
-    public DateTimeOffset? RetryAt { get; set; }
 }

@@ -178,6 +178,17 @@ test.describe.serial('Journey 05: wire up the plumbing', () => {
             );
             expect(created).toBeDefined();
             feedId = created!.id;
+            const createdSync = await until(
+                'the new indexer feed to finish the sync its creation queued',
+                async () => {
+                    const feed = (await api.get<IndexerFeed[]>('/api/indexer-feeds')).find(
+                        (candidate) => candidate.id === feedId,
+                    );
+                    return feed?.lastSync ?? undefined;
+                },
+                30_000,
+                250,
+            );
 
             await page.locator(`[data-action="edit"][data-target="${feedId}"]`).click();
             form = page.locator('[data-component="indexer-feed-form"]');
@@ -189,12 +200,12 @@ test.describe.serial('Journey 05: wire up the plumbing', () => {
             await page.locator(`[data-action="sync"][data-target="${feedId}"]`).click();
             await expect(page.getByText('Sync started', { exact: true })).toBeVisible();
             const synced = await until(
-                'the edited indexer feed to finish its first sync',
+                'the edited indexer feed to finish its manual sync',
                 async () => {
                     const feed = (await api.get<IndexerFeed[]>('/api/indexer-feeds')).find(
                         (candidate) => candidate.id === feedId,
                     );
-                    return feed?.lastSync ? feed : undefined;
+                    return feed?.lastSync && feed.lastSync !== createdSync ? feed : undefined;
                 },
                 30_000,
                 250,
@@ -291,7 +302,7 @@ test.describe.serial('Journey 05: wire up the plumbing', () => {
                     eventName: { operator: 'Regex', value: '^apiKey\\.(created|updated)$' },
                     eventContext: {
                         items: {
-                            'apiKey.changedFields': { operator: 'Regex', value: '(^|,)enabled(,|$)' },
+                            'apiKey.changedFields': { operator: 'Regex', value: '(^|,)Enabled(,|$)' },
                         },
                     },
                 },
@@ -310,7 +321,7 @@ test.describe.serial('Journey 05: wire up the plumbing', () => {
                 rule: { id: rule.id, name: 'Journey compound notification' },
                 event: {
                     name: 'apiKey.updated',
-                    context: { 'apiKey.id': key.key.id, 'apiKey.changedFields': 'enabled' },
+                    context: { 'apiKey.id': key.key.id, 'apiKey.changedFields': 'Enabled' },
                 },
             });
 

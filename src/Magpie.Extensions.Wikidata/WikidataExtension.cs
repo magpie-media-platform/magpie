@@ -28,12 +28,14 @@ public sealed class WikidataExtension : IExtension
     {
         services.AddHttpClient(WikidataClient.HttpClientName)
             .AddUpstreamCooldown(followRedirects: true)
+            .AddHttpMessageHandler<WikidataHttpHandler>()
             .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
             {
                 AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate,
                 AllowAutoRedirect = false
             });
 
+        services.AddTransient<WikidataHttpHandler>();
         services.AddSingleton<IWikidataClient, WikidataClient>();
         services.AddSingleton<IQueryCoordinator, QueryCoordinator>();
         services.AddSingleton<IQueryPlanner, QueryPlanner>();

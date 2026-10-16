@@ -55,7 +55,6 @@ internal sealed class ReleaseSearchService(
     IReleaseSearchQueryExecutor queryExecutor,
     IReleaseEvaluationService releaseEvaluationService,
     IEnumerable<IReleaseComparer> releaseComparers,
-    JobRuntimeOptions jobRuntimeOptions,
     SearchOptions searchOptions,
     TimeProvider timeProvider,
     ILogger<ReleaseSearchService> logger) : IReleaseSearchService
@@ -382,11 +381,6 @@ internal sealed class ReleaseSearchService(
     {
         var result = await SearchInteractiveResultAsync(contentHierarchyItemId, cancellationToken)
             .ConfigureAwait(false);
-        if (result is { Candidates.Count: 0, RetryAt: { } retryAt })
-        {
-            throw new UpstreamThrottledException(retryAt);
-        }
-
         return result?.Candidates;
     }
 
@@ -521,8 +515,7 @@ internal sealed class ReleaseSearchService(
             {
                 Candidates = enriched,
                 Partial = execution.Partial,
-                Warning = execution.Warning,
-                RetryAt = execution.RetryAt
+                Warning = execution.Warning
             };
         }
         catch (Exception ex)
@@ -544,7 +537,6 @@ internal sealed class ReleaseSearchService(
         exception switch
         {
             OperationCanceledException => "cancelled",
-            UpstreamThrottledException => "throttled",
             _ => "failed"
         };
 
@@ -560,7 +552,6 @@ internal sealed class ReleaseSearchService(
         var execution = currentExecutionId is { } executionId
             ? await jobExecutionRepository.GetByIdAsync(executionId, cancellationToken).ConfigureAwait(false)
             : null;
-        var resumed = execution?.StatusMessage == MagpieJobs.StatusMessages.UpstreamThrottled;
         progress?.Report(0, "The search will load the content item.");
 
         var skipReason = await ResolveRecentSearchSkipReasonAsync(
@@ -636,7 +627,6 @@ internal sealed class ReleaseSearchService(
                     correlationId,
                     progress,
                     escalationTurn: true,
-                    resumed,
                     force,
                     cancellationToken)
                     .ConfigureAwait(false);
@@ -672,7 +662,6 @@ internal sealed class ReleaseSearchService(
             correlationId,
             progress,
             escalationTurn: false,
-            resumed,
             force,
             cancellationToken)
             .ConfigureAwait(false);
@@ -863,7 +852,6 @@ internal sealed class ReleaseSearchService(
         Guid? correlationId,
         IProgressReporter? progress,
         bool escalationTurn,
-        bool resumed,
         bool force,
         CancellationToken cancellationToken)
     {
@@ -992,11 +980,6 @@ internal sealed class ReleaseSearchService(
             var result = engineExecution.ExecutedRoutes;
             if (engineExecution.ConnectionsAttempted == 0)
             {
-                if (engineExecution.RetryAt is { } retryAt)
-                {
-                    throw new UpstreamThrottledException(retryAt);
-                }
-
                 activity?.SetTag("terminal_reason", engineExecution.Warning ?? "no-execution");
                 logger.LogInformation(
                     "The release search for {ContentHierarchyItemId} issued no queries ({Reason})",
@@ -1020,7 +1003,6 @@ internal sealed class ReleaseSearchService(
                     retainedReleaseIds,
                     rejectedReleaseIds,
                     actionableHierarchyItemIds,
-                    resumed,
                     userId,
                     engineExecution.Results,
                     cancellationToken).ConfigureAwait(false);
@@ -1030,7 +1012,7 @@ internal sealed class ReleaseSearchService(
 
             var searchCompleted = engineExecution.ConnectionsSucceeded > 0;
             var searchPartial = engineExecution.Partial;
-            if (!searchCompleted && engineExecution.RetryAt is null)
+            if (!searchCompleted)
             {
                 var connectionsAttempted = result.Sum(phase => phase.ConnectionsAttempted);
                 if (connectionsAttempted > 0)
@@ -1068,15 +1050,12 @@ internal sealed class ReleaseSearchService(
                             .ConfigureAwait(false);
                     }
 
-                    if (engineExecution.RetryAt is null)
-                    {
-                        await MarkContentItemSearchedAsync(
-                            item,
-                            contentItemId,
-                            userId,
-                            correlationId,
-                            cancellationToken).ConfigureAwait(false);
-                    }
+                    await MarkContentItemSearchedAsync(
+                        item,
+                        contentItemId,
+                        userId,
+                        correlationId,
+                        cancellationToken).ConfigureAwait(false);
 
                     await transactionManager.OnCommittedAsync(
                         postCommitCancellationToken => FinalizeSearchAsync(
@@ -1089,11 +1068,6 @@ internal sealed class ReleaseSearchService(
                         cancellationToken).ConfigureAwait(false);
                 },
                 cancellationToken).ConfigureAwait(false);
-
-            if (engineExecution.RetryAt is { } deferredUntil)
-            {
-                throw new UpstreamThrottledException(deferredUntil);
-            }
 
             progress?.Report(1, "The release search completed.");
             outcome = "completed";
@@ -1124,8 +1098,6 @@ internal sealed class ReleaseSearchService(
     {
         var leafIdsOutsideLeadTime = await LoadLeafIdsOutsideLeadTimeAsync(node.Id, leadTimeDays, cancellationToken)
             .ConfigureAwait(false);
-        var leafSearchVolume = await CountActiveLeafSearchesAsync(cancellationToken).ConfigureAwait(false);
-        var underLeafBudget = leafSearchVolume <= searchOptions.BackpressureThreshold;
 
         var parentById = subtree.ToDictionary(item => item.Id, item => item.ParentId);
         var parentIds = subtree
@@ -1165,17 +1137,6 @@ internal sealed class ReleaseSearchService(
                 .ConfigureAwait(false);
         }
 
-        if (!underLeafBudget)
-        {
-            logger.LogWarning(
-                "The fan-out for content hierarchy item {ContentHierarchyItemId} deferred leaf searches " +
-                "because volume {LeafSearchVolume} exceeds threshold {Threshold}",
-                node.Id,
-                leafSearchVolume,
-                searchOptions.BackpressureThreshold);
-            return (residualChildIds, residualChildIds.Count);
-        }
-
         var queuedCount = residualChildIds.Count;
         var searchedBefore = timeProvider.GetUtcNow().UtcDateTime - searchOptions.MinimumSearchAge;
         var leafChildren = await LoadUnfulfilledLeafChildrenAsync(node.Id, force, cancellationToken)
@@ -1201,24 +1162,6 @@ internal sealed class ReleaseSearchService(
         }
 
         return (residualChildIds, queuedCount);
-    }
-
-    private async Task<int> CountActiveLeafSearchesAsync(CancellationToken cancellationToken)
-    {
-        var liveSince = timeProvider.GetUtcNow().UtcDateTime - jobRuntimeOptions.RunningStaleCutoff;
-        var executions = await jobExecutionRepository.QueryAllAsync(
-            new JobExecutionQuery
-            {
-                JobType = MagpieJobs.Types.ReleaseSearchItem,
-                Statuses = [JobExecutionStatus.Queued, JobExecutionStatus.Running],
-            },
-            sort: null,
-            cancellationToken).ConfigureAwait(false);
-
-        return executions.Count(execution =>
-            !(execution.Parameters.TryGetValue(MagpieJobs.Parameters.SearchKind, out var kind) &&
-                kind == MagpieJobs.ParameterValues.NodeSearchKind) &&
-            (execution.Status != JobExecutionStatus.Running || execution.LastHeartbeat >= liveSince));
     }
 
     private async Task<HashSet<Guid>> LoadLeafIdsOutsideLeadTimeAsync(
@@ -1793,7 +1736,6 @@ internal sealed class ReleaseSearchService(
         HashSet<Guid> retainedReleaseIds,
         HashSet<Guid> rejectedReleaseIds,
         HashSet<Guid> actionableHierarchyItemIds,
-        bool resumed,
         Guid? userId,
         IReadOnlyList<EvaluatedRelease>? evaluatedResults,
         CancellationToken cancellationToken)
@@ -1965,8 +1907,7 @@ internal sealed class ReleaseSearchService(
                         observedReleaseIds.Add(acceptedObservation.Release.Id);
                     }
 
-                    foreach (var scopedHierarchyItemId in upsert.ActionableNodeIds.Where(nodeId =>
-                        !resumed || upsert.CreatedScopeNodeIds.Contains(nodeId)))
+                    foreach (var scopedHierarchyItemId in upsert.ActionableNodeIds)
                     {
                         actionableHierarchyItemIds.Add(scopedHierarchyItemId);
                     }
@@ -2261,8 +2202,7 @@ internal sealed class ReleaseSearchService(
             }
         }
 
-        var createdScopeNodeIds = releaseScope.ScopeNodeIds.Except(existingScopeNodeIds).ToList();
-        foreach (var scopeNodeId in createdScopeNodeIds)
+        foreach (var scopeNodeId in releaseScope.ScopeNodeIds.Except(existingScopeNodeIds))
         {
             await releaseScopeRepository.CreateAsync(
                 new ReleaseScope
@@ -2280,7 +2220,6 @@ internal sealed class ReleaseSearchService(
             .ToHashSet();
         return new ReleaseUpsertResult(
             [.. releaseScope.ActionableNodeIds.Where(nodeId => !unmatchedNodeIds.Contains(nodeId))],
-            createdScopeNodeIds,
             !created);
     }
 
@@ -2293,10 +2232,12 @@ internal sealed class ReleaseSearchService(
 
         try
         {
+            release.Id = release.Id == Guid.Empty ? Guid.NewGuid() : release.Id;
+            var proposedId = release.Id;
             var persisted = await releaseRepository.CreateAsync(release, userId, cancellationToken)
                 .ConfigureAwait(false);
             release.Id = persisted.Id;
-            return true;
+            return persisted.Id == proposedId;
         }
         catch (DbUpdateException)
         {
@@ -2433,6 +2374,5 @@ internal sealed class ReleaseSearchService(
 
     private sealed record ReleaseUpsertResult(
         IReadOnlyList<Guid> ActionableNodeIds,
-        IReadOnlyList<Guid> CreatedScopeNodeIds,
         bool Rediscovered);
 }

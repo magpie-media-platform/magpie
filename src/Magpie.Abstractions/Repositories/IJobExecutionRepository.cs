@@ -67,19 +67,6 @@ public interface IJobExecutionRepository :
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Returns owned running work to the queue until its upstream cooldown ends.
-    /// </summary>
-    /// <param name="executionId">The id of the execution</param>
-    /// <param name="nodeId">The node that owns the execution</param>
-    /// <param name="notBeforeAt">The earliest UTC time to resume the work</param>
-    /// <param name="cancellationToken">The token that cancels the operation</param>
-    Task<bool> TryDeferRunningAsync(
-        Guid executionId,
-        string nodeId,
-        DateTime notBeforeAt,
-        CancellationToken cancellationToken = default);
-
-    /// <summary>
     /// Cancels a job execution.
     /// </summary>
     /// <param name="executionId">The id of the job execution</param>

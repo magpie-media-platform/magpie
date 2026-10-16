@@ -143,10 +143,8 @@ public interface IDownloadRepository :
     /// <param name="now">The UTC time to record</param>
     /// <param name="userId">The id of the user that starts the operation</param>
     /// <param name="cancellationToken">The token that cancels the operation</param>
-    /// <returns>
-    /// <see langword="true"/> when the row changed and <see cref="PublishRefreshedStatusAsync"/> must follow
-    /// </returns>
-    Task<bool> UpdateRefreshedClientStateAsync(
+    /// <returns>The changed field names, or <see langword="null"/> when the row is not updated</returns>
+    Task<IReadOnlyList<string>?> UpdateRefreshedClientStateAsync(
         Guid downloadId,
         DownloadStatus status,
         string? statusReason,
@@ -164,13 +162,41 @@ public interface IDownloadRepository :
     /// <summary>
     /// Publishes the refreshed status of the downloads.
     /// </summary>
-    /// <param name="downloadIds">The downloads that <see cref="UpdateRefreshedClientStateAsync"/> changed</param>
+    /// <param name="changedFields">The changed field names by download id</param>
     /// <param name="userId">The id of the user that starts the operation</param>
     /// <param name="cancellationToken">The token that cancels the operation</param>
-    /// <returns>A task that completes after every content item and event is processed</returns>
     Task PublishRefreshedStatusAsync(
-        IReadOnlyCollection<Guid> downloadIds,
+        IReadOnlyDictionary<Guid, IReadOnlyList<string>> changedFields,
         Guid? userId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Calculates the active acquisition status of the content items again and publishes each change.
+    /// </summary>
+    /// <param name="contentHierarchyItemIds">The ids of the content hierarchy items</param>
+    /// <param name="userId">The id of the user that starts the operation</param>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
+    Task RecomputeActiveAcquisitionStatusAsync(
+        IReadOnlyCollection<Guid> contentHierarchyItemIds,
+        Guid? userId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Removes the release references from the downloads.
+    /// </summary>
+    /// <param name="releaseIds">The ids of the releases to detach</param>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
+    Task DetachReleasesAsync(IReadOnlyCollection<Guid> releaseIds, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Moves the downloads of merged releases and release sources to the releases and sources that remain.
+    /// </summary>
+    /// <param name="releaseIds">The ids of the remaining releases by merged release id</param>
+    /// <param name="releaseSourceIds">The ids of the remaining release sources by merged release source id</param>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
+    Task ReassignReleasesAsync(
+        IReadOnlyDictionary<Guid, Guid> releaseIds,
+        IReadOnlyDictionary<Guid, Guid> releaseSourceIds,
         CancellationToken cancellationToken = default);
 
     /// <summary>

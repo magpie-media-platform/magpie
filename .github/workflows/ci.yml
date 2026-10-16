@@ -110,7 +110,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        rid: [win-x64, linux-x64]
+        rid: [win-x64, linux-x64, linux-arm64]
     env:
       VERSION: ${{ needs.build.outputs.version }}
       RID: ${{ matrix.rid }}
@@ -176,15 +176,26 @@ jobs:
 
   image:
     needs: [build, pack, app]
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+            rid: linux-x64
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            rid: linux-arm64
+    runs-on: ${{ matrix.runner }}
     env:
       VERSION: ${{ needs.build.outputs.version }}
+      ARCH: ${{ matrix.arch }}
+      RID: ${{ matrix.rid }}
     steps:
       - uses: actions/checkout@v6
 
       - uses: actions/download-artifact@v8
         with:
-          name: app-linux-x64
+          name: app-${{ matrix.rid }}
           path: artifacts/app
 
       - uses: actions/download-artifact@v8
@@ -207,13 +218,18 @@ jobs:
       - name: Build images
         run: |
           mkdir -p artifacts/image/app
-          tar -xzf "artifacts/app/magpie-$VERSION-linux-x64.tar.gz" -C artifacts/image/app
-          docker build --platform linux/amd64 --file Dockerfile --target standard --tag "magpie:$VERSION" \
+          tar -xzf "artifacts/app/magpie-$VERSION-$RID.tar.gz" -C artifacts/image/app
+          docker build --platform "linux/$ARCH" --file Dockerfile --target standard --tag "magpie:$VERSION" \
             --label "org.opencontainers.image.version=$VERSION" \
             --label "org.opencontainers.image.revision=$GITHUB_SHA" \
             --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" \
             artifacts/image
-          docker build --platform linux/amd64 --file Dockerfile --target bare --tag "magpie:$VERSION-bare" \
+          docker build --platform "linux/$ARCH" --file Dockerfile --target bare --tag "magpie:$VERSION-bare" \
+            --label "org.opencontainers.image.version=$VERSION" \
+            --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+            --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" \
+            artifacts/image
+          docker build --platform "linux/$ARCH" --file Dockerfile --target postgresql --tag "magpie:$VERSION-postgresql" \
             --label "org.opencontainers.image.version=$VERSION" \
             --label "org.opencontainers.image.revision=$GITHUB_SHA" \
             --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" \
@@ -221,12 +237,12 @@ jobs:
 
       - run: bash scripts/verify-images.sh "$VERSION" $EXTENSION_PROJECTS
 
-      - run: docker save "magpie:$VERSION" "magpie:$VERSION-bare" | gzip > "artifacts/magpie-$VERSION-image.tar.gz"
+      - run: docker save "magpie:$VERSION" "magpie:$VERSION-bare" "magpie:$VERSION-postgresql" | gzip > "artifacts/magpie-$VERSION-image-$ARCH.tar.gz"
 
       - uses: actions/upload-artifact@v7
         with:
-          name: image
-          path: artifacts/magpie-*-image.tar.gz
+          name: image-${{ matrix.arch }}
+          path: artifacts/magpie-*-image-*.tar.gz
 
   verify:
     needs: [build, pack, app]
@@ -286,12 +302,14 @@ jobs:
           path: artifacts
 
       - name: Authenticate to NuGet
-        uses: NuGet/login@v1
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: NuGet/login@8d196754b4036150537f80ac539e15c2f1028841 # v1.2.0
         id: nuget-login
         with:
           user: ${{ secrets.NUGET_USER }}
 
       - name: Publish NuGet packages
+        if: startsWith(github.ref, 'refs/tags/v')
         env:
           NUGET_API_KEY: ${{ steps.nuget-login.outputs.NUGET_API_KEY }}
         run: >
@@ -304,16 +322,22 @@ jobs:
           REGISTRY_USERNAME: ${{ github.actor }}
           REGISTRY_PASSWORD: ${{ github.token }}
         run: |
-          docker load --input "artifacts/image/magpie-$VERSION-image.tar.gz"
           echo "$REGISTRY_PASSWORD" | docker login "${MAGPIE_IMAGE%%/*}" --username "$REGISTRY_USERNAME" --password-stdin
-          for tag in "$VERSION" "$VERSION-bare"; do
-            docker tag "magpie:$tag" "$MAGPIE_IMAGE:$tag"
-            docker push "$MAGPIE_IMAGE:$tag"
+          suffixes=("" -bare -postgresql)
+          for arch in amd64 arm64; do
+            docker load --input "artifacts/image-$arch/magpie-$VERSION-image-$arch.tar.gz"
+            for suffix in "${suffixes[@]}"; do
+              docker tag "magpie:$VERSION$suffix" "$MAGPIE_IMAGE:$VERSION$suffix-$arch"
+              docker push "$MAGPIE_IMAGE:$VERSION$suffix-$arch"
+            done
           done
-          if [[ "$VERSION" != *-* ]]; then
-            docker tag "magpie:$VERSION" "$MAGPIE_IMAGE:latest"
-            docker push "$MAGPIE_IMAGE:latest"
-          fi
+          for suffix in "${suffixes[@]}"; do
+            docker buildx imagetools create --tag "$MAGPIE_IMAGE:$VERSION$suffix" \
+              "$MAGPIE_IMAGE:$VERSION$suffix-amd64" "$MAGPIE_IMAGE:$VERSION$suffix-arm64"
+            if [[ "$VERSION" != *-* ]]; then
+              docker buildx imagetools create --tag "$MAGPIE_IMAGE:latest$suffix" "$MAGPIE_IMAGE:$VERSION$suffix"
+            fi
+          done
 
       - name: Create the GitHub release
         env:

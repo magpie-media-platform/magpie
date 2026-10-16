@@ -13,12 +13,12 @@ public static class MagpieEvents
         /// <summary>
         /// The changed-field name for the enabled state of a user.
         /// </summary>
-        public const string UserEnabled = "enabled";
+        public const string UserEnabled = "Enabled";
 
         /// <summary>
         /// The changed-field name for the role of a user.
         /// </summary>
-        public const string UserRole = "role";
+        public const string UserRole = "Role";
     }
 
     /// <summary>
@@ -110,6 +110,11 @@ public static class MagpieEvents
         /// The event name for imported content.
         /// </summary>
         public const string ContentImported = "content.imported";
+
+        /// <summary>
+        /// The event name for a migrated database.
+        /// </summary>
+        public const string DatabaseMigrated = "database.migrated";
 
         /// <summary>
         /// The event name for a raised diagnostic finding.
@@ -395,6 +400,11 @@ public static class MagpieEvents
         /// The event name for an updated quality tier list.
         /// </summary>
         public const string QualityTierListUpdated = "qualityTierList.updated";
+
+        /// <summary>
+        /// The event name for an updated quality tier.
+        /// </summary>
+        public const string QualityTierUpdated = "qualityTier.updated";
 
         /// <summary>
         /// The event name for a rejected release grab.
@@ -1011,6 +1021,16 @@ public static class MagpieEvents
         /// The context key for the changed fields of a quality tier list.
         /// </summary>
         public const string QualityTierListChangedFields = "qualityTierList.changedFields";
+
+        /// <summary>
+        /// The context key for the id of the quality tier.
+        /// </summary>
+        public const string QualityTierId = "qualityTier.id";
+
+        /// <summary>
+        /// The context key for the changed fields of a quality tier.
+        /// </summary>
+        public const string QualityTierChangedFields = "qualityTier.changedFields";
 
         /// <summary>
         /// The context key for the id of the release.

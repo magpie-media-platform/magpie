@@ -35,6 +35,8 @@ internal sealed class QueryExecutor(
 
         public int Windows { get; set; }
 
+        public int CompletedWindows { get; set; }
+
         public void RecordRequest() => Interlocked.Increment(ref _requests);
     }
 
@@ -118,13 +120,13 @@ internal sealed class QueryExecutor(
             Warnings = warnings
         };
 
-    private QueryResult Failure(QueryPlan plan, string diagnostic) =>
-        Empty(
-            plan,
-            [
-                .. plan.Warnings,
-                diagnostic
-            ]);
+    private QueryResult Failure(QueryPlan plan, string diagnostic, IReadOnlyList<SearchHit> collected) => new()
+    {
+        Hits = [.. collected.Skip(plan.UsesLocalPaging ? (plan.Page - 1) * plan.MaximumResults : 0)
+            .Take(plan.MaximumResults)],
+        PageInfo = new() { RequestedPage = plan.Page, HasMore = collected.Count > 0 },
+        Warnings = [.. plan.Warnings, diagnostic]
+    };
 
     private string? Read(IReadOnlyDictionary<string, SparqlBindingDto> binding, string key) =>
         binding.TryGetValue(key, out var value) ? value?.Value : null;
@@ -428,9 +430,6 @@ internal sealed class QueryExecutor(
         return possible;
     }
 
-    private bool IsRateLimited(Exception exception) => exception is HttpRequestException &&
-        exception.Data.Contains("wikidata.rate-limited");
-
     private bool IsQidFallbackLabel(SearchHit hit) => string.Equals(
         hit.Label.Trim(),
         hit.Qid,
@@ -506,6 +505,7 @@ internal sealed class QueryExecutor(
             return empty;
         }
 
+        var collected = new List<SearchHit>();
         try
         {
             var resolvedPlan = plan;
@@ -552,7 +552,6 @@ internal sealed class QueryExecutor(
             var logicalBoundary = plan.UsesLocalPaging
                 ? checked(logicalOffset + plan.MaximumResults + 1)
                 : checked(plan.MaximumResults + 1);
-            var collected = new List<SearchHit>();
             var collectedQids = new HashSet<string>(StringComparer.Ordinal);
             var executionWarnings = new List<string>();
             var relationshipIndex = plan.RelationshipSeedFilterIndex();
@@ -661,48 +660,44 @@ internal sealed class QueryExecutor(
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
-            var timedOut = Failure(plan, "Wikidata search timed out; no Wikidata results were returned.");
+            var timedOut = Failure(plan, "Wikidata search timed out; some results may be missing.", collected);
             Complete(
                 activity,
                 plan,
                 totals,
                 startedTimestamp,
                 TerminalReason.Timeout,
-                survivingRows: 0,
+                survivingRows: collected.Count,
                 timedOut);
+            if (totals.CompletedWindows == 0)
+            {
+                throw;
+            }
+
             return timedOut;
-        }
-        catch (HttpRequestException exception) when (IsRateLimited(exception))
-        {
-            logger.LogWarning("Wikidata rate limited the search for entity kind {EntityKind}", plan.EntityKind);
-            Telemetry.Throttled.Add(
-                1,
-                new KeyValuePair<string, object?>("provider", Telemetry.Provider),
-                new KeyValuePair<string, object?>("kind", TerminalReason.RateLimited));
-            var throttled = Failure(plan, "Wikidata search was rate limited; no Wikidata results were returned.");
-            Complete(
-                activity,
-                plan,
-                totals,
-                startedTimestamp,
-                TerminalReason.RateLimited,
-                survivingRows: 0,
-                throttled);
-            return throttled;
         }
         catch (Exception exception) when (exception is HttpRequestException or JsonException
             or WikidataBudgetException)
         {
             logger.LogWarning(exception, "Wikidata search failed for entity kind {EntityKind}", plan.EntityKind);
-            var failed = Failure(plan, "Wikidata search failed; no Wikidata results were returned.");
+            var failed = Failure(plan,
+                collected.Count == 0
+                    ? "Wikidata search failed; no Wikidata results were returned."
+                    : "Wikidata search failed; some results may be missing.",
+                collected);
             Complete(
                 activity,
                 plan,
                 totals,
                 startedTimestamp,
                 TerminalReason.Error,
-                survivingRows: 0,
+                survivingRows: collected.Count,
                 failed);
+            if (totals.CompletedWindows == 0 && exception is not WikidataBudgetException)
+            {
+                throw;
+            }
+
             return failed;
         }
         catch (Exception)
@@ -827,6 +822,11 @@ internal sealed class QueryExecutor(
             exception is OperationCanceledException && !cancellationToken.IsCancellationRequested)
         {
             logger.LogWarning(exception, "Wikidata could not finish the continued search");
+            if (totals.CompletedWindows == 0 && exception is not WikidataBudgetException)
+            {
+                throw;
+            }
+
             warnings.Add("Wikidata could not finish the search. More results may remain.");
         }
 
@@ -958,6 +958,7 @@ internal sealed class QueryExecutor(
             if (context.Progress is not null)
             {
                 var rows = await client.ExecuteSparqlAsync(request, context, cancellationToken).ConfigureAwait(false);
+                totals.CompletedWindows++;
                 EndRequest(activity, totals, role, QueryCoordinatorRegion.Searches, cacheHit: false, rows.Count);
                 return rows;
             }
@@ -978,6 +979,7 @@ internal sealed class QueryExecutor(
             throw;
         }
 
+        totals.CompletedWindows++;
         EndRequest(
             activity,
             totals,
@@ -1062,8 +1064,7 @@ internal sealed class QueryExecutor(
         activity?.SetTag("magpie.query.pruned_stages", totals.PrunedStages);
         activity?.SetTag("magpie.query.has_more", result?.PageInfo.HasMore ?? false);
         activity?.SetTag("magpie.query.terminal_reason", terminalReason);
-        if (terminalReason is TerminalReason.RateLimited
-            or TerminalReason.Timeout
+        if (terminalReason is TerminalReason.Timeout
             or TerminalReason.Cancelled
             or TerminalReason.Error)
         {
@@ -1280,14 +1281,6 @@ internal sealed class QueryExecutor(
                 hits,
                 [
                     "Wikidata result details timed out; some Wikidata result details are missing."
-                ]);
-        }
-        catch (HttpRequestException exception) when (IsRateLimited(exception))
-        {
-            return (
-                hits,
-                [
-                    "Wikidata result details were rate limited; some Wikidata result details are missing."
                 ]);
         }
         catch (Exception exception) when (exception is HttpRequestException or JsonException

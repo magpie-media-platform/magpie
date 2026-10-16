@@ -127,4 +127,86 @@ public sealed class DefaultJobRetryPolicyTests
             Assert.That(retry?.LockPartition, Is.EqualTo("TestJob"));
         }
     }
+
+    [TestCase(null, null)]
+    [TestCase(2, 2)]
+    [TestCase(5, 5)]
+    public async Task BuildInterruptedRequeueAsync_KeepsTheAttempt_WhenTheInterruptionDoesNotCount(
+        int? attempt,
+        int? expected)
+    {
+        // Arrange
+        var interrupted = new JobExecution
+        {
+            Id = new Guid("2f0b0c5e-8a52-4b0e-9f3e-0d4f5a8f7c11"),
+            JobType = "TestJob",
+            ExecutionMode = JobExecutionMode.Immediate,
+            Status = JobExecutionStatus.Running,
+            Attempt = attempt
+        };
+
+        // Act
+        var requeue = await _subject
+            .BuildInterruptedRequeueAsync(interrupted, countsAsAttempt: false)
+            .ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(requeue?.Attempt, Is.EqualTo(expected));
+            Assert.That(requeue?.NotBeforeAt, Is.Null);
+            Assert.That(requeue?.ExecutionMode, Is.EqualTo(JobExecutionMode.Queue));
+            Assert.That(requeue?.Status, Is.EqualTo(JobExecutionStatus.Queued));
+            Assert.That(requeue?.OriginalExecutionId, Is.EqualTo(new Guid("2f0b0c5e-8a52-4b0e-9f3e-0d4f5a8f7c11")));
+        }
+    }
+
+    [TestCase(null, 2)]
+    [TestCase(4, 5)]
+    public async Task BuildInterruptedRequeueAsync_CountsTheAttemptWithoutBackoff_WhenTheInterruptionCounts(
+        int? attempt,
+        int expected)
+    {
+        // Arrange
+        var interrupted = new JobExecution
+        {
+            Id = new Guid("2f0b0c5e-8a52-4b0e-9f3e-0d4f5a8f7c11"),
+            JobType = "TestJob",
+            Status = JobExecutionStatus.Running,
+            Attempt = attempt
+        };
+
+        // Act
+        var requeue = await _subject
+            .BuildInterruptedRequeueAsync(interrupted, countsAsAttempt: true)
+            .ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(requeue?.Attempt, Is.EqualTo(expected));
+            Assert.That(requeue?.NotBeforeAt, Is.Null);
+        }
+    }
+
+    [Test]
+    public async Task BuildInterruptedRequeueAsync_ReturnsNull_WhenTheCountedAttemptPassesTheLimit()
+    {
+        // Arrange
+        var interrupted = new JobExecution
+        {
+            Id = new Guid("2f0b0c5e-8a52-4b0e-9f3e-0d4f5a8f7c11"),
+            JobType = "TestJob",
+            Status = JobExecutionStatus.Running,
+            Attempt = 5
+        };
+
+        // Act
+        var requeue = await _subject
+            .BuildInterruptedRequeueAsync(interrupted, countsAsAttempt: true)
+            .ConfigureAwait(false);
+
+        // Assert
+        Assert.That(requeue, Is.Null);
+    }
 }

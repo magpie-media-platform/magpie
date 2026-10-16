@@ -9,30 +9,38 @@ namespace Magpie.Sdk.Http;
 
 internal sealed class UpstreamCooldownHandler(
     IUpstreamCooldown cooldown,
+    TimeProvider timeProvider,
     Func<HttpRequestMessage, string?>? authenticationScope,
-    bool followRedirects) : DelegatingHandler
+    bool followRedirects,
+    TimeSpan globalTimeout,
+    TimeSpan? requestTimeout) : DelegatingHandler
 {
     /// <inheritdoc />
     protected override async Task<HttpResponseMessage> SendAsync(
         HttpRequestMessage request,
         CancellationToken cancellationToken)
     {
+        var duration = request.GetTransportTimeout() ?? requestTimeout ?? globalTimeout;
+        var timeout = timeProvider.CreateCancellationTokenSource(duration < globalTimeout ? duration : globalTimeout);
+        var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeout.Token);
         var current = request;
         var redirects = new List<HttpRequestMessage>();
+        HttpResponseMessage? response = null;
         try
         {
             for (var count = 0; ; count++)
             {
-                var response = await cooldown.SendAsync(
+                response = await cooldown.SendAsync(
                     current,
                     authenticationScope?.Invoke(current),
-                    token => base.SendAsync(current, token),
-                    cancellationToken).ConfigureAwait(false);
+                    token => SendAttemptAsync(current, token),
+                    linked.Token).ConfigureAwait(false);
                 var location = response.Headers.Location;
                 if (!followRedirects || count >= 50 || location is null ||
                     response.StatusCode is not (HttpStatusCode.MovedPermanently or HttpStatusCode.Redirect or
                         HttpStatusCode.SeeOther or HttpStatusCode.TemporaryRedirect or (HttpStatusCode)308))
                 {
+                    response.Content = new UpstreamResponseContent(response.Content, timeout, linked, timeProvider);
                     return response;
                 }
 
@@ -40,6 +48,7 @@ internal sealed class UpstreamCooldownHandler(
                 if (target.Scheme is not ("http" or "https") ||
                     current.RequestUri!.Scheme == "https" && target.Scheme == "http")
                 {
+                    response.Content = new UpstreamResponseContent(response.Content, timeout, linked, timeProvider);
                     return response;
                 }
 
@@ -64,6 +73,21 @@ internal sealed class UpstreamCooldownHandler(
                 current = redirect;
             }
         }
+        catch (OperationCanceledException) when (timeout.IsCancellationRequested &&
+            !cancellationToken.IsCancellationRequested)
+        {
+            response?.Dispose();
+            linked.Dispose();
+            timeout.Dispose();
+            throw new TaskCanceledException("The HTTP request timed out.", new TimeoutException());
+        }
+        catch
+        {
+            response?.Dispose();
+            linked.Dispose();
+            timeout.Dispose();
+            throw;
+        }
         finally
         {
             foreach (var redirect in redirects)
@@ -71,5 +95,42 @@ internal sealed class UpstreamCooldownHandler(
                 redirect.Dispose();
             }
         }
+    }
+
+    private async Task<HttpResponseMessage> SendAttemptAsync(
+        HttpRequestMessage request,
+        CancellationToken cancellationToken)
+    {
+        using var attempt = new HttpRequestMessage(request.Method, request.RequestUri)
+        {
+            Version = request.Version
+        };
+        foreach (var header in request.Headers)
+        {
+            attempt.Headers.TryAddWithoutValidation(header.Key, header.Value);
+        }
+
+        request.CopyOptionsTo(attempt);
+#if !NETSTANDARD2_1
+        attempt.VersionPolicy = request.VersionPolicy;
+#endif
+        if (request.Content is not null)
+        {
+#if NETSTANDARD2_1
+            var bytes = await request.Content.ReadAsByteArrayAsync()
+                .WaitAsync(Timeout.InfiniteTimeSpan, timeProvider, cancellationToken).ConfigureAwait(false);
+#else
+            var bytes = await request.Content.ReadAsByteArrayAsync(cancellationToken).ConfigureAwait(false);
+#endif
+            attempt.Content = new ByteArrayContent(bytes);
+            foreach (var header in request.Content.Headers)
+            {
+                attempt.Content.Headers.TryAddWithoutValidation(header.Key, header.Value);
+            }
+        }
+
+        var response = await base.SendAsync(attempt, cancellationToken).ConfigureAwait(false);
+        response.RequestMessage = request;
+        return response;
     }
 }

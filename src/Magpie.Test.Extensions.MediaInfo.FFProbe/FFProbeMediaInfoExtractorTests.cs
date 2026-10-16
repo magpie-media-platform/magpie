@@ -20,4 +20,23 @@ public sealed class FFProbeMediaInfoExtractorTests
         // Assert
         Assert.That(result, Is.EqualTo(expected));
     }
+
+    [TestCase("yuv420p10le", 10)]
+    [TestCase("p010le", 10)]
+    [TestCase("yuv444p12be", 12)]
+    [TestCase("yuv420p", 8)]
+    [TestCase("yuvj420p", 8)]
+    [TestCase("pal8", null)]
+    [TestCase("rgb24", null)]
+    [TestCase(null, null)]
+    public void BitDepthFromPixelFormat_ReturnsTheBitsPerSample_WhenThePixelFormatNamesThem(
+        string? pixelFormat,
+        int? expected)
+    {
+        // Act
+        var result = FFProbeMediaInfoExtractor.BitDepthFromPixelFormat(pixelFormat);
+
+        // Assert
+        Assert.That(result, Is.EqualTo(expected));
+    }
 }

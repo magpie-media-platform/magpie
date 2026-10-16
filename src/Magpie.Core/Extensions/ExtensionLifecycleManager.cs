@@ -22,11 +22,17 @@ internal sealed class ExtensionLifecycleManager(
     ExtensionLoadContext loadContext,
     IServiceScopeFactory scopeFactory,
     IExtensionRepository repository,
+    IExtensionNodeStatusRepository nodeStatusRepository,
     IFileSystem fileSystem,
     MagpieHostEnvironment hostEnvironment,
+    TimeProvider timeProvider,
     ILoggerFactory loggerFactory,
     ILogger<ExtensionLifecycleManager> logger) : IExtensionLifecycleManager
 {
+    private const string ClaimPrefix = "claim:";
+
+    private static readonly TimeSpan ClaimTimeout = TimeSpan.FromMinutes(2);
+
     private static string ResolveAssemblyPath(Assembly assembly)
     {
         return AssemblyLoadContext.GetLoadContext(assembly) is ExtensionLoader.ExtensionAssemblyLoadContext context
@@ -119,27 +125,8 @@ internal sealed class ExtensionLifecycleManager(
             }
             else
             {
-                var currentVersion = extension.Version.ToString();
-                if (string.IsNullOrWhiteSpace(row.LifecycleVersion))
-                {
-                    await DispatchVersionHookAsync(
-                        () => lifecycle.OnExtensionInstallAsync(context, cancellationToken),
-                        nameof(IExtensionLifecycle.OnExtensionInstallAsync),
-                        extension,
-                        row,
-                        cancellationToken).ConfigureAwait(false);
-                }
-                else if (!string.Equals(row.LifecycleVersion, currentVersion, StringComparison.Ordinal))
-                {
-                    await DispatchVersionHookAsync(
-                        Version.TryParse(row.LifecycleVersion, out var previousVersion)
-                            ? () => lifecycle.OnExtensionUpgradeAsync(context, previousVersion, cancellationToken)
-                            : () => Task.CompletedTask,
-                        nameof(IExtensionLifecycle.OnExtensionUpgradeAsync),
-                        extension,
-                        row,
-                        cancellationToken).ConfigureAwait(false);
-                }
+                await DispatchVersionHookAsync(lifecycle, context, extension, row, cancellationToken)
+                    .ConfigureAwait(false);
             }
 
             await TryInvokeAsync(
@@ -204,31 +191,71 @@ internal sealed class ExtensionLifecycleManager(
     }
 
     private async Task DispatchVersionHookAsync(
-        Func<Task> hook,
-        string hookName,
+        IExtensionLifecycle lifecycle,
+        ExtensionLifecycleContext context,
         IExtension loaded,
         Extension row,
         CancellationToken cancellationToken)
     {
-        if (!await TryInvokeAsync(hook, loaded.Name, hookName).ConfigureAwait(false))
+        var currentVersion = loaded.Version.ToString();
+        var stored = row.LifecycleVersion;
+        var previousVersion = stored;
+        string? claimNodeId = null;
+        if (stored?.StartsWith(ClaimPrefix, StringComparison.Ordinal) == true)
+        {
+            var separator = stored.IndexOf(':', ClaimPrefix.Length);
+            previousVersion = separator == ClaimPrefix.Length ? null : stored[ClaimPrefix.Length..separator];
+            claimNodeId = stored[(separator + 1)..];
+        }
+
+        if (claimNodeId is not null &&
+            !string.Equals(claimNodeId, hostEnvironment.NodeId, StringComparison.Ordinal) &&
+            !await IsNodeGoneAsync(claimNodeId, cancellationToken).ConfigureAwait(false))
         {
             return;
         }
 
-        var currentVersion = loaded.Version.ToString();
-        row.LifecycleVersion = currentVersion;
-        try
+        if (string.Equals(previousVersion, currentVersion, StringComparison.Ordinal))
         {
-            await repository.UpdateAsync(row, modifiedByUserId: null, cancellationToken).ConfigureAwait(false);
+            if (claimNodeId is not null)
+            {
+                await repository.TrySetLifecycleVersionAsync(row.Id, stored, currentVersion, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+
+            return;
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+
+        var claim = $"{ClaimPrefix}{previousVersion}:{hostEnvironment.NodeId}";
+        if (!await repository.TrySetLifecycleVersionAsync(row.Id, stored, claim, cancellationToken)
+            .ConfigureAwait(false))
         {
-            logger.LogWarning(
-                ex,
-                "The lifecycle manager failed to record version {LifecycleVersion} for extension {ExtensionName}",
-                currentVersion,
-                row.Name);
+            return;
         }
+
+        var succeeded = string.IsNullOrWhiteSpace(previousVersion)
+            ? await TryInvokeAsync(
+                () => lifecycle.OnExtensionInstallAsync(context, cancellationToken),
+                loaded.Name,
+                nameof(IExtensionLifecycle.OnExtensionInstallAsync)).ConfigureAwait(false)
+            : await TryInvokeAsync(
+                Version.TryParse(previousVersion, out var previous)
+                    ? () => lifecycle.OnExtensionUpgradeAsync(context, previous, cancellationToken)
+                    : () => Task.CompletedTask,
+                loaded.Name,
+                nameof(IExtensionLifecycle.OnExtensionUpgradeAsync)).ConfigureAwait(false);
+
+        await repository.TrySetLifecycleVersionAsync(
+            row.Id,
+            claim,
+            succeeded ? currentVersion : previousVersion,
+            CancellationToken.None).ConfigureAwait(false);
+    }
+
+    private async Task<bool> IsNodeGoneAsync(string nodeId, CancellationToken cancellationToken)
+    {
+        var status = await nodeStatusRepository.GetByNodeIdAsync(nodeId, cancellationToken).ConfigureAwait(false);
+        return status is null || status.LastSeenAt < timeProvider.GetUtcNow().UtcDateTime - ClaimTimeout;
     }
 
     private async Task<bool> TryInvokeAsync(Func<Task> hook, string extensionName, string hookName)

@@ -27,7 +27,7 @@ internal sealed class MediaInfoExtractItemJob(
     {
         JobType = MagpieJobs.Types.MediaInfoExtractItem,
         DisplayName = "Media info extract item",
-        Description = "Reads media information from one file and saves it.",
+        Description = "Reads the media information of a file and saves it.",
         Category = "Metadata",
         Scope = JobScope.Administrative,
         Enabled = true,

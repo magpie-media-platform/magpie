@@ -11,7 +11,6 @@ using Magpie.Data;
 using Magpie.Models;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
-using Magpie.Models.Enums;
 using Magpie.Sdk.Services;
 
 using Microsoft.EntityFrameworkCore;
@@ -24,93 +23,59 @@ internal sealed class RootFolderRepository(
     IAuditRecordRepository auditRecordRepository,
     ITransactionManager transactionManager,
     IContentHierarchyItemRepository contentHierarchyItemRepository,
+    ILibraryImportCandidateRepository libraryImportCandidateRepository,
     IEventBus eventBus,
     ILogger<RootFolderRepository> logger,
     TimeProvider timeProvider) : IRootFolderRepository
 {
     private readonly TimeProvider _time = timeProvider;
 
-    private static bool IsUnderAnyRoot(string filePath, IReadOnlyCollection<string> rootPaths)
-    {
-        if (string.IsNullOrWhiteSpace(filePath))
-        {
-            return false;
-        }
-
-        var normalizedFile = NormalizePath(filePath);
-        foreach (var rootPath in rootPaths)
-        {
-            if (string.IsNullOrWhiteSpace(rootPath))
-            {
-                continue;
-            }
-
-            var normalizedRoot = NormalizePath(rootPath);
-            if (normalizedFile.Equals(normalizedRoot, StringComparison.OrdinalIgnoreCase))
-            {
-                return true;
-            }
-
-            if (normalizedFile.StartsWith(normalizedRoot + '/', StringComparison.OrdinalIgnoreCase))
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    private static string NormalizePath(string path)
-    {
-        return path.Replace('\\', '/').TrimEnd('/');
-    }
-
     private static List<string> ChangedFields(RootFolderPatch patch)
     {
         var fields = new List<string>();
         if (patch.Name is not null)
         {
-            fields.Add("name");
+            fields.Add(nameof(RootFolder.Name));
         }
 
         if (patch.Path is not null)
         {
-            fields.Add("path");
+            fields.Add(nameof(RootFolder.Path));
         }
 
         if (patch.ContentType is not null)
         {
-            fields.Add("contentType");
+            fields.Add(nameof(RootFolder.ContentType));
         }
 
         if (patch.IsDefault is not null)
         {
-            fields.Add("isDefault");
+            fields.Add(nameof(RootFolder.IsDefault));
         }
 
         if (patch.DefaultMonitoring is not null)
         {
-            fields.Add("defaultMonitoring");
+            fields.Add(nameof(RootFolder.DefaultMonitoring));
         }
 
         if (patch.RenameTemplate is not null)
         {
-            fields.Add("renameTemplate");
+            fields.Add(nameof(RootFolder.RenameTemplate));
         }
 
         if (patch.UpgradeFileHandling is not null)
         {
-            fields.Add("upgradeFileHandling");
+            fields.Add(nameof(RootFolder.UpgradeFileHandling));
         }
 
         if (patch.AutoImport is not null)
         {
-            fields.Add("autoImport");
+            fields.Add(nameof(RootFolder.AutoImport));
         }
 
         if (patch.Defaults is not null)
         {
-            fields.Add("defaults");
+            fields.Add(nameof(RootFolder.Defaults));
         }
 
         return fields;
@@ -121,52 +86,52 @@ internal sealed class RootFolderRepository(
         var fields = new List<string>();
         if (!string.Equals(current.Name, model.Name, StringComparison.Ordinal))
         {
-            fields.Add("name");
+            fields.Add(nameof(RootFolder.Name));
         }
 
         if (!string.Equals(current.Path, model.Path, StringComparison.Ordinal))
         {
-            fields.Add("path");
+            fields.Add(nameof(RootFolder.Path));
         }
 
         if (!string.Equals(current.ContentType, model.ContentType, StringComparison.Ordinal))
         {
-            fields.Add("contentType");
+            fields.Add(nameof(RootFolder.ContentType));
         }
 
         if (current.ImportMode != model.ImportMode)
         {
-            fields.Add("importMode");
+            fields.Add(nameof(RootFolder.ImportMode));
         }
 
         if (current.IsDefault != model.IsDefault)
         {
-            fields.Add("isDefault");
+            fields.Add(nameof(RootFolder.IsDefault));
         }
 
         if (current.DefaultMonitoring != model.DefaultMonitoring)
         {
-            fields.Add("defaultMonitoring");
+            fields.Add(nameof(RootFolder.DefaultMonitoring));
         }
 
         if (!string.Equals(current.RenameTemplate, model.RenameTemplate, StringComparison.Ordinal))
         {
-            fields.Add("renameTemplate");
+            fields.Add(nameof(RootFolder.RenameTemplate));
         }
 
         if (current.DefaultImportCollisionMode != model.DefaultImportCollisionMode)
         {
-            fields.Add("defaultImportCollisionMode");
+            fields.Add(nameof(RootFolder.DefaultImportCollisionMode));
         }
 
         if (current.UpgradeFileHandling != model.UpgradeFileHandling)
         {
-            fields.Add("upgradeFileHandling");
+            fields.Add(nameof(RootFolder.UpgradeFileHandling));
         }
 
         if (current.AutoImport != model.AutoImport)
         {
-            fields.Add("autoImport");
+            fields.Add(nameof(RootFolder.AutoImport));
         }
 
         var currentDefaults = current.Defaults
@@ -178,7 +143,7 @@ internal sealed class RootFolderRepository(
 
         if (!currentDefaults.SequenceEqual(nextDefaults))
         {
-            fields.Add("defaults");
+            fields.Add(nameof(RootFolder.Defaults));
         }
 
         return fields;
@@ -347,7 +312,7 @@ internal sealed class RootFolderRepository(
             {
                 await transactionManager.OnCommittedAsync(
                     token => eventBus.PublishAsync(
-                        RootFolderEventBuilder.BuildRootFolderUpdatedEvent(id, ["isDefault"]),
+                        RootFolderEventBuilder.BuildRootFolderUpdatedEvent(id, [nameof(RootFolder.IsDefault)]),
                         token),
                     cancellationToken).ConfigureAwait(false);
             }
@@ -374,7 +339,6 @@ internal sealed class RootFolderRepository(
             var changedFields = new List<string>();
             var unmarkedDefaultIds = new List<Guid>();
             var promotedDefaultIds = new List<Guid>();
-            var invalidatedCandidateIds = new List<Guid>();
             var applied = await transactionManager.ExecuteWithTransactionAsync(
                 async _ =>
                 {
@@ -456,10 +420,9 @@ internal sealed class RootFolderRepository(
                             }
                         }
 
-                        invalidatedCandidateIds.AddRange(await InvalidateOrphanedImportCandidatesAsync(
-                            now,
+                        await libraryImportCandidateRepository.InvalidateOutsideRootFoldersAsync(
                             modifiedByUserId,
-                            cancellationToken).ConfigureAwait(false));
+                            cancellationToken).ConfigureAwait(false);
                     }
 
                     return updated > 0;
@@ -481,19 +444,7 @@ internal sealed class RootFolderRepository(
                 {
                     await transactionManager.OnCommittedAsync(
                         token => eventBus.PublishAsync(
-                            RootFolderEventBuilder.BuildRootFolderUpdatedEvent(id, ["isDefault"]),
-                            token),
-                        cancellationToken).ConfigureAwait(false);
-                }
-            }
-
-            if (applied)
-            {
-                foreach (var id in invalidatedCandidateIds)
-                {
-                    await transactionManager.OnCommittedAsync(
-                        token => eventBus.PublishAsync(
-                            ContentEventBuilder.BuildLibraryImportCandidateUpdatedEvent(id),
+                            RootFolderEventBuilder.BuildRootFolderUpdatedEvent(id, [nameof(RootFolder.IsDefault)]),
                             token),
                         cancellationToken).ConfigureAwait(false);
                 }
@@ -523,7 +474,6 @@ internal sealed class RootFolderRepository(
         {
             var unmarkedDefaultIds = new List<Guid>();
             var promotedDefaultIds = new List<Guid>();
-            var invalidatedCandidateIds = new List<Guid>();
             var patched = await transactionManager.ExecuteWithTransactionAsync(
                 async _ =>
                 {
@@ -635,10 +585,9 @@ internal sealed class RootFolderRepository(
                             }
                         }
 
-                        invalidatedCandidateIds.AddRange(await InvalidateOrphanedImportCandidatesAsync(
-                            now,
+                        await libraryImportCandidateRepository.InvalidateOutsideRootFoldersAsync(
                             modifiedByUserId,
-                            cancellationToken).ConfigureAwait(false));
+                            cancellationToken).ConfigureAwait(false);
                     }
 
                     return updated > 0;
@@ -660,16 +609,7 @@ internal sealed class RootFolderRepository(
             {
                 await transactionManager.OnCommittedAsync(
                     token => eventBus.PublishAsync(
-                        RootFolderEventBuilder.BuildRootFolderUpdatedEvent(id, ["isDefault"]),
-                        token),
-                    cancellationToken).ConfigureAwait(false);
-            }
-
-            foreach (var id in invalidatedCandidateIds)
-            {
-                await transactionManager.OnCommittedAsync(
-                    token => eventBus.PublishAsync(
-                        ContentEventBuilder.BuildLibraryImportCandidateUpdatedEvent(id),
+                        RootFolderEventBuilder.BuildRootFolderUpdatedEvent(id, [nameof(RootFolder.IsDefault)]),
                         token),
                     cancellationToken).ConfigureAwait(false);
             }
@@ -684,62 +624,6 @@ internal sealed class RootFolderRepository(
             logger.LogError(ex, "The root folder repository failed to patch root folder {RootFolderId}.", patch.Id);
             throw;
         }
-    }
-
-    private async Task<IReadOnlyList<Guid>> InvalidateOrphanedImportCandidatesAsync(
-        DateTime now,
-        Guid? modifiedByUserId,
-        CancellationToken cancellationToken)
-    {
-        var rootPaths = await context.RootFolders
-            .AsNoTracking()
-            .Select(r => r.Path)
-            .ToListAsync(cancellationToken)
-            .ConfigureAwait(false);
-        var pending = await (
-            from m in context.LibraryImportCandidates.AsNoTracking()
-            where m.Status == LibraryImportCandidateStatus.Pending ||
-                m.Status == LibraryImportCandidateStatus.MatchingPending
-            select new { m.Id, m.FilePath })
-            .ToListAsync(cancellationToken)
-            .ConfigureAwait(false);
-
-        var orphanedIds = (from m in pending where !IsUnderAnyRoot(m.FilePath, rootPaths) select m.Id)
-            .ToList();
-
-        if (orphanedIds.Count == 0)
-        {
-            return [];
-        }
-
-        await context.LibraryImportCandidates
-            .Where(m => orphanedIds.Contains(m.Id))
-            .ExecuteUpdateAsync(
-                s => s
-                    .SetProperty(m => m.Status, LibraryImportCandidateStatus.Invalidated)
-                    .SetProperty(m => m.ModifiedAt, now)
-                    .SetProperty(m => m.ModifiedByUserId, modifiedByUserId),
-                cancellationToken)
-            .ConfigureAwait(false);
-
-        await auditRecordRepository.CreateAsync(
-            new()
-            {
-                Category = AuditCategories.Content,
-                Operation = "Invalidate",
-                EntityType = nameof(LibraryImportCandidate),
-                Detail = $"Invalidated {orphanedIds.Count} library import candidates " +
-                    "left outside all configured root folders after a root-folder change",
-                Timestamp = now,
-                UserId = modifiedByUserId
-            },
-            cancellationToken).ConfigureAwait(false);
-
-        logger.LogInformation(
-            "The root folder change invalidated {Count} library import candidates outside all configured roots",
-            orphanedIds.Count);
-
-        return orphanedIds;
     }
 
     public async Task<bool> DeleteAsync(Guid id, Guid? deletedByUserId, CancellationToken cancellationToken)
@@ -771,6 +655,11 @@ internal sealed class RootFolderRepository(
                     {
                         throw new MagpieException("A root folder containing content cannot be deleted.");
                     }
+
+                    await libraryImportCandidateRepository.DeleteAllByRootFolderAsync(
+                        id,
+                        deletedByUserId,
+                        cancellationToken).ConfigureAwait(false);
 
                     var deleted = await context.RootFolders
                         .Where(r => r.Id == id)
@@ -815,7 +704,9 @@ internal sealed class RootFolderRepository(
                 {
                     await transactionManager.OnCommittedAsync(
                         token => eventBus.PublishAsync(
-                            RootFolderEventBuilder.BuildRootFolderUpdatedEvent(promotedId, ["isDefault"]),
+                            RootFolderEventBuilder.BuildRootFolderUpdatedEvent(
+                                promotedId,
+                                [nameof(RootFolder.IsDefault)]),
                             token),
                         cancellationToken).ConfigureAwait(false);
                 }

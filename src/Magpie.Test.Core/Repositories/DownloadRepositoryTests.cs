@@ -862,7 +862,7 @@ public sealed class DownloadRepositoryTests
             Assert.That(updated, Has.Property(nameof(updated.ModifiedByUserId)).EqualTo(_userId));
             Assert.That(updated, Has.Property(nameof(updated.ModifiedAt)).Not.Null);
             Assert.That(downloadEvent.Context["download.id"], Is.EqualTo(download.Id.ToString("D")));
-            Assert.That(downloadEvent.Context["download.changedFields"], Does.Contain("title"));
+            Assert.That(downloadEvent.Context["download.changedFields"], Does.Contain("Title"));
         }
     }
 
@@ -1817,11 +1817,60 @@ public sealed class DownloadRepositoryTests
             Assert.That(downloadEvents, Has.Count.EqualTo(1));
             Assert.That(downloadEvents[0].Name, Is.EqualTo("download.updated"));
             Assert.That(downloadEvents[0].Context["download.id"], Is.EqualTo(download.Id.ToString("D")));
+            Assert.That(
+                downloadEvents[0].Context["download.changedFields"],
+                Is.EqualTo("Status,StatusReason,Progress,LastProgressAt"));
         }
     }
 
     [Test]
-    public async Task UpdateRefreshedClientStateAsync_ReturnsTrueAndPublishesNoEvent_WhenTheStoredStatusIsUnchanged()
+    public async Task UpdateRefreshedStatusAsync_PublishesNoUpdate_WhenNothingChanged()
+    {
+        // Arrange
+        var now = DateTime.UtcNow;
+        var download = new Download
+        {
+            DownloadClientId = _downloadClientId,
+            ExternalId = "same-refresh",
+            Title = "Same",
+            Status = DownloadStatus.Downloading,
+            Progress = 0.5m,
+            LastProgressAt = now,
+            CreatedAt = now
+        };
+        _context.Downloads.Add(download);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        // Act
+        var applied = await _subject.UpdateRefreshedStatusAsync(
+            download.Id,
+            DownloadStatus.Downloading,
+            statusReason: null,
+            outputPath: null,
+            dateCompleted: null,
+            progress: 0.5m,
+            lastProgressAt: now,
+            heldByPolicy: false,
+            failureReason: null,
+            failedAt: null,
+            now,
+            _userId).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(applied, Is.True);
+            Assert.That(
+                _publishedEvents.Where(e => e.Name.StartsWith("download.", StringComparison.Ordinal)),
+                Is.Empty);
+        }
+    }
+
+    [TestCase(false, "Progress")]
+    [TestCase(true, "HeldByPolicy,Progress")]
+    public async Task UpdateRefreshedClientStateAsync_ReturnsOnlyTheChangedFields_WhenTheStoredStatusIsUnchanged(
+        bool heldByPolicy,
+        string expectedFields)
     {
         // Arrange
         var now = DateTime.UtcNow;
@@ -1831,6 +1880,9 @@ public sealed class DownloadRepositoryTests
             ExternalId = "unchanged-refresh",
             Title = "Unchanged",
             Status = DownloadStatus.Downloading,
+            StatusReason = "client says downloading",
+            Progress = 0.4m,
+            LastProgressAt = now,
             CreatedAt = now
         };
         _context.Downloads.Add(download);
@@ -1845,7 +1897,7 @@ public sealed class DownloadRepositoryTests
             dateCompleted: null,
             progress: 0.5m,
             lastProgressAt: now,
-            heldByPolicy: false,
+            heldByPolicy,
             failureReason: null,
             failedAt: null,
             now,
@@ -1856,10 +1908,9 @@ public sealed class DownloadRepositoryTests
             .ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(updated, Is.True);
-            Assert.That(stored.Status, Is.EqualTo(DownloadStatus.Downloading));
+            Assert.That(updated, Is.EqualTo(expectedFields.Split(',')));
             Assert.That(stored.Progress, Is.EqualTo(0.5m));
-            Assert.That(stored.StatusReason, Is.EqualTo("client says downloading"));
+            Assert.That(stored.HeldByPolicy, Is.EqualTo(heldByPolicy));
             Assert.That(
                 _publishedEvents.Where(e => e.Name.StartsWith("download.", StringComparison.Ordinal)),
                 Is.Empty);
@@ -1867,7 +1918,7 @@ public sealed class DownloadRepositoryTests
     }
 
     [Test]
-    public async Task UpdateRefreshedClientStateAsync_ReturnsFalseAndKeepsRow_WhenTheStoredStatusDiffers()
+    public async Task UpdateRefreshedClientStateAsync_ReturnsNullAndKeepsRow_WhenTheStoredStatusDiffers()
     {
         // Arrange
         var now = DateTime.UtcNow;
@@ -1902,14 +1953,14 @@ public sealed class DownloadRepositoryTests
             .ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(updated, Is.False);
+            Assert.That(updated, Is.Null);
             Assert.That(stored.Status, Is.EqualTo(DownloadStatus.Queued));
             Assert.That(stored.StatusReason, Is.Null);
         }
     }
 
     [Test]
-    public async Task PublishRefreshedStatusAsync_PublishesUpdatedEventPerDownload_WhenDownloadIdsAreGiven()
+    public async Task PublishRefreshedStatusAsync_PublishesTheChangedFields_WhenADownloadChanged()
     {
         // Arrange
         var now = DateTime.UtcNow;
@@ -1925,8 +1976,10 @@ public sealed class DownloadRepositoryTests
         await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
-        await _subject.PublishRefreshedStatusAsync([download.Id], _userId, CancellationToken.None)
-            .ConfigureAwait(false);
+        await _subject.PublishRefreshedStatusAsync(
+            new Dictionary<Guid, IReadOnlyList<string>> { [download.Id] = ["Progress"], [Guid.NewGuid()] = [] },
+            _userId,
+            CancellationToken.None).ConfigureAwait(false);
 
         // Assert
         var downloadEvents = _publishedEvents
@@ -1937,6 +1990,7 @@ public sealed class DownloadRepositoryTests
             Assert.That(downloadEvents, Has.Count.EqualTo(1));
             Assert.That(downloadEvents[0].Name, Is.EqualTo("download.updated"));
             Assert.That(downloadEvents[0].Context["download.id"], Is.EqualTo(download.Id.ToString("D")));
+            Assert.That(downloadEvents[0].Context["download.changedFields"], Is.EqualTo("Progress"));
         }
     }
 
@@ -4224,7 +4278,7 @@ public sealed class DownloadRepositoryTests
             Assert.That(stored.Status, Is.EqualTo(DownloadStatus.Importing));
             Assert.That(_publishedEvents, Has.Count.EqualTo(1));
             Assert.That(_publishedEvents[0].Name, Is.EqualTo("download.updated"));
-            Assert.That(_publishedEvents[0].Context["download.changedFields"], Is.EqualTo("status"));
+            Assert.That(_publishedEvents[0].Context["download.changedFields"], Is.EqualTo("Status"));
         }
     }
 
@@ -4420,6 +4474,139 @@ public sealed class DownloadRepositoryTests
             Assert.That(downloadEvents, Has.Count.EqualTo(1));
             Assert.That(downloadEvents[0].Name, Is.EqualTo(expectedEventName));
             Assert.That(downloadEvents[0].Context["download.id"], Is.EqualTo(download.Id.ToString("D")));
+        }
+    }
+
+    [TestCase(DownloadStatus.Downloaded, "download.completed")]
+    [TestCase(DownloadStatus.Failed, "download.failed")]
+    public async Task CreateAsync_RaisesTheStatusEventAfterCommit_WhenTheClientReportsAFinishedTransfer(
+        DownloadStatus status,
+        string expectedEventName)
+    {
+        // Arrange
+        var download = new Download
+        {
+            DownloadClientId = _downloadClientId,
+            ExternalId = "already-finished",
+            Title = "Already finished",
+            Status = status,
+            FailureReason = status == DownloadStatus.Failed ? DownloadFailureReason.DownloadErrored : null
+        };
+        var eventsDuringTransaction = -1;
+
+        // Act
+        await _transactionManager.ExecuteWithTransactionAsync(async ct =>
+        {
+            await _subject.CreateAsync(download, _userId, ct).ConfigureAwait(false);
+            eventsDuringTransaction = _publishedEvents.Count;
+        }).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(eventsDuringTransaction, Is.Zero);
+            Assert.That(
+                _publishedEvents.Select(e => e.Name),
+                Is.EqualTo(["download.created", expectedEventName]));
+            Assert.That(_publishedEvents[1].Context["download.id"], Is.EqualTo(download.Id.ToString("D")));
+        }
+    }
+
+    [Test]
+    public async Task CreateAsync_RaisesNoFailedEvent_WhenNoClientAcceptedTheGrab()
+    {
+        // Arrange
+        var download = new Download
+        {
+            DownloadClientId = _downloadClientId,
+            ExternalId = string.Empty,
+            Title = "Rejected grab",
+            Status = DownloadStatus.Failed,
+            FailureReason = DownloadFailureReason.ClientRejected
+        };
+
+        // Act
+        await _subject.CreateAsync(download, _userId).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(_publishedEvents.Select(e => e.Name), Is.EqualTo(["download.created"]));
+    }
+
+    [Test]
+    public async Task UpdateAsync_RaisesCompletedOnceAfterCommit_WhenTheUpdateStoresDownloaded()
+    {
+        // Arrange
+        var download = new Download
+        {
+            DownloadClientId = _downloadClientId,
+            ExternalId = "regrabbed",
+            Title = "Regrabbed",
+            Status = DownloadStatus.Downloading,
+            CreatedAt = DateTime.UtcNow
+        };
+        _context.Downloads.Add(download);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.ChangeTracker.Clear();
+        download.Status = DownloadStatus.Downloaded;
+        var eventsDuringTransaction = -1;
+
+        // Act
+        await _transactionManager.ExecuteWithTransactionAsync(async ct =>
+        {
+            await _subject.UpdateAsync(download, _userId, ct).ConfigureAwait(false);
+            eventsDuringTransaction = _publishedEvents.Count;
+        }).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(eventsDuringTransaction, Is.Zero);
+            Assert.That(_publishedEvents.Select(e => e.Name), Is.EqualTo(["download.completed"]));
+        }
+    }
+
+    [Test]
+    public async Task CreateAsync_CarriesTheContentImpactAndRaisesTheAcquisitionChange_WhenTheScopeIsCreatedWithIt()
+    {
+        // Arrange
+        var node = new ContentHierarchyItem
+        {
+            MetadataContainer = new(),
+            ContentType = "test",
+            Level = "item",
+            Slug = "scoped",
+            Name = "Scoped",
+            ContentItem = new()
+        };
+        _context.ContentHierarchyItems.Add(node);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        var download = new Download
+        {
+            DownloadClientId = _downloadClientId,
+            ExternalId = "scoped",
+            Title = "Scoped",
+            Status = DownloadStatus.Downloading
+        };
+        download.Scope.Add(new DownloadScope { ContentHierarchyItemId = node.Id });
+        var eventsDuringTransaction = -1;
+
+        // Act
+        await _transactionManager.ExecuteWithTransactionAsync(async ct =>
+        {
+            await _subject.CreateAsync(download, _userId, ct).ConfigureAwait(false);
+            eventsDuringTransaction = _publishedEvents.Count;
+        }).ConfigureAwait(false);
+
+        // Assert
+        var created = _publishedEvents.Single(e => e.Name == "download.created");
+        var contentUpdated = _publishedEvents.Single(e => e.Name == "content.hierarchyItem.updated");
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(eventsDuringTransaction, Is.Zero);
+            Assert.That(_publishedEvents, Has.Count.EqualTo(2));
+            Assert.That(created.Context["content.hierarchyItemId"], Is.EqualTo(node.Id.ToString("D")));
+            Assert.That(contentUpdated.Context["content.hierarchyItemId"], Is.EqualTo(node.Id.ToString("D")));
+            Assert.That(contentUpdated.Context["content.changedFields"], Is.EqualTo("ActiveAcquisitionStatus"));
         }
     }
 

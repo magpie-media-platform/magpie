@@ -74,7 +74,6 @@ public sealed class UserServiceTests
             _refreshTokens.Object,
             _passwordHasher.Object,
             new DefaultPasswordPolicy(),
-            Mock.Of<IEventBus>(),
             transactionManager.Object,
             TimeProvider.System);
     }

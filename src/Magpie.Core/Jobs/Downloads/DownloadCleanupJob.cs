@@ -26,9 +26,7 @@ internal sealed class DownloadCleanupJob(
     {
         JobType = MagpieJobs.Types.DownloadCleanup,
         DisplayName = "Download cleanup",
-        Description =
-            "Removes completed or failed downloads from the download client when cleanup settings allow it. " +
-            "Download history in Magpie is kept.",
+        Description = "Removes completed or failed downloads from the download client.",
         Category = "System",
         Scope = JobScope.Administrative,
         Enabled = true,

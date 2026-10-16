@@ -21,6 +21,7 @@ using Magpie.Sdk.Jobs;
 using Magpie.Sdk.Services;
 
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
 
@@ -41,10 +42,10 @@ public sealed class JobRuntimeBackgroundServiceTests
     private Mock<IJobExecutionRepository> _executions = null!;
     private Mock<IJobManager> _jobManager = null!;
     private JobRuntimeOptions _options = null!;
-    private Mock<IJobRetryPolicy> _retryPolicy = null!;
     private Mock<IJobRuntime> _runtime = null!;
     private Mock<IScheduleTriggerRepository> _scheduleTriggers = null!;
     private Mock<IServiceScopeFactory> _scopeFactory = null!;
+    private Mock<ISettingsRepository> _settings = null!;
     private MagpieHostEnvironment _hostEnvironment = null!;
     private JobSpec _spec = null!;
     private JobShutdownSignal _shutdownSignal = null!;
@@ -55,15 +56,16 @@ public sealed class JobRuntimeBackgroundServiceTests
     {
         _migrationState = new DatabaseMigrationState();
         _migrationState.Complete();
+        _migrationState.RecordSchemaCheck([]);
         _audits = new Mock<IAuditRecordRepository> { CallBase = true };
         _executions = new Mock<IJobExecutionRepository> { CallBase = true };
         _executions.Setup(repository => repository.QueryAsync(It.IsAny<JobExecutionQuery>(),
                 It.IsAny<PagingParameter>(), It.IsAny<SortParameter?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new PagedList<JobExecution>());
         _jobManager = new Mock<IJobManager>();
-        _retryPolicy = new Mock<IJobRetryPolicy>();
         _runtime = new Mock<IJobRuntime>();
         _scheduleTriggers = new Mock<IScheduleTriggerRepository> { CallBase = true };
+        _settings = new Mock<ISettingsRepository>();
         _options = new JobRuntimeOptions
         {
             StaleJobCleanupInterval = TimeSpan.FromHours(1),
@@ -91,8 +93,11 @@ public sealed class JobRuntimeBackgroundServiceTests
             .Setup(provider => provider.GetService(typeof(IAuditRecordRepository)))
             .Returns(_audits.Object);
         serviceProvider
-            .Setup(provider => provider.GetService(typeof(IJobRetryPolicy)))
-            .Returns(_retryPolicy.Object);
+            .Setup(provider => provider.GetService(typeof(DefaultJobRetryPolicy)))
+            .Returns(new DefaultJobRetryPolicy(
+                _settings.Object,
+                new FakeTimeProvider(),
+                NullLogger<DefaultJobRetryPolicy>.Instance));
         serviceProvider
             .Setup(provider => provider.GetService(typeof(IJobManager)))
             .Returns(_jobManager.Object);
@@ -136,7 +141,7 @@ public sealed class JobRuntimeBackgroundServiceTests
             FailurePolicy = JobFailurePolicy.Requeue
         };
 
-        _shutdownSignal = new JobShutdownSignal();
+        _shutdownSignal = new JobShutdownSignal(Mock.Of<IHostApplicationLifetime>());
 
         _subject = new JobRuntimeBackgroundService(
             Mock.Of<IJobRegistry>(registry => registry.ListJobSpecs() == new[] { _spec }),
@@ -156,6 +161,46 @@ public sealed class JobRuntimeBackgroundServiceTests
     public void TearDown()
     {
         _subject.Dispose();
+    }
+
+    [Test]
+    public async Task RunOnceAsync_ReadsNoTriggers_WhenTheDatabaseHasUnknownMigrations()
+    {
+        // Arrange
+        _migrationState.RecordSchemaCheck(["20991231000000_Future"]);
+
+        // Act
+        await _subject.RunOnceAsync(new DateTime(2026, 1, 1, 12, 0, 0, DateTimeKind.Utc), default)
+            .ConfigureAwait(false);
+
+        // Assert
+        _scopeFactory.Verify(factory => factory.CreateScope(), Times.Never);
+    }
+
+    [Test]
+    public async Task RunCleanupOnceAsync_ReadsNoExecutions_WhenTheDatabaseHasUnknownMigrations()
+    {
+        // Arrange
+        _migrationState.RecordSchemaCheck(["20991231000000_Future"]);
+
+        // Act
+        await _subject.RunCleanupOnceAsync(default).ConfigureAwait(false);
+
+        // Assert
+        _scopeFactory.Verify(factory => factory.CreateScope(), Times.Never);
+    }
+
+    [Test]
+    public async Task ReclaimOwnOrphanedRunningAsync_ReadsNoExecutions_WhenTheDatabaseHasUnknownMigrations()
+    {
+        // Arrange
+        _migrationState.RecordSchemaCheck(["20991231000000_Future"]);
+
+        // Act
+        await _subject.ReclaimOwnOrphanedRunningAsync(default).ConfigureAwait(false);
+
+        // Assert
+        _scopeFactory.Verify(factory => factory.CreateScope(), Times.Never);
     }
 
     [TestCase(JobExecutionMode.Queue)]
@@ -288,11 +333,6 @@ public sealed class JobRuntimeBackgroundServiceTests
         await _subject.RunCleanupOnceAsync(default).ConfigureAwait(false);
 
         // Assert
-        _retryPolicy.Verify(
-            policy => policy.BuildRetryAsync(
-                It.IsAny<JobExecution>(),
-                It.IsAny<CancellationToken>()),
-            Times.Never);
         _executions.Verify(
             repository => repository.CreateAsync(
                 It.IsAny<JobExecution>(),
@@ -306,13 +346,6 @@ public sealed class JobRuntimeBackgroundServiceTests
     {
         // Arrange
         var executionId = Guid.NewGuid();
-        var retry = new JobExecution
-        {
-            Id = Guid.NewGuid(),
-            JobType = "ReleaseSearchItem",
-            Status = JobExecutionStatus.Queued,
-            Attempt = 2
-        };
         var timedOut = new JobExecution
         {
             Id = executionId,
@@ -338,16 +371,15 @@ public sealed class JobRuntimeBackgroundServiceTests
                 It.IsAny<CancellationToken>()))
             .Callback(() => stopping.Cancel())
             .ReturnsAsync(true);
-        _retryPolicy
-            .Setup(policy => policy.BuildRetryAsync(timedOut, It.IsAny<CancellationToken>()))
-            .ReturnsAsync((JobExecution execution, CancellationToken cancellationToken) =>
+        _settings
+            .Setup(repository => repository.GetByIdAsync(
+                It.IsAny<SettingsGroupLookupKey>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync((SettingsGroupLookupKey _, CancellationToken cancellationToken) =>
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                return retry;
+                return null;
             });
-        _executions
-            .Setup(repository => repository.CreateAsync(retry, null, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(retry);
 
         // Act
         await _subject.RunCleanupOnceAsync(stopping.Token).ConfigureAwait(false);
@@ -355,7 +387,7 @@ public sealed class JobRuntimeBackgroundServiceTests
         // Assert
         _executions.Verify(
             repository => repository.CreateAsync(
-                retry,
+                It.Is<JobExecution>(requeue => requeue.OriginalExecutionId == executionId),
                 null,
                 It.Is<CancellationToken>(token => !token.IsCancellationRequested)),
             Times.Once);
@@ -366,13 +398,6 @@ public sealed class JobRuntimeBackgroundServiceTests
     {
         // Arrange
         var executionId = Guid.NewGuid();
-        var retry = new JobExecution
-        {
-            Id = Guid.NewGuid(),
-            JobType = "ReleaseSearchItem",
-            Status = JobExecutionStatus.Queued,
-            Attempt = 2
-        };
         var candidate = new JobExecution
         {
             Id = executionId,
@@ -405,12 +430,6 @@ public sealed class JobRuntimeBackgroundServiceTests
                 It.IsAny<string>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(() => Interlocked.Increment(ref transitionCount) == 1);
-        _retryPolicy
-            .Setup(policy => policy.BuildRetryAsync(candidate, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(retry);
-        _executions
-            .Setup(repository => repository.CreateAsync(retry, null, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(retry);
 
         // Act
         await Task.WhenAll(
@@ -421,10 +440,9 @@ public sealed class JobRuntimeBackgroundServiceTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(transitionCount, Is.EqualTo(2));
-            _retryPolicy.Verify(policy => policy.BuildRetryAsync(candidate, It.IsAny<CancellationToken>()), Times.Once);
             _executions.Verify(
                 repository => repository.CreateAsync(
-                    retry,
+                    It.Is<JobExecution>(requeue => requeue.OriginalExecutionId == executionId),
                     null,
                     It.IsAny<CancellationToken>()),
                 Times.Once);
@@ -561,8 +579,8 @@ public sealed class JobRuntimeBackgroundServiceTests
                 It.IsAny<object?>(),
                 TimeSpan.FromMinutes(3),
                 It.IsAny<TimeSpan>()))
-            .Callback(() => cleanupSleeps.TrySetResult())
-            .CallBase();
+            .CallBase()
+            .Callback(() => cleanupSleeps.TrySetResult());
         _options.RunningStaleCutoff = TimeSpan.FromMinutes(3);
         var orphan = new JobExecution
         {
@@ -668,6 +686,112 @@ public sealed class JobRuntimeBackgroundServiceTests
                     "Node node-A restarted while this execution was Running",
                     It.IsAny<CancellationToken>()),
                 Times.Once);
+            _executions.Verify(
+                repository => repository.CreateAsync(
+                    It.Is<JobExecution>(requeue => requeue.OriginalExecutionId == running.Id),
+                    null,
+                    It.IsAny<CancellationToken>()),
+                Times.Once);
+            _executions.Verify(
+                repository => repository.CreateAsync(
+                    It.Is<JobExecution>(requeue => requeue.OriginalExecutionId == cancelling.Id),
+                    It.IsAny<Guid?>(),
+                    It.IsAny<CancellationToken>()),
+                Times.Never);
+        }
+    }
+
+    [Test]
+    public async Task RunCleanupOnceAsync_RequeuesAsTheNextAttemptWithoutBackoff_WhenItReclaimsAStaleImmediateRun()
+    {
+        // Arrange
+        var executionId = Guid.NewGuid();
+        var stale = new JobExecution
+        {
+            Id = executionId,
+            JobType = "ReleaseSearchItem",
+            ExecutionMode = JobExecutionMode.Immediate,
+            Status = JobExecutionStatus.Running,
+            NodeId = "node-B",
+            Attempt = 2,
+            LastHeartbeat = DateTime.UtcNow.AddHours(-2)
+        };
+        _executions
+            .Setup(repository => repository.QueryAsync(
+                It.Is<JobExecutionQuery>(query =>
+                    query.Status == JobExecutionStatus.Running && query.LastHeartbeat != null),
+                It.IsAny<PagingParameter>(),
+                null,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<JobExecution> { Items = [stale], TotalItems = 1 });
+        _executions
+            .Setup(repository => repository.TryRecoverInactiveAsync(
+                It.Is<JobExecution>(execution => execution.Id == executionId),
+                It.IsAny<string>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+
+        // Act
+        await _subject.RunCleanupOnceAsync(default).ConfigureAwait(false);
+
+        // Assert
+        _executions.Verify(
+            repository => repository.CreateAsync(
+                It.Is<JobExecution>(requeue =>
+                    requeue.OriginalExecutionId == executionId &&
+                    requeue.Status == JobExecutionStatus.Queued &&
+                    requeue.ExecutionMode == JobExecutionMode.Queue &&
+                    requeue.Attempt == 3 &&
+                    requeue.NotBeforeAt == null),
+                null,
+                It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Test]
+    public async Task ReclaimOwnOrphanedRunningAsync_EndsFailedWithoutRequeue_WhenTheReclaimPassesTheAttemptLimit()
+    {
+        // Arrange
+        var orphan = new JobExecution
+        {
+            Id = Guid.NewGuid(),
+            JobType = "ReleaseSearchItem",
+            Status = JobExecutionStatus.Running,
+            NodeId = LocalNodeId,
+            Attempt = 5
+        };
+        _executions
+            .Setup(repository => repository.QueryAsync(
+                It.Is<JobExecutionQuery>(query => query.NodeId == LocalNodeId && query.Statuses != null),
+                It.IsAny<PagingParameter>(),
+                null,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<JobExecution> { Items = [orphan], TotalItems = 1 });
+        _executions
+            .Setup(repository => repository.TryRecoverInactiveAsync(
+                It.IsAny<JobExecution>(),
+                It.IsAny<string>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+
+        // Act
+        await _subject.ReclaimOwnOrphanedRunningAsync(default).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            _executions.Verify(
+                repository => repository.TryRecoverInactiveAsync(
+                    It.Is<JobExecution>(execution => execution.Id == orphan.Id),
+                    "Node node-A restarted while this execution was Running",
+                    It.IsAny<CancellationToken>()),
+                Times.Once);
+            _executions.Verify(
+                repository => repository.CreateAsync(
+                    It.IsAny<JobExecution>(),
+                    It.IsAny<Guid?>(),
+                    It.IsAny<CancellationToken>()),
+                Times.Never);
         }
     }
 
@@ -716,6 +840,7 @@ public sealed class JobRuntimeBackgroundServiceTests
         var scheduler = new MlfqJobConcurrencyScheduler(
             new JobRuntimeOptions { PoolSize = 5 },
             TimeProvider.System,
+            Mock.Of<IJobRegistry>(registry => registry.ListJobSpecs() == Array.Empty<JobSpec>()),
             NullLogger<MlfqJobConcurrencyScheduler>.Instance);
         scheduler.TrySelectAdmission(
             [
@@ -869,6 +994,7 @@ public sealed class JobRuntimeBackgroundServiceTests
             new MlfqJobConcurrencyScheduler(
                 new JobRuntimeOptions { PoolSize = 50 },
                 TimeProvider.System,
+                Mock.Of<IJobRegistry>(registry => registry.ListJobSpecs() == Array.Empty<JobSpec>()),
                 NullLogger<MlfqJobConcurrencyScheduler>.Instance),
             new JobRuntimeOptions(),
             hostEnvironment,
@@ -894,6 +1020,35 @@ public sealed class JobRuntimeBackgroundServiceTests
             executions.Verify(
                 repository => repository.TryClaimAsync(minority.Id, nodeId, It.IsAny<CancellationToken>()),
                 Times.Never);
+        }
+    }
+
+    [Test]
+    public async Task TryAdmitAsync_ClaimsNothing_WhenTheHostIsStopping()
+    {
+        // Arrange
+        using var subject = new JobRuntimeBackgroundService(
+            Mock.Of<IJobRegistry>(registry => registry.ListJobSpecs() == new[] { _spec }),
+            _runtime.Object,
+            Mock.Of<IJobConcurrencyScheduler>(scheduler => scheduler.HasAdmissionCapacity()),
+            _options,
+            _hostEnvironment,
+            _scopeFactory.Object,
+            Mock.Of<IEventBus>(),
+            _shutdownSignal,
+            NullLogger<JobRuntimeBackgroundService>.Instance,
+            TimeProvider.System,
+            _migrationState);
+        await _shutdownSignal.Cancellation.CancelAsync().ConfigureAwait(false);
+
+        // Act
+        var admitted = await subject.TryAdmitAsync(default).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(admitted, Is.False);
+            _scopeFactory.Verify(factory => factory.CreateScope(), Times.Never);
         }
     }
 
@@ -950,6 +1105,7 @@ public sealed class JobRuntimeBackgroundServiceTests
             new MlfqJobConcurrencyScheduler(
                 new JobRuntimeOptions { PoolSize = 5 },
                 TimeProvider.System,
+                Mock.Of<IJobRegistry>(registry => registry.ListJobSpecs() == Array.Empty<JobSpec>()),
                 NullLogger<MlfqJobConcurrencyScheduler>.Instance),
             new JobRuntimeOptions(),
             hostEnvironment,
@@ -1003,5 +1159,233 @@ public sealed class JobRuntimeBackgroundServiceTests
 
         // Assert
         _runtime.Verify(r => r.TryCancelAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [TestCase("ReleaseSearchItem", 1)]
+    [TestCase("MediaInfoExtractItem", 0)]
+    public async Task TryAdmitAsync_ClaimsOnlyTheListedJobTypes_WhenTheNodeHasAJobList(
+        string listedJobType,
+        int expectedClaims)
+    {
+        // Arrange
+        _executions
+            .Setup(repository => repository.GetClaimableCandidatesAsync(
+                It.IsAny<PagingParameter>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(
+            [
+                new JobClaimCandidate(new Guid("6a1f3a52-0d8e-4c55-9e1c-0b4c2b1f1d01"), "ReleaseSearchItem", null)
+            ]);
+        _executions
+            .Setup(repository => repository.TryClaimAsync(It.IsAny<Guid>(), LocalNodeId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((Guid executionId, string _, CancellationToken _) => new JobExecution
+            {
+                Id = executionId,
+                JobType = "ReleaseSearchItem",
+                Scope = JobScope.System,
+                Status = JobExecutionStatus.Running
+            });
+        using var subject = new JobRuntimeBackgroundService(
+            Mock.Of<IJobRegistry>(registry => registry.ListJobSpecs() == new[] { _spec }),
+            _runtime.Object,
+            new MlfqJobConcurrencyScheduler(
+                new JobRuntimeOptions { PoolSize = 5 },
+                TimeProvider.System,
+                Mock.Of<IJobRegistry>(registry => registry.ListJobSpecs() == new[] { _spec }),
+                NullLogger<MlfqJobConcurrencyScheduler>.Instance),
+            new JobRuntimeOptions { JobTypes = [listedJobType] },
+            _hostEnvironment,
+            _scopeFactory.Object,
+            Mock.Of<IEventBus>(),
+            _shutdownSignal,
+            NullLogger<JobRuntimeBackgroundService>.Instance,
+            TimeProvider.System,
+            _migrationState);
+
+        // Act
+        await subject.TryAdmitAsync(default).ConfigureAwait(false);
+
+        // Assert
+        _executions.Verify(
+            repository => repository.TryClaimAsync(It.IsAny<Guid>(), LocalNodeId, It.IsAny<CancellationToken>()),
+            Times.Exactly(expectedClaims));
+    }
+
+    [TestCase(1, 1)]
+    [TestCase(2, 2)]
+    public async Task TryAdmitAsync_ClaimsMaxExecutions_WhenTheJobTypeHasANodeConcurrencyLimit(
+        int max,
+        int expectedClaims)
+    {
+        // Arrange
+        _executions
+            .Setup(repository => repository.GetClaimableCandidatesAsync(
+                It.IsAny<PagingParameter>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(
+            [
+                new JobClaimCandidate(new Guid("6a1f3a52-0d8e-4c55-9e1c-0b4c2b1f1d01"), "ReleaseSearchItem", null),
+                new JobClaimCandidate(new Guid("6a1f3a52-0d8e-4c55-9e1c-0b4c2b1f1d02"), "ReleaseSearchItem", null),
+                new JobClaimCandidate(new Guid("6a1f3a52-0d8e-4c55-9e1c-0b4c2b1f1d03"), "ReleaseSearchItem", null)
+            ]);
+        _executions
+            .Setup(repository => repository.TryClaimAsync(It.IsAny<Guid>(), LocalNodeId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((Guid executionId, string _, CancellationToken _) => new JobExecution
+            {
+                Id = executionId,
+                JobType = "ReleaseSearchItem",
+                Scope = JobScope.System,
+                Status = JobExecutionStatus.Running
+            });
+        _runtime
+            .Setup(runtime => runtime.ExecuteAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .Returns(new TaskCompletionSource().Task);
+        var spec = _spec with { ConcurrencyLimit = new() { Max = max, PerNode = true } };
+        using var subject = new JobRuntimeBackgroundService(
+            Mock.Of<IJobRegistry>(registry => registry.ListJobSpecs() == new[] { spec }),
+            _runtime.Object,
+            new MlfqJobConcurrencyScheduler(
+                new JobRuntimeOptions { PoolSize = 50 },
+                TimeProvider.System,
+                Mock.Of<IJobRegistry>(registry => registry.ListJobSpecs() == new[] { spec }),
+                NullLogger<MlfqJobConcurrencyScheduler>.Instance),
+            _options,
+            _hostEnvironment,
+            _scopeFactory.Object,
+            Mock.Of<IEventBus>(),
+            _shutdownSignal,
+            NullLogger<JobRuntimeBackgroundService>.Instance,
+            TimeProvider.System,
+            _migrationState);
+
+        // Act
+        await subject.TryAdmitAsync(default).ConfigureAwait(false);
+        await subject.TryAdmitAsync(default).ConfigureAwait(false);
+
+        // Assert
+        _executions.Verify(
+            repository => repository.TryClaimAsync(It.IsAny<Guid>(), LocalNodeId, It.IsAny<CancellationToken>()),
+            Times.Exactly(expectedClaims));
+    }
+
+    [Test]
+    public async Task TryAdmitAsync_ClaimsTheNextExecution_WhenTheRunningExecutionOfALimitedJobTypeEnds()
+    {
+        // Arrange
+        var first = new JobClaimCandidate(new Guid("6a1f3a52-0d8e-4c55-9e1c-0b4c2b1f1d01"), "ReleaseSearchItem", null);
+        var second = new JobClaimCandidate(new Guid("6a1f3a52-0d8e-4c55-9e1c-0b4c2b1f1d02"), "ReleaseSearchItem", null);
+        _executions
+            .SetupSequence(repository => repository.GetClaimableCandidatesAsync(
+                It.IsAny<PagingParameter>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync([first, second])
+            .ReturnsAsync([second]);
+        _executions
+            .Setup(repository => repository.TryClaimAsync(It.IsAny<Guid>(), LocalNodeId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((Guid executionId, string _, CancellationToken _) => new JobExecution
+            {
+                Id = executionId,
+                JobType = "ReleaseSearchItem",
+                Scope = JobScope.System,
+                Status = JobExecutionStatus.Running
+            });
+        var running = new TaskCompletionSource();
+        _runtime
+            .Setup(runtime => runtime.ExecuteAsync(first.Id, It.IsAny<CancellationToken>()))
+            .Returns(running.Task);
+        var spec = _spec with { ConcurrencyLimit = new() { Max = 1, PerNode = true } };
+        var time = new FakeTimeProvider(new DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero));
+        var mlfq = new MlfqJobConcurrencyScheduler(
+            new JobRuntimeOptions { PoolSize = 50 },
+            time,
+            Mock.Of<IJobRegistry>(registry => registry.ListJobSpecs() == new[] { spec }),
+            NullLogger<MlfqJobConcurrencyScheduler>.Instance);
+        var released = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var scheduler = new Mock<IJobConcurrencyScheduler>();
+        scheduler.Setup(s => s.HasAdmissionCapacity()).Returns(mlfq.HasAdmissionCapacity);
+        scheduler
+            .Setup(s => s.TrySelectAdmission(
+                It.IsAny<IReadOnlyList<JobClaimCandidate>>(),
+                It.IsAny<ISet<Guid>>(),
+                out It.Ref<JobClaimCandidate>.IsAny))
+            .Returns(mlfq.TrySelectAdmission);
+        scheduler
+            .Setup(s => s.CommitAdmission(It.IsAny<JobClaimCandidate>()))
+            .Callback<JobClaimCandidate>(mlfq.CommitAdmission);
+        scheduler
+            .Setup(s => s.Release(first.Id))
+            .Callback((Guid id) =>
+            {
+                mlfq.Release(id);
+                released.SetResult();
+            });
+        using var subject = new JobRuntimeBackgroundService(
+            Mock.Of<IJobRegistry>(registry => registry.ListJobSpecs() == new[] { spec }),
+            _runtime.Object,
+            scheduler.Object,
+            _options,
+            _hostEnvironment,
+            _scopeFactory.Object,
+            Mock.Of<IEventBus>(),
+            _shutdownSignal,
+            NullLogger<JobRuntimeBackgroundService>.Instance,
+            time,
+            _migrationState);
+        await subject.TryAdmitAsync(default).ConfigureAwait(false);
+        running.SetResult();
+        await released.Task.WaitAsync(TimeSpan.FromSeconds(1)).ConfigureAwait(false);
+
+        // Act
+        await subject.TryAdmitAsync(default).ConfigureAwait(false);
+
+        // Assert
+        _executions.Verify(
+            repository => repository.TryClaimAsync(second.Id, LocalNodeId, It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Test]
+    public async Task TryAdmitAsync_TriesOneClaimOfTheJobType_WhenItsClusterConcurrencyLimitRefusesTheClaim()
+    {
+        // Arrange
+        _executions
+            .Setup(repository => repository.GetClaimableCandidatesAsync(
+                It.IsAny<PagingParameter>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(
+            [
+                new JobClaimCandidate(new Guid("6a1f3a52-0d8e-4c55-9e1c-0b4c2b1f1d01"), "ReleaseSearchItem", null),
+                new JobClaimCandidate(new Guid("6a1f3a52-0d8e-4c55-9e1c-0b4c2b1f1d02"), "ReleaseSearchItem", null),
+                new JobClaimCandidate(new Guid("6a1f3a52-0d8e-4c55-9e1c-0b4c2b1f1d03"), "ReleaseSearchItem", null)
+            ]);
+        var spec = _spec with { ConcurrencyLimit = new() { Max = 1, PerNode = false } };
+        using var subject = new JobRuntimeBackgroundService(
+            Mock.Of<IJobRegistry>(registry => registry.ListJobSpecs() == new[] { spec }),
+            _runtime.Object,
+            new MlfqJobConcurrencyScheduler(
+                new JobRuntimeOptions { PoolSize = 50 },
+                TimeProvider.System,
+                Mock.Of<IJobRegistry>(registry => registry.ListJobSpecs() == new[] { spec }),
+                NullLogger<MlfqJobConcurrencyScheduler>.Instance),
+            _options,
+            _hostEnvironment,
+            _scopeFactory.Object,
+            Mock.Of<IEventBus>(),
+            _shutdownSignal,
+            NullLogger<JobRuntimeBackgroundService>.Instance,
+            TimeProvider.System,
+            _migrationState);
+
+        // Act
+        var admitted = await subject.TryAdmitAsync(default).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(admitted, Is.False);
+            _executions.Verify(
+                repository => repository.TryClaimAsync(It.IsAny<Guid>(), LocalNodeId, It.IsAny<CancellationToken>()),
+                Times.Once);
+        }
     }
 }

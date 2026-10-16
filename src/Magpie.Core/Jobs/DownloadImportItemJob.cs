@@ -241,7 +241,7 @@ internal sealed class DownloadImportItemJob(
     {
         JobType = MagpieJobs.Types.DownloadImportItem,
         DisplayName = "Download import item",
-        Description = "Imports a completed download into its content library.",
+        Description = "Imports a completed download into the library.",
         Category = "Integrations",
         Scope = JobScope.Content,
         Enabled = true,

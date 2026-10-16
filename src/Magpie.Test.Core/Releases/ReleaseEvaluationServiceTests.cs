@@ -384,6 +384,65 @@ public sealed class ReleaseEvaluationServiceTests
         }
     }
 
+    [TestCase(new[] { 1080 }, true, QualityStatus.UpgradeWanted, 1)]
+    [TestCase(new[] { 2160 }, true, QualityStatus.Met, 0)]
+    [TestCase(new[] { 1080 }, false, QualityStatus.Met, 1)]
+    [TestCase(new[] { 1080, 2160 }, true, QualityStatus.Met, 0)]
+    [TestCase(new[] { 480 }, true, null, null)]
+    public async Task ScoreMediaQualityAsync_ScoresTheBestStoredFileAgainstTheCutoff_WhenFilesArePrimary(
+        int[] heights,
+        bool upgradeAllowed,
+        QualityStatus? expectedQuality,
+        int? expectedRank)
+    {
+        // Arrange
+        var listId = Guid.NewGuid();
+        static QualityTierListRank Rank(int ordinal, int height, bool isCutoff) => new()
+        {
+            Ordinal = ordinal,
+            IsCutoff = isCutoff,
+            QualityTier = new QualityTier
+            {
+                Name = $"{height}p",
+                Criteria = new QualityTierCriteria
+                {
+                    And = [new DictionaryCriteria<PropertyCriterion<string>>
+                    {
+                        Items = new Dictionary<string, PropertyCriterion<string>>
+                        {
+                            ["Height"] = new() { Operator = CriteriaValueOperator.Equals, Value = $"{height}" }
+                        }
+                    }]
+                }
+            }
+        };
+        _qualityTierLists.Setup(repository => repository.GetByIdAsync(listId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new QualityTierList
+            {
+                Id = listId,
+                Name = "Stored media",
+                UpgradeAllowed = upgradeAllowed,
+                QualityTierRanks = [Rank(0, 2160, isCutoff: true), Rank(1, 1080, isCutoff: false)]
+            });
+        var files = heights.Select(height => new MediaFile
+        {
+            FilePath = $"/media/stored-{height}.mkv",
+            FileKind = "Video",
+            FileSize = 400,
+            MediaInfo = new() { Tracks = [new() { Name = "Video", Type = "Video", Height = height }] }
+        });
+
+        // Act
+        var (quality, rank) = await _subject.ScoreMediaQualityAsync(files, listId).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(quality, Is.EqualTo(expectedQuality));
+            Assert.That(rank, Is.EqualTo(expectedRank));
+        }
+    }
+
     [TestCase("/media/Show S01E01.mkv", true, true, true, "Show S01E01 1080p WEB-DL-GRP", 1, true, false, 1)]
     [TestCase("/media/Show S01E01.mkv", false, true, true, "Show S01E01 1080p WEB-DL-GRP", null, false, false, 0)]
     [TestCase("/media/Show S01E01 2160p.mkv", true, true, true, "Show S01E01 1080p WEB-DL-GRP", 0, true, false, 0)]

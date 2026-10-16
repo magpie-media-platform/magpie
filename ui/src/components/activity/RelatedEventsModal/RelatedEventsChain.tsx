@@ -146,7 +146,7 @@ export function RelatedEventsChain({
         activity,
         isLoading: isLoadingTree,
         error: treeError,
-    } = useJobExecutionTreeActivity(active ? resolvedExecutionId : null);
+    } = useJobExecutionTreeActivity(active ? resolvedExecutionId : null, true);
     const isLoading = (shouldLoadContext && isLoadingContext) || (!!resolvedExecutionId && isLoadingTree);
     const error = treeError ?? (shouldLoadContext ? contextError : null);
 

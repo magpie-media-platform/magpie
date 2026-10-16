@@ -32,7 +32,7 @@ internal sealed class RootFolderContentImportItemJob(
     {
         JobType = MagpieJobs.Types.RootFolderContentImportItem,
         DisplayName = "Root folder content import item",
-        Description = "Imports one discovered file into its content library.",
+        Description = "Imports a file from a root folder into the library.",
         Category = "Content",
         Scope = JobScope.Content,
         Enabled = true,
@@ -233,10 +233,6 @@ internal sealed class RootFolderContentImportItemJob(
             await libraryImportCandidateRepository
                 .TryResetImportAsync(candidateId, null, context.ManualTriggerUserId, CancellationToken.None)
                 .ConfigureAwait(false);
-            throw;
-        }
-        catch (UpstreamThrottledException)
-        {
             throw;
         }
         catch (Exception ex)

@@ -30,15 +30,17 @@ internal sealed class WishlistRepository(
 {
     private static readonly (string Name, Func<Wishlist, Wishlist, bool> Changed)[] UpdateFields =
     [
-        ("contentFilterId", (current, model) => !Equals(current.ContentFilterId, model.ContentFilterId)),
-        ("qualityTierListId", (current, model) => !Equals(current.QualityTierListId, model.QualityTierListId)),
-        ("rootFolderId", (current, model) => !Equals(current.RootFolderId, model.RootFolderId)),
-        ("ownerUserId", (current, model) => !Equals(current.OwnerUserId, model.OwnerUserId)),
-        ("name", (current, model) => !Equals(current.Name, model.Name)),
-        ("ownerLock", (current, model) => !Equals(current.OwnerLock, model.OwnerLock)),
-        ("enabled", (current, model) => !Equals(current.Enabled, model.Enabled)),
-        ("monitoring", (current, model) => !Equals(current.Monitoring, model.Monitoring)),
-        ("lastSyncedAt", (current, model) => !Equals(current.LastSyncedAt, model.LastSyncedAt)),
+        (nameof(Wishlist.ContentFilterId), (current, model) =>
+            !Equals(current.ContentFilterId, model.ContentFilterId)),
+        (nameof(Wishlist.QualityTierListId), (current, model) =>
+            !Equals(current.QualityTierListId, model.QualityTierListId)),
+        (nameof(Wishlist.RootFolderId), (current, model) => !Equals(current.RootFolderId, model.RootFolderId)),
+        (nameof(Wishlist.OwnerUserId), (current, model) => !Equals(current.OwnerUserId, model.OwnerUserId)),
+        (nameof(Wishlist.Name), (current, model) => !Equals(current.Name, model.Name)),
+        (nameof(Wishlist.OwnerLock), (current, model) => !Equals(current.OwnerLock, model.OwnerLock)),
+        (nameof(Wishlist.Enabled), (current, model) => !Equals(current.Enabled, model.Enabled)),
+        (nameof(Wishlist.Monitoring), (current, model) => !Equals(current.Monitoring, model.Monitoring)),
+        (nameof(Wishlist.LastSyncedAt), (current, model) => !Equals(current.LastSyncedAt, model.LastSyncedAt)),
     ];
 
     private readonly TimeProvider _time = timeProvider;
@@ -48,47 +50,47 @@ internal sealed class WishlistRepository(
         var fields = new List<string>();
         if (patch.Name is not null)
         {
-            fields.Add("name");
+            fields.Add(nameof(Wishlist.Name));
         }
 
         if (patch.ContentFilterId is not null)
         {
-            fields.Add("contentFilterId");
+            fields.Add(nameof(Wishlist.ContentFilterId));
         }
 
         if (patch.QualityTierListId is not null)
         {
-            fields.Add("qualityTierListId");
+            fields.Add(nameof(Wishlist.QualityTierListId));
         }
 
         if (patch.RootFolderId is not null)
         {
-            fields.Add("rootFolderId");
+            fields.Add(nameof(Wishlist.RootFolderId));
         }
 
         if (patch.OwnerLock is not null)
         {
-            fields.Add("ownerLock");
+            fields.Add(nameof(Wishlist.OwnerLock));
         }
 
         if (patch.Enabled is not null)
         {
-            fields.Add("enabled");
+            fields.Add(nameof(Wishlist.Enabled));
         }
 
         if (patch.Monitoring is not null)
         {
-            fields.Add("monitoring");
+            fields.Add(nameof(Wishlist.Monitoring));
         }
 
         if (patch.LastSyncedAt is not null)
         {
-            fields.Add("lastSyncedAt");
+            fields.Add(nameof(Wishlist.LastSyncedAt));
         }
 
         if (patch.Tags is not null)
         {
-            fields.Add("tags");
+            fields.Add(nameof(Wishlist.Tags));
         }
 
         return fields;

@@ -12,14 +12,11 @@ using System.Threading.Tasks;
 using Magpie.Extensions.Tmdb.Mapping;
 using Magpie.Extensions.Tmdb.QueryEngine;
 
-using Microsoft.Extensions.Logging;
-
 namespace Magpie.Extensions.Tmdb;
 
 internal sealed class TmdbClient(
     IHttpClientFactory httpClientFactory,
-    TimeProvider timeProvider,
-    ILogger<TmdbClient> logger) : ITmdbClient
+    TimeProvider timeProvider) : ITmdbClient
 {
     public const string HttpClientName = "magpie.tmdb";
 
@@ -227,14 +224,9 @@ internal sealed class TmdbClient(
                 return null;
             }
 
-            if (response.StatusCode == HttpStatusCode.TooManyRequests)
-            {
-                logger.LogWarning("TMDb returned HTTP 429 for {Path}", path);
-            }
-
             response.EnsureSuccessStatusCode();
 
-            using var timeout = timeProvider.CreateCancellationTokenSource(http.Timeout);
+            using var timeout = timeProvider.CreateCancellationTokenSource(TimeSpan.FromSeconds(100));
             using var reading = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeout.Token);
             var body = await ReadBoundedAsync(response, MaximumResponseBytes(profile), reading.Token)
                 .ConfigureAwait(false);

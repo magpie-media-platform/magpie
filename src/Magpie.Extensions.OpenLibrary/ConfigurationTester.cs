@@ -88,7 +88,6 @@ internal sealed class ConfigurationTester(IOpenLibraryClient client) : IExtensio
         {
             HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden => ConfigurationFailureKind.Auth,
             HttpStatusCode.NotFound => ConfigurationFailureKind.NotFound,
-            (HttpStatusCode)429 => ConfigurationFailureKind.RateLimited,
             HttpStatusCode.RequestTimeout => ConfigurationFailureKind.Transient,
             _ when (int)statusCode >= 500 => ConfigurationFailureKind.Transient,
             _ => ConfigurationFailureKind.Fatal

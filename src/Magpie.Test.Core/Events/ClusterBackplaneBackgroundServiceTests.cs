@@ -35,6 +35,7 @@ public sealed class ClusterBackplaneBackgroundServiceTests
     private Subject<MagpieEvent> _peerEvents = null!;
     private Mock<IClusterBackplane> _backplane = null!;
     private Mock<IObserver<MagpieEvent>> _observer = null!;
+    private MagpieHostEnvironment _hostEnvironment = null!;
     private EventBus _eventBus = null!;
     private ClusterBackplaneBackgroundService _subject = null!;
 
@@ -46,8 +47,9 @@ public sealed class ClusterBackplaneBackgroundServiceTests
         _peerListenerReady = new(TaskCreationOptions.RunContinuationsAsynchronously);
         _peerEvents = new();
         var migrationState = new DatabaseMigrationState();
-        migrationState.Complete();
-        var hostEnvironment = new MagpieHostEnvironment(
+        migrationState.RecordSchemaCheck([]);
+        migrationState.RecordMigrated();
+        _hostEnvironment = new MagpieHostEnvironment(
             LocalNodeId,
             IsClustered: true,
             IsSupervised: false,
@@ -56,7 +58,7 @@ public sealed class ClusterBackplaneBackgroundServiceTests
             ConfigRoot: string.Empty,
             DataRoot: string.Empty,
             StartedAt: DateTime.UtcNow);
-        _eventBus = new EventBus(hostEnvironment, Mock.Of<IJobExecutionScopeFactory>(), TimeProvider.System);
+        _eventBus = new EventBus(_hostEnvironment, Mock.Of<IJobExecutionScopeFactory>(), TimeProvider.System);
         _backplane = new Mock<IClusterBackplane>();
         _backplane
             .Setup(backplane => backplane.CreateListener())
@@ -77,7 +79,7 @@ public sealed class ClusterBackplaneBackgroundServiceTests
             .Callback(() => _publishMarker.TrySetResult());
         _subject = new ClusterBackplaneBackgroundService(
             _eventBus,
-            hostEnvironment,
+            _hostEnvironment,
             NullLogger<ClusterBackplaneBackgroundService>.Instance,
             backplane: _backplane.Object,
             databaseMigration: migrationState);
@@ -183,6 +185,47 @@ public sealed class ClusterBackplaneBackgroundServiceTests
         _observer.Verify(
             observer => observer.OnNext(It.Is<MagpieEvent>(magpieEvent => magpieEvent.Id == EventId)),
             Times.Once);
+    }
+
+    [Test]
+    public async Task ExecuteAsync_ReceivesButDoesNotBroadcast_WhenTheNodeIsBehindTheSchema()
+    {
+        // Arrange
+        var migrationState = new DatabaseMigrationState();
+        migrationState.RecordSchemaCheck(["20991231000000_Future"]);
+        migrationState.Complete();
+        using var subject = new ClusterBackplaneBackgroundService(
+            _eventBus,
+            _hostEnvironment,
+            NullLogger<ClusterBackplaneBackgroundService>.Instance,
+            migrationState,
+            _backplane.Object);
+        using var subscription = _eventBus.Events.Subscribe(_observer.Object);
+        await subject.StartAsync(CancellationToken.None).ConfigureAwait(false);
+        await _peerListenerReady.Task.WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+
+        // Act
+        await _eventBus.PublishAsync(new MagpieEvent(
+            EventId,
+            "test.event",
+            new Dictionary<string, string>(),
+            DateTime.UtcNow,
+            DateTime.UtcNow,
+            LocalNodeId)).ConfigureAwait(false);
+        _peerEvents.OnNext(new MagpieEvent(
+            MarkerEventId,
+            "test.event",
+            new Dictionary<string, string>(),
+            DateTime.UtcNow,
+            DateTime.UtcNow,
+            "node-B"));
+        await _publishMarker.Task.WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+        await subject.StopAsync(CancellationToken.None).ConfigureAwait(false);
+
+        // Assert
+        _backplane.Verify(
+            backplane => backplane.BroadcastEventAsync(It.IsAny<MagpieEvent>(), It.IsAny<CancellationToken>()),
+            Times.Never);
     }
 
     [Test]

@@ -69,22 +69,22 @@ internal sealed class NotificationRuleRepository(
         var fields = new List<string>();
         if (patch.Name is not null)
         {
-            fields.Add("name");
+            fields.Add(nameof(NotificationRule.Name));
         }
 
         if (patch.EventFilter is not null)
         {
-            fields.Add("eventFilter");
+            fields.Add(nameof(NotificationRule.EventFilter));
         }
 
         if (patch.Settings is not null)
         {
-            fields.Add("settings");
+            fields.Add(nameof(NotificationRule.Settings));
         }
 
         if (patch.Enabled is not null)
         {
-            fields.Add("enabled");
+            fields.Add(nameof(NotificationRule.Enabled));
         }
 
         return fields;
@@ -95,27 +95,27 @@ internal sealed class NotificationRuleRepository(
         var fields = new List<string>();
         if (!string.Equals(current.Name, model.Name, StringComparison.Ordinal))
         {
-            fields.Add("name");
+            fields.Add(nameof(NotificationRule.Name));
         }
 
         if (current.Enabled != model.Enabled)
         {
-            fields.Add("enabled");
+            fields.Add(nameof(NotificationRule.Enabled));
         }
 
         if (current.OwnerUserId != model.OwnerUserId)
         {
-            fields.Add("ownerUserId");
+            fields.Add(nameof(NotificationRule.OwnerUserId));
         }
 
         if (!string.Equals(current.ProviderType, model.ProviderType, StringComparison.Ordinal))
         {
-            fields.Add("providerType");
+            fields.Add(nameof(NotificationRule.ProviderType));
         }
 
         if (!SettingsEqual(current.Settings, model.Settings))
         {
-            fields.Add("settings");
+            fields.Add(nameof(NotificationRule.Settings));
         }
 
         if (!string.Equals(
@@ -123,7 +123,7 @@ internal sealed class NotificationRuleRepository(
             JsonSerializer.Serialize(model.EventFilter),
             StringComparison.Ordinal))
         {
-            fields.Add("eventFilter");
+            fields.Add(nameof(NotificationRule.EventFilter));
         }
 
         return fields;

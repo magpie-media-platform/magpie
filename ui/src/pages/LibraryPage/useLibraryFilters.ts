@@ -467,8 +467,7 @@ export function useLibraryFilters({
 
     return {
         isRestoringFilter: Boolean(
-            appliedSavedFilterId &&
-            (!resolvedAppliedFilter || (debouncedFilterQuery !== filterQuery && filterQuery === urlFilterQuery)),
+            appliedSavedFilterId && (!resolvedAppliedFilter || debouncedFilterQuery !== urlFilterQuery),
         ),
         filterRestoreError,
         retrySavedFilters,

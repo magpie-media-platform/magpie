@@ -9,7 +9,6 @@ using System.Threading.Tasks;
 
 using Magpie.Extensions.MusicBrainz;
 using Magpie.Extensions.MusicBrainz.QueryEngine;
-using Magpie.Sdk.Http;
 
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
@@ -77,8 +76,7 @@ public class MusicBrainzClientTests
             client.BaseAddress = new Uri(MusicBrainzClient.DefaultBaseUrl);
             return client;
         });
-        var client = new MusicBrainzClient(factory.Object, TimeProvider.System, NullLogger<MusicBrainzClient>.Instance,
-            Mock.Of<IUpstreamCooldown>());
+        var client = new MusicBrainzClient(factory.Object, TimeProvider.System, NullLogger<MusicBrainzClient>.Instance);
 
         // Act
         var result = await client.SearchAsync(
@@ -123,8 +121,7 @@ public class MusicBrainzClientTests
         httpClient.BaseAddress = new Uri(MusicBrainzClient.DefaultBaseUrl);
         var factory = new Mock<IHttpClientFactory>();
         factory.Setup(value => value.CreateClient(MusicBrainzClient.HttpClientName)).Returns(httpClient);
-        var client = new MusicBrainzClient(factory.Object, TimeProvider.System, NullLogger<MusicBrainzClient>.Instance,
-            Mock.Of<IUpstreamCooldown>());
+        var client = new MusicBrainzClient(factory.Object, TimeProvider.System, NullLogger<MusicBrainzClient>.Instance);
 
         // Act
         var result = await client.BrowseReleaseGroupsAsync(
@@ -160,8 +157,7 @@ public class MusicBrainzClientTests
         httpClient.BaseAddress = new Uri(MusicBrainzClient.DefaultBaseUrl);
         var factory = new Mock<IHttpClientFactory>();
         factory.Setup(value => value.CreateClient(MusicBrainzClient.HttpClientName)).Returns(httpClient);
-        var client = new MusicBrainzClient(factory.Object, TimeProvider.System, NullLogger<MusicBrainzClient>.Instance,
-            Mock.Of<IUpstreamCooldown>());
+        var client = new MusicBrainzClient(factory.Object, TimeProvider.System, NullLogger<MusicBrainzClient>.Instance);
 
         // Act
         var result = await client.BrowseTrackReleasesAsync(
@@ -190,8 +186,7 @@ public class MusicBrainzClientTests
         httpClient.BaseAddress = new Uri(MusicBrainzClient.DefaultBaseUrl);
         var factory = new Mock<IHttpClientFactory>();
         factory.Setup(value => value.CreateClient(MusicBrainzClient.HttpClientName)).Returns(httpClient);
-        var client = new MusicBrainzClient(factory.Object, TimeProvider.System, NullLogger<MusicBrainzClient>.Instance,
-            Mock.Of<IUpstreamCooldown>());
+        var client = new MusicBrainzClient(factory.Object, TimeProvider.System, NullLogger<MusicBrainzClient>.Instance);
 
         // Act
         var result = await client.SearchAsync(
@@ -227,8 +222,7 @@ public class MusicBrainzClientTests
         httpClient.BaseAddress = new Uri(MusicBrainzClient.DefaultBaseUrl);
         var factory = new Mock<IHttpClientFactory>();
         factory.Setup(value => value.CreateClient(MusicBrainzClient.HttpClientName)).Returns(httpClient);
-        var client = new MusicBrainzClient(factory.Object, TimeProvider.System, NullLogger<MusicBrainzClient>.Instance,
-            Mock.Of<IUpstreamCooldown>());
+        var client = new MusicBrainzClient(factory.Object, TimeProvider.System, NullLogger<MusicBrainzClient>.Instance);
 
         // Act
         var result = await client.SearchAsync(
@@ -267,8 +261,7 @@ public class MusicBrainzClientTests
         httpClient.BaseAddress = new Uri(MusicBrainzClient.DefaultBaseUrl);
         var factory = new Mock<IHttpClientFactory>();
         factory.Setup(value => value.CreateClient(MusicBrainzClient.HttpClientName)).Returns(httpClient);
-        var client = new MusicBrainzClient(factory.Object, TimeProvider.System, NullLogger<MusicBrainzClient>.Instance,
-            Mock.Of<IUpstreamCooldown>());
+        var client = new MusicBrainzClient(factory.Object, TimeProvider.System, NullLogger<MusicBrainzClient>.Instance);
 
         // Act
         var result = await client.GetIsrcAsync("USRC17607839", new Settings(), default).ConfigureAwait(false);
@@ -302,8 +295,7 @@ public class MusicBrainzClientTests
         httpClient.BaseAddress = new Uri(MusicBrainzClient.DefaultBaseUrl);
         var factory = new Mock<IHttpClientFactory>();
         factory.Setup(value => value.CreateClient(MusicBrainzClient.HttpClientName)).Returns(httpClient);
-        var client = new MusicBrainzClient(factory.Object, TimeProvider.System, NullLogger<MusicBrainzClient>.Instance,
-            Mock.Of<IUpstreamCooldown>());
+        var client = new MusicBrainzClient(factory.Object, TimeProvider.System, NullLogger<MusicBrainzClient>.Instance);
 
         // Act
         var result = await client.GetIsrcAsync("GBUM71029604", new Settings(), default).ConfigureAwait(false);
@@ -330,8 +322,7 @@ public class MusicBrainzClientTests
         httpClient.BaseAddress = new Uri(MusicBrainzClient.DefaultBaseUrl);
         var factory = new Mock<IHttpClientFactory>();
         factory.Setup(value => value.CreateClient(MusicBrainzClient.HttpClientName)).Returns(httpClient);
-        var client = new MusicBrainzClient(factory.Object, TimeProvider.System, NullLogger<MusicBrainzClient>.Instance,
-            Mock.Of<IUpstreamCooldown>());
+        var client = new MusicBrainzClient(factory.Object, TimeProvider.System, NullLogger<MusicBrainzClient>.Instance);
 
         // Act
         var result = await client.SearchAsync(
@@ -382,8 +373,7 @@ public class MusicBrainzClientTests
             client.BaseAddress = new Uri(MusicBrainzClient.DefaultBaseUrl);
             return client;
         });
-        var client = new MusicBrainzClient(factory.Object, TimeProvider.System, NullLogger<MusicBrainzClient>.Instance,
-            Mock.Of<IUpstreamCooldown>());
+        var client = new MusicBrainzClient(factory.Object, TimeProvider.System, NullLogger<MusicBrainzClient>.Instance);
 
         // Act
         var result = await client.BrowseArtistsAsync(
@@ -421,8 +411,7 @@ public class MusicBrainzClientTests
             httpClient.BaseAddress = new Uri(MusicBrainzClient.DefaultBaseUrl);
             return httpClient;
         });
-        var client = new MusicBrainzClient(factory.Object, TimeProvider.System, NullLogger<MusicBrainzClient>.Instance,
-            Mock.Of<IUpstreamCooldown>());
+        var client = new MusicBrainzClient(factory.Object, TimeProvider.System, NullLogger<MusicBrainzClient>.Instance);
 
         // Act
         var result = await client.BrowseArtistsAsync(
@@ -466,8 +455,7 @@ public class MusicBrainzClientTests
             httpClient.BaseAddress = new Uri(MusicBrainzClient.DefaultBaseUrl);
             return httpClient;
         });
-        var client = new MusicBrainzClient(factory.Object, TimeProvider.System, NullLogger<MusicBrainzClient>.Instance,
-            Mock.Of<IUpstreamCooldown>());
+        var client = new MusicBrainzClient(factory.Object, TimeProvider.System, NullLogger<MusicBrainzClient>.Instance);
 
         // Act
         var result = await client.ResolveArtistCompositionAsync(
@@ -525,8 +513,7 @@ public class MusicBrainzClientTests
             httpClient.BaseAddress = new Uri(MusicBrainzClient.DefaultBaseUrl);
             return httpClient;
         });
-        var client = new MusicBrainzClient(factory.Object, TimeProvider.System, NullLogger<MusicBrainzClient>.Instance,
-            Mock.Of<IUpstreamCooldown>());
+        var client = new MusicBrainzClient(factory.Object, TimeProvider.System, NullLogger<MusicBrainzClient>.Instance);
 
         // Act
         var result = await client.GetEntityAsync(
@@ -572,8 +559,7 @@ public class MusicBrainzClientTests
         var client = new MusicBrainzClient(
             factory.Object,
             timeProvider,
-            NullLogger<MusicBrainzClient>.Instance,
-            Mock.Of<IUpstreamCooldown>());
+            NullLogger<MusicBrainzClient>.Instance);
         var pending = client.SearchAsync(
             new Request
             {
@@ -614,8 +600,7 @@ public class MusicBrainzClientTests
         var client = new MusicBrainzClient(
             factory.Object,
             timeProvider,
-            NullLogger<MusicBrainzClient>.Instance,
-            Mock.Of<IUpstreamCooldown>());
+            NullLogger<MusicBrainzClient>.Instance);
         var pending = client.GetIsrcAsync("GBUM71029604", new Settings(), CancellationToken.None);
         await _reading.Task.ConfigureAwait(false);
 

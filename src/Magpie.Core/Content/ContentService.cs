@@ -301,6 +301,27 @@ internal sealed class ContentService(
     }
 
     /// <inheritdoc />
+    public Task<MediaFile?> ReplaceFileAsync(
+        Guid contentHierarchyItemId,
+        Guid mediaFileId,
+        string stagedPath,
+        string outputFileName,
+        MediaInfo mediaInfo,
+        Guid? actingUserId,
+        CancellationToken cancellationToken = default)
+    {
+        return contentFileService.ReplaceAsync(
+            contentHierarchyItemId,
+            mediaFileId,
+            stagedPath,
+            outputFileName,
+            mediaInfo,
+            actingUserId,
+            ct => MaterializeFulfillmentStatusAsync(contentHierarchyItemId, actingUserId, cancellationToken: ct),
+            cancellationToken);
+    }
+
+    /// <inheritdoc />
     public async Task<bool> UnlinkFileAsync(
         Guid contentHierarchyItemId,
         Guid mediaFileId,

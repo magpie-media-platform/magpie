@@ -35,22 +35,22 @@ internal sealed class ApiKeyRepository(
         var fields = new List<string>();
         if (!string.Equals(current.Name, model.Name, StringComparison.Ordinal))
         {
-            fields.Add("name");
+            fields.Add(nameof(ApiKey.Name));
         }
 
         if (current.Enabled != model.Enabled)
         {
-            fields.Add("enabled");
+            fields.Add(nameof(ApiKey.Enabled));
         }
 
         if (current.ExpiresAt != model.ExpiresAt)
         {
-            fields.Add("expiresAt");
+            fields.Add(nameof(ApiKey.ExpiresAt));
         }
 
         if (current.LastUsedAt != model.LastUsedAt)
         {
-            fields.Add("lastUsedAt");
+            fields.Add(nameof(ApiKey.LastUsedAt));
         }
 
         return fields;
@@ -61,7 +61,7 @@ internal sealed class ApiKeyRepository(
         var fields = new List<string>();
         if (patch.Enabled is not null)
         {
-            fields.Add("enabled");
+            fields.Add(nameof(ApiKey.Enabled));
         }
 
         return fields;

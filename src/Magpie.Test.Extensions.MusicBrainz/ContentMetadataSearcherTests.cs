@@ -80,6 +80,165 @@ public class ContentMetadataSearcherTests
             NullLogger<ContentMetadataSearcher>.Instance);
     }
 
+    [Test]
+    public async Task SearchTargets_PreservesAnsweredTarget_WhenAnotherFails(
+        [Values] bool continuation,
+        [Values] bool failureFirst,
+        [Values] bool empty,
+        [Values] bool timeout,
+        [Values] bool allFail)
+    {
+        // Arrange
+        var calls = 0;
+        _queryExecutor.Setup(executor => executor.ExecuteAsync(It.IsAny<QueryPlan>(), It.IsAny<CancellationToken>()))
+            .Returns((QueryPlan _, CancellationToken _) =>
+            {
+                var current = calls++;
+                if (allFail || current != (failureFirst ? 1 : 0))
+                {
+                    return Task.FromException<QueryResult>(timeout
+                        ? new TaskCanceledException("request timed out")
+                        : new System.Net.Http.HttpRequestException("unavailable"));
+                }
+
+                return Task.FromResult(new QueryResult
+                {
+                    Supported = true,
+                    Hits = empty ? [] :
+                        [new SearchHit { Target = QueryTarget.Artist, PrimaryMbid = "artist-1", Title = "Artist" }],
+                    PageInfo = NotExhausted
+                });
+            });
+
+        // Act
+        if (allFail)
+        {
+            Assert.ThrowsAsync<System.Net.Http.HttpRequestException>(async () =>
+            {
+                if (continuation)
+                {
+                    await _subject.ContinueSearchAsync("music",
+                    new ContentHierarchyItemCriteria(),
+                        25,
+                    "en",
+                    null,
+                    default).ConfigureAwait(false);
+                }
+                else
+                {
+                    await _subject.AdvancedSearchAsync("music",
+                    new ContentHierarchyItemCriteria(),
+                        25,
+                    "en",
+                    default).ConfigureAwait(false);
+                }
+            });
+            Assert.That(calls, Is.EqualTo(3));
+            return;
+        }
+
+        var page = continuation
+            ? (await _subject.ContinueSearchAsync(
+                "music",
+                    new ContentHierarchyItemCriteria(), 25,
+                    "en",
+                    null,
+                    default).ConfigureAwait(false)).Page
+            : await _subject.AdvancedSearchAsync(
+                "music",
+                    new ContentHierarchyItemCriteria(), 25,
+                    "en",
+                    default).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(calls, Is.EqualTo(3));
+            Assert.That(page.Matches, Has.Count.EqualTo(empty ? 0 : 1));
+            Assert.That(page.Warnings, Is.Not.Empty);
+        }
+    }
+
+    [TestCase(false, 25)]
+    [TestCase(true, 25)]
+    [TestCase(true, 0)]
+    public void SearchTargets_PropagatesCallerCancellation(bool continuation, int maximumResults)
+    {
+        // Arrange
+        using var cancellation = new CancellationTokenSource();
+        var calls = 0;
+        _queryExecutor.Setup(executor => executor.ExecuteAsync(It.IsAny<QueryPlan>(), It.IsAny<CancellationToken>()))
+            .Returns(async (QueryPlan _, CancellationToken token) =>
+            {
+                calls++;
+                await cancellation.CancelAsync().ConfigureAwait(false);
+                return await Task.FromCanceled<QueryResult>(token).ConfigureAwait(false);
+            });
+
+        // Act and assert
+        Assert.CatchAsync<OperationCanceledException>(async () =>
+        {
+            if (continuation)
+            {
+                await _subject.ContinueSearchAsync("music",
+                    new ContentHierarchyItemCriteria(),
+                    maximumResults,
+                    "en",
+                    null,
+                    cancellation.Token).ConfigureAwait(false);
+            }
+            else
+            {
+                await _subject.AdvancedSearchAsync("music",
+                    new ContentHierarchyItemCriteria(),
+                    25,
+                    "en",
+                    cancellation.Token).ConfigureAwait(false);
+            }
+        });
+        Assert.That(calls, Is.EqualTo(1));
+    }
+
+    [Test]
+    public async Task ContinueSearchAsync_ValidatesOtherTargets_WhenOneTargetFails([Values] bool allFail)
+    {
+        // Arrange
+        var calls = 0;
+        _queryExecutor.Setup(executor => executor.ExecuteAsync(It.IsAny<QueryPlan>(), It.IsAny<CancellationToken>()))
+            .Returns((QueryPlan _, CancellationToken _) =>
+                calls++ == 1 && !allFail
+                    ? Task.FromResult(new QueryResult { Supported = true, Hits = [], PageInfo = NotExhausted })
+                    : Task.FromException<QueryResult>(new System.Net.Http.HttpRequestException("unavailable")));
+
+        // Act and assert
+        if (allFail)
+        {
+            Assert.ThrowsAsync<System.Net.Http.HttpRequestException>(async () =>
+                await _subject.ContinueSearchAsync(
+                    "music",
+                    new ContentHierarchyItemCriteria(), 0,
+                    "en",
+                    null,
+                    default).ConfigureAwait(false));
+        }
+        else
+        {
+            var batch = await _subject.ContinueSearchAsync(
+                "music",
+                    new ContentHierarchyItemCriteria(), 0,
+                    "en",
+                    null,
+                    default).ConfigureAwait(false);
+            using (Assert.EnterMultipleScope())
+            {
+                Assert.That(batch.Page.Matches, Is.Empty);
+                Assert.That(batch.Page.Warnings, Is.Not.Empty);
+            }
+        }
+
+        Assert.That(calls, Is.EqualTo(3));
+    }
+
     [TestCase("music", true)]
     [TestCase("movie", false)]
     public void CanProvideFacts_ReturnsExpected_WhenContentTypeIsGiven(string contentType, bool expected)

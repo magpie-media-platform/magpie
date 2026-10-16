@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 
+using Magpie.Models;
 using Magpie.Models.Data;
 
 using Microsoft.Data.SqlClient;
@@ -40,7 +41,8 @@ public sealed class MagpieDbContextFactory : IDesignTimeDbContextFactory<MagpieD
         DbContextOptionsBuilder optionsBuilder,
         string connectionString,
         IReadOnlyList<ScheduleTrigger> defaultScheduleTriggers,
-        IReadOnlyList<EventTrigger> defaultEventTriggers)
+        IReadOnlyList<EventTrigger> defaultEventTriggers,
+        DatabaseMigrationState? migrationState = null)
     {
         optionsBuilder
             .UseSqlServer(
@@ -50,7 +52,7 @@ public sealed class MagpieDbContextFactory : IDesignTimeDbContextFactory<MagpieD
                     .MigrationsAssembly(typeof(MagpieDbContextFactory).Assembly.GetName().Name)
                     .UseQuerySplittingBehavior(QuerySplittingBehavior.SplitQuery))
             .ReplaceService<IModelCustomizer, SqlServerModelCustomizer>()
-            .UseMagpieSeeding(defaultScheduleTriggers, defaultEventTriggers);
+            .UseMagpieSeeding(defaultScheduleTriggers, defaultEventTriggers, migrationState);
     }
 
     private static string GetDesignTimeConnectionString()

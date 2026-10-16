@@ -128,16 +128,14 @@ describe('InteractiveSearchPage', () => {
         vi.mocked(apiPost).mockResolvedValue({
             candidates: [candidate()],
             partial: true,
-            warning: 'One or more upstream providers are throttled. The search is incomplete.',
-            retryAt: '2027-01-01T00:00:00Z',
+            warning: 'One or more providers failed. The search is incomplete.',
         });
 
         // Act
         render(<InteractiveSearchPage />, { wrapper: TestWrapper });
 
         // Assert
-        expect(await screen.findByRole('alert')).toHaveTextContent('providers are throttled');
-        expect(screen.getByRole('alert')).toHaveTextContent('Retry after');
+        expect(await screen.findByRole('alert')).toHaveTextContent('providers failed');
         expect(screen.queryByText('No releases found')).not.toBeInTheDocument();
         expect(screen.getByText('The.Movie.2024.1080p.BluRay')).toBeInTheDocument();
     });
@@ -147,16 +145,14 @@ describe('InteractiveSearchPage', () => {
         vi.mocked(apiPost).mockResolvedValue({
             candidates: [],
             partial: true,
-            warning: 'One or more upstream providers are throttled. The search is incomplete.',
-            retryAt: '2027-01-01T00:00:00Z',
+            warning: 'One or more providers failed. The search is incomplete.',
         });
 
         // Act
         render(<InteractiveSearchPage />, { wrapper: TestWrapper });
 
         // Assert
-        expect(await screen.findByRole('alert')).toHaveTextContent('providers are throttled');
-        expect(screen.getByRole('alert')).toHaveTextContent('Retry after');
+        expect(await screen.findByRole('alert')).toHaveTextContent('providers failed');
         expect(screen.queryByText('No releases found')).not.toBeInTheDocument();
         expect(screen.getByText('Search incomplete')).toBeInTheDocument();
     });

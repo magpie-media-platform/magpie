@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 using Magpie.Abstractions.Jobs;
 using Magpie.Abstractions.Repositories;
 using Magpie.Core;
+using Magpie.Core.Config;
 using Magpie.Core.Jobs;
 using Magpie.Core.Jobs.Runtime;
 using Magpie.Core.Repositories;
@@ -76,7 +77,7 @@ public sealed class DownloadImportRecoveryTests
             Mock.Of<IEventBus>(),
             NullLogger<JobExecutionRepository>.Instance,
             time,
-            new JobRegistry([], NullLogger<JobRegistry>.Instance));
+            new JobRegistry([], new JobRuntimeOptions(), NullLogger<JobRegistry>.Instance));
         var registry = Mock.Of<IJobRegistry>(registry =>
             registry.ListJobSpecs() == new[] { DownloadImportItemJob.Spec });
         var manager = new JobManager(Mock.Of<IJobRuntime>(), registry, executions,
@@ -269,7 +270,7 @@ public sealed class DownloadImportRecoveryTests
             Mock.Of<IEventBus>(),
             NullLogger<JobExecutionRepository>.Instance,
             time,
-            new JobRegistry([], NullLogger<JobRegistry>.Instance));
+            new JobRegistry([], new JobRuntimeOptions(), NullLogger<JobRegistry>.Instance));
         var registry = Mock.Of<IJobRegistry>(registry =>
             registry.ListJobSpecs() == new[] { DownloadImportItemJob.Spec });
         var manager = new JobManager(Mock.Of<IJobRuntime>(), registry, repository,

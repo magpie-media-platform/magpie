@@ -573,6 +573,54 @@ describe('MyJobsPage Executions tab', () => {
     });
 });
 
+describe('MyJobsPage attempts filter', () => {
+    it('requests only the retry family while preserving the user scope and clears it on demand', async () => {
+        // Arrange
+        const user = userEvent.setup();
+        render(
+            <TestWrapper initialRoute="/?originalExecutionId=exec-original">
+                <MyJobsPage />
+            </TestWrapper>,
+        );
+
+        // Assert
+        expect(mockUseJobs).toHaveBeenLastCalledWith(
+            expect.objectContaining({
+                mine: true,
+                rootsOnly: false,
+                originalExecutionId: 'exec-original',
+            }),
+        );
+        expect(screen.getByText('All attempts')).toBeInTheDocument();
+        expect(screen.getByRole('switch', { name: 'Show top level only' })).toBeDisabled();
+
+        // Act
+        await user.click(screen.getByRole('button', { name: 'Clear attempts filter' }));
+
+        // Assert
+        expect(screen.queryByText('All attempts')).not.toBeInTheDocument();
+        expect(mockUseJobs.mock.calls.at(-1)?.[0]?.originalExecutionId).toBeUndefined();
+    });
+
+    it('clears the attempts filter when leaving history', async () => {
+        // Arrange
+        const user = userEvent.setup();
+        render(
+            <TestWrapper initialRoute="/?originalExecutionId=exec-original">
+                <MyJobsPage />
+            </TestWrapper>,
+        );
+
+        // Act
+        await user.click(screen.getByRole('tab', { name: 'Scheduled Jobs' }));
+        await user.click(screen.getByRole('tab', { name: 'History' }));
+
+        // Assert
+        expect(screen.queryByText('All attempts')).not.toBeInTheDocument();
+        expect(mockUseJobs.mock.calls.at(-1)?.[0]?.originalExecutionId).toBeUndefined();
+    });
+});
+
 describe('MyJobsPage chain filter', () => {
     it('requests the correlationId filter from the URL', () => {
         render(

@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
@@ -507,9 +506,8 @@ internal sealed class ReleaseSearchQueryExecutor(
             : combined;
         var accepted = eligible;
         var attempted = branches.Count(branch => branch.Attempted);
-        var succeeded = branches.Count(branch => branch.Attempted && branch.Failure is null);
+        var succeeded = branches.Count(branch => branch.ExecutedRoutes.Any(route => route.ConnectionsSucceeded > 0));
         var partial = failures.Count > 0;
-        var retryAt = branches.Select(branch => branch.RetryAt).Max();
 
         activity?.SetTag("magpie.query.raw_results", branches.Sum(branch => branch.RawCount));
         activity?.SetTag("magpie.query.evaluated_results", combined.Count);
@@ -518,12 +516,12 @@ internal sealed class ReleaseSearchQueryExecutor(
         activity?.SetTag("magpie.query.partial", partial);
         RecordContributions(activity, rootUnion.Contributions);
 
-        if (attempted > 0 && succeeded == 0 && retryAt is null)
+        if (failures.Count > 0 && succeeded == 0)
         {
             activity?.SetStatus(ActivityStatusCode.Error, "Every attempted connection failed.");
             activity?.SetTag("magpie.query.terminal_reason", "failed");
             throw new InvalidOperationException(
-                $"Release search failed; every one of the {attempted} attempted connections failed.");
+                "Release search failed; no provider answered successfully.");
         }
 
         activity?.SetTag(
@@ -536,12 +534,7 @@ internal sealed class ReleaseSearchQueryExecutor(
             ConnectionsAttempted = attempted,
             ConnectionsSucceeded = succeeded,
             Partial = partial,
-            Warning = retryAt is null
-                ? partial ? "One or more providers failed. The search is incomplete." : warning
-                : failures.Values.Any(error => error != "upstream-throttled")
-                    ? "Some providers are throttled and other providers failed. The search is incomplete."
-                    : "One or more upstream providers are throttled. The search is incomplete.",
-            RetryAt = retryAt,
+            Warning = partial ? "One or more providers failed. The search is incomplete." : warning,
         };
     }
 
@@ -581,7 +574,6 @@ internal sealed class ReleaseSearchQueryExecutor(
         var evaluatedCount = 0;
         var attempted = false;
         string? failure = null;
-        var throttles = new ConcurrentBag<UpstreamThrottledException>();
 
         try
         {
@@ -600,7 +592,7 @@ internal sealed class ReleaseSearchQueryExecutor(
                 if (leaf.Failure is not null)
                 {
                     failure = leaf.Failure;
-                    break;
+                    continue;
                 }
 
                 var routeObservations = new List<PlannedObservation>();
@@ -668,7 +660,7 @@ internal sealed class ReleaseSearchQueryExecutor(
                 }
             }
 
-            if (failure is null && !results.Any(result => IsUseful(result.Assessment)) &&
+            if (!results.Any(result => IsUseful(result.Assessment)) &&
                 evaluatedCount < maximumResults)
             {
                 using var keywordActivity = ReleaseTelemetry.Source.StartActivity("magpie.release-query.node.union");
@@ -695,7 +687,6 @@ internal sealed class ReleaseSearchQueryExecutor(
                         if (leaf.Failure is not null)
                         {
                             failure = leaf.Failure;
-                            break;
                         }
                     }
 
@@ -789,10 +780,7 @@ internal sealed class ReleaseSearchQueryExecutor(
                         ? "accepted"
                         : "exhausted");
 
-            return new ConnectionExecution(planned, results, executedRoutes, attempted, failure, rawCount)
-            {
-                RetryAt = throttles.Select(throttle => (DateTimeOffset?)throttle.RetryAt).Max()
-            };
+            return new ConnectionExecution(planned, results, executedRoutes, attempted, failure, rawCount);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -876,11 +864,6 @@ internal sealed class ReleaseSearchQueryExecutor(
             }
             catch (RouteCachePopulationException ex)
             {
-                if (ex.RetryAt is { } retryAt)
-                {
-                    throttles.Add(new UpstreamThrottledException(retryAt));
-                }
-
                 routeResult = new([], ex.Attempted, ex.Failure, 0);
             }
 
@@ -937,7 +920,6 @@ internal sealed class ReleaseSearchQueryExecutor(
 
             async ValueTask<CachedRouteResult> PopulateAsync(CancellationToken token)
             {
-                UpstreamThrottledException? throttle = null;
                 var result = await RunPhaseConnectionAsync(
                     planned.Connection,
                     planned.Order,
@@ -948,11 +930,10 @@ internal sealed class ReleaseSearchQueryExecutor(
                     applicableIndexerIds,
                     onConnectionStarted,
                     preserveDuplicateObservations: true,
-                    cancellationToken: token,
-                    onThrottled: value => throttle = value).ConfigureAwait(false);
+                    cancellationToken: token).ConfigureAwait(false);
                 if (result.Failure is { } failure)
                 {
-                    throw new RouteCachePopulationException(result.Attempted, failure.Error, throttle?.RetryAt);
+                    throw new RouteCachePopulationException(result.Attempted, failure.Error);
                 }
 
                 return new CachedRouteResult(result.Releases, result.Attempted, null, maximumResults);
@@ -1599,8 +1580,7 @@ internal sealed class ReleaseSearchQueryExecutor(
             ISet<Guid> applicableIndexerIds,
             Action<int, string>? onConnectionStarted,
             bool preserveDuplicateObservations,
-            CancellationToken cancellationToken,
-            Action<UpstreamThrottledException>? onThrottled = null)
+            CancellationToken cancellationToken)
     {
         var attempted = false;
         var stopwatch = Stopwatch.StartNew();
@@ -1776,12 +1756,6 @@ internal sealed class ReleaseSearchQueryExecutor(
         {
             activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
             activity?.AddException(ex);
-            if (ex is UpstreamThrottledException throttle)
-            {
-                onThrottled?.Invoke(throttle);
-                attempted = throttle.RequestSent;
-            }
-
             Record(attempted ? "attempted" : "error", 0, failed: true);
             ReleaseTelemetry.IndexerQueryFailures.Add(
                 1,
@@ -1879,11 +1853,6 @@ internal sealed class ReleaseSearchQueryExecutor(
         var connectionsById = connections.ToDictionary(connection => connection.Id);
         foreach (var (connectionId, error) in failures)
         {
-            if (error == "upstream-throttled")
-            {
-                continue;
-            }
-
             if (!connectionsById.TryGetValue(connectionId, out var connection) ||
                 connection.Status == IntegrationHealthStatus.Stabilizing)
             {
@@ -1892,8 +1861,8 @@ internal sealed class ReleaseSearchQueryExecutor(
 
             try
             {
-                var patched = await indexerConnectionRepository
-                    .PatchAsync(
+                var patched = await indexerRepository
+                    .PatchConnectionAsync(
                         new IndexerConnectionPatch
                         {
                             Id = connectionId,
@@ -2098,7 +2067,7 @@ internal sealed class ReleaseSearchQueryExecutor(
     }
 
     private string ClassifyProviderFailure(Exception exception) =>
-        exception is UpstreamThrottledException ? "upstream-throttled" : $"provider-error:{exception.GetType().Name}";
+        $"provider-error:{exception.GetType().Name}";
 
     private sealed record PlannedRoute(
         string NodeId,
@@ -2207,10 +2176,7 @@ internal sealed class ReleaseSearchQueryExecutor(
         IReadOnlyList<ReleaseSearchPhase> ExecutedRoutes,
         bool Attempted,
         string? Failure,
-        int RawCount)
-    {
-        internal DateTimeOffset? RetryAt { get; init; }
-    }
+        int RawCount);
 
     private sealed record CachedRouteResult(
         IReadOnlyList<Release> Releases,
@@ -2253,13 +2219,11 @@ internal sealed class ReleaseSearchQueryExecutor(
         }
     }
 
-    private sealed class RouteCachePopulationException(bool attempted, string failure, DateTimeOffset? retryAt)
+    private sealed class RouteCachePopulationException(bool attempted, string failure)
         : Exception
     {
         internal bool Attempted { get; } = attempted;
 
         internal string Failure { get; } = failure;
-
-        internal DateTimeOffset? RetryAt { get; } = retryAt;
     }
 }

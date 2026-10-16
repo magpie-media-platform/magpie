@@ -34,6 +34,12 @@ interface SetupStatus {
     requiresAdminClaim: boolean;
 }
 
+interface DatabaseStatus {
+    initialized: boolean;
+    provider: string;
+    jobTypes: Record<string, string>;
+}
+
 interface SettingsGroup {
     name: string;
     extensionId: string | null;
@@ -61,10 +67,16 @@ test.describe.serial('Journey 1: day one: unbox the instance', () => {
         await test.step('prove the instance is clean and the deployment is initialized', async () => {
             const status = await new ApiClient().get<SetupStatus>('/api/system/setup/status');
             expect(status).toEqual({ isRequired: true, isComplete: false, requiresAdminClaim: true });
-            const database = await new ApiClient().get<{ initialized: boolean; provider: string }>(
-                '/api/system/setup/db-status',
-            );
-            expect(database).toEqual({ initialized: true, provider: integrationEnvironment.databaseProvider });
+            const database = await new ApiClient().get<DatabaseStatus>('/api/system/setup/db-status');
+            expect(database).toEqual({
+                initialized: true,
+                provider: integrationEnvironment.databaseProvider,
+                jobTypes: expect.objectContaining({
+                    DatabaseBackup: 'Database backup',
+                    RootFolderContentDiscovery: 'Root folder content discovery',
+                    WishlistRefreshScan: 'Wishlist refresh scan',
+                }),
+            });
         });
 
         await test.step('claim the administrator account and reach the extensions step', async () => {
@@ -185,6 +197,11 @@ test.describe.serial('Journey 1: day one: unbox the instance', () => {
                 isRequired: false,
                 isComplete: true,
                 requiresAdminClaim: false,
+            });
+            expect(await new ApiClient().get<DatabaseStatus>('/api/system/setup/db-status')).toEqual({
+                initialized: true,
+                provider: integrationEnvironment.databaseProvider,
+                jobTypes: {},
             });
         });
 

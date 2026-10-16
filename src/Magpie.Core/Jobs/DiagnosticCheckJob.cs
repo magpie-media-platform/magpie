@@ -39,7 +39,7 @@ internal sealed class DiagnosticCheckJob(
     {
         JobType = MagpieJobs.Types.DiagnosticCheck,
         DisplayName = "Diagnostic check",
-        Description = "Runs all system diagnostics and saves the results.",
+        Description = "Runs the system diagnostics and saves the results.",
         Category = "System",
         Scope = JobScope.System,
         Enabled = true,

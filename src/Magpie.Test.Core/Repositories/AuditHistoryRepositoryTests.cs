@@ -4,6 +4,7 @@ using System.Linq;
 using System.Threading.Tasks;
 
 using Magpie.Abstractions.Repositories;
+using Magpie.Core.Config;
 using Magpie.Core.Jobs;
 using Magpie.Core.Jobs.Runtime;
 using Magpie.Core.Repositories;
@@ -179,6 +180,7 @@ public sealed class AuditHistoryRepositoryTests
             _context,
             new JobRegistry(
                 [new(DownloadImportItemJob.Spec, typeof(DownloadImportItemJob))],
+                new JobRuntimeOptions(),
                 NullLogger<JobRegistry>.Instance),
             NullLogger<AuditHistoryRepository>.Instance);
     }

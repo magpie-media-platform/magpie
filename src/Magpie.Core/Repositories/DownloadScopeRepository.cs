@@ -22,6 +22,7 @@ internal sealed class DownloadScopeRepository(
     MagpieDbContext context,
     ITransactionManager transactionManager,
     IAuditRecordRepository auditRecordRepository,
+    IDownloadRepository downloadRepository,
     ILogger<DownloadScopeRepository> logger,
     TimeProvider timeProvider) : IDownloadScopeRepository
 {
@@ -128,7 +129,7 @@ internal sealed class DownloadScopeRepository(
                     context.DownloadScopes.Add(model);
                     await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
                     await WriteAuditAsync("Create", model, createdByUserId, cancellationToken).ConfigureAwait(false);
-                    await RecomputeAcquisitionStatusAsync(
+                    await downloadRepository.RecomputeActiveAcquisitionStatusAsync(
                         [model.ContentHierarchyItemId],
                         createdByUserId,
                         cancellationToken)
@@ -174,7 +175,7 @@ internal sealed class DownloadScopeRepository(
                     {
                         await WriteAuditAsync("Update", model, modifiedByUserId, cancellationToken)
                             .ConfigureAwait(false);
-                        await RecomputeAcquisitionStatusAsync(
+                        await downloadRepository.RecomputeActiveAcquisitionStatusAsync(
                             [priorHierarchyItemId.Value, model.ContentHierarchyItemId],
                             modifiedByUserId,
                             cancellationToken)
@@ -210,7 +211,7 @@ internal sealed class DownloadScopeRepository(
                     await context.DownloadScopes.Where(scope => scope.Id == id)
                         .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
                     await WriteAuditAsync("Delete", model, deletedByUserId, cancellationToken).ConfigureAwait(false);
-                    await RecomputeAcquisitionStatusAsync(
+                    await downloadRepository.RecomputeActiveAcquisitionStatusAsync(
                         [model.ContentHierarchyItemId],
                         deletedByUserId,
                         cancellationToken)
@@ -223,67 +224,6 @@ internal sealed class DownloadScopeRepository(
         {
             logger.LogError(ex, "The download scope repository failed to delete scope {DownloadScopeId}.", id);
             throw;
-        }
-    }
-
-    private async Task RecomputeAcquisitionStatusAsync(
-        IReadOnlyCollection<Guid> hierarchyItemIds,
-        Guid? userId,
-        CancellationToken cancellationToken)
-    {
-        var contentItemIds = await context.ContentItems.AsNoTracking()
-            .Where(item => hierarchyItemIds.Contains(item.ContentHierarchyItemId))
-            .Select(item => item.Id)
-            .ToListAsync(cancellationToken).ConfigureAwait(false);
-        await RecomputeActiveAcquisitionStatusAsync(
-            contentItemIds,
-            _time.GetUtcNow().UtcDateTime,
-            userId,
-            cancellationToken).ConfigureAwait(false);
-    }
-
-    private async Task RecomputeActiveAcquisitionStatusAsync(
-        IReadOnlyCollection<Guid> contentItemIds,
-        DateTime now,
-        Guid? userId,
-        CancellationToken cancellationToken)
-    {
-        if (contentItemIds.Count == 0)
-        {
-            return;
-        }
-
-        var distinctIds = contentItemIds.Distinct().ToList();
-
-        var inFlight = await (
-            from d in context.Downloads.AsNoTracking()
-            join scope in context.DownloadScopes.AsNoTracking() on d.Id equals scope.DownloadId
-            join ci in context.ContentItems.AsNoTracking()
-                on scope.ContentHierarchyItemId equals ci.ContentHierarchyItemId
-            where distinctIds.Contains(ci.Id) &&
-                !DownloadStatuses.Finished.Contains(d.Status)
-            select new { ContentItemId = ci.Id, d.Status, Anchor = d.ModifiedAt ?? d.CreatedAt })
-            .ToListAsync(cancellationToken)
-            .ConfigureAwait(false);
-
-        var statusByContentItem = inFlight
-            .GroupBy(x => x.ContentItemId)
-            .ToDictionary(g => g.Key, g => g.OrderByDescending(x => x.Anchor).First().Status);
-
-        foreach (var contentItemId in distinctIds)
-        {
-            var next = statusByContentItem.TryGetValue(contentItemId, out var status)
-                ? (DownloadStatus?)status
-                : null;
-            await context.ContentItems
-                .Where(ci => ci.Id == contentItemId && ci.ActiveAcquisitionStatus != next)
-                .ExecuteUpdateAsync(
-                    s => s
-                        .SetProperty(ci => ci.ActiveAcquisitionStatus, next)
-                        .SetProperty(ci => ci.ModifiedAt, now)
-                        .SetProperty(ci => ci.ModifiedByUserId, userId),
-                    cancellationToken)
-                .ConfigureAwait(false);
         }
     }
 

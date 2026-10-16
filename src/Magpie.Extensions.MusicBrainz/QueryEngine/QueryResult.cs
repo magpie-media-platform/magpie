@@ -9,6 +9,8 @@ internal sealed record QueryResult
 {
     public required bool Supported { get; init; }
 
+    public bool Failed { get; init; }
+
     public required IReadOnlyList<SearchHit> Hits { get; init; }
 
     public required ProviderSearchPageInfo PageInfo { get; init; }

@@ -18,7 +18,7 @@ internal sealed class ReleaseSearchItemJob(
     {
         JobType = MagpieJobs.Types.ReleaseSearchItem,
         DisplayName = "Release search item",
-        Description = "Searches available releases for one content item.",
+        Description = "Searches the indexers for releases of a content item.",
         Category = "Content",
         Scope = JobScope.Content,
         Enabled = true,

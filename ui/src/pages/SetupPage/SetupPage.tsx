@@ -136,8 +136,10 @@ export function SetupPage(): ReactNode {
                     </div>
                 ) : resolvedStepId === 'db' ? (
                     <DbProviderStep onAdvance={handleAdvance} />
+                ) : resolvedStepId === 'join' ? (
+                    <DbProviderStep join onAdvance={handleAdvance} />
                 ) : resolvedStepId === 'admin' ? (
-                    <AdminClaimStep onAdvance={handleAdvance} />
+                    <AdminClaimStep onAdvance={handleAdvance} onJoinCluster={() => setStepId('join')} />
                 ) : resolvedStepId === 'extensions' ? (
                     <ExtensionsStep onAdvance={handleAdvance} />
                 ) : resolvedStepId === 'metadata' ? (

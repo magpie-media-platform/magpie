@@ -38,76 +38,6 @@ public sealed class DefaultJobScheduleDiagnosticTests
     private ScheduleTrigger _releaseSearchTrigger = null!;
     private IDiagnosticCheck _subject = null!;
 
-    public static IEnumerable<TestCaseData> StoredImportTriggerCases
-    {
-        get
-        {
-            yield return new TestCaseData(new EventTrigger
-            {
-                Id = new Guid("00000000-0000-0000-0000-000000000300"),
-                JobType = "MediaInfoExtractScan",
-                Scope = JobScope.Content,
-                Name = "Media info extract on import",
-                EventFilter = new()
-                {
-                    EventName = new() { Operator = CriteriaValueOperator.Equals, Value = "content.imported" }
-                },
-                Enabled = true
-            }, 1);
-            yield return new TestCaseData(new EventTrigger
-            {
-                Id = new Guid("00000000-0000-0000-0000-000000000300"),
-                JobType = "MediaInfoExtractScan",
-                Scope = JobScope.Content,
-                Name = "Media info extract on import",
-                EventFilter = new()
-                {
-                    EventName = new() { Operator = CriteriaValueOperator.Equals, Value = "content.imported" }
-                },
-                Enabled = true,
-                Parameters = new() { ["mediaInfoPolicy"] = "All" }
-            }, 0);
-            yield return new TestCaseData(new EventTrigger
-            {
-                Id = new Guid("00000000-0000-0000-0000-000000000300"),
-                JobType = "MediaInfoExtractScan",
-                Scope = JobScope.Content,
-                Name = "My media info scan",
-                EventFilter = new()
-                {
-                    EventName = new() { Operator = CriteriaValueOperator.Equals, Value = "content.imported" }
-                },
-                Enabled = true,
-                CreatedByUserId = new Guid("00000000-0000-0000-0000-00000000000a")
-            }, 0);
-            yield return new TestCaseData(new EventTrigger
-            {
-                Id = new Guid("00000000-0000-0000-0000-000000000300"),
-                JobType = "MediaInfoExtractScan",
-                Scope = JobScope.Content,
-                Name = "Media info extract on import",
-                EventFilter = new()
-                {
-                    EventName = new() { Operator = CriteriaValueOperator.Equals, Value = "content.imported" }
-                },
-                Enabled = true,
-                ModifiedByUserId = new Guid("00000000-0000-0000-0000-00000000000a")
-            }, 0);
-            yield return new TestCaseData(new EventTrigger
-            {
-                Id = new Guid("00000000-0000-0000-0000-000000000300"),
-                JobType = "MediaInfoExtractScan",
-                Scope = JobScope.Content,
-                Name = "Media info extract on import",
-                EventFilter = new()
-                {
-                    EventName = new() { Operator = CriteriaValueOperator.Equals, Value = "download.imported" }
-                },
-                Enabled = true
-            }, 0);
-        }
-    }
-
     [SetUp]
     public void SetUp()
     {
@@ -253,31 +183,17 @@ public sealed class DefaultJobScheduleDiagnosticTests
             finding.Title == "Job type extension-job has no handler on this node"));
     }
 
-    [TestCaseSource(nameof(StoredImportTriggerCases))]
-    public async Task RunAsync_ReportsTheStoredImportTrigger_WhenItIsTheBuiltInTriggerWithNoParameters(
-        EventTrigger stored,
-        int expectedFindings)
+    [TestCase("DownloadCleanup")]
+    [TestCase("ReleaseAutoGrabScan")]
+    public async Task RunAsync_ReportsOneMissingEventTrigger_WhenTheJobTypeHasSeveralBuiltInTriggers(string jobType)
     {
-        // Arrange
-        _eventTriggers.Setup(repository => repository.ListAllAsync(It.IsAny<CancellationToken>()))
-            .ReturnsAsync([stored]);
-
         // Act
         var findings = await _subject.RunAsync(DiagnosticContext.Empty).ConfigureAwait(false);
 
         // Assert
-        var unbound = findings
-            .Where(finding => finding.AffectedEntity == "EventTrigger:00000000-0000-0000-0000-000000000300")
-            .ToList();
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(unbound, Has.Count.EqualTo(expectedFindings));
-            Assert.That(unbound.Select(finding => finding.RepairId), Is.All.EqualTo("core.config.reseed-default-job"));
-            Assert.That(
-                unbound.Select(finding => finding.Detail),
-                Is.All.EqualTo("The built-in MediaInfoExtractScan event trigger has no parameters, and the built-in " +
-                    "trigger binds contentHierarchyItemId, mediaInfoPolicy."));
-        }
+        Assert.That(
+            findings.Where(finding => finding.AffectedEntity == "EventTriggerJob:" + jobType),
+            Has.Exactly(1).Items);
     }
 
     [Test]

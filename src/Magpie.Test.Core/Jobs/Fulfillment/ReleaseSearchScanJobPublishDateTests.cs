@@ -100,7 +100,6 @@ public sealed class ReleaseSearchScanJobPublishDateTests
             Mock.Of<IContentRepository>());
         _subject = new ReleaseSearchScanJob(
             _jobManager.Object,
-            _executions.Object,
             hierarchy,
             _time,
             NullLogger<ReleaseSearchScanJob>.Instance,
@@ -128,7 +127,6 @@ public sealed class ReleaseSearchScanJobPublishDateTests
             Mock.Of<IReleaseSearchQueryExecutor>(),
             Mock.Of<IReleaseEvaluationService>(),
             [],
-            new JobRuntimeOptions(),
             new SearchOptions(),
             _time,
             NullLogger<ReleaseSearchService>.Instance);

@@ -33,7 +33,7 @@ internal sealed class IndexerFeedSyncItemJob(
     {
         JobType = MagpieJobs.Types.IndexerFeedSyncItem,
         DisplayName = "Indexer feed sync item",
-        Description = "Refreshes indexer definitions from one enabled feed.",
+        Description = "Updates indexer definitions from an indexer feed.",
         Category = "Integrations",
         Scope = JobScope.Administrative,
         Enabled = true,

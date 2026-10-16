@@ -1407,6 +1407,7 @@ public sealed class AuditRecordRepositoryTests
             ParentEntityId = parentEntityId,
             EntityType = "Subject",
             Detail = "Updated subject metadata",
+            Data = "{\"field\":\"value\"}",
             Timestamp = timestamp,
             UserId = _userId
         };
@@ -1427,6 +1428,7 @@ public sealed class AuditRecordRepositoryTests
             Assert.That(entity, Has.Property(nameof(entity.ParentEntityId)).EqualTo(parentEntityId));
             Assert.That(entity, Has.Property(nameof(entity.EntityType)).EqualTo("Subject"));
             Assert.That(entity, Has.Property(nameof(entity.Detail)).EqualTo("Updated subject metadata"));
+            Assert.That(entity, Has.Property(nameof(entity.Data)).EqualTo("{\"field\":\"value\"}"));
             Assert.That(entity, Has.Property(nameof(entity.Timestamp)).EqualTo(timestamp));
             Assert.That(entity, Has.Property(nameof(entity.UserId)).EqualTo(_userId));
         }

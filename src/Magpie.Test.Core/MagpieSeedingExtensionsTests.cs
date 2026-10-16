@@ -1,13 +1,17 @@
 using System;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 
+using Magpie.Core.Jobs;
 using Magpie.Data;
+using Magpie.Models;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
 
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
 
 using NUnit.Framework;
 
@@ -17,15 +21,23 @@ namespace Magpie.Test.Core;
 public sealed class MagpieSeedingExtensionsTests
 {
     private MagpieDbContext _context = null!;
+    private DatabaseMigrationState _migrationState = null!;
+    private Func<DbContext, bool, CancellationToken, Task> _seed = null!;
 
     [SetUp]
     public void SetUp()
     {
         var connection = new SqliteConnection("Data Source=:memory:");
         connection.Open();
+        _migrationState = new DatabaseMigrationState();
+        _migrationState.RecordPendingMigrations(["20261010042727_audit_record_data"]);
         var options = new DbContextOptionsBuilder<MagpieDbContext>()
             .UseSqlite(connection, contextOwnsConnection: true);
-        options.UseMagpieSeeding([], []);
+        options.UseMagpieSeeding(
+            DefaultJobTriggerCatalog.ScheduleTriggers,
+            DefaultJobTriggerCatalog.EventTriggers,
+            _migrationState);
+        _seed = options.Options.FindExtension<CoreOptionsExtension>()!.AsyncSeeder!;
         _context = new MagpieDbContext(options.Options);
         _context.Database.EnsureCreated();
         _context.ChangeTracker.Clear();
@@ -123,7 +135,9 @@ public sealed class MagpieSeedingExtensionsTests
         await _context.Database.EnsureCreatedAsync().ConfigureAwait(false);
 
         // Assert
-        var trigger = await _context.ScheduleTriggers.AsNoTracking().SingleAsync().ConfigureAwait(false);
+        var trigger = await _context.ScheduleTriggers.AsNoTracking()
+            .SingleAsync(candidate => candidate.Schedule == "45 3 * * *")
+            .ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
             Assert.That(trigger.JobType, Is.EqualTo("SubjectMaintenance"));
@@ -185,5 +199,93 @@ public sealed class MagpieSeedingExtensionsTests
             Assert.That(await _context.QualityTierLists.CountAsync().ConfigureAwait(false), Is.EqualTo(0));
             Assert.That(await _context.QualityTiers.CountAsync().ConfigureAwait(false), Is.EqualTo(36));
         }
+    }
+
+    [Test]
+    public async Task UseMagpieSeeding_KeepsOneCopyOfTheTriggerCatalog_WhenTheServerStartsAgain()
+    {
+        // Act
+        await _context.Database.EnsureCreatedAsync().ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(await _context.ScheduleTriggers.CountAsync().ConfigureAwait(false), Is.EqualTo(20));
+            Assert.That(await _context.EventTriggers.CountAsync().ConfigureAwait(false), Is.EqualTo(16));
+        }
+    }
+
+    [Test]
+    public async Task UseMagpieSeeding_KeepsTheBuiltInTriggersDeleted_WhenTheServerStartsAgain()
+    {
+        // Arrange
+        await _context.ScheduleTriggers
+            .Where(trigger => trigger.Name == "Download cleanup schedule")
+            .ExecuteDeleteAsync()
+            .ConfigureAwait(false);
+        await _context.EventTriggers
+            .Where(trigger => trigger.Name == "Download cleanup on conclusion")
+            .ExecuteDeleteAsync()
+            .ConfigureAwait(false);
+
+        // Act
+        await _context.Database.EnsureCreatedAsync().ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(await _context.ScheduleTriggers.CountAsync().ConfigureAwait(false), Is.EqualTo(19));
+            Assert.That(await _context.EventTriggers.CountAsync().ConfigureAwait(false), Is.EqualTo(15));
+        }
+    }
+
+    [Test]
+    public async Task UseMagpieSeeding_AddsOnlyTheNewEventTriggers_WhenTheStartupAppliesTheAuditRecordDataMigration()
+    {
+        // Arrange
+        await _context.EventTriggers.ExecuteDeleteAsync().ConfigureAwait(false);
+
+        // Act
+        await _seed(_context, true, CancellationToken.None).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(
+            await _context.EventTriggers.Select(trigger => trigger.Name).ToListAsync().ConfigureAwait(false),
+            Is.EquivalentTo(new[]
+            {
+                "Media info extract on file change",
+                "Media server refresh on file change",
+                "Download cleanup on hold change",
+                "Release auto-grab scan on fulfillment change",
+                "Content fulfillment reconciliation on quality tier change",
+                "Indexer feed sync on creation",
+            }));
+    }
+
+    [TestCase("20261010042727_audit_record_data", false)]
+    [TestCase("20261101000000_later_change", true)]
+    public async Task UseMagpieSeeding_AddsNoEventTrigger_WhenTheStartupDoesNotApplyTheAuditRecordDataMigration(
+        string pendingMigration,
+        bool storeManagementPerformed)
+    {
+        // Arrange
+        await _context.EventTriggers.ExecuteDeleteAsync().ConfigureAwait(false);
+        _migrationState.RecordPendingMigrations([pendingMigration]);
+
+        // Act
+        await _seed(_context, storeManagementPerformed, CancellationToken.None).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(await _context.EventTriggers.CountAsync().ConfigureAwait(false), Is.EqualTo(0));
+    }
+
+    [Test]
+    public async Task UseMagpieSeeding_AddsNoSecondCopy_WhenTheDatabaseHasTheNewEventTriggers()
+    {
+        // Act
+        await _seed(_context, true, CancellationToken.None).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(await _context.EventTriggers.CountAsync().ConfigureAwait(false), Is.EqualTo(16));
     }
 }

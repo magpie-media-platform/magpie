@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Net.Http;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -165,6 +166,85 @@ public sealed class QueryExecutorTests
             _cacheFactory,
             settingsResolver.Object,
             NullLogger<QueryExecutor>.Instance);
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public void ExecuteSearchAsync_Throws_WhenNoRequestAnswers(bool timeout)
+    {
+        // Arrange
+        _client.Setup(value => value.GetJsonAsync<SearchResponseDto>(
+                It.IsAny<ApiRequest>(), _context, It.IsAny<CancellationToken>()))
+            .ThrowsAsync(timeout
+                ? new TaskCanceledException("Request timed out.", new TimeoutException())
+                : new HttpRequestException("Provider unavailable."));
+        var plan = new QueryPlan
+        {
+            Root = new PlanNode
+            {
+                Kind = PlanNodeKind.Fetch,
+                SourceTerms = [new SourceTerm { Field = "title", Values = ["Book"] }],
+                PagingMode = FetchPagingMode.Direct
+            },
+            Hierarchy = new BookHierarchy { ContentTypeSlug = "books", BookLevelSlug = "book" },
+            Advanced = true,
+            MaxResults = 10
+        };
+
+        // Act and Assert
+        Assert.That(() => _subject.ExecuteSearchAsync(plan, default), Throws.InstanceOf<Exception>());
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task ExecuteSearchAsync_RetainsSuccessfulPage_WhenALaterRequestFails(bool keepMatches)
+    {
+        // Arrange
+        _client.SetupSequence(value => value.GetJsonAsync<SearchResponseDto>(
+                It.IsAny<ApiRequest>(), _context, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new SearchResponseDto
+            {
+                NumFound = 200,
+                NumFoundExact = true,
+                Docs = [.. Enumerable.Range(1, 100).Select(id => new SearchDocumentDto
+                {
+                    Key = $"/works/OL{id}W",
+                    Title = "Book"
+                })]
+            })
+            .ThrowsAsync(new TaskCanceledException("Request timed out.", new TimeoutException()));
+        var plan = new QueryPlan
+        {
+            Root = new PlanNode
+            {
+                Kind = PlanNodeKind.Filter,
+                Filters = [new QueryFilter
+                {
+                    Field = QueryField.Title,
+                    Operator = CriteriaValueOperator.Equals,
+                    Values = [keepMatches ? "Book" : "Other"]
+                }],
+                Children = [new PlanNode
+                {
+                    Kind = PlanNodeKind.Fetch,
+                    SourceTerms = [new SourceTerm { Field = "title", Values = ["Book"] }],
+                    PagingMode = FetchPagingMode.SurvivorScan
+                }]
+            },
+            Hierarchy = new BookHierarchy { ContentTypeSlug = "books", BookLevelSlug = "book" },
+            Advanced = true,
+            MaxResults = 150
+        };
+
+        // Act
+        var result = await _subject.ExecuteSearchAsync(plan, default).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.Hits, Has.Count.EqualTo(keepMatches ? 100 : 0));
+            Assert.That(result.Warnings, Has.Count.EqualTo(1));
+        }
     }
 
     [Test]

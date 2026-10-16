@@ -691,10 +691,6 @@ internal sealed class LibraryImportService(
                 ContentHierarchyItemId = ex.ContentHierarchyItemId
             };
         }
-        catch (UpstreamThrottledException)
-        {
-            throw;
-        }
         catch (Exception ex)
         {
             var reason = $"Import failed: {ExceptionMessages(ex)}";

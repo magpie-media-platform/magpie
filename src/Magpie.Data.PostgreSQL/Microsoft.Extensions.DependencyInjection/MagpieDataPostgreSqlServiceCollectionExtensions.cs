@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using Magpie.Abstractions.Database;
 using Magpie.Data;
 using Magpie.Data.PostgreSQL;
+using Magpie.Models;
 using Magpie.Models.Data;
 using Magpie.Sdk.Extensions;
 
@@ -24,23 +25,27 @@ public static class MagpieDataPostgreSqlServiceCollectionExtensions
     /// <param name="connectionString">The PostgreSQL connection string</param>
     /// <param name="defaultScheduleTriggers">The default schedule triggers to seed</param>
     /// <param name="defaultEventTriggers">The default event triggers to seed</param>
+    /// <param name="toolsDirectory">The directory to search for pg_dump and pg_restore before PATH</param>
     /// <returns>The service collection for chaining</returns>
     public static IServiceCollection AddMagpieDataPostgreSql(
         this IServiceCollection services,
         string connectionString,
         IReadOnlyList<ScheduleTrigger> defaultScheduleTriggers,
-        IReadOnlyList<EventTrigger> defaultEventTriggers)
+        IReadOnlyList<EventTrigger> defaultEventTriggers,
+        string? toolsDirectory = null)
     {
         ArgumentNullException.ThrowIfNull(services);
         ArgumentException.ThrowIfNullOrWhiteSpace(connectionString);
 
         services.AddDbContext<MagpieDbContext>(
-            options => MagpieDbContextFactory.ConfigureOptions(
+            (serviceProvider, options) => MagpieDbContextFactory.ConfigureOptions(
                 options,
                 connectionString,
                 defaultScheduleTriggers,
-                defaultEventTriggers));
+                defaultEventTriggers,
+                serviceProvider.GetRequiredService<DatabaseMigrationState>()));
 
+        services.AddSingleton(new PostgreSqlToolOptions(toolsDirectory));
         services.TryAddScoped<IDatabaseManagementProvider, PostgreSqlDatabaseManagementProvider>();
 
         return services;

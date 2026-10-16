@@ -9,4 +9,5 @@ namespace Magpie.App.Hosting;
 internal sealed record LoadedExtensionSet(
     IReadOnlyList<Extension> Discovered,
     IReadOnlyList<IExtension> Loaded,
-    IReadOnlyDictionary<Guid, string> PackageVersions);
+    IReadOnlyDictionary<Guid, string> PackageVersions,
+    long ActivationGeneration);

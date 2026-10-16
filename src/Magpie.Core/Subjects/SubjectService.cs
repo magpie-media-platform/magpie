@@ -4,7 +4,6 @@ using System.Threading.Tasks;
 
 using Magpie.Abstractions;
 using Magpie.Abstractions.Repositories;
-using Magpie.Core.Events;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Paging;
@@ -15,7 +14,6 @@ namespace Magpie.Core.Subjects;
 internal sealed class SubjectService(
     ISubjectRepository subjects,
     IMetadataContainerRepository metadataContainers,
-    IEventBus eventBus,
     ITransactionManager transactionManager) : ISubjectService
 {
     public Task<PagedList<Subject>> QueryAsync(
@@ -33,44 +31,17 @@ internal sealed class SubjectService(
         Guid? actingUserId,
         CancellationToken cancellationToken = default)
     {
-        var subject = await subjects.GetByIdAsync(subjectId, cancellationToken).ConfigureAwait(false);
-        if (subject is null)
+        if (patch.Tags is null && patch.PrimaryImageId is null)
         {
-            return false;
+            return await subjects.GetByIdAsync(subjectId, cancellationToken).ConfigureAwait(false) is not null;
         }
 
-        if (patch.Tags is not null)
-        {
-            await subjects
-                .PatchAsync(new SubjectRowPatch { Id = subjectId, Tags = patch.Tags }, actingUserId, cancellationToken)
-                .ConfigureAwait(false);
-        }
-
-        if (patch.PrimaryImageId is not null)
-        {
-            var updated = await metadataContainers
-                .PatchAsync(
-                    new MetadataContainerPatch
-                    {
-                        ContainerId = subject.MetadataContainerId,
-                        PrimaryImageId = patch.PrimaryImageId
-                    },
-                    actingUserId,
-                    cancellationToken)
-                .ConfigureAwait(false);
-            if (!updated)
-            {
-                return false;
-            }
-
-            await eventBus
-                .PublishAsync(
-                    SubjectEventBuilder.BuildSubjectUpdatedEvent(subjectId, ["primaryImage"]),
-                    cancellationToken)
-                .ConfigureAwait(false);
-        }
-
-        return true;
+        return await subjects
+            .PatchAsync(
+                new SubjectRowPatch { Id = subjectId, Tags = patch.Tags, PrimaryImageId = patch.PrimaryImageId },
+                actingUserId,
+                cancellationToken)
+            .ConfigureAwait(false);
     }
 
     public async Task<bool> DeleteAsync(

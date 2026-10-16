@@ -11,6 +11,7 @@ using Magpie.Abstractions.Releases;
 using Magpie.Abstractions.Repositories;
 using Magpie.Abstractions.Security;
 using Magpie.Core;
+using Magpie.Core.Config;
 using Magpie.Core.Jobs;
 using Magpie.Core.Jobs.Fulfillment;
 using Magpie.Core.Jobs.Runtime;
@@ -100,11 +101,11 @@ public sealed class ReleaseCapacityStatusTests
             events,
             NullLogger<JobExecutionRepository>.Instance,
             _time,
-            new JobRegistry([], NullLogger<JobRegistry>.Instance));
+            new JobRegistry([], new JobRuntimeOptions(), NullLogger<JobRegistry>.Instance));
         _downloads = new DownloadRepository(_context, audits, transactions, events,
             NullLogger<DownloadRepository>.Instance, Mock.Of<IDataProtectionService>(), _time);
         var downloadScopes = new DownloadScopeRepository(_context, transactions, audits,
-            NullLogger<DownloadScopeRepository>.Instance, _time);
+            _downloads, NullLogger<DownloadScopeRepository>.Instance, _time);
         var registry = new Mock<IJobRegistry>();
         registry.Setup(value => value.ListJobSpecs()).Returns([ReleaseDownloadItemJob.Spec]);
         var jobs = new JobManager(Mock.Of<IJobRuntime>(), registry.Object, _executions,
@@ -145,7 +146,7 @@ public sealed class ReleaseCapacityStatusTests
                 It.IsAny<PagingParameter>(), It.IsAny<SortParameter?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new PagedList<ContentHierarchyItem>());
         _releases = new Mock<IReleaseRepository> { CallBase = true };
-        _storedReleases = new ReleaseRepository(_context, audits, transactions,
+        _storedReleases = new ReleaseRepository(_context, audits, transactions, _downloads,
             NullLogger<ReleaseRepository>.Instance, _time);
         _releases.Setup(value => value.GetByIdAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
             .Returns((Guid id, CancellationToken token) => _storedReleases.GetByIdAsync(id, token));

@@ -101,7 +101,7 @@ public sealed class ReleaseSearchEnqueueTests
             Mock.Of<IEventBus>(),
             NullLogger<JobExecutionRepository>.Instance,
             TimeProvider.System,
-            new JobRegistry([], NullLogger<JobRegistry>.Instance));
+            new JobRegistry([], new JobRuntimeOptions(), NullLogger<JobRegistry>.Instance));
         var registry = new Mock<IJobRegistry>();
         registry.Setup(value => value.ListJobSpecs()).Returns([ReleaseSearchItemJob.Spec, ReleaseSearchScanJob.Spec]);
         _schedules = new ScheduleTriggerRepository(_context,
@@ -139,7 +139,7 @@ public sealed class ReleaseSearchEnqueueTests
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(() => _roots.ToDictionary(id => id,
                 id => new ContentHierarchyItemAncestry { Id = id, EffectiveMonitoring = MonitoringMode.Monitored }));
-        _scan = new ReleaseSearchScanJob(_manager, _executions, _hierarchy.Object, TimeProvider.System,
+        _scan = new ReleaseSearchScanJob(_manager, _hierarchy.Object, TimeProvider.System,
             NullLogger<ReleaseSearchScanJob>.Instance, Mock.Of<IProgressReporter>());
         _services = new ServiceCollection().BuildServiceProvider();
         var migration = new DatabaseMigrationState();
@@ -171,7 +171,7 @@ public sealed class ReleaseSearchEnqueueTests
             Name = "search",
             Schedule = "*/30 * * * *",
             Enabled = true,
-            Parameters = new() { ["backpressureThreshold"] = "2" }
+            Parameters = new()
         });
         _context.JobExecutions.AddRange(Enumerable.Range(0, alreadyActive).Select(_ => new JobExecution
         {
@@ -221,8 +221,9 @@ public sealed class ReleaseSearchEnqueueTests
     }
 
     [TestCase(50, 53)]
-    [TestCase(51, 51)]
-    public async Task ExecuteAsync_QueuesEveryRoot_WhenTheScanIsNotAboveItsSkipThreshold(
+    [TestCase(51, 54)]
+    [TestCase(2001, 2004)]
+    public async Task ExecuteAsync_QueuesEveryRoot_WhenOtherSearchesAreAlreadyQueued(
         int alreadyActive,
         int expectedActive)
     {
@@ -238,7 +239,7 @@ public sealed class ReleaseSearchEnqueueTests
 
         // Act
         await _scan.ExecuteAsync(new JobContext(Guid.NewGuid(), null, null, null, JobExecutionMode.Queue,
-            new Dictionary<string, string> { ["backpressureThreshold"] = "50" }, null)).ConfigureAwait(false);
+            new Dictionary<string, string>(), null)).ConfigureAwait(false);
 
         // Assert
         Assert.That(await _context.JobExecutions.AsNoTracking()
@@ -397,7 +398,7 @@ public sealed class ReleaseSearchEnqueueTests
             Name = "search",
             Schedule = "*/30 * * * *",
             Enabled = true,
-            Parameters = new() { ["backpressureThreshold"] = "2" }
+            Parameters = new()
         });
         _context.JobExecutions.AddRange(Enumerable.Range(0, 50).Select(_ => new JobExecution
         {
@@ -430,7 +431,7 @@ public sealed class ReleaseSearchEnqueueTests
             new ReleaseBlockList(Mock.Of<IDownloadRepository>()),
             Mock.Of<IDownloadClientRepository>(), Mock.Of<IContentTypeRegistry>(), Mock.Of<IRootFolderService>(),
             Mock.Of<IAuditRecordRepository>(), _executions, _manager, _transactions, Mock.Of<IEventBus>(),
-            Mock.Of<IReleaseSearchQueryExecutor>(), Mock.Of<IReleaseEvaluationService>(), [], new JobRuntimeOptions(),
+            Mock.Of<IReleaseSearchQueryExecutor>(), Mock.Of<IReleaseEvaluationService>(), [],
             new SearchOptions(), TimeProvider.System, NullLogger<ReleaseSearchService>.Instance);
 
         // Act

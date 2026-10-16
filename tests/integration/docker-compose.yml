@@ -61,7 +61,7 @@ services:
       MAGPIE_BASE_URL: http://magpie:8080
       MAGPIE_SKIP_BOOT: "true"
       MAGPIE_CLI_URL: http://magpie:8080
-      MAGPIE_CLI_APPHOST: /app/Magpie.App
+      MAGPIE_CLI_APPHOST: /app/magpie
       Magpie__Database__Provider: "${MAGPIE_DATABASE_PROVIDER:-sqlite}"
       Magpie__Database__ConnectionString: "${MAGPIE_DATABASE_CONNECTION_STRING:-Data Source=/app/data/magpie.db}"
       Magpie__Data__Path: /app/data

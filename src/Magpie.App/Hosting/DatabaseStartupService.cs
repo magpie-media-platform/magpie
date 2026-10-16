@@ -1,18 +1,24 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
 using Magpie.Abstractions;
 using Magpie.Abstractions.Content;
+using Magpie.Abstractions.Database;
 using Magpie.Abstractions.Repositories;
 using Magpie.Abstractions.Security;
 using Magpie.Data;
 using Magpie.Models;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
+using Magpie.Sdk.Events;
+using Magpie.Sdk.Services;
 
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -21,6 +27,9 @@ namespace Magpie.App.Hosting;
 internal sealed class DatabaseStartupService(
     IServiceScopeFactory scopeFactory,
     LoadedExtensionSet loadedExtensions,
+    DatabaseMigrationState migrationState,
+    MagpieHostEnvironment hostEnvironment,
+    IEventBus eventBus,
     ILogger<DatabaseStartupService> logger)
 {
     public async Task RunAsync(CancellationToken cancellationToken)
@@ -28,8 +37,20 @@ internal sealed class DatabaseStartupService(
         var scope = scopeFactory.CreateAsyncScope();
         await using (scope.ConfigureAwait(false))
         {
+            var databaseManagement = scope.ServiceProvider.GetRequiredService<IDatabaseManagementProvider>();
+            if (!await IsSchemaKnownAsync(databaseManagement, cancellationToken).ConfigureAwait(false))
+            {
+                return;
+            }
+
             var context = scope.ServiceProvider.GetRequiredService<MagpieDbContext>();
-            await context.Database.MigrateAsync(cancellationToken).ConfigureAwait(false);
+            migrationState.RecordPendingMigrations(
+                [.. await context.Database.GetPendingMigrationsAsync(cancellationToken).ConfigureAwait(false)]);
+            if (!await MigrateAsync(context.GetService<IMigrator>(), databaseManagement, cancellationToken)
+                .ConfigureAwait(false))
+            {
+                return;
+            }
 
             await scope.ServiceProvider.GetRequiredService<IExtensionRepository>()
                 .RegisterLoadedExtensionsAsync(
@@ -62,7 +83,40 @@ internal sealed class DatabaseStartupService(
                 cancellationToken).ConfigureAwait(false);
         }
 
-        await DispatchLifecycleEventsAsync(scopeFactory, cancellationToken).ConfigureAwait(false);
+        await DispatchLifecycleEventsAsync(scopeFactory, loadedExtensions.ActivationGeneration, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    internal async Task<bool> MigrateAsync(
+        IMigrator migrator,
+        IDatabaseManagementProvider databaseManagement,
+        CancellationToken cancellationToken)
+    {
+        var applied = await databaseManagement.GetAppliedMigrationsAsync(cancellationToken).ConfigureAwait(false);
+        await migrator.MigrateAsync(cancellationToken: cancellationToken).ConfigureAwait(false);
+        var appliedAfter = await databaseManagement.GetAppliedMigrationsAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        if (appliedAfter.Count > applied.Count)
+        {
+            await eventBus.PublishAsync(
+                new MagpieEvent(
+                    Guid.Empty,
+                    MagpieEvents.Names.DatabaseMigrated,
+                    new Dictionary<string, string>(),
+                    default,
+                    default,
+                    null),
+                cancellationToken).ConfigureAwait(false);
+        }
+
+        if (!await IsSchemaKnownAsync(databaseManagement, cancellationToken).ConfigureAwait(false))
+        {
+            return false;
+        }
+
+        migrationState.RecordMigrated();
+        return true;
     }
 
     private static async Task BackfillMediaFilePathKeysAsync(
@@ -122,13 +176,10 @@ internal sealed class DatabaseStartupService(
 
     private static async Task DispatchLifecycleEventsAsync(
         IServiceScopeFactory scopeFactory,
+        long generation,
         CancellationToken cancellationToken = default)
     {
         using var scope = scopeFactory.CreateScope();
-        var activationGenerationRepository = scope.ServiceProvider
-            .GetRequiredService<IExtensionActivationGenerationRepository>();
-        var generation = await activationGenerationRepository.GetCurrentAsync(cancellationToken)
-            .ConfigureAwait(false);
 
         try
         {
@@ -174,5 +225,23 @@ internal sealed class DatabaseStartupService(
                 Message = message,
             },
             cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<bool> IsSchemaKnownAsync(
+        IDatabaseManagementProvider databaseManagement,
+        CancellationToken cancellationToken)
+    {
+        var unknownMigrations = await databaseManagement.GetUnknownMigrationsAsync(cancellationToken)
+            .ConfigureAwait(false);
+        migrationState.RecordSchemaCheck(unknownMigrations);
+        if (unknownMigrations.Count > 0)
+        {
+            logger.LogError(
+                "The database schema is newer than node {NodeId}. Unknown migrations: {Migrations}",
+                hostEnvironment.NodeId,
+                string.Join(", ", unknownMigrations));
+        }
+
+        return unknownMigrations.Count == 0;
     }
 }

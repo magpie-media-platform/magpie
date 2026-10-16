@@ -64,7 +64,7 @@ export function InteractiveSearchPage() {
     const canGrab = hasPermission('content.request');
 
     const detailQuery = useContentDetail(contentHierarchyItemId);
-    const { candidates, partial, warning, retryAt, isLoading, isFetching, error, refetch } =
+    const { candidates, partial, warning, isLoading, isFetching, error, refetch } =
         useInteractiveSearch(contentHierarchyItemId);
     const grabMutation = useGrabInteractiveCandidate();
     const { pendingReleaseIds, succeededReleaseIds, tryBeginGrab, markGrabSucceeded, markGrabFailed } =
@@ -315,7 +315,6 @@ export function InteractiveSearchPage() {
                 {!isLoading && !error && partial && (
                     <Alert variant="warning">
                         {warning ?? 'The search is incomplete. Some providers did not return results.'}
-                        {retryAt && <> Retry after {new Date(retryAt).toLocaleString()}.</>}
                     </Alert>
                 )}
 

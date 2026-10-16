@@ -31,10 +31,7 @@ internal sealed class ReleaseAutoGrabItemJob(
     {
         JobType = MagpieJobs.Types.ReleaseAutoGrabItem,
         DisplayName = "Release auto-grab item",
-        Description =
-            "Chooses the best acceptable release for one content item and queues it for download. " +
-            "After a failed download, the job waits before trying again to avoid repeatedly " +
-            "grabbing the same release.",
+        Description = "Selects the best release for a content item and downloads it.",
         Category = "Content",
         Scope = JobScope.Content,
         Enabled = true,

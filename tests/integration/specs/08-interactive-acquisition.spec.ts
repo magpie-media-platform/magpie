@@ -800,7 +800,7 @@ async function addFromUi(
     await page.getByRole('combobox', { name: 'Content Type' }).click();
     await page.getByRole('option', { name: fixture.option, exact: true }).click();
     await page.locator('#sfb-title').fill(fixture.title);
-    await page.getByRole('button', { name: /^search$/i }).click();
+    await page.getByRole('region', { name: 'Filter options' }).getByRole('button', { name: /^search$/i }).click();
 
     const row = page.getByRole('grid').getByRole('row').filter({ hasText: fixture.title });
     await expect(row).toBeVisible();

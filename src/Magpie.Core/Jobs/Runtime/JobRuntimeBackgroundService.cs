@@ -15,7 +15,6 @@ using Magpie.Models;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
-using Magpie.Models.Jobs;
 using Magpie.Sdk.Events;
 using Magpie.Sdk.Jobs;
 using Magpie.Sdk.Services;
@@ -60,12 +59,15 @@ internal sealed class JobRuntimeBackgroundService(
 
     private readonly ConcurrentDictionary<Guid, Task> _immediateOutstanding = new();
 
-    private readonly IReadOnlyList<JobSpec> _jobSpecs = jobRegistry.ListJobSpecs();
-
     private readonly HashSet<string> _jobTypes =
         [.. jobRegistry.ListJobSpecs().Select(spec => spec.JobType)];
 
     private readonly ConcurrentDictionary<string, byte> _unavailableJobTypes = new(StringComparer.Ordinal);
+
+    private readonly HashSet<string> _clusterLimitedJobTypes = jobRegistry.ListJobSpecs()
+        .Where(spec => spec.ConcurrencyLimit is { PerNode: false })
+        .Select(spec => spec.JobType)
+        .ToHashSet(StringComparer.Ordinal);
 
     private SchedulerEligibility? _schedulerEligibility;
 
@@ -235,6 +237,11 @@ internal sealed class JobRuntimeBackgroundService(
 
     private async Task<bool> IsSchedulerEligibleAsync(CancellationToken cancellationToken)
     {
+        if (!databaseMigration.IsSchemaKnown)
+        {
+            return false;
+        }
+
         var now = timeProvider.GetUtcNow();
         var cached = _schedulerEligibility;
         if (cached is not null && now - cached.CheckedAt < SchedulerEligibilityCacheDuration)
@@ -264,7 +271,7 @@ internal sealed class JobRuntimeBackgroundService(
     {
         if (_jobTypes.Contains(jobType))
         {
-            return true;
+            return jobRuntimeOptions.JobTypes.Count == 0 || jobRuntimeOptions.JobTypes.Contains(jobType);
         }
 
         if (_unavailableJobTypes.TryAdd(jobType, 0))
@@ -281,7 +288,7 @@ internal sealed class JobRuntimeBackgroundService(
 
     internal async Task<bool> TryAdmitAsync(CancellationToken stoppingToken)
     {
-        if (!concurrencyScheduler.HasAdmissionCapacity())
+        if (shutdownSignal.Cancellation.IsCancellationRequested || !concurrencyScheduler.HasAdmissionCapacity())
         {
             return false;
         }
@@ -310,10 +317,17 @@ internal sealed class JobRuntimeBackgroundService(
 
         var admittedAny = false;
         var excluded = new HashSet<Guid>();
+        var refusedJobTypes = new HashSet<string>(StringComparer.Ordinal);
 
         while (concurrencyScheduler.HasAdmissionCapacity() &&
             concurrencyScheduler.TrySelectAdmission(candidates, excluded, out var selected))
         {
+            if (refusedJobTypes.Contains(selected.JobType))
+            {
+                excluded.Add(selected.Id);
+                continue;
+            }
+
             var claimed = await executions
                 .TryClaimAsync(selected.Id, hostEnvironment.NodeId, stoppingToken)
                 .ConfigureAwait(false);
@@ -321,6 +335,11 @@ internal sealed class JobRuntimeBackgroundService(
             if (claimed is null)
             {
                 excluded.Add(selected.Id);
+                if (_clusterLimitedJobTypes.Contains(selected.JobType))
+                {
+                    refusedJobTypes.Add(selected.JobType);
+                }
+
                 continue;
             }
 
@@ -639,13 +658,18 @@ internal sealed class JobRuntimeBackgroundService(
 
     internal async Task RunCleanupOnceAsync(CancellationToken cancellationToken)
     {
+        if (!databaseMigration.IsSchemaKnown)
+        {
+            return;
+        }
+
         logger.LogDebug("The job runtime worker will start the stale job execution cleanup");
 
         var scope = scopeFactory.CreateAsyncScope();
         await using var scopeHandle = scope.ConfigureAwait(false);
         var jobExecutionRepository = scope.ServiceProvider.GetRequiredService<IJobExecutionRepository>();
         var transactionManager = scope.ServiceProvider.GetRequiredService<ITransactionManager>();
-        var retryPolicy = scope.ServiceProvider.GetRequiredService<IJobRetryPolicy>();
+        var retryPolicy = scope.ServiceProvider.GetRequiredService<DefaultJobRetryPolicy>();
 
         foreach (var status in StaleCandidateStatuses)
         {
@@ -685,7 +709,7 @@ internal sealed class JobRuntimeBackgroundService(
     private async Task TransitionStaleJobAsync(
         IJobExecutionRepository repository,
         ITransactionManager transactionManager,
-        IJobRetryPolicy retryPolicy,
+        DefaultJobRetryPolicy retryPolicy,
         JobExecution job,
         CancellationToken cancellationToken)
     {
@@ -767,13 +791,18 @@ internal sealed class JobRuntimeBackgroundService(
 
     internal async Task ReclaimOwnOrphanedRunningAsync(CancellationToken cancellationToken)
     {
+        if (!databaseMigration.IsSchemaKnown)
+        {
+            return;
+        }
+
         try
         {
             var scope = scopeFactory.CreateAsyncScope();
             await using var scopeHandle = scope.ConfigureAwait(false);
             var executions = scope.ServiceProvider.GetRequiredService<IJobExecutionRepository>();
             var transactionManager = scope.ServiceProvider.GetRequiredService<ITransactionManager>();
-            var retryPolicy = scope.ServiceProvider.GetRequiredService<IJobRetryPolicy>();
+            var retryPolicy = scope.ServiceProvider.GetRequiredService<DefaultJobRetryPolicy>();
 
             var orphans = await executions.QueryAllAsync(
                 new()
@@ -836,12 +865,11 @@ internal sealed class JobRuntimeBackgroundService(
         }
     }
 
-    private static async Task<JobFailureTransitionResult> TransitionRunningToFailureAsync(
+    private static async Task<JobFailureTransitionResult> TransitionReclaimedAsync(
         IJobExecutionRepository executions,
         ITransactionManager transactionManager,
-        IJobRetryPolicy retryPolicy,
-        JobExecution failed,
-        JobFailurePolicy policy,
+        DefaultJobRetryPolicy retryPolicy,
+        JobExecution orphan,
         string reason)
     {
         var result = new JobFailureTransitionResult(false, null);
@@ -849,29 +877,23 @@ internal sealed class JobRuntimeBackgroundService(
             async transactionToken =>
             {
                 var transitioned = await executions
-                    .TryRecoverInactiveAsync(failed, reason, transactionToken)
+                    .TryRecoverInactiveAsync(orphan, reason, transactionToken)
                     .ConfigureAwait(false);
                 if (!transitioned)
                 {
                     return;
                 }
 
-                if (policy is JobFailurePolicy.Fail ||
-                    (policy is JobFailurePolicy.Retry && failed.ExecutionMode is JobExecutionMode.Immediate))
+                var requeue = await retryPolicy
+                    .BuildInterruptedRequeueAsync(orphan, countsAsAttempt: true, transactionToken)
+                    .ConfigureAwait(false);
+                if (requeue is not null)
                 {
-                    result = new(true, null);
-                    return;
+                    await executions.CreateAsync(requeue, orphan.CreatedByUserId, transactionToken)
+                        .ConfigureAwait(false);
                 }
 
-                var retry = await retryPolicy.BuildRetryAsync(failed, transactionToken).ConfigureAwait(false);
-                if (retry is null)
-                {
-                    result = new(true, null);
-                    return;
-                }
-
-                await executions.CreateAsync(retry, failed.CreatedByUserId, transactionToken).ConfigureAwait(false);
-                result = new(true, retry);
+                result = new(true, requeue);
             },
             default).ConfigureAwait(false);
 
@@ -881,22 +903,16 @@ internal sealed class JobRuntimeBackgroundService(
     private async Task ReclaimAsync(
         IJobExecutionRepository executions,
         ITransactionManager transactionManager,
-        IJobRetryPolicy retryPolicy,
+        DefaultJobRetryPolicy retryPolicy,
         JobExecution orphan,
         string reason,
         string reclaimKind)
     {
-        var spec = string.IsNullOrWhiteSpace(orphan.JobType)
-            ? null
-            : _jobSpecs.FirstOrDefault(candidate =>
-                string.Equals(candidate.JobType, orphan.JobType, StringComparison.Ordinal));
-        var policy = spec?.FailurePolicy ?? JobFailurePolicy.Fail;
-        var result = await TransitionRunningToFailureAsync(
+        var result = await TransitionReclaimedAsync(
             executions,
             transactionManager,
             retryPolicy,
             orphan,
-            policy,
             reason).ConfigureAwait(false);
         if (!result.Transitioned)
         {
@@ -928,14 +944,12 @@ internal sealed class JobRuntimeBackgroundService(
         {
             JobsTelemetry.RetriesTotal.Add(1, new KeyValuePair<string, object?>("job.type", orphan.JobType));
             logger.LogInformation(
-                "The job runtime worker queued {Policy} execution {NextExecutionId} for {ExecutionId} " +
-                "({JobType}) as attempt {Attempt} at {NotBeforeAt:O}",
-                policy,
-                retry.Id,
+                "The job runtime worker requeued execution {ExecutionId} ({JobType}) as execution " +
+                "{NextExecutionId}, attempt {Attempt}",
                 orphan.Id,
                 orphan.JobType,
-                retry.Attempt,
-                retry.NotBeforeAt);
+                retry.Id,
+                retry.Attempt);
         }
         else
         {

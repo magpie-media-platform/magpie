@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -91,27 +92,51 @@ public sealed class QualityTierListRepositoryTests
 
         _qualityTierId = qualityTier.Id;
 
+        _contentHierarchyItems = new Mock<IContentHierarchyItemRepository>();
+
+        _updateEvents = new Mock<IEventBus>();
+        var transactionManager = new TransactionManager(_context, NullLogger<TransactionManager>.Instance);
+        _subject = CreateSubject(transactionManager, _contentHierarchyItems.Object);
+    }
+
+    private IQualityTierListRepository CreateSubject(
+        TransactionManager transactionManager,
+        IContentHierarchyItemRepository contentHierarchyItems)
+    {
+        var timeProvider = new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero));
         var auditRecordRepository = new AuditRecordRepository(
             _context,
             Mock.Of<IEventBus>(),
             NullLogger<AuditRecordRepository>.Instance,
             new TransactionManager(_context, NullLogger<TransactionManager>.Instance),
             Mock.Of<IJobExecutionScopeFactory>(),
-            timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
-
-        var transactionManager = new TransactionManager(_context, NullLogger<TransactionManager>.Instance);
-
-        _contentHierarchyItems = new Mock<IContentHierarchyItemRepository>();
-
-        _updateEvents = new Mock<IEventBus>();
-        _subject = new QualityTierListRepository(
+            timeProvider: timeProvider);
+        var rootFolders = new RootFolderRepository(
             _context,
             auditRecordRepository,
             transactionManager,
-            _contentHierarchyItems.Object,
+            contentHierarchyItems,
+            Mock.Of<ILibraryImportCandidateRepository>(),
+            _updateEvents.Object,
+            NullLogger<RootFolderRepository>.Instance,
+            timeProvider);
+        var wishlists = new WishlistRepository(
+            _context,
+            auditRecordRepository,
+            transactionManager,
+            _updateEvents.Object,
+            NullLogger<WishlistRepository>.Instance,
+            timeProvider);
+        return new QualityTierListRepository(
+            _context,
+            auditRecordRepository,
+            transactionManager,
+            contentHierarchyItems,
+            rootFolders,
+            wishlists,
             _updateEvents.Object,
             NullLogger<QualityTierListRepository>.Instance,
-            timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
+            timeProvider: timeProvider);
     }
 
     [TearDown]
@@ -372,7 +397,7 @@ public sealed class QualityTierListRepositoryTests
             It.Is<MagpieEvent>(e =>
                 e.Name == "qualityTierList.updated" &&
                 e.Context.ContainsKey("qualityTierList.changedFields") &&
-                e.Context["qualityTierList.changedFields"] == "name,upgradeAllowed"),
+                e.Context["qualityTierList.changedFields"] == "Name,UpgradeAllowed"),
             It.IsAny<CancellationToken>()), Times.Once);
     }
 
@@ -506,6 +531,152 @@ public sealed class QualityTierListRepositoryTests
             Assert.That(result, Is.True);
             Assert.That(storedLevelDefault.QualityTierListId, Is.Null);
             Assert.That(storedWishlist.QualityTierListId, Is.Null);
+        }
+    }
+
+    [Test]
+    public async Task DeleteAsync_RaisesRootFolderAndWishlistUpdatesAfterCommit_WhenTheyReferenceTheList()
+    {
+        // Arrange
+        var qualityTierList = new QualityTierList { Name = "Referenced", CreatedAt = DateTime.UtcNow };
+        _context.QualityTierLists.Add(qualityTierList);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        var rootFolder = new RootFolder
+        {
+            Name = "Books",
+            Path = "/books",
+            ContentType = "book",
+            IsDefault = true,
+            Defaults = new() { ["book"] = new() { QualityTierListId = qualityTierList.Id } },
+            CreatedAt = DateTime.UtcNow,
+        };
+        var wishlist = new Wishlist
+        {
+            Name = "Books",
+            ContentFilter = new() { Name = "Wanted books", Criteria = new(), CreatedAt = DateTime.UtcNow },
+            QualityTierListId = qualityTierList.Id,
+            CreatedAt = DateTime.UtcNow,
+        };
+        _context.RootFolders.Add(rootFolder);
+        _context.Wishlists.Add(wishlist);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        var published = new List<MagpieEvent>();
+        var publishedInsideTransaction = false;
+        _updateEvents
+            .Setup(bus => bus.PublishAsync(It.IsAny<MagpieEvent>(), It.IsAny<CancellationToken>()))
+            .Callback((MagpieEvent magpieEvent, CancellationToken _) =>
+            {
+                published.Add(magpieEvent);
+                publishedInsideTransaction |= _context.Database.CurrentTransaction is not null;
+            })
+            .Returns(Task.CompletedTask);
+
+        // Act
+        await _subject.DeleteAsync(qualityTierList.Id, _userId).ConfigureAwait(false);
+
+        // Assert
+        var rootFolderUpdates = published.Where(e => e.Name == "library.rootFolder.updated").ToList();
+        var wishlistUpdates = published.Where(e => e.Name == "wishlist.updated").ToList();
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(publishedInsideTransaction, Is.False);
+            Assert.That(rootFolderUpdates, Has.Count.EqualTo(1));
+            Assert.That(rootFolderUpdates[0].Context["rootFolder.id"], Is.EqualTo(rootFolder.Id.ToString("D")));
+            Assert.That(rootFolderUpdates[0].Context["rootFolder.changedFields"], Is.EqualTo("Defaults"));
+            Assert.That(wishlistUpdates, Has.Count.EqualTo(1));
+            Assert.That(wishlistUpdates[0].Context["wishlist.id"], Is.EqualTo(wishlist.Id.ToString("D")));
+            Assert.That(wishlistUpdates[0].Context["wishlist.changedFields"], Is.EqualTo("QualityTierListId"));
+            Assert.That(published, Has.One.With.Property(nameof(MagpieEvent.Name)).EqualTo("qualityTierList.deleted"));
+        }
+    }
+
+    [Test]
+    public async Task DeleteAsync_ReportsTheItemQualityTierListAfterCommit_WhenAnItemNamesTheList()
+    {
+        // Arrange
+        var qualityTierList = new QualityTierList { Name = "Explicit", CreatedAt = DateTime.UtcNow };
+        _context.QualityTierLists.Add(qualityTierList);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        var rootFolder = new RootFolder
+        {
+            Name = "Type A",
+            Path = "/library/type-a",
+            ContentType = "type-a",
+            IsDefault = true,
+            CreatedAt = DateTime.UtcNow,
+        };
+        _context.RootFolders.Add(rootFolder);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        var item = new ContentHierarchyItem
+        {
+            MetadataContainer = new MetadataContainer { CreatedAt = DateTime.UtcNow },
+            ContentType = "type-a",
+            Level = "root",
+            Slug = "explicit",
+            Name = "Explicit",
+            Monitoring = MonitoringMode.Monitored,
+            QualityTierListId = qualityTierList.Id,
+            EffectiveRootFolderId = rootFolder.Id,
+            EffectiveMonitoring = MonitoringMode.Monitored,
+            EffectiveQualityTierListId = qualityTierList.Id,
+            CreatedAt = DateTime.UtcNow,
+        };
+        _context.ContentHierarchyItems.Add(item);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        var contentTypes = new Mock<IContentTypeRegistry>();
+        contentTypes.Setup(registry => registry.GetDefinitionFor("type-a"))
+            .Returns(new ContentTypeDefinition
+            {
+                Slug = "type-a",
+                DisplayName = "Type A",
+                LevelDefinitions =
+                [
+                    new ContentHierarchyLevelDefinition
+                    {
+                        Slug = "root",
+                        DisplayName = "Root",
+                        CustomMetadataFields = []
+                    }
+                ]
+            });
+        var transactionManager = new TransactionManager(_context, NullLogger<TransactionManager>.Instance);
+        var contentHierarchyItems = new ContentHierarchyItemRepository(
+            _context,
+            Mock.Of<IAuditRecordRepository>(),
+            transactionManager,
+            Mock.Of<IMetadataContainerRepository>(),
+            contentTypes.Object,
+            _updateEvents.Object,
+            NullLogger<ContentHierarchyItemRepository>.Instance,
+            TimeProvider.System,
+            Mock.Of<IContentRepository>());
+        var subject = CreateSubject(transactionManager, contentHierarchyItems);
+        var published = new List<MagpieEvent>();
+        var publishedInsideTransaction = false;
+        _updateEvents
+            .Setup(bus => bus.PublishAsync(It.IsAny<MagpieEvent>(), It.IsAny<CancellationToken>()))
+            .Callback((MagpieEvent magpieEvent, CancellationToken _) =>
+            {
+                published.Add(magpieEvent);
+                publishedInsideTransaction |= _context.Database.CurrentTransaction is not null;
+            })
+            .Returns(Task.CompletedTask);
+
+        // Act
+        await subject.DeleteAsync(qualityTierList.Id, _userId).ConfigureAwait(false);
+
+        // Assert
+        var stored = await _context.ContentHierarchyItems.AsNoTracking().SingleAsync().ConfigureAwait(false);
+        var itemUpdates = published.Where(e => e.Name == "content.hierarchyItem.updated").ToList();
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(stored.QualityTierListId, Is.Null);
+            Assert.That(publishedInsideTransaction, Is.False);
+            Assert.That(itemUpdates, Has.Count.EqualTo(1));
+            Assert.That(itemUpdates[0].Context["content.hierarchyItemId"], Is.EqualTo(item.Id.ToString("D")));
+            Assert.That(
+                itemUpdates[0].Context["content.changedFields"].Split(','),
+                Is.EquivalentTo(["QualityTierListId", "EffectiveQualityTierListId"]));
         }
     }
 

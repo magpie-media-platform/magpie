@@ -38,15 +38,15 @@ internal sealed class MediaServerRefreshJob(
     {
         JobType = MagpieJobs.Types.MediaServerRefresh,
         DisplayName = "Media server refresh",
-        Description = "Asks configured media servers to refresh their libraries.",
+        Description = "Tells media servers to refresh their libraries.",
         Category = "Integrations",
         Scope = JobScope.Administrative,
         Enabled = true,
         OnDemand = true,
         FailurePolicy = JobFailurePolicy.Retry,
         SupportedTriggerModes = [JobTriggerMode.Manual, JobTriggerMode.Schedule, JobTriggerMode.Event],
-        ConcurrencyScope = ConcurrencyScope.PerType,
-        CoalesceWideningFields = [MagpieJobs.Parameters.ContentHierarchyItemId],
+        ConcurrencyScope = ConcurrencyScope.PerTypeAndTarget,
+        LockPartitionFields = [MagpieJobs.Parameters.ContentHierarchyItemId],
         LockPartitionEventContextKeys = new Dictionary<string, string>
         {
             [MagpieJobs.Parameters.ContentHierarchyItemId] = MagpieEvents.Keys.ContentHierarchyItemId

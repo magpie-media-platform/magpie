@@ -627,7 +627,7 @@ describe('ExecutionRow deferred status', () => {
         vi.useRealTimers();
     });
 
-    it('renders a deferred Queued row as "Pending" and surfaces the deferred-until hint', () => {
+    it('shows the pending-until date without opening the row or hovering', () => {
         render(
             <QueryClientProvider
                 client={
@@ -657,7 +657,18 @@ describe('ExecutionRow deferred status', () => {
 
         const badge = screen.getByTestId('execution-row__status-badge');
         expect(badge).toHaveTextContent('Pending');
-        expect(badge).toHaveAttribute('title', expect.stringContaining('Deferred until'));
+        const pendingTime = screen.getByText('Pending until').querySelector('time');
+        expect(pendingTime).toBeVisible();
+        expect(pendingTime).toHaveAttribute('datetime', '2024-01-15T13:00:00Z');
+        expect(pendingTime).toHaveTextContent(
+            new Date('2024-01-15T13:00:00Z').toLocaleDateString(undefined, {
+                month: 'short',
+                day: 'numeric',
+                hour: '2-digit',
+                minute: '2-digit',
+            }),
+        );
+        expect(screen.getByTestId('execution-row__trigger')).toHaveAccessibleName(/Pending until/);
         expect(document.querySelector('[data-status="pending"]')).toBeInTheDocument();
     });
 
@@ -692,6 +703,7 @@ describe('ExecutionRow deferred status', () => {
         const badge = screen.getByTestId('execution-row__status-badge');
         expect(badge).toHaveTextContent('Queued');
         expect(badge).not.toHaveAttribute('title');
+        expect(screen.queryByText('Pending until')).not.toBeInTheDocument();
         expect(document.querySelector('[data-status="queued"]')).toBeInTheDocument();
     });
 

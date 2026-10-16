@@ -208,10 +208,8 @@ public interface IDownloadService
     /// <param name="info">The status as the download client reports it</param>
     /// <param name="userId">The user to record as the actor, or <see langword="null"/> for the system</param>
     /// <param name="cancellationToken">The token that cancels the operation</param>
-    /// <returns>
-    /// <see langword="true"/> when the caller must include the download in <see cref="PublishRefreshedStatusAsync"/>
-    /// </returns>
-    Task<bool> UpdateRefreshedClientStateAsync(
+    /// <returns>The changed field names</returns>
+    Task<IReadOnlyList<string>> UpdateRefreshedClientStateAsync(
         Download download,
         DownloadInfo info,
         Guid? userId,
@@ -220,14 +218,11 @@ public interface IDownloadService
     /// <summary>
     /// Publishes the refreshed status of the downloads.
     /// </summary>
-    /// <param name="downloadIds">
-    /// The downloads for which <see cref="UpdateRefreshedClientStateAsync"/> returned <see langword="true"/>
-    /// </param>
+    /// <param name="changedFields">The changed field names by download id</param>
     /// <param name="userId">The user to record as the actor, or <see langword="null"/> for the system</param>
     /// <param name="cancellationToken">The token that cancels the operation</param>
-    /// <returns>A task that completes after every content item and event is processed</returns>
     Task PublishRefreshedStatusAsync(
-        IReadOnlyCollection<Guid> downloadIds,
+        IReadOnlyDictionary<Guid, IReadOnlyList<string>> changedFields,
         Guid? userId,
         CancellationToken cancellationToken = default);
 

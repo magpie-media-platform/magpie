@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -30,6 +31,22 @@ internal sealed class ExtensionNodeStatusRepository(
         catch (Exception ex)
         {
             logger.LogError(ex, "The node status repository failed to read the status of node {NodeId}.", nodeId);
+            throw;
+        }
+    }
+
+    public async Task<IEnumerable<ExtensionNodeStatus>> ListAllAsync(CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            return await context.ExtensionNodeStatuses
+                .AsNoTracking()
+                .ToListAsync(cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "The node status repository failed to list the node statuses.");
             throw;
         }
     }

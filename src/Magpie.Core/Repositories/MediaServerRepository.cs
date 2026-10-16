@@ -30,14 +30,15 @@ internal sealed class MediaServerRepository(
 {
     private static readonly (string Name, Func<MediaServer, MediaServer, bool> Changed)[] UpdateFields =
     [
-        ("name", (current, model) => !Equals(current.Name, model.Name)),
-        ("extensionId", (current, model) => !Equals(current.ExtensionId, model.ExtensionId)),
-        ("providerType", (current, model) => !Equals(current.ProviderType, model.ProviderType)),
-        ("enabled", (current, model) => !Equals(current.Enabled, model.Enabled)),
-        ("status", (current, model) => !Equals(current.Status, model.Status)),
-        ("contentTypes", (current, model) => !current.ContentTypes.SequenceEqual(model.ContentTypes)),
-        ("lastChecked", (current, model) => !Equals(current.LastChecked, model.LastChecked)),
-        ("settings", (current, model) => !SettingsEqual(current.Settings, model.Settings)),
+        (nameof(MediaServer.Name), (current, model) => !Equals(current.Name, model.Name)),
+        (nameof(MediaServer.ExtensionId), (current, model) => !Equals(current.ExtensionId, model.ExtensionId)),
+        (nameof(MediaServer.ProviderType), (current, model) => !Equals(current.ProviderType, model.ProviderType)),
+        (nameof(MediaServer.Enabled), (current, model) => !Equals(current.Enabled, model.Enabled)),
+        (nameof(MediaServer.Status), (current, model) => !Equals(current.Status, model.Status)),
+        (nameof(MediaServer.ContentTypes), (current, model) =>
+            !current.ContentTypes.SequenceEqual(model.ContentTypes)),
+        (nameof(MediaServer.LastChecked), (current, model) => !Equals(current.LastChecked, model.LastChecked)),
+        (nameof(MediaServer.Settings), (current, model) => !SettingsEqual(current.Settings, model.Settings)),
     ];
 
     private readonly TimeProvider _time = timeProvider;
@@ -56,47 +57,47 @@ internal sealed class MediaServerRepository(
         var fields = new List<string>();
         if (patch.Name is not null)
         {
-            fields.Add("name");
+            fields.Add(nameof(MediaServer.Name));
         }
 
         if (patch.Enabled is not null)
         {
-            fields.Add("enabled");
+            fields.Add(nameof(MediaServer.Enabled));
         }
 
         if (patch.ContentTypes is not null)
         {
-            fields.Add("contentTypes");
+            fields.Add(nameof(MediaServer.ContentTypes));
         }
 
         if (patch.Settings is not null)
         {
-            fields.Add("settings");
+            fields.Add(nameof(MediaServer.Settings));
         }
 
         if (patch.Status is not null)
         {
-            fields.Add("status");
+            fields.Add(nameof(MediaServer.Status));
         }
 
         if (patch.LastChecked is not null)
         {
-            fields.Add("lastChecked");
+            fields.Add(nameof(MediaServer.LastChecked));
         }
 
         if (patch.LastError is not null)
         {
-            fields.Add("lastError");
+            fields.Add(nameof(MediaServer.LastError));
         }
 
         if (patch.ConsecutiveFailures is not null)
         {
-            fields.Add("consecutiveFailures");
+            fields.Add(nameof(MediaServer.ConsecutiveFailures));
         }
 
         if (patch.Tags is not null)
         {
-            fields.Add("tags");
+            fields.Add(nameof(MediaServerPatch.Tags));
         }
 
         return fields;

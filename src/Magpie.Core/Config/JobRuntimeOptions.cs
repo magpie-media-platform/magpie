@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 
 namespace Magpie.Core.Config;
 
@@ -41,4 +42,14 @@ public sealed class JobRuntimeOptions
     /// The per-level MLFQ quantum overrides, indexed by level.
     /// </summary>
     public TimeSpan?[] MlfqQuanta { get; set; } = new TimeSpan?[4];
+
+    /// <summary>
+    /// The job types that the node runs.
+    /// </summary>
+    public List<string> JobTypes { get; set; } = [];
+
+    /// <summary>
+    /// The maximum number of executions that run at once, by job type.
+    /// </summary>
+    public Dictionary<string, int> ConcurrencyLimits { get; set; } = [];
 }

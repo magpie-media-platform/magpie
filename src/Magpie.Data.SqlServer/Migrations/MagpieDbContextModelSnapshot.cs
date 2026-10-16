@@ -195,6 +195,9 @@ namespace Magpie.Data.SqlServer.Migrations
                     b.Property<Guid?>("CorrelationId")
                         .HasColumnType("uniqueidentifier");
 
+                    b.Property<string>("Data")
+                        .HasColumnType("nvarchar(max)");
+
                     b.Property<string>("Detail")
                         .HasColumnType("nvarchar(max)");
 

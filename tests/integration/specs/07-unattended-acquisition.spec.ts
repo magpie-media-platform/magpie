@@ -133,7 +133,7 @@ test.describe.serial('Journey 7: set it and forget it', () => {
                     await page.getByRole('combobox', { name: 'Content Type' }).click();
                     await page.getByRole('option', { name: 'Movie', exact: true }).click();
                     await page.locator('#sfb-title').fill(movie.title);
-                    await page.getByRole('button', { name: /^search$/i }).click();
+                    await page.getByRole('region', { name: 'Filter options' }).getByRole('button', { name: /^search$/i }).click();
 
                     const row = page.getByRole('grid').getByRole('row').filter({ hasText: movie.title });
                     await expect(row).toBeVisible();
@@ -579,7 +579,7 @@ test.describe.serial('Journey 7: set it and forget it', () => {
                 await expect(stat(strayFolder)).rejects.toThrow();
             });
 
-            await test.step('imports complete: both monitored movies are Fulfilled, and the download-imported event trigger fires its job', async () => {
+            await test.step('imports complete: both monitored movies are Fulfilled, and the media file event trigger fires its job', async () => {
                 const monitored = await Promise.all(
                     movies.slice(0, 2).map((movie) =>
                         until(
@@ -601,7 +601,7 @@ test.describe.serial('Journey 7: set it and forget it', () => {
                 }
 
                 const eventJob = await until(
-                    'download-imported event job to become terminal',
+                    'media file event job to become terminal',
                     async () => {
                         const jobs = await api.get<Paged<JourneyJobExecution>>(
                             '/api/jobs?jobType=MediaServerRefresh&pageSize=250',
@@ -610,7 +610,7 @@ test.describe.serial('Journey 7: set it and forget it', () => {
                             (job) =>
                                 !initialMediaRefreshJobIds.has(job.id) &&
                                 job.eventTriggerId != null &&
-                                job.triggerContext?.['event.name'] === 'download.imported' &&
+                                job.triggerContext?.['event.name'] === 'content.hierarchyItem.updated' &&
                                 ['Completed', 'Failed', 'Cancelled'].includes(job.status),
                         );
                     },

@@ -32,7 +32,6 @@ export interface InteractiveSearchResult {
     candidates: InteractiveSearchCandidate[];
     partial: boolean;
     warning?: string | null;
-    retryAt?: string | null;
 }
 
 async function runInteractiveSearch(contentHierarchyItemId: string): Promise<InteractiveSearchResult> {
@@ -57,7 +56,6 @@ export function useInteractiveSearch(contentHierarchyItemId: string | undefined,
         candidates: query.data?.candidates ?? [],
         partial: query.data?.partial ?? false,
         warning: query.data?.warning,
-        retryAt: query.data?.retryAt,
         isLoading: query.isLoading,
         isFetching: query.isFetching,
         error: queryErrorOrNull(query),

@@ -17,7 +17,7 @@ internal sealed class ReleaseDownloadItemJob(
     {
         JobType = MagpieJobs.Types.ReleaseDownloadItem,
         DisplayName = "Release download item",
-        Description = "Downloads a selected release using an enabled download client.",
+        Description = "Sends a release to a download client.",
         Category = "Content",
         Scope = JobScope.Content,
         Enabled = true,

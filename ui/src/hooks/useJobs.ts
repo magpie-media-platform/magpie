@@ -127,6 +127,8 @@ export interface JobExecutionQueryParams {
 
     correlationId?: string;
 
+    originalExecutionId?: string;
+
     status?: JobExecutionEffectiveStatusValue[];
 
     mine?: boolean;
@@ -240,6 +242,7 @@ export function useJobs(params?: JobExecutionQueryParams) {
     const queryClient = useQueryClient();
     const hasFilters = !!(
         params?.correlationId ||
+        params?.originalExecutionId ||
         params?.eventTriggerId ||
         params?.extensionId ||
         params?.jobType ||

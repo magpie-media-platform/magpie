@@ -24,6 +24,7 @@ internal sealed class ReleaseRepository(
     MagpieDbContext context,
     IAuditRecordRepository auditRecordRepository,
     ITransactionManager transactionManager,
+    IDownloadRepository downloadRepository,
     ILogger<ReleaseRepository> logger,
     TimeProvider timeProvider) : IReleaseRepository
 {
@@ -304,20 +305,12 @@ internal sealed class ReleaseRepository(
         var sourceIdsByKey = sourceRows
             .Where(source => source.ReleaseId == canonical.Id)
             .ToDictionary(source => source.Key, source => source.Id, StringComparer.Ordinal);
+        var mergedSourceIds = new Dictionary<Guid, Guid>();
         foreach (var source in sourceRows.Where(source => source.ReleaseId != canonical.Id))
         {
             if (sourceIdsByKey.TryGetValue(source.Key, out var retainedSourceId))
             {
-                await context.Downloads
-                    .Where(download => download.ReleaseSourceId == source.Id)
-                    .ExecuteUpdateAsync(
-                        setters => setters.SetProperty(download => download.ReleaseSourceId, (Guid?)retainedSourceId),
-                        cancellationToken)
-                    .ConfigureAwait(false);
-                await context.ReleaseSources
-                    .Where(candidate => candidate.Id == source.Id)
-                    .ExecuteDeleteAsync(cancellationToken)
-                    .ConfigureAwait(false);
+                mergedSourceIds.Add(source.Id, retainedSourceId);
                 continue;
             }
 
@@ -330,11 +323,14 @@ internal sealed class ReleaseRepository(
             sourceIdsByKey.Add(source.Key, source.Id);
         }
 
-        await context.Downloads
-            .Where(download => download.ReleaseId != null && aliasIds.Contains(download.ReleaseId.Value))
-            .ExecuteUpdateAsync(
-                setters => setters.SetProperty(download => download.ReleaseId, (Guid?)canonical.Id),
-                cancellationToken)
+        await downloadRepository.ReassignReleasesAsync(
+            aliasIds.ToDictionary(aliasId => aliasId, _ => canonical.Id),
+            mergedSourceIds,
+            cancellationToken).ConfigureAwait(false);
+        var deletedSourceIds = mergedSourceIds.Keys.ToArray();
+        await context.ReleaseSources
+            .Where(candidate => deletedSourceIds.Contains(candidate.Id))
+            .ExecuteDeleteAsync(cancellationToken)
             .ConfigureAwait(false);
         await context.ExternalIds
             .Where(externalId => externalId.ReleaseId != null && aliasIds.Contains(externalId.ReleaseId.Value))
@@ -602,6 +598,20 @@ internal sealed class ReleaseRepository(
             return await transactionManager.ExecuteWithTransactionAsync(
                 async _ =>
                 {
+                    if (model.IndexerId is { } indexerId && !string.IsNullOrWhiteSpace(model.ExternalId))
+                    {
+                        await context.Indexers
+                            .Where(indexer => indexer.Id == indexerId)
+                            .ExecuteUpdateAsync(
+                                setters => setters.SetProperty(indexer => indexer.Name, indexer => indexer.Name),
+                                cancellationToken)
+                            .ConfigureAwait(false);
+                        if (await UpdateAsync(model, createdByUserId, cancellationToken).ConfigureAwait(false))
+                        {
+                            return (await GetByIdAsync(model.Id, cancellationToken).ConfigureAwait(false))!;
+                        }
+                    }
+
                     var now = _time.GetUtcNow().UtcDateTime;
                     model.Id = model.Id == Guid.Empty ? Guid.NewGuid() : model.Id;
                     model.CreatedAt = now;
@@ -846,14 +856,13 @@ internal sealed class ReleaseRepository(
                 continue;
             }
 
-            foreach (var duplicate in matches.Where(candidate => candidate.Id != existing.Id))
+            var duplicates = matches.Where(candidate => candidate.Id != existing.Id).ToList();
+            await downloadRepository.ReassignReleasesAsync(
+                new Dictionary<Guid, Guid>(),
+                duplicates.ToDictionary(duplicate => duplicate.Id, _ => existing.Id),
+                cancellationToken).ConfigureAwait(false);
+            foreach (var duplicate in duplicates)
             {
-                await context.Downloads
-                    .Where(download => download.ReleaseSourceId == duplicate.Id)
-                    .ExecuteUpdateAsync(
-                        setters => setters.SetProperty(download => download.ReleaseSourceId, (Guid?)existing.Id),
-                        cancellationToken)
-                    .ConfigureAwait(false);
                 await context.ReleaseSources
                     .Where(candidate => candidate.Id == duplicate.Id)
                     .ExecuteDeleteAsync(cancellationToken)
@@ -928,13 +937,7 @@ internal sealed class ReleaseRepository(
                     var deleted = 0;
                     foreach (var batch in ids.Chunk(ParameterBatchSize))
                     {
-                        await context.Downloads
-                            .Where(download => download.ReleaseSource != null &&
-                                batch.Contains(download.ReleaseSource.ReleaseId))
-                            .ExecuteUpdateAsync(
-                                setters => setters.SetProperty(download => download.ReleaseSourceId, (Guid?)null),
-                                ct)
-                            .ConfigureAwait(false);
+                        await downloadRepository.DetachReleasesAsync(batch, ct).ConfigureAwait(false);
                         deleted += await context.Releases
                             .Where(release => batch.Contains(release.Id))
                             .ExecuteDeleteAsync(ct)
@@ -987,13 +990,7 @@ internal sealed class ReleaseRepository(
                         return false;
                     }
 
-                    await context.Downloads
-                        .Where(download => download.ReleaseSource != null &&
-                            download.ReleaseSource.ReleaseId == id)
-                        .ExecuteUpdateAsync(
-                            setters => setters.SetProperty(download => download.ReleaseSourceId, (Guid?)null),
-                            cancellationToken)
-                        .ConfigureAwait(false);
+                    await downloadRepository.DetachReleasesAsync([id], cancellationToken).ConfigureAwait(false);
                     var deleted = await context.Releases
                         .Where(r => r.Id == id)
                         .ExecuteDeleteAsync(cancellationToken)

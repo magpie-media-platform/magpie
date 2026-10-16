@@ -85,7 +85,8 @@ const magpieActivityQueryKeys = {
         ['magpie-activity', 'content', contentId, params ?? {}] as const,
     forCorrelation: (correlationId: string, params?: MagpieActivityQueryParams) =>
         ['magpie-activity', 'correlation', correlationId, params ?? {}] as const,
-    forExecutionTree: (executionId: string) => ['magpie-activity', 'execution-tree', executionId] as const,
+    forExecutionTree: (executionId: string, includeSiblings: boolean) =>
+        ['magpie-activity', 'execution-tree', executionId, includeSiblings] as const,
     forExecutionAudits: (executionId: string) => ['magpie-activity', 'execution-audits', executionId] as const,
 };
 
@@ -195,8 +196,11 @@ function toExecutionTreeMagpieActivityResponse(tree: JobExecutionTree): MagpieAc
     };
 }
 
-async function fetchJobExecutionTreeActivity(executionId: string): Promise<MagpieActivityResponse> {
-    const url = buildUrl(`/jobs/${executionId}/execution-tree`, { 'include-siblings': true });
+async function fetchJobExecutionTreeActivity(
+    executionId: string,
+    includeSiblings: boolean,
+): Promise<MagpieActivityResponse> {
+    const url = buildUrl(`/jobs/${executionId}/execution-tree`, { 'include-siblings': includeSiblings });
     return apiGet<JobExecutionTree>(url).then(toExecutionTreeMagpieActivityResponse);
 }
 
@@ -306,10 +310,10 @@ export function useJobExecutionAudits(executionId: string | null | undefined) {
     };
 }
 
-export function useJobExecutionTreeActivity(executionId: string | null | undefined) {
+export function useJobExecutionTreeActivity(executionId: string | null | undefined, includeSiblings = false) {
     const query = useQuery({
-        queryKey: magpieActivityQueryKeys.forExecutionTree(executionId ?? ''),
-        queryFn: () => fetchJobExecutionTreeActivity(executionId!),
+        queryKey: magpieActivityQueryKeys.forExecutionTree(executionId ?? '', includeSiblings),
+        queryFn: () => fetchJobExecutionTreeActivity(executionId!, includeSiblings),
         enabled: !!executionId,
     });
     const executionIds = [executionId, ...(query.data?.entries.map((entry) => entry.id) ?? [])].filter(
@@ -318,7 +322,7 @@ export function useJobExecutionTreeActivity(executionId: string | null | undefin
 
     useInvalidateQueriesOnEvents(
         executionId ? ACTIVITY_APPEND_EVENTS : [],
-        [magpieActivityQueryKeys.forExecutionTree(executionId ?? '')],
+        [magpieActivityQueryKeys.forExecutionTree(executionId ?? '', includeSiblings)],
         {
             debounceMs: 150,
             entityIds: executionIds,

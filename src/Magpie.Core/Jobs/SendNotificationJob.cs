@@ -27,7 +27,7 @@ internal sealed class SendNotificationJob(
     {
         JobType = MagpieJobs.Types.SendNotification,
         DisplayName = "Send notification",
-        Description = "Sends one matching notification through its configured provider.",
+        Description = "Sends a notification through a notification provider.",
         Category = "System",
         Scope = JobScope.System,
         Enabled = true,

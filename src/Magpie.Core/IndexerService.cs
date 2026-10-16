@@ -212,8 +212,8 @@ internal sealed class IndexerService(
                         : new Dictionary<string, string>(create.Settings),
                 };
 
-                var persistedConnection = await indexerConnectionRepository
-                    .CreateAsync(defaultConnection, actingUserId, ct)
+                var persistedConnection = await indexerRepository
+                    .CreateConnectionAsync(defaultConnection, actingUserId, ct)
                     .ConfigureAwait(false);
 
                 return (persisted, persistedConnection);
@@ -264,27 +264,8 @@ internal sealed class IndexerService(
             .ConfigureAwait(false);
     }
 
-    public async Task<bool> DeleteAsync(Guid id, Guid? actingUserId, CancellationToken cancellationToken = default)
-    {
-        var deleted = await transactionManager.ExecuteWithTransactionAsync(
-            async ct =>
-            {
-                var connections = await indexerConnectionRepository.QueryAllAsync(
-                    new IndexerConnectionQuery { IndexerId = id },
-                    cancellationToken: ct).ConfigureAwait(false);
-
-                foreach (var connection in connections)
-                {
-                    await indexerConnectionRepository.DeleteAsync(connection.Id, actingUserId, ct)
-                        .ConfigureAwait(false);
-                }
-
-                return await indexerRepository.DeleteAsync(id, actingUserId, ct).ConfigureAwait(false);
-            },
-            cancellationToken).ConfigureAwait(false);
-
-        return deleted;
-    }
+    public Task<bool> DeleteAsync(Guid id, Guid? actingUserId, CancellationToken cancellationToken = default) =>
+        indexerRepository.DeleteAsync(id, actingUserId, cancellationToken);
 
     public async Task<IReadOnlyList<SettingSchemaDefinition>> GetSettingsSchemaAsync(
         Guid id,
@@ -475,6 +456,11 @@ internal sealed class IndexerService(
             selectedConnectionIds: selectedIds).ConfigureAwait(false);
 
         var phase = phases[0];
+        if (phase.ConnectionsSucceeded == 0 && phase.Connections.Any(connection => connection.Error is not null))
+        {
+            throw new InvalidOperationException("Indexer search failed; no provider answered successfully.");
+        }
+
         await transactionManager.ExecuteWithTransactionAsync(
             async transactionCancellationToken =>
             {
@@ -577,7 +563,7 @@ internal sealed class IndexerService(
                 : new Dictionary<string, string>(create.Settings),
         };
 
-        return await indexerConnectionRepository.CreateAsync(connection, actingUserId, cancellationToken)
+        return await indexerRepository.CreateConnectionAsync(connection, actingUserId, cancellationToken)
             .ConfigureAwait(false);
     }
 
@@ -595,8 +581,8 @@ internal sealed class IndexerService(
             return false;
         }
 
-        var patched = await indexerConnectionRepository
-            .PatchAsync(patch with { Id = connectionId }, actingUserId, cancellationToken)
+        var patched = await indexerRepository
+            .PatchConnectionAsync(patch with { Id = connectionId }, actingUserId, cancellationToken)
             .ConfigureAwait(false);
 
         if (patched && patch.Status?.Value is { } toStatus && toStatus != connection.Status)
@@ -626,7 +612,7 @@ internal sealed class IndexerService(
             return false;
         }
 
-        return await indexerConnectionRepository.DeleteAsync(connectionId, actingUserId, cancellationToken)
+        return await indexerRepository.DeleteConnectionAsync(connectionId, actingUserId, cancellationToken)
             .ConfigureAwait(false);
     }
 
@@ -956,7 +942,7 @@ internal sealed class IndexerService(
             ? IntegrationHealthStatus.Healthy
             : ToHealthStatus(result.FailureKind, failures);
 
-        await indexerConnectionRepository.PatchAsync(
+        await indexerRepository.PatchConnectionAsync(
             new IndexerConnectionPatch
             {
                 Id = connection.Id,

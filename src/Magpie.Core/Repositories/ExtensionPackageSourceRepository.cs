@@ -33,15 +33,20 @@ internal sealed class ExtensionPackageSourceRepository(
     private static readonly
         (string Name, Func<ExtensionPackageSource, ExtensionPackageSource, bool> Changed)[] UpdateFields =
     [
-        ("name", (current, model) => !Equals(current.Name, model.Name)),
-        ("sourceUrl", (current, model) => !Equals(current.SourceUrl, model.SourceUrl)),
-        ("enabled", (current, model) => !Equals(current.Enabled, model.Enabled)),
-        ("searchFilterKind", (current, model) => !Equals(current.SearchFilterKind, model.SearchFilterKind)),
-        ("searchFilterValue", (current, model) => !Equals(current.SearchFilterValue, model.SearchFilterValue)),
-        ("credentialKind", (current, model) => !Equals(current.CredentialKind, model.CredentialKind)),
-        ("username", (current, model) => !Equals(current.Username, model.Username)),
-        ("encryptedSecret", (current, model) => !Equals(current.EncryptedSecret, model.EncryptedSecret)),
-        ("secretReference", (current, model) => !Equals(current.SecretReference, model.SecretReference)),
+        (nameof(ExtensionPackageSource.Name), (current, model) => !Equals(current.Name, model.Name)),
+        (nameof(ExtensionPackageSource.SourceUrl), (current, model) => !Equals(current.SourceUrl, model.SourceUrl)),
+        (nameof(ExtensionPackageSource.Enabled), (current, model) => !Equals(current.Enabled, model.Enabled)),
+        (nameof(ExtensionPackageSource.SearchFilterKind), (current, model) =>
+            !Equals(current.SearchFilterKind, model.SearchFilterKind)),
+        (nameof(ExtensionPackageSource.SearchFilterValue), (current, model) =>
+            !Equals(current.SearchFilterValue, model.SearchFilterValue)),
+        (nameof(ExtensionPackageSource.CredentialKind), (current, model) =>
+            !Equals(current.CredentialKind, model.CredentialKind)),
+        (nameof(ExtensionPackageSource.Username), (current, model) => !Equals(current.Username, model.Username)),
+        (nameof(ExtensionPackageSource.EncryptedSecret), (current, model) =>
+            !Equals(current.EncryptedSecret, model.EncryptedSecret)),
+        (nameof(ExtensionPackageSource.SecretReference), (current, model) =>
+            !Equals(current.SecretReference, model.SecretReference)),
     ];
 
     private readonly TimeProvider _time = timeProvider;
@@ -94,47 +99,47 @@ internal sealed class ExtensionPackageSourceRepository(
         var fields = new List<string>();
         if (patch.Name is not null)
         {
-            fields.Add("name");
+            fields.Add(nameof(ExtensionPackageSource.Name));
         }
 
         if (patch.SourceUrl is not null)
         {
-            fields.Add("sourceUrl");
+            fields.Add(nameof(ExtensionPackageSource.SourceUrl));
         }
 
         if (patch.Enabled is not null)
         {
-            fields.Add("enabled");
+            fields.Add(nameof(ExtensionPackageSource.Enabled));
         }
 
         if (patch.SearchFilterKind is not null)
         {
-            fields.Add("searchFilterKind");
+            fields.Add(nameof(ExtensionPackageSource.SearchFilterKind));
         }
 
         if (patch.SearchFilterValue is not null)
         {
-            fields.Add("searchFilterValue");
+            fields.Add(nameof(ExtensionPackageSource.SearchFilterValue));
         }
 
         if (patch.CredentialKind is not null)
         {
-            fields.Add("credentialKind");
+            fields.Add(nameof(ExtensionPackageSource.CredentialKind));
         }
 
         if (patch.Username is not null)
         {
-            fields.Add("username");
+            fields.Add(nameof(ExtensionPackageSource.Username));
         }
 
         if (patch.EncryptedSecret is not null)
         {
-            fields.Add("encryptedSecret");
+            fields.Add(nameof(ExtensionPackageSource.EncryptedSecret));
         }
 
         if (patch.SecretReference is not null)
         {
-            fields.Add("secretReference");
+            fields.Add(nameof(ExtensionPackageSource.SecretReference));
         }
 
         return fields;

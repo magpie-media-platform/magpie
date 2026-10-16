@@ -82,6 +82,13 @@ public sealed class DownloadRefreshJobTests
             .ReturnsAsync(Guid.NewGuid());
 
         _downloadService = new Mock<IDownloadService>();
+        _downloadService
+            .Setup(s => s.UpdateRefreshedClientStateAsync(
+                It.IsAny<Download>(),
+                It.IsAny<DownloadInfo>(),
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
 
         _subject = new DownloadRefreshJob(
             _integrations,
@@ -1237,7 +1244,7 @@ public sealed class DownloadRefreshJobTests
                 It.IsAny<DownloadInfo>(),
                 It.IsAny<Guid?>(),
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(true);
+            .ReturnsAsync(["Progress"]);
 
         // Act
         await _subject.ExecuteAsync(_jobContext).ConfigureAwait(false);
@@ -1245,7 +1252,8 @@ public sealed class DownloadRefreshJobTests
         // Assert
         _downloadService.Verify(
             s => s.PublishRefreshedStatusAsync(
-                It.Is<IReadOnlyCollection<Guid>>(ids => ids.Count == 1 && ids.Contains(updated.Id)),
+                It.Is<IReadOnlyDictionary<Guid, IReadOnlyList<string>>>(changes =>
+                    changes.Count == 1 && changes[updated.Id].SequenceEqual(new[] { "Progress" })),
                 _userId,
                 CancellationToken.None),
             Times.Once);
@@ -1296,10 +1304,10 @@ public sealed class DownloadRefreshJobTests
                 It.IsAny<DownloadInfo>(),
                 It.IsAny<Guid?>(),
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(true);
+            .ReturnsAsync(["Progress"]);
         _downloadService
             .Setup(s => s.PublishRefreshedStatusAsync(
-                It.IsAny<IReadOnlyCollection<Guid>>(),
+                It.IsAny<IReadOnlyDictionary<Guid, IReadOnlyList<string>>>(),
                 It.IsAny<Guid?>(),
                 It.IsAny<CancellationToken>()))
             .ThrowsAsync(new InvalidOperationException("boom"));

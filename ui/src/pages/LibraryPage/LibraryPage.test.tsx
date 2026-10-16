@@ -2447,6 +2447,12 @@ describe('LibraryPage', () => {
                 expect(calledWithSavedQuery).toBe(true);
             });
 
+            expect(
+                mockUseContentList.mock.calls.every(
+                    (call) => call[1]?.enabled === false || call[0]?.filter === 'monitoring != Unmonitored',
+                ),
+            ).toBe(true);
+
             expect(screen.getByTestId('location-probe')).toHaveTextContent('savedFilter=filter-1');
             expect(await screen.findByTestId('library-page__applied-saved-filter')).toHaveTextContent('My Active');
             expect(screen.queryByText('Saved filter not found')).not.toBeInTheDocument();

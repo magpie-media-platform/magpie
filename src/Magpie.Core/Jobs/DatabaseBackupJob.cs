@@ -24,7 +24,7 @@ internal sealed class DatabaseBackupJob(
     {
         JobType = MagpieJobs.Types.DatabaseBackup,
         DisplayName = "Database backup",
-        Description = "Creates an on-demand database backup.",
+        Description = "Creates a backup of the database.",
         Category = "System",
         Scope = JobScope.Administrative,
         Enabled = true,

@@ -1,10 +1,14 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 
 using Magpie.Api.Hosting;
 using Magpie.Api.Setup;
+using Magpie.Models;
 using Magpie.Sdk.Api;
+using Magpie.Sdk.Services;
 
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -49,6 +53,7 @@ public static class WebApplicationExtensions
     /// <param name="app">The web application to configure</param>
     public static WebApplication MapMagpieEndpoints(this WebApplication app)
     {
+        app.MapMagpieHealthEndpoints();
         var apiGroup = app.MapGroup("/api");
 
         foreach (var group in app.Services.GetServices<IApiEndpointGroup>())
@@ -66,6 +71,51 @@ public static class WebApplicationExtensions
             .AllowAnonymous();
 
         return app;
+    }
+
+    /// <summary>
+    /// Maps the Magpie health and readiness endpoints under <c>/api/system</c>.
+    /// </summary>
+    /// <param name="app">The web application to configure</param>
+    public static WebApplication MapMagpieHealthEndpoints(this WebApplication app)
+    {
+        var systemGroup = app.MapGroup("/api/system");
+        systemGroup.MapGet("health", GetSystemHealthAsync)
+            .WithName(nameof(GetSystemHealthAsync))
+            .Produces<SystemHealth>()
+            .AllowAnonymous();
+        systemGroup.MapGet("ready", GetSystemReadiness)
+            .WithName(nameof(GetSystemReadiness))
+            .Produces(StatusCodes.Status200OK)
+            .ProducesProblem(StatusCodes.Status503ServiceUnavailable)
+            .AllowAnonymous();
+
+        return app;
+    }
+
+    private static async Task<IResult> GetSystemHealthAsync(
+        [FromServices] IMagpieSystem magpieSystem,
+        CancellationToken cancellationToken)
+    {
+        var health = await magpieSystem.CheckHealthAsync(cancellationToken).ConfigureAwait(false);
+
+        return Results.Ok(health);
+    }
+
+    private static IResult GetSystemReadiness([FromServices] DatabaseMigrationState migrationState)
+    {
+        if (migrationState.IsSchemaKnown)
+        {
+            return Results.Ok();
+        }
+
+        var detail = migrationState.UnknownMigrations.Count > 0
+            ? "The database schema is newer than the current node, the node requires an upgrade."
+            : "The node is starting.";
+        return Results.Problem(
+            detail: detail,
+            statusCode: StatusCodes.Status503ServiceUnavailable,
+            title: "The node is not ready.");
     }
 
     private static IResult AnswerUnroutedApiRequest(

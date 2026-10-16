@@ -963,6 +963,7 @@ internal sealed class SubjectRepository(
     {
         try
         {
+            var changedFields = new SortedSet<string>(StringComparer.Ordinal);
             await transactionManager.ExecuteWithTransactionAsync(
                 async ct =>
                 {
@@ -977,7 +978,7 @@ internal sealed class SubjectRepository(
                         .ToListAsync(ct)
                         .ConfigureAwait(false);
 
-                    await context.Relationships
+                    if (await context.Relationships
                         .Where(relationship => relationship.RelatedMetadataContainerId != null &&
                             containerIds.Contains(relationship.RelatedMetadataContainerId.Value))
                         .ExecuteUpdateAsync(
@@ -985,9 +986,12 @@ internal sealed class SubjectRepository(
                                 relationship => relationship.RelatedMetadataContainerId,
                                 survivorContainerId),
                             ct)
-                        .ConfigureAwait(false);
+                        .ConfigureAwait(false) > 0)
+                    {
+                        changedFields.Add(nameof(MetadataContribution.Relationships));
+                    }
 
-                    await context.MetadataContributions
+                    if (await context.MetadataContributions
                         .Where(contribution => containerIds.Contains(contribution.MetadataContainerId) &&
                             contribution.ProviderType == UserProviderType)
                         .ExecuteUpdateAsync(
@@ -995,7 +999,10 @@ internal sealed class SubjectRepository(
                                 contribution => contribution.MetadataContainerId,
                                 survivorContainerId),
                             ct)
-                        .ConfigureAwait(false);
+                        .ConfigureAwait(false) > 0)
+                    {
+                        changedFields.Add(nameof(MetadataContainer.Contributions));
+                    }
 
                     var survivorContributions = await context.MetadataContributions.AsNoTracking()
                         .Where(contribution => contribution.MetadataContainerId == survivorContainerId)
@@ -1022,17 +1029,21 @@ internal sealed class SubjectRepository(
                                     ct)
                                 .ConfigureAwait(false);
                             survivorContributions.Add(contribution);
+                            changedFields.Add(nameof(MetadataContainer.Contributions));
                             continue;
                         }
 
-                        await context.Relationships
+                        if (await context.Relationships
                             .Where(relationship => relationship.MetadataContributionId == contribution.Id)
                             .ExecuteUpdateAsync(
                                 setters => setters.SetProperty(
                                     relationship => relationship.MetadataContributionId,
                                     target.Id),
                                 ct)
-                            .ConfigureAwait(false);
+                            .ConfigureAwait(false) > 0)
+                        {
+                            changedFields.Add(nameof(MetadataContribution.Relationships));
+                        }
                     }
 
                     var survivorContributionIds =
@@ -1080,9 +1091,19 @@ internal sealed class SubjectRepository(
                         }
 
                         await context.SaveChangesAsync(ct).ConfigureAwait(false);
+                        changedFields.Add(nameof(SubjectRowPatch.Tags));
                     }
                 },
                 cancellationToken).ConfigureAwait(false);
+
+            if (changedFields.Count > 0)
+            {
+                await transactionManager.OnCommittedAsync(
+                    token => eventBus.PublishAsync(
+                        SubjectEventBuilder.BuildSubjectUpdatedEvent(survivorId, changedFields),
+                        token),
+                    cancellationToken).ConfigureAwait(false);
+            }
         }
         catch (Exception ex)
         {
@@ -1164,12 +1185,12 @@ internal sealed class SubjectRepository(
                     var changedFields = new List<string>();
                     if (!Equals(current.Kind, model.Kind))
                     {
-                        changedFields.Add("kind");
+                        changedFields.Add(nameof(Subject.Kind));
                     }
 
                     if (!Equals(current.DateLastRefreshed, model.DateLastRefreshed))
                     {
-                        changedFields.Add("dateLastRefreshed");
+                        changedFields.Add(nameof(Subject.DateLastRefreshed));
                     }
 
                     var updated = await context.Subjects
@@ -1367,7 +1388,33 @@ internal sealed class SubjectRepository(
                         model.DateLastRefreshed != patch.DateLastRefreshed.Value)
                     {
                         model.DateLastRefreshed = patch.DateLastRefreshed.Value;
-                        changedFields.Add("dateLastRefreshed");
+                        changedFields.Add(nameof(Subject.DateLastRefreshed));
+                    }
+
+                    if (patch.PrimaryImageId is not null)
+                    {
+                        var imageId = patch.PrimaryImageId.Value;
+                        var containerId = model.MetadataContainerId;
+                        var images = context.Images.Where(image => context.MetadataContributions.Any(contribution =>
+                            contribution.Id == image.MetadataContributionId &&
+                            contribution.MetadataContainerId == containerId));
+                        var belongs = await images
+                            .AnyAsync(image => image.Id == imageId, cancellationToken)
+                            .ConfigureAwait(false);
+                        if (!belongs)
+                        {
+                            return false;
+                        }
+
+                        if (await images
+                            .Where(image => image.IsPrimary != (image.Id == imageId))
+                            .ExecuteUpdateAsync(
+                                setters => setters.SetProperty(image => image.IsPrimary, image => image.Id == imageId),
+                                cancellationToken)
+                            .ConfigureAwait(false) > 0)
+                        {
+                            changedFields.Add(nameof(SubjectRowPatch.PrimaryImageId));
+                        }
                     }
 
                     var tagsAdded = new List<string>();
@@ -1417,7 +1464,7 @@ internal sealed class SubjectRepository(
 
                     if (!tagsAdded.ToHashSet(StringComparer.Ordinal).SetEquals(tagsRemoved))
                     {
-                        changedFields.Add("tags");
+                        changedFields.Add(nameof(SubjectRowPatch.Tags));
                     }
 
                     model.ModifiedAt = now;

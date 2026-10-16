@@ -32,8 +32,32 @@ internal sealed class ContentRepository(
     IFileSystem fileSystem,
     IAuditRecordRepository auditRecordRepository) : IContentRepository
 {
+    private static readonly (string Name, Func<ContentItem, ContentItem, bool> Changed)[] UpdateFields =
+    [
+        (nameof(ContentItem.FulfilledAt), (current, model) => current.FulfilledAt != model.FulfilledAt),
+        (nameof(ContentItem.QualityStatus), (current, model) => current.QualityStatus != model.QualityStatus),
+        (nameof(ContentItem.DateLastSearched), (current, model) => current.DateLastSearched != model.DateLastSearched),
+    ];
+
+    private static readonly (string Name, Func<ContentItem, ContentItem, bool> Changed)[] MediaStateFields =
+    [
+        (nameof(ContentItem.FulfilledAt), (current, model) => current.FulfilledAt != model.FulfilledAt),
+        (nameof(ContentItem.QualityStatus), (current, model) => current.QualityStatus != model.QualityStatus),
+        (nameof(ContentItem.PrimaryMediaSize), (current, model) => current.PrimaryMediaSize != model.PrimaryMediaSize),
+        (nameof(ContentItem.PrimaryMediaFileCount),
+            (current, model) => current.PrimaryMediaFileCount != model.PrimaryMediaFileCount),
+        (nameof(ContentItem.CurrentFileQualityRank),
+            (current, model) => current.CurrentFileQualityRank != model.CurrentFileQualityRank),
+    ];
+
     private static bool IsFulfilled(FulfillmentStatus status) =>
         status is not FulfillmentStatus.Missing;
+
+    private static List<string> ChangedFields(
+        (string Name, Func<ContentItem, ContentItem, bool> Changed)[] fields,
+        ContentItem current,
+        ContentItem model) =>
+        [.. fields.Where(field => field.Changed(current, model)).Select(field => field.Name)];
 
     private IQueryable<ContentItem> ApplySort(IQueryable<ContentItem> items, SortParameter? sort)
     {
@@ -179,6 +203,8 @@ internal sealed class ContentRepository(
                                 .SetProperty(item => item.ModifiedByUserId, modifiedByUserId),
                             ct)
                         .ConfigureAwait(false);
+                    await PublishUpdatedAsync(contentItem.Id, ChangedFields(UpdateFields, current, contentItem), ct)
+                        .ConfigureAwait(false);
                 },
                 cancellationToken).ConfigureAwait(false);
             return true;
@@ -201,25 +227,36 @@ internal sealed class ContentRepository(
             return await transactionManager.ExecuteWithTransactionAsync(
                 async ct =>
                 {
+                    var current = await GetByIdAsync(contentItem.Id, ct).ConfigureAwait(false);
                     await UpdateFulfillmentAsync(
                         contentItem.Id,
                         contentItem.Fulfillment,
                         contentItem.ModifiedAt ?? timeProvider.GetUtcNow().UtcDateTime,
                         modifiedByUserId,
                         ct).ConfigureAwait(false);
-                    return await context.ContentItems
+                    var fulfilledAt = contentItem.Fulfillment == FulfillmentStatus.Missing
+                        ? null
+                        : contentItem.FulfilledAt;
+                    var updated = await context.ContentItems
                         .Where(item => item.Id == contentItem.Id)
                         .ExecuteUpdateAsync(
                             update => update
-                                .SetProperty(item => item.FulfilledAt,
-                                    contentItem.Fulfillment == FulfillmentStatus.Missing
-                                        ? null : contentItem.FulfilledAt)
+                                .SetProperty(item => item.FulfilledAt, fulfilledAt)
                                 .SetProperty(item => item.QualityStatus, contentItem.QualityStatus)
                                 .SetProperty(item => item.PrimaryMediaSize, contentItem.PrimaryMediaSize)
                                 .SetProperty(item => item.PrimaryMediaFileCount, contentItem.PrimaryMediaFileCount)
                                 .SetProperty(item => item.CurrentFileQualityRank, contentItem.CurrentFileQualityRank)
                                 .SetProperty(item => item.MediaReconciledAt, contentItem.MediaReconciledAt),
                             ct).ConfigureAwait(false) > 0;
+                    if (updated && current is not null)
+                    {
+                        await PublishUpdatedAsync(
+                            contentItem.Id,
+                            ChangedFields(MediaStateFields, current, contentItem with { FulfilledAt = fulfilledAt }),
+                            ct).ConfigureAwait(false);
+                    }
+
+                    return updated;
                 },
                 cancellationToken).ConfigureAwait(false);
         }
@@ -339,6 +376,63 @@ internal sealed class ContentRepository(
                 contentItemId);
             throw;
         }
+    }
+
+    private async Task PublishUpdatedAsync(
+        Guid contentItemId,
+        IReadOnlyCollection<string> changedFields,
+        CancellationToken cancellationToken)
+    {
+        if (changedFields.Count == 0)
+        {
+            return;
+        }
+
+        var current = await (
+            from c in context.ContentItems.AsNoTracking()
+            join i in context.ContentHierarchyItems.AsNoTracking()
+                on c.ContentHierarchyItemId equals i.Id
+            where c.Id == contentItemId
+            select new
+            {
+                c.Fulfillment,
+                c.RequestedViaWishlistId,
+                i.Id,
+                i.MetadataContainerId,
+                i.ParentId,
+                i.ContentType,
+                i.Level,
+                i.RootFolderId,
+                i.QualityTierListId,
+                i.EffectiveMonitoring
+            })
+            .FirstOrDefaultAsync(cancellationToken)
+            .ConfigureAwait(false);
+        if (current is null)
+        {
+            return;
+        }
+
+        var impact = new ContentEventImpact
+        {
+            HierarchyItemId = current.Id,
+            ItemId = contentItemId,
+            MetadataContainerId = current.MetadataContainerId,
+            ParentId = current.ParentId,
+            ContentType = current.ContentType,
+            Level = current.Level,
+            TopLevel = current.ParentId is null,
+            RootFolderId = current.RootFolderId,
+            QualityTierListId = current.QualityTierListId,
+            Monitoring = current.EffectiveMonitoring != MonitoringMode.Unmonitored,
+            Fulfillment = current.Fulfillment.ToString(),
+            WishlistId = current.RequestedViaWishlistId
+        };
+        await transactionManager.OnCommittedAsync(
+            token => eventBus.PublishAsync(
+                ContentEventBuilder.BuildContentHierarchyItemUpdatedEvent(impact, changedFields),
+                token),
+            cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
@@ -517,31 +611,6 @@ internal sealed class ContentRepository(
                             Timestamp = now,
                             UserId = modifiedByUserId
                         }, ct).ConfigureAwait(false);
-                        var impact = new ContentEventImpact
-                        {
-                            HierarchyItemId = node.Id,
-                            ItemId = current.Id,
-                            ParentId = node.ParentId,
-                            MetadataContainerId = node.MetadataContainerId,
-                            ContentType = node.ContentType,
-                            Level = node.Level,
-                            TopLevel = node.ParentId == null,
-                            RootFolderId = node.EffectiveRootFolderId,
-                            QualityTierListId = node.EffectiveQualityTierListId,
-                            Monitoring = node.EffectiveMonitoring != MonitoringMode.Unmonitored,
-                            Fulfillment = fulfillment.ToString()
-                        };
-                        await transactionManager.OnCommittedAsync(
-                            token => eventBus.PublishAsync(
-                                ContentEventBuilder.BuildContentHierarchyItemUpdatedEvent(
-                                    impact,
-                                    [
-                                        nameof(ContentItem.PrimaryMediaSize),
-                                        nameof(ContentItem.PrimaryMediaFileCount),
-                                        nameof(ContentItem.FulfilledAt)
-                                    ]),
-                                token),
-                            ct).ConfigureAwait(false);
                     }
 
                     return true;

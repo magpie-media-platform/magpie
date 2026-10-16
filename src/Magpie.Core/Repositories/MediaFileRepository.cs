@@ -171,6 +171,12 @@ internal sealed class MediaFileRepository(
                         .ConfigureAwait(false);
                 }
 
+                await PublishUpdatedAsync(
+                    items,
+                    mediaFile.MediaInfo is null
+                        ? [nameof(ContentItem.MediaFiles)]
+                        : [nameof(ContentItem.MediaFiles), nameof(MediaFile.MediaInfo)],
+                    ct).ConfigureAwait(false);
                 return mediaFile;
             }, cancellationToken).ConfigureAwait(false);
         }
@@ -206,6 +212,14 @@ internal sealed class MediaFileRepository(
                 {
                     await contentRepository.ReconcileMediaStateAsync(owner, deletedByUserId, ct)
                         .ConfigureAwait(false);
+                }
+
+                if (removed)
+                {
+                    await PublishUpdatedAsync(
+                        [current.ContentItemId, .. current.Coverage.Select(coverage => coverage.ContentItemId)],
+                        [nameof(ContentItem.MediaFiles)],
+                        ct).ConfigureAwait(false);
                 }
 
                 return removed;
@@ -274,23 +288,28 @@ internal sealed class MediaFileRepository(
                         .ConfigureAwait(false);
                 }
 
-                if (updated > 0 && mediaInfoChanged)
+                if (updated > 0)
                 {
-                    foreach (var owner in owners)
+                    var previousItems = current.Coverage.Select(coverage => coverage.ContentItemId)
+                        .Prepend(current.ContentItemId)
+                        .ToList();
+                    var filesChanged = current.ContentItemId != items[0] ||
+                        !previousItems.ToHashSet().SetEquals(items) ||
+                        !string.Equals(current.FilePath, mediaFile.FilePath, StringComparison.Ordinal) ||
+                        current.ReplacedAt != mediaFile.ReplacedAt;
+                    List<string> changedFields = [];
+                    if (filesChanged)
                     {
-                        var impact = new ContentEventImpact
-                        {
-                            HierarchyItemId = owner,
-                            ItemId = items[0]
-                        };
-                        await transactionManager.OnCommittedAsync(
-                            token => eventBus.PublishAsync(
-                                ContentEventBuilder.BuildContentHierarchyItemUpdatedEvent(
-                                    impact,
-                                    [nameof(MediaFile.MediaInfo)]),
-                                token),
-                            ct).ConfigureAwait(false);
+                        changedFields.Add(nameof(ContentItem.MediaFiles));
                     }
+
+                    if (mediaInfoChanged)
+                    {
+                        changedFields.Add(nameof(MediaFile.MediaInfo));
+                    }
+
+                    await PublishUpdatedAsync([.. previousItems.Union(items)], changedFields, ct)
+                        .ConfigureAwait(false);
                 }
 
                 return updated > 0;
@@ -300,6 +319,36 @@ internal sealed class MediaFileRepository(
         {
             logger.LogError(ex, "The media file repository failed to update media file {MediaFileId}.", mediaFile.Id);
             throw;
+        }
+    }
+
+    private async Task PublishUpdatedAsync(
+        IReadOnlyCollection<Guid> contentItemIds,
+        IReadOnlyCollection<string> changedFields,
+        CancellationToken cancellationToken)
+    {
+        if (changedFields.Count == 0)
+        {
+            return;
+        }
+
+        var items = await context.ContentItems.AsNoTracking()
+            .Where(item => contentItemIds.Contains(item.Id))
+            .Select(item => new { item.Id, item.ContentHierarchyItemId })
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+        foreach (var item in items)
+        {
+            var impact = new ContentEventImpact
+            {
+                HierarchyItemId = item.ContentHierarchyItemId,
+                ItemId = item.Id
+            };
+            await transactionManager.OnCommittedAsync(
+                token => eventBus.PublishAsync(
+                    ContentEventBuilder.BuildContentHierarchyItemUpdatedEvent(impact, changedFields),
+                    token),
+                cancellationToken).ConfigureAwait(false);
         }
     }
 

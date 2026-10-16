@@ -718,31 +718,30 @@ internal sealed class ContentHierarchyItemRepository(
                 message.Contains("content_hierarchyItem.ContentType", StringComparison.Ordinal) &&
                 message.Contains("content_hierarchyItem.Level", StringComparison.Ordinal) &&
                 message.Contains("content_hierarchyItem.Slug", StringComparison.Ordinal);
-            if (!hierarchyIdentity)
-            {
-                continue;
-            }
-
-            if (databaseException.SqlState == "23505")
-            {
-                return true;
-            }
-
-            if (databaseException.GetType().FullName == "Microsoft.Data.SqlClient.SqlException" &&
-                databaseException.GetType().GetProperty("Number")?.GetValue(databaseException) is 2601 or 2627)
-            {
-                return true;
-            }
-
-            if (databaseException.GetType().FullName == "Microsoft.Data.Sqlite.SqliteException" &&
-                databaseException.GetType().GetProperty("SqliteExtendedErrorCode")?.GetValue(databaseException)
-                    is 2067)
+            if (hierarchyIdentity && IsUniqueViolation(databaseException))
             {
                 return true;
             }
         }
 
         return false;
+    }
+
+    private static bool IsUniqueViolation(DbException exception)
+    {
+        if (exception.SqlState == "23505")
+        {
+            return true;
+        }
+
+        var type = exception.GetType();
+        if (type.FullName == "Microsoft.Data.SqlClient.SqlException")
+        {
+            return type.GetProperty("Number")?.GetValue(exception) is 2601 or 2627;
+        }
+
+        return type.FullName == "Microsoft.Data.Sqlite.SqliteException" &&
+            type.GetProperty("SqliteExtendedErrorCode")?.GetValue(exception) is 1555 or 2067;
     }
 
     public async Task<ContentStats> GetStatsAsync(CancellationToken cancellationToken = default)
@@ -1213,8 +1212,7 @@ internal sealed class ContentHierarchyItemRepository(
     {
         try
         {
-            var impact = new ContentEventImpact { HierarchyItemId = id };
-            var removed = await transactionManager.ExecuteWithTransactionAsync(
+            return await transactionManager.ExecuteWithTransactionAsync(
                 async _ =>
                 {
                     var now = _time.GetUtcNow().UtcDateTime;
@@ -1227,17 +1225,7 @@ internal sealed class ContentHierarchyItemRepository(
                     var model = await (
                         from i in context.ContentHierarchyItems.AsNoTracking()
                         where i.Id == id
-                        select new
-                        {
-                            i.Name,
-                            i.ParentId,
-                            i.ContentType,
-                            i.Level,
-                            i.MetadataContainerId,
-                            i.RootFolderId,
-                            i.QualityTierListId,
-                            i.EffectiveMonitoring
-                        })
+                        select new { i.Name, i.ParentId })
                         .FirstOrDefaultAsync(cancellationToken)
                         .ConfigureAwait(false);
 
@@ -1254,20 +1242,6 @@ internal sealed class ContentHierarchyItemRepository(
                             deletedByUserId,
                             cancellationToken).ConfigureAwait(false);
                     }
-
-                    impact = new()
-                    {
-                        HierarchyItemId = id,
-                        MetadataContainerId = model.MetadataContainerId,
-                        ParentId = model.ParentId,
-                        ContentType = model.ContentType,
-                        Level = model.Level,
-                        TopLevel = model.ParentId is null,
-                        RootFolderId = model.RootFolderId,
-                        QualityTierListId = model.QualityTierListId,
-                        Monitoring = model.EffectiveMonitoring != MonitoringMode.Unmonitored,
-                        SubtreeIds = subtreeIds
-                    };
 
                     if (subtreeIds.Count > 0)
                     {
@@ -1288,17 +1262,6 @@ internal sealed class ContentHierarchyItemRepository(
                     return subtreeIds;
                 },
                 cancellationToken).ConfigureAwait(false);
-
-            if (removed.Count > 0)
-            {
-                await transactionManager.OnCommittedAsync(
-                    token => eventBus.PublishAsync(
-                        ContentEventBuilder.BuildContentHierarchyItemDeletedEvent(impact),
-                        token),
-                    cancellationToken).ConfigureAwait(false);
-            }
-
-            return removed;
         }
         catch (Exception ex)
         {
@@ -1515,6 +1478,7 @@ internal sealed class ContentHierarchyItemRepository(
             var result = await transactionManager.ExecuteWithTransactionAsync(
                 async _ =>
                 {
+                    await CreateMissingTagsAsync(patch.Patch.Tags?.Add, cancellationToken).ConfigureAwait(false);
                     var now = _time.GetUtcNow().UtcDateTime;
                     foreach (var id in targetIds)
                     {
@@ -1600,11 +1564,22 @@ internal sealed class ContentHierarchyItemRepository(
             await LockAsync(lineage[^1].Id, cancellationToken).ConfigureAwait(false);
         }
 
-        var rootExists = await context.ContentHierarchyItems
+        var root = await context.ContentHierarchyItems
             .AsNoTracking()
-            .AnyAsync(i => i.Id == id, cancellationToken)
+            .Where(i => i.Id == id)
+            .Select(i => new
+            {
+                i.ParentId,
+                i.ContentType,
+                i.Level,
+                i.MetadataContainerId,
+                i.RootFolderId,
+                i.QualityTierListId,
+                i.EffectiveMonitoring
+            })
+            .FirstOrDefaultAsync(cancellationToken)
             .ConfigureAwait(false);
-        if (!rootExists)
+        if (root is null)
         {
             return [];
         }
@@ -1703,6 +1678,23 @@ internal sealed class ContentHierarchyItemRepository(
                 .ConfigureAwait(false);
         }
 
+        var impact = new ContentEventImpact
+        {
+            HierarchyItemId = id,
+            MetadataContainerId = root.MetadataContainerId,
+            ParentId = root.ParentId,
+            ContentType = root.ContentType,
+            Level = root.Level,
+            TopLevel = root.ParentId is null,
+            RootFolderId = root.RootFolderId,
+            QualityTierListId = root.QualityTierListId,
+            Monitoring = root.EffectiveMonitoring != MonitoringMode.Unmonitored,
+            SubtreeIds = subtreeIds
+        };
+        await transactionManager.OnCommittedAsync(
+            token => eventBus.PublishAsync(ContentEventBuilder.BuildContentHierarchyItemDeletedEvent(impact), token),
+            cancellationToken).ConfigureAwait(false);
+
         return subtreeIds;
     }
 
@@ -1719,6 +1711,7 @@ internal sealed class ContentHierarchyItemRepository(
             var patched = await transactionManager.ExecuteWithTransactionAsync(
                 async _ =>
                 {
+                    await CreateMissingTagsAsync(patch.Tags?.Add, cancellationToken).ConfigureAwait(false);
                     var now = _time.GetUtcNow().UtcDateTime;
                     var outcome = await ApplyPatchAsync(
                         patch.Id,
@@ -3006,18 +2999,12 @@ internal sealed class ContentHierarchyItemRepository(
         {
             if (patch.Tags.Add is not null)
             {
-                foreach (var tagName in patch.Tags.Add)
+                foreach (var tagName in patch.Tags.Add.Order(StringComparer.Ordinal))
                 {
                     var tag = await context.Tags
                         .Include(t => t.MetadataContainers)
-                        .FirstOrDefaultAsync(t => t.Name == tagName, cancellationToken)
+                        .FirstAsync(t => t.Name == tagName, cancellationToken)
                         .ConfigureAwait(false);
-
-                    if (tag is null)
-                    {
-                        tag = new() { Name = tagName };
-                        context.Tags.Add(tag);
-                    }
 
                     if (!tag.MetadataContainers.Contains(model.MetadataContainer))
                     {
@@ -3122,6 +3109,37 @@ internal sealed class ContentHierarchyItemRepository(
                 Monitoring = model.EffectiveMonitoring != MonitoringMode.Unmonitored
             },
             previous);
+    }
+
+    private async Task CreateMissingTagsAsync(IEnumerable<string>? tagNames, CancellationToken cancellationToken)
+    {
+        if (tagNames is null)
+        {
+            return;
+        }
+
+        var names = tagNames.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToList();
+        var existing = await context.Tags.AsNoTracking()
+            .Where(tag => names.Contains(tag.Name))
+            .Select(tag => tag.Name)
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+        foreach (var name in names.Except(existing, StringComparer.Ordinal))
+        {
+            var tag = new Tag { Name = name };
+            context.Tags.Add(tag);
+            try
+            {
+                await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (DbUpdateException ex) when (ex.InnerException is DbException inner && IsUniqueViolation(inner))
+            {
+            }
+            finally
+            {
+                context.Entry(tag).State = EntityState.Detached;
+            }
+        }
     }
 
     private async Task<IQueryable<ContentHierarchyItem>> ApplyCriteriaAsync(

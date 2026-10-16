@@ -43,6 +43,7 @@ internal sealed class EventDispatchBackgroundService(
     private static readonly HashSet<string> NonDispatchableEventNames =
     [
         MagpieEvents.Names.AuditRecordCreated,
+        MagpieEvents.Names.DatabaseMigrated,
         MagpieEvents.Names.JobExecutionCancellationRequested,
         MagpieEvents.Names.JobExecutionCancelled,
         MagpieEvents.Names.JobExecutionCompleted,

@@ -5,9 +5,9 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import { createElement } from 'react';
 
-vi.mock('@/lib/api', () => ({
+vi.mock('@/lib/api', async (importOriginal) => ({
+    ...(await importOriginal<typeof import('@/lib/api')>()),
     apiGet: vi.fn(),
-    buildUrl: (path: string) => path,
 }));
 
 import { apiGet } from '@/lib/api';
@@ -166,7 +166,7 @@ describe('ExecutionDetailPanel', () => {
         expect(row).toHaveTextContent('3');
         expect(within(row).getByRole('link', { name: 'View all attempts' })).toHaveAttribute(
             'href',
-            '/?correlationId=corr-9&rootsOnly=0',
+            '/?originalExecutionId=exec-original&rootsOnly=0',
         );
     });
 
@@ -177,13 +177,72 @@ describe('ExecutionDetailPanel', () => {
 
         const row = screen.getByText('Attempt').closest('.execution-details__row') as HTMLElement;
         expect(row).toHaveTextContent('—');
-        expect(within(row).getByRole('link', { name: 'View all attempts' })).toBeInTheDocument();
+        expect(within(row).getByRole('link', { name: 'View all attempts' })).toHaveAttribute(
+            'href',
+            '/?originalExecutionId=exec-original&rootsOnly=0',
+        );
     });
 
     it('names Manual as the trigger for an on-demand run', () => {
         renderWithClient(<ExecutionDetailPanel execution={makeExecution({ createdByUserId: 'user-1' })} />);
 
         expect(screen.getByText('Trigger').closest('.execution-details__row')).toHaveTextContent('Manual');
+    });
+
+    it('links the creating scan without showing its other searches in the item ledger', async () => {
+        // Arrange
+        const execution = makeExecution({
+            jobType: 'ReleaseSearchItem',
+            status: 'Queued',
+            startedAt: null,
+            completedAt: null,
+            parentExecutionId: 'exec-scan',
+            correlationId: 'corr-search',
+        });
+        mockApiGet.mockImplementation((url: string) => {
+            if (url === '/jobs/exec-scan') {
+                return Promise.resolve(makeExecution({ id: 'exec-scan', jobType: 'ReleaseSearchScan' }));
+            }
+            if (url === '/jobs/exec-1/execution-tree?include-siblings=false') {
+                return Promise.resolve({ root: { ...execution, children: [] }, totalCount: 1 });
+            }
+            if (url.startsWith('/audit-history')) return Promise.resolve(emptyAudits);
+            return Promise.reject(new Error(`Unexpected request: ${url}`));
+        });
+
+        // Act
+        renderWithClient(<ExecutionDetailPanel execution={execution} />);
+
+        // Assert
+        const row = screen.getByText('Created by').closest('.execution-details__row') as HTMLElement;
+        expect(await within(row).findByRole('link', { name: 'Release Search Scan' })).toHaveAttribute(
+            'href',
+            '/?job=exec-scan',
+        );
+        expect(mockApiGet).toHaveBeenCalledWith('/jobs/exec-1/execution-tree?include-siblings=false');
+        expect(screen.queryByText('Manual')).not.toBeInTheDocument();
+        const ledger = screen.getByTestId('execution-detail__ledger');
+        expect(ledger).toHaveTextContent('Created');
+        expect(within(ledger).queryByRole('link')).not.toBeInTheDocument();
+        expect(within(ledger).queryByRole('alert')).not.toBeInTheDocument();
+    });
+
+    it('keeps a parent link instead of Manual when the parent cannot be read', async () => {
+        // Arrange
+        mockApiGet.mockImplementation((url: string) =>
+            url === '/jobs/exec-parent'
+                ? Promise.reject(new Error('Not found'))
+                : Promise.resolve(url.startsWith('/audit-history') ? emptyAudits : emptyTree),
+        );
+
+        // Act
+        renderWithClient(<ExecutionDetailPanel execution={makeExecution({ parentExecutionId: 'exec-parent' })} />);
+
+        // Assert
+        await waitFor(() => expect(mockApiGet).toHaveBeenCalledWith('/jobs/exec-parent'));
+        const row = screen.getByText('Created by').closest('.execution-details__row') as HTMLElement;
+        expect(within(row).getByRole('link', { name: 'Parent job' })).toHaveAttribute('href', '/?job=exec-parent');
+        expect(screen.queryByText('Manual')).not.toBeInTheDocument();
     });
 
     it('names the event and links the parent job for an event-triggered run', () => {
@@ -485,13 +544,16 @@ describe('ExecutionDetailPanel', () => {
         expect(screen.getByText('Duration').nextElementSibling).toHaveTextContent(expected);
     });
 
-    it('does not fetch while inactive', () => {
-        renderWithClient(
-            <ExecutionDetailPanel
-                execution={makeExecution({ correlationId: 'corr-1', scheduleTriggerId: 'schedule-1' })}
-                active={false}
-            />,
-        );
-        expect(mockApiGet).not.toHaveBeenCalled();
-    });
+    it.each([{ scheduleTriggerId: 'schedule-1' }, { parentExecutionId: 'exec-parent' }])(
+        'does not fetch while inactive with %o',
+        (trigger) => {
+            renderWithClient(
+                <ExecutionDetailPanel
+                    execution={makeExecution({ correlationId: 'corr-1', ...trigger })}
+                    active={false}
+                />,
+            );
+            expect(mockApiGet).not.toHaveBeenCalled();
+        },
+    );
 });

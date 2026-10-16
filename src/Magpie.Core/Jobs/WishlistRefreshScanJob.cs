@@ -25,7 +25,7 @@ internal sealed class WishlistRefreshScanJob(
     {
         JobType = MagpieJobs.Types.WishlistRefreshScan,
         DisplayName = "Wishlist refresh scan",
-        Description = "Queues a refresh for every monitored wishlist.",
+        Description = "Queues a refresh of all monitored wishlists.",
         Category = "Content",
         Scope = JobScope.Administrative,
         Enabled = true,

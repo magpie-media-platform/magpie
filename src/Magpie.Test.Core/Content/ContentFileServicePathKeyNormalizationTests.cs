@@ -115,7 +115,7 @@ public sealed class ContentFileServicePathKeyNormalizationTests
             Mock.Of<IRootFolderRepository>(), Mock.Of<IContentTypeRegistry>(),
             new SubjectKindRegistry([], NullLogger<SubjectKindRegistry>.Instance),
             Mock.Of<IFileSystem>(),
-            _mediaFiles, _content, _fileAudit.Object, _transactions, Mock.Of<IJobManager>(), TimeProvider.System,
+            _mediaFiles, _content, _fileAudit.Object, _transactions, TimeProvider.System,
             NullLogger<ContentFileService>.Instance);
     }
 

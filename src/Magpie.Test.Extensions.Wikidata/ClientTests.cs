@@ -10,7 +10,6 @@ using System.Threading.Tasks;
 
 using Magpie.Extensions.Wikidata;
 using Magpie.Extensions.Wikidata.QueryEngine;
-using Magpie.Sdk.Http;
 
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -28,21 +27,6 @@ namespace Magpie.Test.Extensions.Wikidata;
 [TestFixture]
 internal sealed class ClientTests
 {
-    private ServiceProvider _cooldownServices = null!;
-
-    [SetUp]
-    public void SetUp()
-    {
-        var timeProvider = new Mock<TimeProvider>();
-        timeProvider.Setup(provider => provider.GetUtcNow())
-            .Returns(new DateTimeOffset(2026, 9, 22, 12, 0, 0, TimeSpan.Zero));
-        _cooldownServices = new ServiceCollection().AddSingleton(timeProvider.Object)
-            .AddHttpClient("test-cooldown").AddUpstreamCooldown().Services.BuildServiceProvider();
-    }
-
-    [TearDown]
-    public void DisposeCooldownServices() => _cooldownServices.Dispose();
-
     [Test]
     public void SearchEntitiesAsync_FailsAfterTenPages_WhenContinuationNeverEnds()
     {
@@ -55,13 +39,13 @@ internal sealed class ClientTests
                 Content = new StringContent(
                     "{\"search\":[{\"id\":\"Q42\"}],\"search-continue\":" + ++pages + "}")
             });
-        var factory = new Mock<IHttpClientFactory>();
-        factory.Setup(value => value.CreateClient(WikidataClient.HttpClientName))
-            .Returns(() => new HttpClient(http, disposeHandler: false));
-        var subject = new WikidataClient(
-            factory.Object,
-            _cooldownServices.GetRequiredService<IUpstreamCooldown>(),
-            TimeProvider.System);
+        var registrations = new ServiceCollection().AddSingleton<TimeProvider>(TimeProvider.System);
+        new WikidataExtension().RegisterServices(registrations);
+        registrations.AddHttpClient(WikidataClient.HttpClientName)
+            .ConfigurePrimaryHttpMessageHandler(() => http);
+        using var transport = registrations.BuildServiceProvider();
+        var factory = transport.GetRequiredService<IHttpClientFactory>();
+        var subject = new WikidataClient(factory);
         var context = new RequestContext
         {
             Language = "en",
@@ -101,14 +85,13 @@ internal sealed class ClientTests
                     Content = new StringContent("{\"entities\":{\"Q1\":{\"id\":\"Q1\"}}}")
                 };
             });
-        var httpClientFactory = new Mock<IHttpClientFactory>();
-        httpClientFactory
-            .Setup(factory => factory.CreateClient(WikidataClient.HttpClientName))
-            .Returns(() => new HttpClient(http, disposeHandler: false));
-        IWikidataClient subject = new WikidataClient(
-            httpClientFactory.Object,
-            _cooldownServices.GetRequiredService<IUpstreamCooldown>(),
-            TimeProvider.System);
+        var registrations = new ServiceCollection().AddSingleton<TimeProvider>(TimeProvider.System);
+        new WikidataExtension().RegisterServices(registrations);
+        registrations.AddHttpClient(WikidataClient.HttpClientName)
+            .ConfigurePrimaryHttpMessageHandler(() => http);
+        using var transport = registrations.BuildServiceProvider();
+        var httpClientFactory = transport.GetRequiredService<IHttpClientFactory>();
+        IWikidataClient subject = new WikidataClient(httpClientFactory);
         var context = new RequestContext
         {
             Language = "fr",
@@ -151,14 +134,13 @@ internal sealed class ClientTests
                     Content = new StringContent("{\"entities\":{\"Q1\":{\"id\":\"Q1\"}}}")
                 };
             });
-        var httpClientFactory = new Mock<IHttpClientFactory>();
-        httpClientFactory
-            .Setup(factory => factory.CreateClient(WikidataClient.HttpClientName))
-            .Returns(() => new HttpClient(http, disposeHandler: false));
-        IWikidataClient subject = new WikidataClient(
-            httpClientFactory.Object,
-            _cooldownServices.GetRequiredService<IUpstreamCooldown>(),
-            TimeProvider.System);
+        var registrations = new ServiceCollection().AddSingleton<TimeProvider>(TimeProvider.System);
+        new WikidataExtension().RegisterServices(registrations);
+        registrations.AddHttpClient(WikidataClient.HttpClientName)
+            .ConfigurePrimaryHttpMessageHandler(() => http);
+        using var transport = registrations.BuildServiceProvider();
+        var httpClientFactory = transport.GetRequiredService<IHttpClientFactory>();
+        IWikidataClient subject = new WikidataClient(httpClientFactory);
         var context = new RequestContext
         {
             Language = "en",
@@ -206,14 +188,13 @@ internal sealed class ClientTests
                     Content = new StringContent("{\"search\":[{\"id\":\"Q42\"},{\"id\":\"Q99\"}]}")
                 };
             });
-        var httpClientFactory = new Mock<IHttpClientFactory>();
-        httpClientFactory
-            .Setup(factory => factory.CreateClient(WikidataClient.HttpClientName))
-            .Returns(() => new HttpClient(http, disposeHandler: false));
-        IWikidataClient subject = new WikidataClient(
-            httpClientFactory.Object,
-            _cooldownServices.GetRequiredService<IUpstreamCooldown>(),
-            TimeProvider.System);
+        var registrations = new ServiceCollection().AddSingleton<TimeProvider>(TimeProvider.System);
+        new WikidataExtension().RegisterServices(registrations);
+        registrations.AddHttpClient(WikidataClient.HttpClientName)
+            .ConfigurePrimaryHttpMessageHandler(() => http);
+        using var transport = registrations.BuildServiceProvider();
+        var httpClientFactory = transport.GetRequiredService<IHttpClientFactory>();
+        IWikidataClient subject = new WikidataClient(httpClientFactory);
         var upstreamRequests = 0;
         var context = new RequestContext
         {
@@ -273,14 +254,13 @@ internal sealed class ClientTests
                     Content = new StringContent("{\"results\":{\"bindings\":[]}}")
                 };
             });
-        var httpClientFactory = new Mock<IHttpClientFactory>();
-        httpClientFactory
-            .Setup(factory => factory.CreateClient(WikidataClient.HttpClientName))
-            .Returns(() => new HttpClient(http, disposeHandler: false));
-        IWikidataClient subject = new WikidataClient(
-            httpClientFactory.Object,
-            _cooldownServices.GetRequiredService<IUpstreamCooldown>(),
-            TimeProvider.System);
+        var registrations = new ServiceCollection().AddSingleton<TimeProvider>(TimeProvider.System);
+        new WikidataExtension().RegisterServices(registrations);
+        registrations.AddHttpClient(WikidataClient.HttpClientName)
+            .ConfigurePrimaryHttpMessageHandler(() => http);
+        using var transport = registrations.BuildServiceProvider();
+        var httpClientFactory = transport.GetRequiredService<IHttpClientFactory>();
+        IWikidataClient subject = new WikidataClient(httpClientFactory);
         var upstreamRequests = 0;
         var context = new RequestContext
         {
@@ -322,30 +302,29 @@ internal sealed class ClientTests
         http.VerifyNoOutstandingExpectation();
     }
 
-    [Test]
-    public void GetEntitiesAsync_DefersWithoutRetry_WhenMaxlagEnvelope()
+    [TestCase("maxlag")]
+    [TestCase("ratelimited")]
+    public async Task GetEntitiesAsync_RetriesInternally_WhenThrottleEnvelope(string errorCode)
     {
         // Arrange
+        var time = new FakeTimeProvider { AutoAdvanceAmount = TimeSpan.FromSeconds(2) };
         using var http = new MockHttpMessageHandler();
         var first = http.Expect(HttpMethod.Get, WikidataClient.DefaultApiUrl + "*")
-            .Respond(_ =>
+            .Respond(_ => new HttpResponseMessage(HttpStatusCode.OK)
             {
-                var response = new HttpResponseMessage(HttpStatusCode.OK)
+                Headers =
                 {
-                    Content = new StringContent("{\"error\":{\"code\":\"maxlag\",\"info\":\"lagged\"}}")
-                };
-                response.Headers.RetryAfter = new RetryConditionHeaderValue(TimeSpan.Zero);
-                return response;
+                    RetryAfter = new System.Net.Http.Headers.RetryConditionHeaderValue(TimeSpan.FromSeconds(1))
+                },
+                Content = new StringContent("{\"error\":{\"code\":\"" + errorCode + "\"}}")
             });
-
-        var httpClientFactory = new Mock<IHttpClientFactory>();
-        httpClientFactory
-            .Setup(factory => factory.CreateClient(WikidataClient.HttpClientName))
-            .Returns(() => new HttpClient(http, disposeHandler: false));
-        IWikidataClient subject = new WikidataClient(
-            httpClientFactory.Object,
-            _cooldownServices.GetRequiredService<IUpstreamCooldown>(),
-            TimeProvider.System);
+        var second = http.Expect(HttpMethod.Get, WikidataClient.DefaultApiUrl + "*")
+            .Respond("application/json", "{\"entities\":{}}");
+        var registrations = new ServiceCollection().AddSingleton<TimeProvider>(time);
+        new WikidataExtension().RegisterServices(registrations);
+        registrations.AddHttpClient(WikidataClient.HttpClientName).ConfigurePrimaryHttpMessageHandler(() => http);
+        using var transport = registrations.BuildServiceProvider();
+        var subject = new WikidataClient(transport.GetRequiredService<IHttpClientFactory>());
         var upstreamRequests = 0;
         var context = new RequestContext
         {
@@ -356,15 +335,15 @@ internal sealed class ClientTests
         };
 
         // Act
-        var throttle = Assert.ThrowsAsync<Magpie.Models.UpstreamThrottledException>(async () =>
-            await subject.GetEntitiesAsync(["Q1"], context, default).ConfigureAwait(false));
+        var result = await subject.GetEntitiesAsync(["Q1"], context, default).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(throttle!.RetryAt, Is.EqualTo(new DateTimeOffset(2026, 9, 22, 12, 0, 30, TimeSpan.Zero)));
-            Assert.That(upstreamRequests, Is.EqualTo(1));
+            Assert.That(result, Is.Empty);
+            Assert.That(upstreamRequests, Is.EqualTo(2));
             Assert.That(http.GetMatchCount(first), Is.EqualTo(1));
+            Assert.That(http.GetMatchCount(second), Is.EqualTo(1));
         }
 
         http.VerifyNoOutstandingExpectation();
@@ -375,14 +354,13 @@ internal sealed class ClientTests
     {
         // Arrange
         using var http = new MockHttpMessageHandler();
-        var httpClientFactory = new Mock<IHttpClientFactory>();
-        httpClientFactory
-            .Setup(factory => factory.CreateClient(WikidataClient.HttpClientName))
-            .Returns(() => new HttpClient(http, disposeHandler: false));
-        IWikidataClient subject = new WikidataClient(
-            httpClientFactory.Object,
-            _cooldownServices.GetRequiredService<IUpstreamCooldown>(),
-            TimeProvider.System);
+        var registrations = new ServiceCollection().AddSingleton<TimeProvider>(TimeProvider.System);
+        new WikidataExtension().RegisterServices(registrations);
+        registrations.AddHttpClient(WikidataClient.HttpClientName)
+            .ConfigurePrimaryHttpMessageHandler(() => http);
+        using var transport = registrations.BuildServiceProvider();
+        var httpClientFactory = transport.GetRequiredService<IHttpClientFactory>();
+        IWikidataClient subject = new WikidataClient(httpClientFactory);
         var ids = Enumerable.Range(1, 51).Select(value => "Q" + value).ToArray();
         var context = new RequestContext
         {
@@ -409,14 +387,13 @@ internal sealed class ClientTests
                 "{\"entities\":{\"Q59431323\":{" +
                 "\"redirects\":{\"from\":\"Q59431323\",\"to\":\"Q42\"}," +
                 "\"id\":\"Q42\"}}}");
-        var httpClientFactory = new Mock<IHttpClientFactory>();
-        httpClientFactory
-            .Setup(factory => factory.CreateClient(WikidataClient.HttpClientName))
-            .Returns(() => new HttpClient(http, disposeHandler: false));
-        IWikidataClient subject = new WikidataClient(
-            httpClientFactory.Object,
-            _cooldownServices.GetRequiredService<IUpstreamCooldown>(),
-            TimeProvider.System);
+        var registrations = new ServiceCollection().AddSingleton<TimeProvider>(TimeProvider.System);
+        new WikidataExtension().RegisterServices(registrations);
+        registrations.AddHttpClient(WikidataClient.HttpClientName)
+            .ConfigurePrimaryHttpMessageHandler(() => http);
+        using var transport = registrations.BuildServiceProvider();
+        var httpClientFactory = transport.GetRequiredService<IHttpClientFactory>();
+        IWikidataClient subject = new WikidataClient(httpClientFactory);
         var context = new RequestContext
         {
             Language = "en",
@@ -449,14 +426,13 @@ internal sealed class ClientTests
                 "\"Q59431323\":{\"redirects\":{\"from\":\"Q59431323\",\"to\":\"Q42\"}," +
                 "\"id\":\"Q42\"}," +
                 "\"Q42\":{\"id\":\"Q42\"}}}");
-        var httpClientFactory = new Mock<IHttpClientFactory>();
-        httpClientFactory
-            .Setup(factory => factory.CreateClient(WikidataClient.HttpClientName))
-            .Returns(() => new HttpClient(http, disposeHandler: false));
-        IWikidataClient subject = new WikidataClient(
-            httpClientFactory.Object,
-            _cooldownServices.GetRequiredService<IUpstreamCooldown>(),
-            TimeProvider.System);
+        var registrations = new ServiceCollection().AddSingleton<TimeProvider>(TimeProvider.System);
+        new WikidataExtension().RegisterServices(registrations);
+        registrations.AddHttpClient(WikidataClient.HttpClientName)
+            .ConfigurePrimaryHttpMessageHandler(() => http);
+        using var transport = registrations.BuildServiceProvider();
+        var httpClientFactory = transport.GetRequiredService<IHttpClientFactory>();
+        IWikidataClient subject = new WikidataClient(httpClientFactory);
         var context = new RequestContext
         {
             Language = "en",
@@ -482,20 +458,28 @@ internal sealed class ClientTests
     }
 
     [Test]
-    public void ExecuteSparqlAsync_ThrowsRateLimited_WhenTooManyRequests()
+    public async Task ExecuteSparqlAsync_RetriesInternally_WhenTooManyRequests()
     {
         // Arrange
+        var time = new FakeTimeProvider { AutoAdvanceAmount = TimeSpan.FromSeconds(2) };
         using var http = new MockHttpMessageHandler();
         var expected = http.Expect(HttpMethod.Get, WikidataClient.DefaultSparqlUrl + "*")
-            .Respond(_ => new HttpResponseMessage(HttpStatusCode.TooManyRequests));
-        var httpClientFactory = new Mock<IHttpClientFactory>();
-        httpClientFactory
-            .Setup(factory => factory.CreateClient(WikidataClient.HttpClientName))
-            .Returns(() => new HttpClient(http, disposeHandler: false));
-        IWikidataClient subject = new WikidataClient(
-            httpClientFactory.Object,
-            _cooldownServices.GetRequiredService<IUpstreamCooldown>(),
-            TimeProvider.System);
+            .Respond(_ => new HttpResponseMessage(HttpStatusCode.TooManyRequests)
+            {
+                Headers =
+                {
+                    RetryAfter = new System.Net.Http.Headers.RetryConditionHeaderValue(TimeSpan.FromSeconds(1))
+                }
+            });
+        http.Expect(HttpMethod.Get, WikidataClient.DefaultSparqlUrl + "*")
+            .Respond("application/json", "{\"results\":{\"bindings\":[]}}");
+        var registrations = new ServiceCollection().AddSingleton<TimeProvider>(time);
+        new WikidataExtension().RegisterServices(registrations);
+        registrations.AddHttpClient(WikidataClient.HttpClientName)
+            .ConfigurePrimaryHttpMessageHandler(() => http);
+        using var transport = registrations.BuildServiceProvider();
+        var httpClientFactory = transport.GetRequiredService<IHttpClientFactory>();
+        IWikidataClient subject = new WikidataClient(httpClientFactory);
         var context = new RequestContext
         {
             Language = "en",
@@ -506,20 +490,19 @@ internal sealed class ClientTests
         {
             QueryText = "SELECT ?item WHERE { ?item ?p ?o. }",
             CanonicalCacheKey = "rate-limit",
-            Timeout = TimeSpan.FromSeconds(1)
+            Timeout = TimeSpan.FromSeconds(30)
         };
 
         // Act
-        var exception = Assert.ThrowsAsync<HttpRequestException>(async () => await subject.ExecuteSparqlAsync(
+        var result = await subject.ExecuteSparqlAsync(
             request,
             context,
-            default).ConfigureAwait(false));
+            default).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(exception, Is.Not.Null);
-            Assert.That(exception!.Data.Contains("wikidata.rate-limited"), Is.True);
+            Assert.That(result, Is.Empty);
             Assert.That(http.GetMatchCount(expected), Is.EqualTo(1));
         }
 
@@ -556,12 +539,13 @@ internal sealed class ClientTests
                     Content = new StringContent("{\"entities\":{},\"results\":{\"bindings\":[]}}")
                 };
             });
-        var factory = new Mock<IHttpClientFactory>();
-        factory.Setup(value => value.CreateClient(WikidataClient.HttpClientName))
-            .Returns(() => new HttpClient(handler.Object, disposeHandler: false));
-        using var services = new ServiceCollection().AddSingleton<TimeProvider>(time)
-            .AddHttpClient("cooldown").AddUpstreamCooldown().Services.BuildServiceProvider();
-        var subject = new WikidataClient(factory.Object, services.GetRequiredService<IUpstreamCooldown>(), time);
+        var registrations = new ServiceCollection().AddSingleton<TimeProvider>(time);
+        new WikidataExtension().RegisterServices(registrations);
+        registrations.AddHttpClient(WikidataClient.HttpClientName)
+            .ConfigurePrimaryHttpMessageHandler(() => handler.Object);
+        using var transport = registrations.BuildServiceProvider();
+        var factory = transport.GetRequiredService<IHttpClientFactory>();
+        var subject = new WikidataClient(factory);
         var context = new RequestContext { Language = "en", FallbackLanguages = ["en"], UserAgent = "test" };
         var occupying = new SparqlRequest
         {
@@ -622,13 +606,13 @@ internal sealed class ClientTests
                 await response.ConfigureAwait(false);
                 return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(page) };
             });
-        var factory = new Mock<IHttpClientFactory>();
-        factory.Setup(value => value.CreateClient(WikidataClient.HttpClientName))
-            .Returns(() => new HttpClient(handler.Object, disposeHandler: false));
-        var cooldown = new ServiceCollection().AddSingleton<TimeProvider>(time)
-            .AddHttpClient("cooldown").AddUpstreamCooldown().Services.BuildServiceProvider()
-            .GetRequiredService<IUpstreamCooldown>();
-        var subject = new WikidataClient(factory.Object, cooldown, time);
+        var registrations = new ServiceCollection().AddSingleton<TimeProvider>(time);
+        new WikidataExtension().RegisterServices(registrations);
+        registrations.AddHttpClient(WikidataClient.HttpClientName)
+            .ConfigurePrimaryHttpMessageHandler(() => handler.Object);
+        using var transport = registrations.BuildServiceProvider();
+        var factory = transport.GetRequiredService<IHttpClientFactory>();
+        var subject = new WikidataClient(factory);
         var context = new RequestContext { Language = "en", FallbackLanguages = ["en"], UserAgent = "test" };
         var started = time.GetUtcNow();
 
@@ -672,13 +656,13 @@ internal sealed class ClientTests
                     Content = new StringContent("{\"search\":[{\"id\":\"Q1\"}],\"search-continue\":1}")
                 };
             });
-        var factory = new Mock<IHttpClientFactory>();
-        factory.Setup(value => value.CreateClient(WikidataClient.HttpClientName))
-            .Returns(() => new HttpClient(handler.Object, disposeHandler: false));
-        var cooldown = new ServiceCollection().AddSingleton<TimeProvider>(time)
-            .AddHttpClient("cooldown").AddUpstreamCooldown().Services.BuildServiceProvider()
-            .GetRequiredService<IUpstreamCooldown>();
-        var subject = new WikidataClient(factory.Object, cooldown, time);
+        var registrations = new ServiceCollection().AddSingleton<TimeProvider>(time);
+        new WikidataExtension().RegisterServices(registrations);
+        registrations.AddHttpClient(WikidataClient.HttpClientName)
+            .ConfigurePrimaryHttpMessageHandler(() => handler.Object);
+        using var transport = registrations.BuildServiceProvider();
+        var factory = transport.GetRequiredService<IHttpClientFactory>();
+        var subject = new WikidataClient(factory);
         var context = new RequestContext { Language = "en", FallbackLanguages = ["en"], UserAgent = "test" };
 
         // Act
@@ -716,13 +700,13 @@ internal sealed class ClientTests
                     Content = new StringContent("{\"search\":[{\"id\":\"Q1\"}],\"search-continue\":1}")
                 };
             });
-        var factory = new Mock<IHttpClientFactory>();
-        factory.Setup(value => value.CreateClient(WikidataClient.HttpClientName))
-            .Returns(() => new HttpClient(handler.Object, disposeHandler: false));
-        var cooldown = new ServiceCollection().AddSingleton<TimeProvider>(time)
-            .AddHttpClient("cooldown").AddUpstreamCooldown().Services.BuildServiceProvider()
-            .GetRequiredService<IUpstreamCooldown>();
-        var subject = new WikidataClient(factory.Object, cooldown, time);
+        var registrations = new ServiceCollection().AddSingleton<TimeProvider>(time);
+        new WikidataExtension().RegisterServices(registrations);
+        registrations.AddHttpClient(WikidataClient.HttpClientName)
+            .ConfigurePrimaryHttpMessageHandler(() => handler.Object);
+        using var transport = registrations.BuildServiceProvider();
+        var factory = transport.GetRequiredService<IHttpClientFactory>();
+        var subject = new WikidataClient(factory);
         var context = new RequestContext { Language = "en", FallbackLanguages = ["en"], UserAgent = "test" };
 
         // Act

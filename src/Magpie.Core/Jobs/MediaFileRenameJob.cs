@@ -23,7 +23,7 @@ internal sealed class MediaFileRenameJob(
     {
         JobType = MagpieJobs.Types.MediaFileRename,
         DisplayName = "Media file rename",
-        Description = "Renames one media file using its effective rename template.",
+        Description = "Renames a media file to match the rename template.",
         Category = "Content",
         Scope = JobScope.Content,
         Enabled = true,

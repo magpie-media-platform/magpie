@@ -11,13 +11,11 @@ using System.Threading.Tasks;
 using Magpie.Abstractions;
 using Magpie.Abstractions.Content;
 using Magpie.Abstractions.Repositories;
-using Magpie.Core.Jobs;
 using Magpie.Models;
 using Magpie.Models.Api;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
-using Magpie.Models.Jobs;
 using Magpie.Models.Patch;
 using Magpie.Models.Storage;
 using Magpie.Sdk.Content;
@@ -39,7 +37,6 @@ internal sealed class ContentFileService(
     IContentRepository contentRepository,
     IAuditRecordRepository auditRecordRepository,
     ITransactionManager transactionManager,
-    IJobManager jobManager,
     TimeProvider timeProvider,
     ILogger<ContentFileService> logger) : IContentFileService
 {
@@ -136,6 +133,7 @@ internal sealed class ContentFileService(
 
     private const int MaxSegmentLength = 255;
     private const char SanitizationReplacement = '_';
+    private const string StagedExtension = ".partial";
 
     private const string CollectionSeparator = " ";
     private const string LevelNumberToken = "Number";
@@ -368,7 +366,6 @@ internal sealed class ContentFileService(
             actingUserId,
             allowContainerFallback: false,
             acceptExisting: false,
-            queueMediaInfoScan: true,
             materializeFulfillmentAsync: null,
             cancellationToken);
     }
@@ -385,7 +382,6 @@ internal sealed class ContentFileService(
             actingUserId,
             allowContainerFallback: true,
             acceptExisting: true,
-            queueMediaInfoScan: false,
             materializeFulfillmentAsync: null,
             cancellationToken);
     }
@@ -403,7 +399,6 @@ internal sealed class ContentFileService(
             actingUserId,
             allowContainerFallback: false,
             acceptExisting: false,
-            queueMediaInfoScan: true,
             materializeFulfillmentAsync,
             cancellationToken);
     }
@@ -414,7 +409,6 @@ internal sealed class ContentFileService(
         Guid? actingUserId,
         bool allowContainerFallback,
         bool acceptExisting,
-        bool queueMediaInfoScan,
         Func<CancellationToken, Task>? materializeFulfillmentAsync,
         CancellationToken cancellationToken)
     {
@@ -460,38 +454,12 @@ internal sealed class ContentFileService(
             throw new ArgumentException("The selected file does not exist.");
         }
 
-        try
-        {
-            if (fileSystem.PathContainsLink(rootPath, fullPath))
-            {
-                throw new ArgumentException("The selected file path contains a link and cannot be imported.");
-            }
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or
-            NotSupportedException or PathTooLongException)
-        {
-            throw new ArgumentException("The selected file is not accessible.", ex);
-        }
-
-        if (level.AcceptedFileTypes.Count == 0 && !allowContainerFallback)
-        {
-            throw new ArgumentException("This content level has no configured file types.");
-        }
-
-        var mimeType = await fileSystem.LookupMimeTypeAsync(fullPath, cancellationToken)
-            .ConfigureAwait(false)
-            ?? throw new ArgumentException("The selected file type is unknown.");
-        var isPrimary = await fileSystem
-            .MatchesAnyFileTypeAsync(fullPath, level.AcceptedFileTypes, cancellationToken)
-            .ConfigureAwait(false);
-        var isSidecar = !isPrimary && await fileSystem
-            .MatchesAnyFileTypeAsync(fullPath, level.AcceptedSidecarTypes, cancellationToken)
-            .ConfigureAwait(false);
-        isPrimary = isPrimary || !isSidecar && allowContainerFallback && level.AcceptedFileTypes.Count == 0;
-        if (!isPrimary && !isSidecar)
-        {
-            throw new ArgumentException("The selected file type is not accepted by this content level.");
-        }
+        var (mimeType, isPrimary) = await ResolveAttachableTypeAsync(
+            level,
+            rootPath,
+            fullPath,
+            allowContainerFallback,
+            cancellationToken).ConfigureAwait(false);
 
         long fileSize;
         FileState? fileState = null;
@@ -579,51 +547,16 @@ internal sealed class ContentFileService(
                         }
                     }
 
-                    var fulfillmentChanged = await UpdateFulfillmentCoreAsync(
+                    var fulfillmentChanged = await CompleteAttachAsync(
                         hierarchyItem,
                         contentItem,
+                        mediaFile,
+                        fullPath,
+                        isPrimary,
                         now,
                         actingUserId,
+                        materializeFulfillmentAsync,
                         ct).ConfigureAwait(false);
-
-                    await auditRecordRepository.CreateAsync(
-                        new AuditRecord
-                        {
-                            Category = AuditCategories.Content,
-                            Operation = "FileAttached",
-                            EntityType = nameof(MediaFile),
-                            EntityId = mediaFile.Id.ToString(),
-                            ParentEntityId = contentHierarchyItemId.ToString(),
-                            Detail = $"Attached {Path.GetFileName(fullPath)} as " +
-                                (isPrimary ? "primary content." : "a sidecar."),
-                            Timestamp = now,
-                            UserId = actingUserId
-                        },
-                        ct).ConfigureAwait(false);
-
-                    if (fulfillmentChanged && materializeFulfillmentAsync is not null)
-                    {
-                        await materializeFulfillmentAsync(ct).ConfigureAwait(false);
-                    }
-
-                    if (queueMediaInfoScan && existing is null)
-                    {
-                        await jobManager.ExecuteAsync(
-                            new JobEnqueueRequest
-                            {
-                                JobType = MagpieJobs.Types.MediaInfoExtractScan,
-                                Parameters = new Dictionary<string, string>
-                                {
-                                    [MagpieJobs.Parameters.ContentHierarchyItemId] =
-                                        contentHierarchyItemId.ToString("D"),
-                                    [MagpieJobs.Parameters.MediaInfoPolicy] =
-                                        MagpieJobs.ParameterValues.AllMediaInfoPolicy
-                                },
-                                Mode = JobExecutionMode.Queue,
-                                UserId = actingUserId
-                            },
-                            ct).ConfigureAwait(false);
-                    }
 
                     return new AttachContentFileResult
                     {
@@ -632,6 +565,89 @@ internal sealed class ContentFileService(
                     };
                 },
                 cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<bool> CompleteAttachAsync(
+        ContentHierarchyItem hierarchyItem,
+        ContentItem contentItem,
+        MediaFile mediaFile,
+        string filePath,
+        bool isPrimary,
+        DateTime now,
+        Guid? actingUserId,
+        Func<CancellationToken, Task>? materializeFulfillmentAsync,
+        CancellationToken cancellationToken)
+    {
+        var fulfillmentChanged = await UpdateFulfillmentCoreAsync(
+            hierarchyItem,
+            contentItem,
+            now,
+            actingUserId,
+            cancellationToken).ConfigureAwait(false);
+
+        await auditRecordRepository.CreateAsync(
+            new()
+            {
+                Category = AuditCategories.Content,
+                Operation = "FileAttached",
+                EntityType = nameof(MediaFile),
+                EntityId = mediaFile.Id.ToString(),
+                ParentEntityId = hierarchyItem.Id.ToString(),
+                Detail = $"Attached {Path.GetFileName(filePath)} as " + (isPrimary ? "primary content." : "a sidecar."),
+                Timestamp = now,
+                UserId = actingUserId
+            },
+            cancellationToken).ConfigureAwait(false);
+
+        if (fulfillmentChanged && materializeFulfillmentAsync is not null)
+        {
+            await materializeFulfillmentAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        return fulfillmentChanged;
+    }
+
+    private async Task<(string MimeType, bool IsPrimary)> ResolveAttachableTypeAsync(
+        ContentHierarchyLevelDefinition level,
+        string rootPath,
+        string fullPath,
+        bool allowContainerFallback,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            if (fileSystem.PathContainsLink(rootPath, fullPath))
+            {
+                throw new ArgumentException("The selected file path contains a link and cannot be imported.");
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or
+            NotSupportedException or PathTooLongException)
+        {
+            throw new ArgumentException("The selected file is not accessible.", ex);
+        }
+
+        if (level.AcceptedFileTypes.Count == 0 && !allowContainerFallback)
+        {
+            throw new ArgumentException("This content level has no configured file types.");
+        }
+
+        var mimeType = await fileSystem.LookupMimeTypeAsync(fullPath, cancellationToken)
+            .ConfigureAwait(false)
+            ?? throw new ArgumentException("The selected file type is unknown.");
+        var isPrimary = await fileSystem
+            .MatchesAnyFileTypeAsync(fullPath, level.AcceptedFileTypes, cancellationToken)
+            .ConfigureAwait(false);
+        var isSidecar = !isPrimary && await fileSystem
+            .MatchesAnyFileTypeAsync(fullPath, level.AcceptedSidecarTypes, cancellationToken)
+            .ConfigureAwait(false);
+        isPrimary = isPrimary || !isSidecar && allowContainerFallback && level.AcceptedFileTypes.Count == 0;
+        if (!isPrimary && !isSidecar)
+        {
+            throw new ArgumentException("The selected file type is not accepted by this content level.");
+        }
+
+        return (mimeType, isPrimary);
     }
 
     public async Task<UnlinkContentFileResult> UnlinkAsync(
@@ -733,6 +749,418 @@ internal sealed class ContentFileService(
             Deleted = fileDeleted || removed,
             FulfillmentChanged = fulfillmentChanged
         };
+    }
+
+    public async Task<MediaFile?> ReplaceAsync(
+        Guid contentHierarchyItemId,
+        Guid mediaFileId,
+        string stagedPath,
+        string outputFileName,
+        MediaInfo mediaInfo,
+        Guid? actingUserId,
+        Func<CancellationToken, Task> materializeFulfillmentAsync,
+        CancellationToken cancellationToken = default)
+    {
+        var hierarchyItem = await contentHierarchyItemRepository
+            .GetByIdAsync(contentHierarchyItemId, cancellationToken)
+            .ConfigureAwait(false);
+        if (hierarchyItem is null)
+        {
+            return null;
+        }
+
+        var stagedName = Path.GetFileName(stagedPath);
+        if (stagedName.Length <= outputFileName.Length + StagedExtension.Length + 1 ||
+            !stagedName.StartsWith(outputFileName + ".", StringComparison.Ordinal) ||
+            !stagedName.EndsWith(StagedExtension, StringComparison.Ordinal))
+        {
+            throw new ArgumentException("The staged file name is not the output file name, a lineage and .partial.");
+        }
+
+        var lineage = stagedName[(outputFileName.Length + 1)..^StagedExtension.Length];
+        var level = contentTypeRegistry.GetDefinitionFor(hierarchyItem.ContentType)?.LevelDefinitions
+            .FirstOrDefault(candidate => candidate.Slug == hierarchyItem.Level)
+            ?? throw new ArgumentException("The content level has no file contract.");
+        var rootFolder = await rootFolderRepository
+            .GetByIdAsync(hierarchyItem.EffectiveRootFolderId, cancellationToken)
+            .ConfigureAwait(false)
+            ?? throw new ArgumentException("The content item has no configured root folder.");
+        var rename = await PreviewRenameAsync(
+            contentHierarchyItemId,
+            new(Path.Combine(Path.GetDirectoryName(stagedPath)!, outputFileName)),
+            mediaInfo,
+            cancellationToken).ConfigureAwait(false);
+        var realPath = rename.Rename.FullName;
+        var rootPath = fileSystem.GetFullPath(rootFolder.Path);
+        if (!fileSystem.IsPathWithin(rootPath, realPath))
+        {
+            throw new ArgumentException("The selected file is outside the configured root folder.");
+        }
+
+        var (mimeType, isPrimary) = await ResolveAttachableTypeAsync(
+            level,
+            rootPath,
+            realPath,
+            allowContainerFallback: false,
+            cancellationToken).ConfigureAwait(false);
+        var source = await GetOwnedOrCoveredMediaFileAsync(contentHierarchyItemId, mediaFileId, cancellationToken)
+            .ConfigureAwait(false);
+        using var paths = fileSystem.AcquireImportPaths(
+            source is null ? [realPath, stagedPath] : [source.FilePath, realPath, stagedPath]);
+        var backupPath = $"{realPath}.magpie-replace-{lineage}.orig";
+        if (source is not null && fileSystem.PathsEqual(realPath, source.FilePath))
+        {
+            return await ReplaceInPlaceAsync(
+                contentHierarchyItemId,
+                source,
+                stagedPath,
+                backupPath,
+                mediaInfo,
+                actingUserId,
+                cancellationToken).ConfigureAwait(false);
+        }
+
+        if (source is null && fileSystem.FileExists(backupPath))
+        {
+            RestoreReplaceBackup(realPath, stagedPath, backupPath);
+            throw new InvalidOperationException("The media file record is gone. The old file was restored.");
+        }
+
+        var sourceVersion = source is not null && fileSystem.FileExists(source.FilePath)
+            ? fileSystem.GetFileVersion(source.FilePath)
+            : null;
+        var placed = await mediaFileRepository.GetByPathAsync(realPath, cancellationToken).ConfigureAwait(false);
+        if (!fileSystem.FileExists(stagedPath))
+        {
+            if (placed is null ||
+                !fileSystem.FileExists(realPath) ||
+                (source is not null && placed.ContentItemId != source.ContentItemId))
+            {
+                throw new FileNotFoundException("The staged file does not exist.", stagedPath);
+            }
+        }
+        else if (fileSystem.FileExists(realPath) ||
+            (placed is not null && placed.ContentItemId != source?.ContentItemId))
+        {
+            throw new InvalidOperationException("Rename target file already exists");
+        }
+        else
+        {
+            var fileState = fileSystem.ReadFileState(stagedPath);
+            var created = placed is null;
+            if (placed is null)
+            {
+                placed = await CreateReplacementRecordAsync(
+                    hierarchyItem,
+                    source ?? throw new InvalidOperationException("The media file record is gone."),
+                    fileState,
+                    realPath,
+                    mimeType,
+                    isPrimary,
+                    mediaInfo,
+                    actingUserId,
+                    materializeFulfillmentAsync,
+                    cancellationToken).ConfigureAwait(false);
+            }
+            else
+            {
+                placed = placed with
+                {
+                    FileSize = fileState.Size,
+                    FileModifiedAt = fileState.LastWriteTimeUtc,
+                    MediaInfo = mediaInfo,
+                    ModifiedAt = timeProvider.GetUtcNow().UtcDateTime
+                };
+                if (!await mediaFileRepository.UpdateAsync(placed, actingUserId, cancellationToken)
+                    .ConfigureAwait(false))
+                {
+                    throw new InvalidOperationException("The media file changed during the replace.");
+                }
+            }
+
+            try
+            {
+                fileSystem.CreateDirectory(Path.GetDirectoryName(realPath)!);
+                fileSystem.Move(stagedPath, realPath);
+            }
+            catch (Exception ex) when (created)
+            {
+                logger.LogError(
+                    ex,
+                    "The content service failed to move {StagedPath} to {RealPath} and removes its new record",
+                    stagedPath,
+                    realPath);
+                await RemoveAssociationAsync(
+                    contentHierarchyItemId,
+                    placed,
+                    null,
+                    null,
+                    completeIfAlreadyRemoved: false,
+                    keepOtherItems: false,
+                    actingUserId,
+                    CancellationToken.None).ConfigureAwait(false);
+                throw;
+            }
+        }
+
+        if (source is not null)
+        {
+            await RemoveReplacedFileAsync(
+                contentHierarchyItemId,
+                source,
+                sourceVersion,
+                actingUserId,
+                materializeFulfillmentAsync,
+                cancellationToken).ConfigureAwait(false);
+        }
+
+        return placed;
+    }
+
+    private async Task<MediaFile> CreateReplacementRecordAsync(
+        ContentHierarchyItem hierarchyItem,
+        MediaFile source,
+        FileState fileState,
+        string realPath,
+        string mimeType,
+        bool isPrimary,
+        MediaInfo mediaInfo,
+        Guid? actingUserId,
+        Func<CancellationToken, Task> materializeFulfillmentAsync,
+        CancellationToken cancellationToken)
+    {
+        return await transactionManager.ExecuteWithTransactionAsync(
+            async ct =>
+            {
+                await LockFulfillmentLineageAsync(hierarchyItem.Id, ct).ConfigureAwait(false);
+                var now = timeProvider.GetUtcNow().UtcDateTime;
+                MediaFile mediaFile;
+                try
+                {
+                    mediaFile = await mediaFileRepository.CreateAsync(
+                        SetItems(
+                            new()
+                            {
+                                FileKind = fileSystem.ResolveFileKind(mimeType).ToString(),
+                                MimeType = mimeType,
+                                FilePath = realPath,
+                                FileSize = fileState.Size,
+                                FileModifiedAt = fileState.LastWriteTimeUtc,
+                                MediaInfo = mediaInfo,
+                                CreatedAt = now
+                            },
+                            [.. ItemsOf(source)]),
+                        actingUserId,
+                        ct).ConfigureAwait(false);
+                }
+                catch (DbUpdateException ex) when (IsPathUniqueViolation(ex))
+                {
+                    throw new InvalidOperationException("Rename target file already exists", ex);
+                }
+
+                var contentItem = await contentRepository.GetByIdAsync(source.ContentItemId, ct)
+                    .ConfigureAwait(false)
+                    ?? throw new InvalidOperationException($"Content item {source.ContentItemId} does not exist.");
+                await CompleteAttachAsync(
+                    hierarchyItem,
+                    contentItem,
+                    mediaFile,
+                    realPath,
+                    isPrimary,
+                    now,
+                    actingUserId,
+                    materializeFulfillmentAsync,
+                    ct).ConfigureAwait(false);
+
+                return mediaFile;
+            },
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task RemoveReplacedFileAsync(
+        Guid contentHierarchyItemId,
+        MediaFile source,
+        string? sourceVersion,
+        Guid? actingUserId,
+        Func<CancellationToken, Task> materializeFulfillmentAsync,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            if (fileSystem.FileExists(source.FilePath))
+            {
+                if (fileSystem.GetFileVersion(source.FilePath) != sourceVersion)
+                {
+                    throw new IOException($"{source.FilePath} changed during its replacement.");
+                }
+
+                fileSystem.DeleteFile(source.FilePath);
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "The content service could not delete the replaced file {FilePath}", source.FilePath);
+            await auditRecordRepository.CreateAsync(
+                new()
+                {
+                    Category = AuditCategories.Content,
+                    Operation = "FileDeleteFailed",
+                    EntityType = nameof(MediaFile),
+                    EntityId = source.Id.ToString(),
+                    ParentEntityId = contentHierarchyItemId.ToString(),
+                    Detail = $"Could not delete the superseded file {source.FilePath}.",
+                    Timestamp = timeProvider.GetUtcNow().UtcDateTime,
+                    UserId = actingUserId
+                },
+                cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        await transactionManager.ExecuteWithTransactionAsync(
+            async ct =>
+            {
+                var (_, fulfillmentChanged) = await RemoveAssociationAsync(
+                    contentHierarchyItemId,
+                    source,
+                    "FileDeleted",
+                    $"Deleted {Path.GetFileName(source.FilePath)} from the host.",
+                    completeIfAlreadyRemoved: true,
+                    keepOtherItems: false,
+                    actingUserId,
+                    ct).ConfigureAwait(false);
+                if (fulfillmentChanged)
+                {
+                    await materializeFulfillmentAsync(ct).ConfigureAwait(false);
+                }
+            },
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<MediaFile> ReplaceInPlaceAsync(
+        Guid contentHierarchyItemId,
+        MediaFile source,
+        string stagedPath,
+        string backupPath,
+        MediaInfo mediaInfo,
+        Guid? actingUserId,
+        CancellationToken cancellationToken)
+    {
+        var path = source.FilePath;
+        if (fileSystem.FileExists(stagedPath))
+        {
+            if (fileSystem.FileExists(backupPath) == fileSystem.FileExists(path))
+            {
+                throw new InvalidOperationException(
+                    fileSystem.FileExists(path)
+                        ? $"The replace backup {backupPath} already exists."
+                        : $"The media file {path} does not exist.");
+            }
+
+            try
+            {
+                if (!fileSystem.FileExists(backupPath))
+                {
+                    fileSystem.Move(path, backupPath);
+                }
+
+                fileSystem.Move(stagedPath, path);
+            }
+            catch
+            {
+                RestoreReplaceBackup(path, stagedPath, backupPath);
+                throw;
+            }
+        }
+        else if (!fileSystem.FileExists(backupPath) || !fileSystem.FileExists(path))
+        {
+            RestoreReplaceBackup(path, stagedPath, backupPath);
+            throw new FileNotFoundException("The staged file does not exist.", stagedPath);
+        }
+
+        MediaFile replaced;
+        try
+        {
+            var fileState = fileSystem.ReadFileState(path);
+            var now = timeProvider.GetUtcNow().UtcDateTime;
+            replaced = source with
+            {
+                FileSize = fileState.Size,
+                FileModifiedAt = fileState.LastWriteTimeUtc,
+                MediaInfo = mediaInfo,
+                ReplacedAt = now,
+                ModifiedAt = now
+            };
+            await transactionManager.ExecuteWithTransactionAsync(
+                async ct =>
+                {
+                    if (!await mediaFileRepository.UpdateAsync(replaced, actingUserId, ct).ConfigureAwait(false))
+                    {
+                        throw new InvalidOperationException("The media file changed during the replace.");
+                    }
+
+                    await auditRecordRepository.CreateAsync(
+                        new()
+                        {
+                            Category = AuditCategories.Content,
+                            Operation = "Replace",
+                            EntityType = nameof(MediaFile),
+                            EntityId = replaced.Id.ToString(),
+                            ParentEntityId = contentHierarchyItemId.ToString(),
+                            Detail = $"Replaced {Path.GetFileName(path)}.",
+                            Timestamp = now,
+                            UserId = actingUserId
+                        },
+                        ct).ConfigureAwait(false);
+                },
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch
+        {
+            RestoreReplaceBackup(path, stagedPath, backupPath);
+            throw;
+        }
+
+        try
+        {
+            fileSystem.DeleteFile(backupPath);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            logger.LogWarning(ex, "The content service could not delete the replace backup {BackupPath}", backupPath);
+        }
+
+        return replaced;
+    }
+
+    private void RestoreReplaceBackup(string path, string stagedPath, string backupPath)
+    {
+        try
+        {
+            if (!fileSystem.FileExists(backupPath))
+            {
+                return;
+            }
+
+            if (fileSystem.FileExists(path) && !fileSystem.FileExists(stagedPath))
+            {
+                fileSystem.Move(path, stagedPath);
+            }
+
+            if (!fileSystem.FileExists(path))
+            {
+                fileSystem.Move(backupPath, path);
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            logger.LogError(
+                ex,
+                "The content service could not restore {Path} from the replace backup {BackupPath} after a failure " +
+                "to place {StagedPath}",
+                path,
+                backupPath,
+                stagedPath);
+        }
     }
 
     public async Task<bool> UpdateFulfillmentAsync(

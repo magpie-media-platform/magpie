@@ -121,6 +121,18 @@ internal sealed class ReleaseService(
         }
     }
 
+    private static void AddDownloadScope(Download download, IReadOnlyList<Guid> scopeNodeIds)
+    {
+        foreach (var contentHierarchyItemId in scopeNodeIds.Distinct())
+        {
+            download.Scope.Add(new DownloadScope
+            {
+                Id = Guid.NewGuid(),
+                ContentHierarchyItemId = contentHierarchyItemId
+            });
+        }
+    }
+
     private static ContentEventImpact? GrabScopeImpact(IReadOnlyCollection<Guid> contentScopeIds)
     {
         return contentScopeIds.Count switch
@@ -662,7 +674,7 @@ internal sealed class ReleaseService(
         }
 
         var downloadScopeNodeIds = await ResolveDownloadScopeNodeIdsAsync(
-            release.Id,
+            release,
             request.GrabTargetContentHierarchyItemId,
             cancellationToken).ConfigureAwait(false);
 
@@ -830,21 +842,14 @@ internal sealed class ReleaseService(
                 progress?.Report(null, "The acquisition will save the download.");
 
                 var download = await transactionManager.ExecuteWithTransactionAsync(
-                    async transactionCancellationToken =>
-                    {
-                        var persisted = await UpsertDownloadAsync(
-                            sourceRelease,
-                            source?.Id,
-                            downloadClient,
-                            grabResult.DownloadInfo,
-                            request.UserId,
-                            transactionCancellationToken).ConfigureAwait(false);
-                        await EnsureDownloadScopeAsync(
-                            persisted.Id,
-                            downloadScopeNodeIds,
-                            transactionCancellationToken).ConfigureAwait(false);
-                        return persisted;
-                    },
+                    transactionCancellationToken => UpsertDownloadAsync(
+                        sourceRelease,
+                        source?.Id,
+                        downloadClient,
+                        grabResult.DownloadInfo,
+                        downloadScopeNodeIds,
+                        request.UserId,
+                        transactionCancellationToken),
                     cancellationToken).ConfigureAwait(false);
 
                 progress?.Report(1, "The acquisition completed.");
@@ -1026,12 +1031,12 @@ internal sealed class ReleaseService(
     }
 
     private async Task<IReadOnlyList<Guid>> ResolveDownloadScopeNodeIdsAsync(
-        Guid releaseId,
+        Release release,
         Guid? grabTargetContentHierarchyItemId,
         CancellationToken cancellationToken)
     {
         var releaseScopes = await releaseScopeRepository.QueryAllAsync(
-            new ReleaseScopeQuery { ReleaseId = releaseId },
+            new ReleaseScopeQuery { ReleaseId = release.Id },
             sort: null,
             cancellationToken).ConfigureAwait(false);
         var releaseScopeNodeIds = releaseScopes
@@ -1042,8 +1047,12 @@ internal sealed class ReleaseService(
 
         var needyNodeIds = await ListNodeIdsNeedingAcquisitionAsync(releaseScopeNodeIds, cancellationToken)
             .ConfigureAwait(false);
+        var downloads = await downloadRepository.ListByReleaseAsync([release], cancellationToken).ConfigureAwait(false);
+        var importedDownloads = downloads.Where(download => download.Status == DownloadStatus.Imported).ToList();
         var scopeNodeIds = releaseScopeNodeIds
-            .Where(nodeId => nodeId == grabTargetContentHierarchyItemId || needyNodeIds.Contains(nodeId))
+            .Where(nodeId => nodeId == grabTargetContentHierarchyItemId ||
+                needyNodeIds.Contains(nodeId) && !importedDownloads.Any(download =>
+                    download.Scope.Count == 0 || download.Scope.Any(scope => scope.ContentHierarchyItemId == nodeId)))
             .ToList();
 
         if (scopeNodeIds.Count > 0)
@@ -1058,7 +1067,7 @@ internal sealed class ReleaseService(
         }
 
         throw new InvalidOperationException(
-            $"Release acquisition requires a content hierarchy target for release {releaseId}.");
+            $"Release acquisition requires a content hierarchy target for release {release.Id}.");
     }
 
     private async Task<HashSet<Guid>> ListNodeIdsNeedingAcquisitionAsync(
@@ -1165,6 +1174,7 @@ internal sealed class ReleaseService(
         Guid? releaseSourceId,
         DownloadClient downloadClient,
         DownloadInfo downloadInfo,
+        IReadOnlyList<Guid> downloadScopeNodeIds,
         Guid? userId,
         CancellationToken cancellationToken)
     {
@@ -1197,6 +1207,7 @@ internal sealed class ReleaseService(
                 LastProgressAt = timeProvider.GetUtcNow().UtcDateTime
             };
             CopyReleaseIdentityKeys(release, created);
+            AddDownloadScope(created, downloadScopeNodeIds);
             return await downloadRepository.CreateAsync(created, userId, cancellationToken).ConfigureAwait(false);
         }
 
@@ -1221,6 +1232,7 @@ internal sealed class ReleaseService(
         };
         CopyReleaseIdentityKeys(release, updated);
         await downloadRepository.UpdateAsync(updated, userId, cancellationToken).ConfigureAwait(false);
+        await EnsureDownloadScopeAsync(updated.Id, downloadScopeNodeIds, cancellationToken).ConfigureAwait(false);
         return updated;
     }
 
@@ -1251,20 +1263,9 @@ internal sealed class ReleaseService(
                 FailedAt = now
             };
             CopyReleaseIdentityKeys(release, row);
+            AddDownloadScope(row, downloadScopeNodeIds);
 
-            await transactionManager.ExecuteWithTransactionAsync(
-                async transactionCancellationToken =>
-
-                {
-                    var created = await downloadRepository
-                        .CreateAsync(row, userId, transactionCancellationToken)
-                        .ConfigureAwait(false);
-                    await EnsureDownloadScopeAsync(
-                        created.Id,
-                        downloadScopeNodeIds,
-                        transactionCancellationToken).ConfigureAwait(false);
-                },
-                cancellationToken).ConfigureAwait(false);
+            await downloadRepository.CreateAsync(row, userId, cancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {

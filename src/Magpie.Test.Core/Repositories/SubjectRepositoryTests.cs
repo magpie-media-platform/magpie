@@ -8,6 +8,7 @@ using Magpie.Abstractions;
 using Magpie.Abstractions.Jobs;
 using Magpie.Abstractions.Repositories;
 using Magpie.Core;
+using Magpie.Core.Content;
 using Magpie.Core.Repositories;
 using Magpie.Data;
 using Magpie.Models;
@@ -43,10 +44,10 @@ public sealed class SubjectRepositoryTests
         new object[]
         {
             new SubjectRowPatch { DateLastRefreshed = new() { Value = DateTime.UnixEpoch } },
-            "dateLastRefreshed"
+            "DateLastRefreshed"
         },
-        new object[] { new SubjectRowPatch { Tags = new() { Add = ["followed"] } }, "tags" },
-        new object[] { new SubjectRowPatch { Tags = new() { Add = ["new-tag"] } }, "tags" },
+        new object[] { new SubjectRowPatch { Tags = new() { Add = ["followed"] } }, "Tags" },
+        new object[] { new SubjectRowPatch { Tags = new() { Add = ["new-tag"] } }, "Tags" },
         new object[] { new SubjectRowPatch { Tags = new() { Remove = ["absent"] } }, "" },
         new object[] { new SubjectRowPatch { Tags = new() { Add = ["followed"], Remove = ["followed"] } }, "" },
         new object[]
@@ -56,7 +57,7 @@ public sealed class SubjectRepositoryTests
                 DateLastRefreshed = new() { Value = DateTime.UnixEpoch },
                 Tags = new() { Add = ["followed"] }
             },
-            "dateLastRefreshed,tags"
+            "DateLastRefreshed,Tags"
         }
     ];
 
@@ -2509,7 +2510,7 @@ public sealed class SubjectRepositoryTests
         // Assert
         _eventBus.Verify(bus => bus.PublishAsync(
             It.Is<MagpieEvent>(e => e.Name == "subject.updated" &&
-                e.Context["subject.changedFields"] == "kind"),
+                e.Context["subject.changedFields"] == "Kind"),
             It.IsAny<CancellationToken>()), Times.Once);
     }
 
@@ -2995,6 +2996,11 @@ public sealed class SubjectRepositoryTests
         _context.Tags.Add(new Tag { Name = "followed", MetadataContainers = { duplicateContainer } });
         await _context.SaveChangesAsync().ConfigureAwait(false);
         _context.ChangeTracker.Clear();
+        var publishedInsideTransaction = false;
+        _eventBus
+            .Setup(bus => bus.PublishAsync(It.IsAny<MagpieEvent>(), It.IsAny<CancellationToken>()))
+            .Callback(() => publishedInsideTransaction |= _context.Database.CurrentTransaction is not null)
+            .Returns(Task.CompletedTask);
 
         // Act
         await _subject.MergeAsync(
@@ -3037,6 +3043,167 @@ public sealed class SubjectRepositoryTests
                     .ToListAsync()
                     .ConfigureAwait(false),
                 Is.EquivalentTo(["tmdb", "user", "wikidata"]));
+            Assert.That(publishedInsideTransaction, Is.False);
         }
+
+        _eventBus.Verify(
+            bus => bus.PublishAsync(
+                It.Is<MagpieEvent>(e => e.Name == "subject.updated" &&
+                    e.Context["subject.id"] == "aaaaaaaa-0000-0000-0000-000000000001" &&
+                    e.Context["subject.changedFields"] == "Contributions,Relationships,Tags"),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
+        _eventBus.Verify(
+            bus => bus.PublishAsync(It.IsAny<MagpieEvent>(), It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Test]
+    public async Task PatchAsync_PublishesThePrimaryImageOnceAfterCommit_WhenThePrimaryImageChanges()
+    {
+        // Arrange
+        var previous = new Image { Type = "portrait", Url = new Uri("https://example.test/old"), IsPrimary = true };
+        var image = new Image { Type = "portrait", Url = new Uri("https://example.test/new") };
+        var subject = new Subject { Kind = "person", MetadataContainerId = _metadataContainerId };
+        _context.Subjects.Add(subject);
+        _context.MetadataContributions.Add(new MetadataContribution
+        {
+            MetadataContainerId = _metadataContainerId,
+            ProviderType = "tmdb",
+            Images = { previous, image }
+        });
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.ChangeTracker.Clear();
+        var publishedInsideTransaction = false;
+        _eventBus
+            .Setup(bus => bus.PublishAsync(It.IsAny<MagpieEvent>(), It.IsAny<CancellationToken>()))
+            .Callback(() => publishedInsideTransaction |= _context.Database.CurrentTransaction is not null)
+            .Returns(Task.CompletedTask);
+
+        // Act
+        var patched = await _subject.PatchAsync(
+            new SubjectRowPatch { Id = subject.Id, PrimaryImageId = new() { Value = image.Id } },
+            _userId).ConfigureAwait(false);
+
+        // Assert
+        var primary = await _context.Images.AsNoTracking()
+            .Where(stored => stored.IsPrimary)
+            .Select(stored => stored.Id)
+            .ToListAsync()
+            .ConfigureAwait(false);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(patched, Is.True);
+            Assert.That(primary, Is.EqualTo([image.Id]));
+            Assert.That(publishedInsideTransaction, Is.False);
+        }
+
+        _eventBus.Verify(
+            bus => bus.PublishAsync(
+                It.Is<MagpieEvent>(e => e.Name == "subject.updated" &&
+                    e.Context["subject.id"] == subject.Id.ToString() &&
+                    e.Context["subject.changedFields"] == "PrimaryImageId"),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
+        _eventBus.Verify(
+            bus => bus.PublishAsync(It.IsAny<MagpieEvent>(), It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Test]
+    public async Task PatchSubjectContributionAsync_PublishesThePrimaryImageOnceAfterCommit_WhenThePrimaryImageChanges()
+    {
+        // Arrange
+        var previous = new Image { Type = "portrait", Url = new Uri("https://example.test/old"), IsPrimary = true };
+        var image = new Image { Type = "portrait", Url = new Uri("https://example.test/new") };
+        var subject = new Subject { Kind = "person", MetadataContainerId = _metadataContainerId };
+        _context.Subjects.Add(subject);
+        _context.MetadataContributions.Add(new MetadataContribution
+        {
+            MetadataContainerId = _metadataContainerId,
+            ProviderType = "tmdb",
+            Images = { previous, image }
+        });
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.ChangeTracker.Clear();
+        var publishedInsideTransaction = false;
+        _eventBus
+            .Setup(bus => bus.PublishAsync(It.IsAny<MagpieEvent>(), It.IsAny<CancellationToken>()))
+            .Callback(() => publishedInsideTransaction |= _context.Database.CurrentTransaction is not null)
+            .Returns(Task.CompletedTask);
+        var metadataService = new MetadataService(
+            Mock.Of<IMaterializedMetadataRepository>(),
+            _metadataContainerRepository,
+            _subject,
+            Mock.Of<IContentHierarchyItemRepository>(),
+            _eventBus.Object,
+            _transactionManager);
+
+        // Act
+        var patched = await metadataService.PatchSubjectContributionAsync(
+            subject.Id,
+            new MetadataContainerPatch
+            {
+                PrimaryImageId = new() { Value = image.Id },
+                Title = new() { Value = "Jane Doe" }
+            },
+            _userId).ConfigureAwait(false);
+
+        // Assert
+        var primary = await _context.Images.AsNoTracking()
+            .Where(stored => stored.IsPrimary)
+            .Select(stored => stored.Id)
+            .ToListAsync()
+            .ConfigureAwait(false);
+        var userTitle = await _context.MetadataContributions.AsNoTracking()
+            .Where(contribution => contribution.MetadataContainerId == _metadataContainerId &&
+                contribution.ProviderType == "user")
+            .Select(contribution => contribution.Title)
+            .SingleAsync()
+            .ConfigureAwait(false);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(patched, Is.True);
+            Assert.That(primary, Is.EqualTo([image.Id]));
+            Assert.That(userTitle, Is.EqualTo("Jane Doe"));
+            Assert.That(publishedInsideTransaction, Is.False);
+        }
+
+        _eventBus.Verify(
+            bus => bus.PublishAsync(
+                It.Is<MagpieEvent>(e => e.Name == "subject.updated" &&
+                    e.Context["subject.id"] == subject.Id.ToString() &&
+                    e.Context["subject.changedFields"] == "PrimaryImageId"),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
+        _eventBus.Verify(
+            bus => bus.PublishAsync(It.IsAny<MagpieEvent>(), It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Test]
+    public async Task PatchAsync_ReturnsFalse_WhenThePrimaryImageBelongsToAnotherContainer()
+    {
+        // Arrange
+        var image = new Image { Type = "portrait", Url = new Uri("https://example.test/other") };
+        var subject = new Subject { Kind = "person", MetadataContainerId = _metadataContainerId };
+        _context.Subjects.Add(subject);
+        _context.MetadataContainers.Add(new MetadataContainer
+        {
+            Contributions = { new MetadataContribution { ProviderType = "tmdb", Images = { image } } }
+        });
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.ChangeTracker.Clear();
+
+        // Act
+        var patched = await _subject.PatchAsync(
+            new SubjectRowPatch { Id = subject.Id, PrimaryImageId = new() { Value = image.Id } },
+            _userId).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(patched, Is.False);
+        _eventBus.Verify(
+            bus => bus.PublishAsync(It.IsAny<MagpieEvent>(), It.IsAny<CancellationToken>()),
+            Times.Never);
     }
 }

@@ -8,10 +8,10 @@ using System.Threading.Tasks;
 using Magpie.Extensions.Cardigann.Engine;
 using Magpie.Extensions.Cardigann.Engine.Session;
 using Magpie.Models.Data;
-using Magpie.Models.Jobs;
 using Magpie.Sdk.Configuration;
 using Magpie.Sdk.Diagnostics;
 using Magpie.Sdk.Extensions;
+using Magpie.Sdk.Http;
 using Magpie.Sdk.Integrations;
 using Magpie.Sdk.Releases;
 using Magpie.Sdk.Services;
@@ -70,11 +70,13 @@ public sealed class CardigannExtension : IExtensionLifecycle
                 UseCookies = false,
                 AllowAutoRedirect = false
             });
-        services.AddHttpClient(Git.GitCoreDefinitionSource.HttpClientName);
+        services.AddHttpClient(Git.GitCoreDefinitionSource.HttpClientName)
+            .AddUpstreamCooldown(request => request.Headers.Authorization?.ToString(), followRedirects: true)
+            .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
         services
             .AddHttpClient(
                 FlareSolverrClient.HttpClientName,
-                client => client.Timeout = FlareSolverrClient.RequestTimeout)
+                (services, client) => client.Timeout = services.GetRequiredService<HttpOptions>().Timeout)
             .ConfigureAdditionalHttpMessageHandlers((handlers, _) => handlers.Clear());
 
         services.AddSingleton<ICardigannLoader, CardigannLoader>();
@@ -101,7 +103,6 @@ public sealed class CardigannExtension : IExtensionLifecycle
         ArgumentNullException.ThrowIfNull(context);
 
         var indexerService = context.ServiceProvider.GetRequiredService<IIndexerService>();
-        var jobManager = context.ServiceProvider.GetRequiredService<IJobManager>();
 
         var feeds = await indexerService.ListFeedsAsync(cancellationToken).ConfigureAwait(false);
         if (feeds.Any(feed => feed.ProviderType == Constants.ProviderTypeName))
@@ -117,10 +118,5 @@ public sealed class CardigannExtension : IExtensionLifecycle
         logger.LogInformation(
             "Cardigann extension registered the default indexer feed for provider type {ProviderType}",
             Constants.ProviderTypeName);
-
-        await jobManager
-            .ExecuteAsync(new JobEnqueueRequest { JobType = "IndexerFeedSyncScan" }, cancellationToken)
-            .ConfigureAwait(false);
-        logger.LogInformation("Cardigann extension enqueued an indexer feed sync after it created the default feed");
     }
 }

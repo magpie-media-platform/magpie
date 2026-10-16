@@ -415,18 +415,20 @@ public sealed class LibraryImportMatchResolutionJobTests
                 return _parse(path);
             });
 
-        _candidates = new Mock<ILibraryImportCandidateRepository>();
+        _candidates = new Mock<ILibraryImportCandidateRepository> { CallBase = true };
         _candidates
             .Setup(r => r.QueryAsync(
                 It.Is<LibraryImportCandidateQuery>(q => q.Status == LibraryImportCandidateStatus.MatchingPending),
                 It.Is<PagingParameter>(p => p.PageSize > 1),
                 It.IsAny<SortParameter?>(),
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(() => new PagedList<LibraryImportCandidate>
-            {
-                Items = _pendingBatch,
-                TotalItems = _pendingBatch.Count
-            });
+            .ReturnsAsync((LibraryImportCandidateQuery _, PagingParameter paging, SortParameter? _,
+                CancellationToken _) => new PagedList<LibraryImportCandidate>
+                {
+                    Items = _pendingBatch.Skip((paging.PageNumber - 1) * paging.PageSize).Take(paging.PageSize)
+                        .ToList(),
+                    TotalItems = _pendingBatch.Count
+                });
         _candidates
             .Setup(r => r.QueryAsync(
                 It.Is<LibraryImportCandidateQuery>(q => q.Status == LibraryImportCandidateStatus.MatchingPending),
@@ -677,6 +679,57 @@ public sealed class LibraryImportMatchResolutionJobTests
             Assert.That(_candidate.Notes, Is.EqualTo(
                 "Matching will retry because the metadata search did not complete: " +
                 "provider-a could not finish the search. Try again."));
+            _jobManager.Verify(manager => manager.ExecuteAsync(
+                It.Is<JobEnqueueRequest>(request => request.IsSuccessor &&
+                    request.NotBeforeAt == new DateTime(2026, 5, 20, 12, 1, 0, DateTimeKind.Utc)),
+                It.IsAny<CancellationToken>()), Times.Once);
+        }
+    }
+
+    [TestCase(null)]
+    [TestCase("/media/Blocked")]
+    public async Task ExecuteAsync_AttemptsLaterCandidates_WhenMoreThanOnePageStaysPendingForProviderRetry(
+        string? layoutKey)
+    {
+        // Arrange
+        _searchWarnings = ["The provider is unavailable."];
+        _pendingBatch = Enumerable.Range(0, 500)
+            .Select(_ => _candidate with
+            {
+                Id = Guid.NewGuid(),
+                FilePath = "/media/Blocked/Blocked.mkv",
+                LayoutKey = layoutKey,
+                CreatedAt = new DateTime(2026, 5, 19, 12, 0, 0, DateTimeKind.Utc)
+            })
+            .ToList();
+        _candidate.FilePath = "/media/Later.mkv";
+        _pendingBatch.Add(_candidate);
+        _remainingAfterBatch = 500;
+        _searchResponse = (query, _) => query == "Later"
+            ? [new MetadataSearchCandidate
+            {
+                ProviderType = "provider-a",
+                ExternalIdSource = "provider-a.type-a",
+                ExternalId = "later",
+                ContentType = "type-a",
+                Level = "type-a",
+                Title = "Later"
+            }]
+            : [];
+
+        // Act
+        await _resolutionJob.ExecuteAsync(_jobContext).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(_candidate.Status, Is.EqualTo(LibraryImportCandidateStatus.Pending));
+            Assert.That(_candidate.Matches.Select(match => match.ExternalId), Is.EqualTo(["later"]));
+            Assert.That(_updatedCandidates, Has.Count.EqualTo(501));
+            Assert.That(_pendingBatch.Take(500).Select(candidate => candidate.Status),
+                Is.All.EqualTo(LibraryImportCandidateStatus.MatchingPending));
+            _metadataService.Verify(service => service.SearchAsync(
+                "Later", "type-a", It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Once);
             _jobManager.Verify(manager => manager.ExecuteAsync(
                 It.Is<JobEnqueueRequest>(request => request.IsSuccessor &&
                     request.NotBeforeAt == new DateTime(2026, 5, 20, 12, 1, 0, DateTimeKind.Utc)),

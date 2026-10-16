@@ -29,26 +29,30 @@ internal sealed class ExtensionRepository(
     ILogger<ExtensionRepository> logger,
     TimeProvider timeProvider) : IExtensionRepository
 {
+    private const int ActivationStateId = 1;
+
     private static readonly (string Name, Func<Extension, Extension, bool> Changed)[] UpdateFields =
     [
-        ("packageId", (current, model) => !Equals(current.PackageId, model.PackageId)),
-        ("version", (current, model) => !Equals(current.Version, model.Version)),
-        ("lifecycleVersion", (current, model) => !Equals(current.LifecycleVersion, model.LifecycleVersion)),
-        ("name", (current, model) => !Equals(current.Name, model.Name)),
-        ("author", (current, model) => !Equals(current.Author, model.Author)),
-        ("description", (current, model) => !Equals(current.Description, model.Description)),
-        ("targetABI", (current, model) => !Equals(current.TargetABI, model.TargetABI)),
-        ("filePath", (current, model) => !Equals(current.FilePath, model.FilePath)),
-        ("assemblyName", (current, model) => !Equals(current.AssemblyName, model.AssemblyName)),
-        ("installed", (current, model) => !Equals(current.Installed, model.Installed)),
-        ("enabled", (current, model) => !Equals(current.Enabled, model.Enabled)),
-        ("disabledReason", (current, model) => !Equals(current.DisabledReason, model.DisabledReason)),
-        ("loadOrder", (current, model) => !Equals(current.LoadOrder, model.LoadOrder)),
-        ("managed", (current, model) => !Equals(current.Managed, model.Managed)),
-        ("nuGetId", (current, model) => !Equals(current.NuGetId, model.NuGetId)),
-        ("packageRepository", (current, model) => !Equals(current.PackageRepository, model.PackageRepository)),
-        ("autoUpgrade", (current, model) => !Equals(current.AutoUpgrade, model.AutoUpgrade)),
-        ("lastChecked", (current, model) => !Equals(current.LastChecked, model.LastChecked)),
+        (nameof(Extension.PackageId), (current, model) => !Equals(current.PackageId, model.PackageId)),
+        (nameof(Extension.Version), (current, model) => !Equals(current.Version, model.Version)),
+        (nameof(Extension.LifecycleVersion), (current, model) =>
+            !Equals(current.LifecycleVersion, model.LifecycleVersion)),
+        (nameof(Extension.Name), (current, model) => !Equals(current.Name, model.Name)),
+        (nameof(Extension.Author), (current, model) => !Equals(current.Author, model.Author)),
+        (nameof(Extension.Description), (current, model) => !Equals(current.Description, model.Description)),
+        (nameof(Extension.TargetABI), (current, model) => !Equals(current.TargetABI, model.TargetABI)),
+        (nameof(Extension.FilePath), (current, model) => !Equals(current.FilePath, model.FilePath)),
+        (nameof(Extension.AssemblyName), (current, model) => !Equals(current.AssemblyName, model.AssemblyName)),
+        (nameof(Extension.Installed), (current, model) => !Equals(current.Installed, model.Installed)),
+        (nameof(Extension.Enabled), (current, model) => !Equals(current.Enabled, model.Enabled)),
+        (nameof(Extension.DisabledReason), (current, model) => !Equals(current.DisabledReason, model.DisabledReason)),
+        (nameof(Extension.LoadOrder), (current, model) => !Equals(current.LoadOrder, model.LoadOrder)),
+        (nameof(Extension.Managed), (current, model) => !Equals(current.Managed, model.Managed)),
+        (nameof(Extension.NuGetId), (current, model) => !Equals(current.NuGetId, model.NuGetId)),
+        (nameof(Extension.PackageRepository), (current, model) =>
+            !Equals(current.PackageRepository, model.PackageRepository)),
+        (nameof(Extension.AutoUpgrade), (current, model) => !Equals(current.AutoUpgrade, model.AutoUpgrade)),
+        (nameof(Extension.LastChecked), (current, model) => !Equals(current.LastChecked, model.LastChecked)),
     ];
 
     private readonly TimeProvider _time = timeProvider;
@@ -58,32 +62,32 @@ internal sealed class ExtensionRepository(
         var fields = new List<string>();
         if (patch.NuGetId is not null)
         {
-            fields.Add("nuGetId");
+            fields.Add(nameof(Extension.NuGetId));
         }
 
         if (patch.PackageRepository is not null)
         {
-            fields.Add("packageRepository");
+            fields.Add(nameof(Extension.PackageRepository));
         }
 
         if (patch.AutoUpgrade is not null)
         {
-            fields.Add("autoUpgrade");
+            fields.Add(nameof(Extension.AutoUpgrade));
         }
 
         if (patch.LoadOrder is not null)
         {
-            fields.Add("loadOrder");
+            fields.Add(nameof(Extension.LoadOrder));
         }
 
         if (patch.Enabled is not null)
         {
-            fields.Add("enabled");
+            fields.Add(nameof(Extension.Enabled));
         }
 
         if (patch.DisabledReason is not null)
         {
-            fields.Add("disabledReason");
+            fields.Add(nameof(Extension.DisabledReason));
         }
 
         return fields;
@@ -403,34 +407,83 @@ internal sealed class ExtensionRepository(
     {
         try
         {
-            var extensions = discovered.Count > 0
-                ? discovered
-                : await context.Extensions.ToListAsync(cancellationToken).ConfigureAwait(false);
-
-            foreach (var extension in extensions)
-            {
-                var match = loaded.FirstOrDefault(candidate =>
-                    string.Equals(
-                        candidate.GetType().Assembly.GetName().Name,
-                        extension.AssemblyName,
-                        StringComparison.OrdinalIgnoreCase));
-
-                if (match is null)
+            await transactionManager.ExecuteWithTransactionAsync(
+                async _ =>
                 {
-                    continue;
-                }
+                    await context.ExtensionActivationStates
+                        .Where(state => state.Id == ActivationStateId)
+                        .ExecuteUpdateAsync(
+                            state => state.SetProperty(e => e.Generation, e => e.Generation),
+                            cancellationToken)
+                        .ConfigureAwait(false);
 
-                extension.Name = match.Name;
-                extension.Version = packageVersions.GetValueOrDefault(extension.Id) ?? match.Version.ToString();
-                extension.TargetABI = match.TargetABI;
-            }
+                    var extensions = discovered.Count > 0
+                        ? discovered
+                        : await context.Extensions.ToListAsync(cancellationToken).ConfigureAwait(false);
 
-            context.Extensions.AddRange(discovered);
-            await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+                    foreach (var extension in extensions)
+                    {
+                        var match = loaded.FirstOrDefault(candidate =>
+                            string.Equals(
+                                candidate.GetType().Assembly.GetName().Name,
+                                extension.AssemblyName,
+                                StringComparison.OrdinalIgnoreCase));
+
+                        if (match is null)
+                        {
+                            continue;
+                        }
+
+                        extension.Name = match.Name;
+                        extension.Version = packageVersions.GetValueOrDefault(extension.Id) ?? match.Version.ToString();
+                        extension.TargetABI = match.TargetABI;
+                    }
+
+                    var registeredIds = await context.Extensions
+                        .Select(e => new { e.PackageId, e.Id })
+                        .ToDictionaryAsync(e => e.PackageId, e => e.Id, cancellationToken)
+                        .ConfigureAwait(false);
+
+                    foreach (var extension in discovered.Where(e => registeredIds.ContainsKey(e.PackageId)))
+                    {
+                        extension.Id = registeredIds[extension.PackageId];
+                    }
+
+                    context.Extensions.AddRange(discovered.Where(e => !registeredIds.ContainsKey(e.PackageId)));
+                    await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+                },
+                cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
             logger.LogError(ex, "The extension repository failed to register the loaded extensions.");
+            throw;
+        }
+    }
+
+    public async Task<bool> TrySetLifecycleVersionAsync(
+        Guid id,
+        string? expectedVersion,
+        string? version,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var extensions = context.Extensions.Where(e => e.Id == id);
+            extensions = string.IsNullOrEmpty(expectedVersion)
+                ? extensions.Where(e => e.LifecycleVersion == null || e.LifecycleVersion == "")
+                : extensions.Where(e => e.LifecycleVersion == expectedVersion);
+
+            return await extensions
+                .ExecuteUpdateAsync(s => s.SetProperty(e => e.LifecycleVersion, version), cancellationToken)
+                .ConfigureAwait(false) == 1;
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(
+                ex,
+                "The extension repository failed to set the lifecycle version of extension {ExtensionId}.",
+                id);
             throw;
         }
     }

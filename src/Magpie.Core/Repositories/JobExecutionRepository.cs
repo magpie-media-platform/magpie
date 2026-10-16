@@ -48,6 +48,8 @@ internal sealed class JobExecutionRepository(
 
     private const string CoalescingLockKeyProperty = "Key";
 
+    private const string ConcurrencyLimitLockPartition = "concurrency-limit";
+
     private static ContentEventImpact? ParameterImpact(JobExecution execution)
     {
         var hierarchyItemId = ParameterId(execution, MagpieJobs.Parameters.ContentHierarchyItemId);
@@ -166,6 +168,50 @@ internal sealed class JobExecutionRepository(
         {
             throw new InvalidOperationException(
                 $"Expected one job execution coalescing lock row for key {key}, but deleted {deleted}.");
+        }
+    }
+
+    private async Task<T?> ClaimWithinConcurrencyLimitAsync<T>(
+        string jobType,
+        Func<Task<T?>> claim,
+        CancellationToken cancellationToken)
+    {
+        if (!jobRegistry.TryGetJobSpec(jobType, out var spec) || spec.ConcurrencyLimit is not { PerNode: false } limit)
+        {
+            return await claim().ConfigureAwait(false);
+        }
+
+        var limitLock = await AcquireCoalescingLockAsync(jobType, ConcurrencyLimitLockPartition, cancellationToken)
+            .ConfigureAwait(false);
+        var failed = false;
+        try
+        {
+            var running = await context.JobExecutions
+                .AsNoTracking()
+                .CountAsync(
+                    e => e.JobType == jobType &&
+                        (e.Status == JobExecutionStatus.Running ||
+                            e.Status == JobExecutionStatus.CancellationRequested),
+                    cancellationToken)
+                .ConfigureAwait(false);
+
+            return running < limit.Max ? await claim().ConfigureAwait(false) : default;
+        }
+        catch
+        {
+            failed = true;
+            throw;
+        }
+        finally
+        {
+            try
+            {
+                await ReleaseCoalescingLockAsync(limitLock).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (failed)
+            {
+                logger.LogError(ex, "The concurrency limit lock release failed after a claim failure.");
+            }
         }
     }
 
@@ -336,6 +382,12 @@ internal sealed class JobExecutionRepository(
         if (query.CorrelationId is not null)
         {
             jobExecutions = jobExecutions.Where(e => e.CorrelationId == query.CorrelationId);
+        }
+
+        if (query.OriginalExecutionId is { } originalExecutionId)
+        {
+            jobExecutions = jobExecutions.Where(e => e.Id == originalExecutionId ||
+                e.OriginalExecutionId == originalExecutionId);
         }
 
         if (query.RootsOnly)
@@ -705,17 +757,13 @@ internal sealed class JobExecutionRepository(
             return null;
         }
 
-        var upstreamDeferred = existing.StatusMessage == MagpieJobs.StatusMessages.UpstreamThrottled;
-        var reconciled = upstreamDeferred ? existing.NotBeforeAt
-            : ReconcileNotBeforeAt(existing.NotBeforeAt, incoming.NotBeforeAt, now);
+        var reconciled = ReconcileNotBeforeAt(existing.NotBeforeAt, incoming.NotBeforeAt, now);
         jobRegistry.TryGetJobSpec(incoming.JobType, out var spec);
         var sameTarget = string.Equals(
             ResolveParameter(existing, spec, MagpieJobs.Parameters.ContentHierarchyItemId),
             ResolveParameter(incoming, spec, MagpieJobs.Parameters.ContentHierarchyItemId),
             StringComparison.OrdinalIgnoreCase);
-        var statusMessage = upstreamDeferred
-            ? MagpieJobs.Parameters.IsForced(incoming.Parameters) ? incoming.StatusMessage : existing.StatusMessage
-            : sameTarget ? incoming.StatusMessage ?? existing.StatusMessage : existing.StatusMessage;
+        var statusMessage = sameTarget ? incoming.StatusMessage ?? existing.StatusMessage : existing.StatusMessage;
 
         var trueWins = (spec?.CoalesceTrueWinsFields ?? [])
             .Where(field => IsTrue(incoming.Parameters, field) && !IsTrue(existing.Parameters, field))
@@ -962,81 +1010,19 @@ internal sealed class JobExecutionRepository(
             var claimed = await transactionManager.ExecuteWithTransactionAsync(
                 async _ =>
                 {
-                    var now = _time.GetUtcNow().UtcDateTime;
-
-                    var partition = await (
+                    var target = await (
                         from e in context.JobExecutions.AsNoTracking()
                         where e.Id == executionId
-                        select e.LockPartition)
+                        select new { e.JobType, e.LockPartition })
                         .FirstOrDefaultAsync(cancellationToken)
                         .ConfigureAwait(false);
-                    var transaction = context.Database.CurrentTransaction;
-                    const string savepoint = "job_execution_partition_claim";
-                    if (transaction is { SupportsSavepoints: true })
-                    {
-                        await transaction.CreateSavepointAsync(savepoint, cancellationToken).ConfigureAwait(false);
-                    }
 
-                    var updated = 0;
-                    try
-                    {
-                        updated = await context.JobExecutions
-                            .Where(e => e.Id == executionId &&
-                                e.Status == JobExecutionStatus.Queued &&
-                                (e.NotBeforeAt == null || e.NotBeforeAt <= now) &&
-                                e.NodeId == null &&
-                                (partition == null ||
-                                    !context.JobExecutions.Any(x =>
-                                        (x.Status == JobExecutionStatus.Running ||
-                                            x.Status == JobExecutionStatus.CancellationRequested) &&
-                                        x.LockPartition == partition)))
-                            .ExecuteUpdateAsync(
-                                s => s
-                                    .SetProperty(e => e.Status, JobExecutionStatus.Running)
-                                    .SetProperty(e => e.NodeId, nodeId)
-                                    .SetProperty(e => e.StartedAt, now)
-                                    .SetProperty(e => e.LastHeartbeat, now)
-                                    .SetProperty(e => e.ModifiedAt, now),
-                                cancellationToken)
-                            .ConfigureAwait(false);
-                    }
-                    catch (DbException ex) when (IsPartitionUniqueViolation(ex))
-                    {
-                        if (transaction is { SupportsSavepoints: true })
-                        {
-                            await transaction.RollbackToSavepointAsync(savepoint, cancellationToken)
-                                .ConfigureAwait(false);
-                        }
-
-                        logger.LogDebug(
-                            ex,
-                            "The claim on partition {LockPartition} for candidate {ExecutionId} lost the race",
-                            partition,
-                            executionId);
-                        return null;
-                    }
-
-                    if (updated == 0)
-                    {
-                        return null;
-                    }
-
-                    await auditRecordRepository.CreateAsync(
-                        new()
-                        {
-                            Category = AuditCategories.Jobs,
-                            Operation = "Dequeue",
-                            EntityId = executionId.ToString(),
-                            EntityType = nameof(JobExecution),
-                            Detail = $"Job run {executionId} was assigned to Magpie instance {nodeId}.",
-                            Timestamp = now
-                        },
-                        cancellationToken).ConfigureAwait(false);
-
-                    return await context.JobExecutions
-                        .AsNoTracking()
-                        .FirstOrDefaultAsync(e => e.Id == executionId, cancellationToken)
-                        .ConfigureAwait(false);
+                    return target is null
+                        ? null
+                        : await ClaimWithinConcurrencyLimitAsync(
+                            target.JobType,
+                            () => TryClaimCoreAsync(executionId, nodeId, target.LockPartition, cancellationToken),
+                            cancellationToken).ConfigureAwait(false);
                 },
                 cancellationToken).ConfigureAwait(false);
 
@@ -1064,6 +1050,82 @@ internal sealed class JobExecutionRepository(
                 nodeId);
             throw;
         }
+    }
+
+    private async Task<JobExecution?> TryClaimCoreAsync(
+        Guid executionId,
+        string nodeId,
+        string? partition,
+        CancellationToken cancellationToken)
+    {
+        var now = _time.GetUtcNow().UtcDateTime;
+        var transaction = context.Database.CurrentTransaction;
+        const string savepoint = "job_execution_partition_claim";
+        if (transaction is { SupportsSavepoints: true })
+        {
+            await transaction.CreateSavepointAsync(savepoint, cancellationToken).ConfigureAwait(false);
+        }
+
+        var updated = 0;
+        try
+        {
+            updated = await context.JobExecutions
+                .Where(e => e.Id == executionId &&
+                    e.Status == JobExecutionStatus.Queued &&
+                    (e.NotBeforeAt == null || e.NotBeforeAt <= now) &&
+                    e.NodeId == null &&
+                    (partition == null ||
+                        !context.JobExecutions.Any(x =>
+                            (x.Status == JobExecutionStatus.Running ||
+                                x.Status == JobExecutionStatus.CancellationRequested) &&
+                            x.LockPartition == partition)))
+                .ExecuteUpdateAsync(
+                    s => s
+                        .SetProperty(e => e.Status, JobExecutionStatus.Running)
+                        .SetProperty(e => e.NodeId, nodeId)
+                        .SetProperty(e => e.StartedAt, now)
+                        .SetProperty(e => e.LastHeartbeat, now)
+                        .SetProperty(e => e.ModifiedAt, now),
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (DbException ex) when (IsPartitionUniqueViolation(ex))
+        {
+            if (transaction is { SupportsSavepoints: true })
+            {
+                await transaction.RollbackToSavepointAsync(savepoint, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+
+            logger.LogDebug(
+                ex,
+                "The claim on partition {LockPartition} for candidate {ExecutionId} lost the race",
+                partition,
+                executionId);
+            return null;
+        }
+
+        if (updated == 0)
+        {
+            return null;
+        }
+
+        await auditRecordRepository.CreateAsync(
+            new()
+            {
+                Category = AuditCategories.Jobs,
+                Operation = "Dequeue",
+                EntityId = executionId.ToString(),
+                EntityType = nameof(JobExecution),
+                Detail = $"Job run {executionId} was assigned to Magpie instance {nodeId}.",
+                Timestamp = now
+            },
+            cancellationToken).ConfigureAwait(false);
+
+        return await context.JobExecutions
+            .AsNoTracking()
+            .FirstOrDefaultAsync(e => e.Id == executionId, cancellationToken)
+            .ConfigureAwait(false);
     }
 
     public async Task<bool> TryStartAsync(Guid executionId, string nodeId, CancellationToken cancellationToken)
@@ -1193,53 +1255,6 @@ internal sealed class JobExecutionRepository(
                 ex,
                 "The job execution repository failed to mark job execution {ExecutionId} complete.",
                 executionId);
-            throw;
-        }
-    }
-
-    /// <inheritdoc />
-    public async Task<bool> TryDeferRunningAsync(
-        Guid executionId,
-        string nodeId,
-        DateTime notBeforeAt,
-        CancellationToken cancellationToken)
-    {
-        try
-        {
-            return await transactionManager.ExecuteWithTransactionAsync(async token =>
-            {
-                var now = _time.GetUtcNow().UtcDateTime;
-                var updated = await context.JobExecutions
-                    .Where(e => e.Id == executionId && e.NodeId == nodeId && e.Status == JobExecutionStatus.Running)
-                    .ExecuteUpdateAsync(setters => setters
-                        .SetProperty(e => e.Status, JobExecutionStatus.Queued)
-                        .SetProperty(e => e.NodeId, (string?)null)
-                        .SetProperty(e => e.StartedAt, (DateTime?)null)
-                        .SetProperty(e => e.LastHeartbeat, (DateTime?)null)
-                        .SetProperty(e => e.NotBeforeAt, notBeforeAt)
-                        .SetProperty(e => e.StatusMessage, MagpieJobs.StatusMessages.UpstreamThrottled)
-                        .SetProperty(e => e.ModifiedAt, now),
-                        token).ConfigureAwait(false);
-                if (updated == 0)
-                {
-                    return false;
-                }
-
-                await transactionManager.OnCommittedAsync(
-                    eventToken => eventBus.PublishAsync(
-                        JobEventBuilder.BuildJobExecutionStateChangedEvent(
-                            MagpieEvents.Names.JobExecutionQueued,
-                            executionId,
-                            null,
-                            null),
-                        eventToken),
-                    token).ConfigureAwait(false);
-                return true;
-            }, cancellationToken).ConfigureAwait(false);
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "The job execution repository failed to defer execution {ExecutionId}.", executionId);
             throw;
         }
     }

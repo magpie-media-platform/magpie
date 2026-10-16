@@ -27,10 +27,8 @@ public sealed class OpenLibraryExtension : IExtension
     /// <inheritdoc />
     public void RegisterServices(IServiceCollection services)
     {
-        services.AddHttpClient(
-            OpenLibraryClient.HttpClientName,
-            client => client.Timeout = TimeSpan.FromSeconds(20))
-            .AddUpstreamCooldown(followRedirects: true)
+        services.AddHttpClient(OpenLibraryClient.HttpClientName)
+            .AddUpstreamCooldown(followRedirects: true, requestTimeout: TimeSpan.FromSeconds(20))
             .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
             {
                 AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate,

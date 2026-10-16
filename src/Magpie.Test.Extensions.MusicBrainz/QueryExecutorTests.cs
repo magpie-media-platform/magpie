@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -171,7 +172,12 @@ public class QueryExecutorTests
                         _scans[fingerprint] = scan;
                     }
 
-                    if (result.Outcome != FetchOutcome.Success ||
+                    if (result.Outcome != FetchOutcome.Success)
+                    {
+                        return result with { Value = existing };
+                    }
+
+                    if (
                         result.Value is null ||
                         isSufficient(result.Value))
                     {
@@ -327,7 +333,7 @@ public class QueryExecutorTests
     }
 
     [Test]
-    public async Task ExecuteAsync_ReturnsFailureWarning_WhenSearchTransportFails()
+    public void ExecuteAsync_PropagatesFailure_WhenSearchTransportFails()
     {
         // Arrange
         var fetch = new FetchPlanNode
@@ -357,23 +363,13 @@ public class QueryExecutorTests
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(new FetchResult<SearchPage> { Outcome = FetchOutcome.Unavailable });
 
-        // Act
-        var result = await _subject.ExecuteAsync(plan, default).ConfigureAwait(false);
-
-        // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(result.Supported, Is.True);
-            Assert.That(result.Hits, Is.Empty);
-            Assert.That(result.PageInfo.HasMore, Is.True);
-            Assert.That(
-                result.Warnings.Select(warning => warning),
-                Is.EqualTo(["musicbrainz is unavailable."]));
-        }
+        // Act and assert
+        Assert.ThrowsAsync<HttpRequestException>(async () =>
+            await _subject.ExecuteAsync(plan, default).ConfigureAwait(false));
     }
 
     [Test]
-    public async Task ExecuteAsync_ReturnsInvalidResponseWarning_WhenSearchBodyIsMalformed()
+    public void ExecuteAsync_PropagatesFailure_WhenSearchBodyIsMalformed()
     {
         // Arrange
         var fetch = new FetchPlanNode
@@ -403,17 +399,9 @@ public class QueryExecutorTests
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(new FetchResult<SearchPage> { Outcome = FetchOutcome.Malformed });
 
-        // Act
-        var result = await _subject.ExecuteAsync(plan, default).ConfigureAwait(false);
-
-        // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(result.Hits, Is.Empty);
-            Assert.That(
-                result.Warnings.Select(warning => warning),
-                Is.EqualTo(["musicbrainz returned an invalid response."]));
-        }
+        // Act and assert
+        Assert.ThrowsAsync<HttpRequestException>(async () =>
+            await _subject.ExecuteAsync(plan, default).ConfigureAwait(false));
     }
 
     [Test]
@@ -1139,7 +1127,7 @@ public class QueryExecutorTests
     }
 
     [Test]
-    public async Task ExecuteAsync_ReturnsFailureWarning_WhenEntityLookupTransportFails()
+    public void ExecuteAsync_PropagatesFailure_WhenEntityLookupTransportFails()
     {
         // Arrange
         var fetch = new FetchPlanNode
@@ -1170,18 +1158,9 @@ public class QueryExecutorTests
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(new FetchResult<EntityResponseDto> { Outcome = FetchOutcome.Unavailable });
 
-        // Act
-        var result = await _subject.ExecuteAsync(plan, default).ConfigureAwait(false);
-
-        // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(result.Hits, Is.Empty);
-            Assert.That(result.PageInfo.HasMore, Is.True);
-            Assert.That(
-                result.Warnings.Select(warning => warning),
-                Is.EqualTo(["musicbrainz is unavailable."]));
-        }
+        // Act and assert
+        Assert.ThrowsAsync<HttpRequestException>(async () =>
+            await _subject.ExecuteAsync(plan, default).ConfigureAwait(false));
 
         _client.Verify(
             client => client.GetEntityAsync(
@@ -1519,6 +1498,51 @@ public class QueryExecutorTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(result.Hits, Has.Count.EqualTo(25));
+            Assert.That(result.PageInfo.HasMore, Is.True);
+            Assert.That(
+                result.Warnings.Select(warning => warning),
+                Is.EqualTo(["musicbrainz is unavailable."]));
+        }
+    }
+
+    [Test]
+    public async Task ExecuteAsync_ReturnsPartialEmptyPage_WhenAnsweredBatchHasNoMatchesAndNextBatchFails()
+    {
+        // Arrange
+        var plan = ScanPlan;
+        _client.Setup(client => client.SearchAsync(
+                It.Is<Request>(request => request.Offset == 0),
+                It.IsAny<Settings>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new FetchResult<SearchPage>
+            {
+                Outcome = FetchOutcome.Success,
+                Value = new SearchPage
+                {
+                    Count = 200,
+                    Offset = 0,
+                    Artists = [.. Enumerable.Range(1, 100)
+                        .Select(index => new ArtistDto
+                        {
+                            Id = "10000000-0000-0000-0000-000000000" +
+                                index.ToString("D3", CultureInfo.InvariantCulture),
+                            Name = "Drop"
+                        })]
+                }
+            });
+        _client.Setup(client => client.SearchAsync(
+                It.Is<Request>(request => request.Offset == 100),
+                It.IsAny<Settings>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new FetchResult<SearchPage> { Outcome = FetchOutcome.Unavailable });
+
+        // Act
+        var result = await _subject.ExecuteAsync(plan, default).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.Hits, Is.Empty);
             Assert.That(result.PageInfo.HasMore, Is.True);
             Assert.That(
                 result.Warnings.Select(warning => warning),
@@ -1876,7 +1900,255 @@ public class QueryExecutorTests
     }
 
     [Test]
-    public async Task ExecuteAsync_StopsBeforeTheBrowse_WhenArtistResolutionFails()
+    public async Task ExecuteAsync_ContinuesArtistAlternatives_WhenOneBrowseFails(
+        [Values] bool continuation,
+        [Values] bool failureFirst,
+        [Values] bool empty,
+        [Values] bool allFail)
+    {
+        // Arrange
+        var firstResolver = new ResolvePlanNode
+        {
+            Id = 1,
+            Precondition = NoPrecondition,
+            Contributes = "resolved artist ids",
+            Composition = new ArtistComposition
+            {
+                RelatedEntity = ArtistCompositionEntity.Artist,
+                Resolution = ArtistCompositionResolution.KnownMbid,
+                Expansion = ArtistCompositionExpansion.BrowseArtists,
+                Constraint = ArtistCompositionConstraint.Include,
+                FinalStage = ArtistCompositionFinalStage.ReturnExpandedCandidates,
+                ExternalIdSource = Constants.ProviderType,
+                RelatedMbid = "50000000-0000-0000-0000-000000000001"
+            }
+        };
+        var secondResolver = firstResolver with
+        {
+            Id = 2,
+            Composition = firstResolver.Composition with { RelatedMbid = "50000000-0000-0000-0000-000000000002" }
+        };
+        var fetch = new FetchPlanNode
+        {
+            Id = 3,
+            Precondition = NoPrecondition,
+            Contributes = "content linked to resolved artists",
+            Target = QueryTarget.Track,
+            AccessMode = AccessMode.Browse,
+            AnchorKind = AnchorKind.ResolvedArtist,
+            CombineMode = CombineMode.And,
+            Filters = [],
+            Resolvers = [firstResolver, secondResolver]
+        };
+        var plan = new QueryPlan
+        {
+            RequestedPage = 1,
+            MaxResults = 25,
+            Settings = new Settings(),
+            Warnings = [],
+            Fingerprint = "fp-browse-two-artists",
+            Progress = continuation ? new QueryProgress() : null,
+            Root = fetch
+        };
+        var calls = 0;
+        _client.Setup(client => client.SearchAsync(
+                It.IsAny<Request>(), It.IsAny<Settings>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((Request _, Settings _, CancellationToken _) =>
+            {
+                var failed = calls++ == (failureFirst ? 0 : 1) || allFail;
+                return failed
+                    ? new FetchResult<SearchPage> { Outcome = FetchOutcome.Unavailable }
+                    : new FetchResult<SearchPage>
+                    {
+                        Outcome = FetchOutcome.Success,
+                        Value = new SearchPage
+                        {
+                            Count = empty ? 0 : 1,
+                            Offset = 0,
+                            Recordings = empty ? [] :
+                                [new RecordingDto { Id = "60000000-0000-0000-0000-000000000001", Title = "Shared" }]
+                        }
+                    };
+            });
+
+        // Act and assert
+        if (allFail)
+        {
+            Assert.ThrowsAsync<HttpRequestException>(async () =>
+                await _subject.ExecuteAsync(plan, default).ConfigureAwait(false));
+        }
+        else
+        {
+            var result = await _subject.ExecuteAsync(plan, default).ConfigureAwait(false);
+            using (Assert.EnterMultipleScope())
+            {
+                Assert.That(result.Hits, Has.Count.EqualTo(allFail || empty ? 0 : 1));
+                Assert.That(result.Warnings, Is.Not.Empty);
+            }
+        }
+
+        Assert.That(calls, Is.EqualTo(2));
+    }
+
+    [Test]
+    public void ExecuteAsync_StopsArtistAlternatives_WhenTheCallerCancels([Values] bool continuation)
+    {
+        // Arrange
+        var firstResolver = new ResolvePlanNode
+        {
+            Id = 1,
+            Precondition = NoPrecondition,
+            Contributes = "resolved artist ids",
+            Composition = new ArtistComposition
+            {
+                RelatedEntity = ArtistCompositionEntity.Artist,
+                Resolution = ArtistCompositionResolution.KnownMbid,
+                Expansion = ArtistCompositionExpansion.BrowseArtists,
+                Constraint = ArtistCompositionConstraint.Include,
+                FinalStage = ArtistCompositionFinalStage.ReturnExpandedCandidates,
+                ExternalIdSource = Constants.ProviderType,
+                RelatedMbid = "50000000-0000-0000-0000-000000000001"
+            }
+        };
+        var secondResolver = firstResolver with
+        {
+            Id = 2,
+            Composition = firstResolver.Composition with { RelatedMbid = "50000000-0000-0000-0000-000000000002" }
+        };
+        var fetch = new FetchPlanNode
+        {
+            Id = 3,
+            Precondition = NoPrecondition,
+            Contributes = "content linked to resolved artists",
+            Target = QueryTarget.Track,
+            AccessMode = AccessMode.Browse,
+            AnchorKind = AnchorKind.ResolvedArtist,
+            CombineMode = CombineMode.And,
+            Filters = [],
+            Resolvers = [firstResolver, secondResolver]
+        };
+        var plan = new QueryPlan
+        {
+            RequestedPage = 1,
+            MaxResults = 25,
+            Settings = new Settings(),
+            Warnings = [],
+            Fingerprint = "fp-browse-two-artists",
+            Progress = continuation ? new QueryProgress() : null,
+            Root = fetch
+        };
+        using var cancellation = new CancellationTokenSource();
+        var calls = 0;
+        _client.Setup(client => client.SearchAsync(
+                It.IsAny<Request>(), It.IsAny<Settings>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((Request _, Settings _, CancellationToken _) =>
+            {
+                calls++;
+                cancellation.Cancel();
+                throw new OperationCanceledException(cancellation.Token);
+            });
+
+        // Act and assert
+        Assert.ThrowsAsync<OperationCanceledException>(async () =>
+            await _subject.ExecuteAsync(plan, cancellation.Token).ConfigureAwait(false));
+        Assert.That(calls, Is.EqualTo(1));
+    }
+
+    [Test]
+    public async Task ExecuteAsync_ContinuesCompositionAlternatives_WhenOneBrowseFails(
+        [Values] bool continuation,
+        [Values] bool failureFirst,
+        [Values] bool empty,
+        [Values] bool allFail)
+    {
+        // Arrange
+        var firstResolver = new ResolvePlanNode
+        {
+            Id = 1,
+            Precondition = NoPrecondition,
+            Contributes = "resolved artist ids",
+            Composition = new ArtistComposition
+            {
+                RelatedEntity = ArtistCompositionEntity.ReleaseGroup,
+                Resolution = ArtistCompositionResolution.KnownMbid,
+                Expansion = ArtistCompositionExpansion.BrowseArtists,
+                Constraint = ArtistCompositionConstraint.Include,
+                FinalStage = ArtistCompositionFinalStage.ReturnExpandedCandidates,
+                ExternalIdSource = Constants.ProviderType,
+                RelatedMbid = "50000000-0000-0000-0000-000000000001"
+            }
+        };
+        var secondResolver = firstResolver with
+        {
+            Id = 2,
+            Composition = firstResolver.Composition with { RelatedMbid = "50000000-0000-0000-0000-000000000002" }
+        };
+        var fetch = new FetchPlanNode
+        {
+            Id = 3,
+            Precondition = NoPrecondition,
+            Contributes = "content linked to resolved artists",
+            Target = QueryTarget.Artist,
+            AccessMode = AccessMode.Browse,
+            AnchorKind = AnchorKind.ResolvedArtist,
+            CombineMode = CombineMode.And,
+            Filters = [],
+            Resolvers = [firstResolver, secondResolver],
+            BrowseComposition = firstResolver.Composition
+        };
+        var plan = new QueryPlan
+        {
+            RequestedPage = 1,
+            MaxResults = 25,
+            Settings = new Settings(),
+            Warnings = [],
+            Fingerprint = "fp-browse-two-artists",
+            Progress = continuation ? new QueryProgress() : null,
+            Root = fetch
+        };
+        var calls = 0;
+        _client.Setup(client => client.BrowseArtistsAsync(
+                It.IsAny<ArtistBrowseCacheKey>(),
+                It.IsAny<Settings>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync((ArtistBrowseCacheKey _, Settings _, CancellationToken _) =>
+            {
+                var failed = calls++ == (failureFirst ? 0 : 1) || allFail;
+                return failed
+                    ? new FetchResult<ArtistBrowseResponseDto> { Outcome = FetchOutcome.Unavailable }
+                    : new FetchResult<ArtistBrowseResponseDto>
+                    {
+                        Outcome = FetchOutcome.Success,
+                        Value = new ArtistBrowseResponseDto
+                        {
+                            ArtistCount = empty ? 0 : 1,
+                            Artists = empty ? [] :
+                                [new ArtistDto { Id = "60000000-0000-0000-0000-000000000001", Name = "Shared" }]
+                        }
+                    };
+            });
+
+        // Act and assert
+        if (allFail)
+        {
+            Assert.ThrowsAsync<HttpRequestException>(async () =>
+                await _subject.ExecuteAsync(plan, default).ConfigureAwait(false));
+        }
+        else
+        {
+            var result = await _subject.ExecuteAsync(plan, default).ConfigureAwait(false);
+            using (Assert.EnterMultipleScope())
+            {
+                Assert.That(result.Hits, Has.Count.EqualTo(allFail || empty ? 0 : 1));
+                Assert.That(result.Warnings, Is.Not.Empty);
+            }
+        }
+
+        Assert.That(calls, Is.EqualTo(2));
+    }
+
+    [Test]
+    public void ExecuteAsync_StopsBeforeTheBrowse_WhenArtistResolutionFails()
     {
         // Arrange
         var resolver = new ResolvePlanNode
@@ -1922,22 +2194,136 @@ public class QueryExecutorTests
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(new FetchResult<ArtistResolutionResponse> { Outcome = FetchOutcome.Unavailable });
 
-        // Act
-        var result = await _subject.ExecuteAsync(plan, default).ConfigureAwait(false);
-
-        // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(result.Hits, Is.Empty);
-            Assert.That(result.PageInfo.HasMore, Is.True);
-            Assert.That(
-                result.Warnings.Select(warning => warning),
-                Is.EqualTo(["musicbrainz is unavailable."]));
-        }
+        // Act and assert
+        Assert.ThrowsAsync<HttpRequestException>(async () =>
+            await _subject.ExecuteAsync(plan, default).ConfigureAwait(false));
 
         _client.Verify(
             client => client.SearchAsync(It.IsAny<Request>(), It.IsAny<Settings>(), It.IsAny<CancellationToken>()),
             Times.Never);
+    }
+
+    [Test]
+    public async Task ExecuteAsync_ContinuesUnion_WhenAnAlternativeResolverFails(
+        [Values] bool failureFirst,
+        [Values] bool empty,
+        [Values] bool allFail,
+        [Values] bool prevalidated)
+    {
+        // Arrange
+        var resolver = new ResolvePlanNode
+        {
+            Id = 1,
+            Precondition = NoPrecondition,
+            Contributes = "resolved artist ids",
+            Composition = new ArtistComposition
+            {
+                RelatedEntity = ArtistCompositionEntity.Artist,
+                Resolution = ArtistCompositionResolution.ExactNameSearch,
+                Expansion = ArtistCompositionExpansion.BrowseArtists,
+                Constraint = ArtistCompositionConstraint.Include,
+                FinalStage = ArtistCompositionFinalStage.ReturnExpandedCandidates,
+                ExternalIdSource = Constants.ProviderType,
+                RelatedName = "Miles Davis"
+            }
+        };
+        var fetch = new FetchPlanNode
+        {
+            Id = 2,
+            Precondition = NoPrecondition,
+            Contributes = "content linked to resolved artists",
+            Target = QueryTarget.Track,
+            AccessMode = AccessMode.Browse,
+            AnchorKind = AnchorKind.ResolvedArtist,
+            CombineMode = CombineMode.And,
+            Filters = [],
+            Resolvers = [resolver]
+        };
+        var plan = new QueryPlan
+        {
+            RequestedPage = 1,
+            MaxResults = 25,
+            Settings = new Settings(),
+            Warnings = [],
+            Fingerprint = "fp-resolution-failure",
+            Progress = new QueryProgress(),
+            Root = new UnionPlanNode
+            {
+                Id = 5,
+                Precondition = NoPrecondition,
+                Contributes = "independent alternatives",
+                Children = [fetch, fetch with { Id = 4, Resolvers = [resolver with { Id = 3 }] }]
+            }
+        };
+        if (prevalidated)
+        {
+            var identity = empty ? "[]" :
+                "[{\"PrimaryMbid\":\"90000000-0000-0000-0000-000000000001\",\"ArtistType\":null}]";
+            plan.Progress.ResolverIdentities[1] = identity;
+            plan.Progress.ResolverIdentities[3] = identity;
+        }
+
+        var calls = 0;
+        _client.Setup(client => client.ResolveArtistCompositionAsync(
+                It.IsAny<ArtistResolutionRequest>(),
+                It.IsAny<Settings>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() =>
+            {
+                var failed = calls++ == (failureFirst ? 0 : 1) || allFail;
+                return failed ? new FetchResult<ArtistResolutionResponse> { Outcome = FetchOutcome.Unavailable } :
+                    new FetchResult<ArtistResolutionResponse>
+                    {
+                        Outcome = FetchOutcome.Success,
+                        Value = new ArtistResolutionResponse
+                        {
+                            Count = empty ? 0 : 1,
+                            ReturnedCount = empty ? 0 : 1,
+                            Candidates = empty ? [] :
+                            [
+                                new ArtistResolutionCandidate
+                                {
+                                    Mbid = "90000000-0000-0000-0000-000000000001",
+                                    Name = "Miles Davis"
+                                }
+                            ]
+                        }
+                    };
+            });
+        _client.Setup(client => client.SearchAsync(
+                It.IsAny<Request>(),
+                It.IsAny<Settings>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new FetchResult<SearchPage>
+            {
+                Outcome = FetchOutcome.Success,
+                Value = new SearchPage
+                {
+                    Count = 1,
+                    Recordings =
+                    [
+                        new RecordingDto { Id = "60000000-0000-0000-0000-000000000001", Title = "Healthy" }
+                    ]
+                }
+            });
+
+        // Act and assert
+        if (allFail)
+        {
+            Assert.ThrowsAsync<HttpRequestException>(async () =>
+                await _subject.ExecuteAsync(plan, default).ConfigureAwait(false));
+        }
+        else
+        {
+            var result = await _subject.ExecuteAsync(plan, default).ConfigureAwait(false);
+            using (Assert.EnterMultipleScope())
+            {
+                Assert.That(result.Hits, Has.Count.EqualTo(empty ? 0 : 1));
+                Assert.That(result.Warnings, Is.Not.Empty);
+            }
+        }
+
+        Assert.That(calls, Is.EqualTo(2));
     }
 
     [Test]
@@ -2593,6 +2979,83 @@ public class QueryExecutorTests
 
         // Assert
         Assert.That(result.Hits.Select(hit => hit.Title), Is.EqualTo(["First", "Second"]));
+
+        _client.Verify(
+            client => client.BrowseArtistsAsync(
+                It.IsAny<ArtistBrowseCacheKey>(),
+                It.IsAny<Settings>(),
+                It.IsAny<CancellationToken>()),
+            Times.Exactly(2));
+    }
+
+    [Test]
+    public async Task ExecuteAsync_RetainsEarlierArtists_WhenALaterCompositionPageFails()
+    {
+        // Arrange
+        var composition = new ArtistComposition
+        {
+            RelatedEntity = ArtistCompositionEntity.ReleaseGroup,
+            Resolution = ArtistCompositionResolution.KnownMbid,
+            Expansion = ArtistCompositionExpansion.BrowseArtists,
+            Constraint = ArtistCompositionConstraint.Include,
+            FinalStage = ArtistCompositionFinalStage.ReturnExpandedCandidates,
+            ExternalIdSource = Constants.ProviderType,
+            RelatedMbid = "d0000000-0000-0000-0000-000000000001"
+        };
+        var resolver = new ResolvePlanNode
+        {
+            Id = 1,
+            Precondition = NoPrecondition,
+            Contributes = "resolved artist ids",
+            Composition = composition
+        };
+        var fetch = new FetchPlanNode
+        {
+            Id = 2,
+            Precondition = NoPrecondition,
+            Contributes = "expanded artist candidates",
+            Target = QueryTarget.Artist,
+            AccessMode = AccessMode.Browse,
+            AnchorKind = AnchorKind.ResolvedArtist,
+            CombineMode = CombineMode.And,
+            Filters = [],
+            Resolvers = [resolver],
+            BrowseComposition = composition
+        };
+        var plan = new QueryPlan
+        {
+            RequestedPage = 1,
+            MaxResults = 25,
+            Settings = new Settings(),
+            Warnings = [],
+            Fingerprint = "fp-expansion-paged",
+            Root = fetch
+        };
+        _client.SetupSequence(client => client.BrowseArtistsAsync(
+                It.IsAny<ArtistBrowseCacheKey>(),
+                It.IsAny<Settings>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new FetchResult<ArtistBrowseResponseDto>
+            {
+                Outcome = FetchOutcome.Success,
+                Value = new ArtistBrowseResponseDto
+                {
+                    ArtistCount = 2,
+                    Artists = [new ArtistDto { Id = "d0000000-0000-0000-0000-00000000000a", Name = "First" }]
+                }
+            })
+            .ReturnsAsync(new FetchResult<ArtistBrowseResponseDto> { Outcome = FetchOutcome.Unavailable });
+
+        // Act
+        var result = await _subject.ExecuteAsync(plan, default).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.Hits.Select(hit => hit.Title), Is.EqualTo(["First"]));
+            Assert.That(result.Warnings, Is.Not.Empty);
+            Assert.That(result.PageInfo.HasMore, Is.True);
+        }
 
         _client.Verify(
             client => client.BrowseArtistsAsync(

@@ -1,9 +1,13 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 
+using Magpie.Abstractions;
 using Magpie.Abstractions.Jobs;
 using Magpie.Abstractions.Repositories;
+using Magpie.Abstractions.Security;
 using Magpie.Core;
 using Magpie.Core.Repositories;
 using Magpie.Data;
@@ -39,6 +43,9 @@ public sealed class ReleaseRepositoryTests
     private MagpieDbContext _context = null!;
     private SqliteConnection _template = null!;
     private IReleaseRepository _subject = null!;
+    private IDownloadRepository _downloads = null!;
+    private ITransactionManager _transactionManager = null!;
+    private List<MagpieEvent> _publishedEvents = null!;
     private Guid _userId;
     private Guid _indexerId;
 
@@ -103,11 +110,27 @@ public sealed class ReleaseRepositoryTests
             timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
 
         var transactionManager = new TransactionManager(_context, NullLogger<TransactionManager>.Instance);
+        _transactionManager = transactionManager;
+        _publishedEvents = [];
+        var eventBus = new Mock<IEventBus>();
+        eventBus
+            .Setup(bus => bus.PublishAsync(It.IsAny<MagpieEvent>(), It.IsAny<CancellationToken>()))
+            .Callback((MagpieEvent magpieEvent, CancellationToken _) => _publishedEvents.Add(magpieEvent))
+            .Returns(Task.CompletedTask);
+        _downloads = new DownloadRepository(
+            _context,
+            auditRecordRepository,
+            transactionManager,
+            eventBus.Object,
+            NullLogger<DownloadRepository>.Instance,
+            Mock.Of<IDataProtectionService>(),
+            new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
 
         _subject = new ReleaseRepository(
             _context,
             auditRecordRepository,
             transactionManager,
+            _downloads,
             NullLogger<ReleaseRepository>.Instance,
             timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
     }
@@ -706,6 +729,109 @@ public sealed class ReleaseRepositoryTests
     }
 
     [Test]
+    public async Task UpdateAsync_RaisesDownloadUpdatedAfterCommit_WhenAnIdentityMergeMovesADownload()
+    {
+        // Arrange
+        var now = DateTime.UtcNow;
+        var downloadClient = new DownloadClient
+        {
+            ProviderType = "qbittorrent",
+            Name = "TestClient",
+            CreatedAt = now
+        };
+        var canonical = new Release
+        {
+            IndexerId = _indexerId,
+            Protocol = "torrent",
+            ExternalId = "canonical",
+            Title = "Merged.Release",
+            PublishDate = now,
+            CreatedAt = now,
+            ObservedAt = now
+        };
+        canonical.IdentityKeys.Add(
+            new ReleaseIdentityKey { Authority = "btih", Value = "canonical-hash", Ordinal = 0 });
+        var alias = new Release
+        {
+            IndexerId = _indexerId,
+            Protocol = "torrent",
+            ExternalId = "alias",
+            Title = "Merged.Release",
+            PublishDate = now,
+            CreatedAt = now,
+            ObservedAt = now
+        };
+        alias.IdentityKeys.Add(new ReleaseIdentityKey { Authority = "btih", Value = "alias-hash", Ordinal = 0 });
+        _context.DownloadClients.Add(downloadClient);
+        _context.Releases.AddRange(canonical, alias);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.ChangeTracker.Clear();
+        var canonicalSource = new ReleaseSource
+        {
+            ReleaseId = canonical.Id,
+            Key = "shared",
+            IndexerId = _indexerId,
+            Protocol = "torrent",
+            ExternalId = "canonical",
+            Title = "Merged.Release",
+            CreatedAt = now,
+            ObservedAt = now
+        };
+        var aliasSource = new ReleaseSource
+        {
+            ReleaseId = alias.Id,
+            Key = "shared",
+            IndexerId = _indexerId,
+            Protocol = "torrent",
+            ExternalId = "alias",
+            Title = "Merged.Release",
+            CreatedAt = now,
+            ObservedAt = now
+        };
+        _context.ReleaseSources.AddRange(canonicalSource, aliasSource);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        var download = new Download
+        {
+            ReleaseId = alias.Id,
+            ReleaseSourceId = aliasSource.Id,
+            DownloadClientId = downloadClient.Id,
+            ExternalId = "ext-download",
+            Title = "Merged.Release",
+            Status = DownloadStatus.Downloading,
+            CreatedAt = now
+        };
+        _context.Downloads.Add(download);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.ChangeTracker.Clear();
+        canonical.IdentityKeys.Clear();
+        canonical.IdentityKeys.Add(
+            new ReleaseIdentityKey { Authority = "btih", Value = "canonical-hash", Ordinal = 0 });
+        canonical.IdentityKeys.Add(new ReleaseIdentityKey { Authority = "btih", Value = "alias-hash", Ordinal = 1 });
+        var eventsDuringTransaction = -1;
+
+        // Act
+        await _transactionManager.ExecuteWithTransactionAsync(async ct =>
+        {
+            await _subject.UpdateAsync(canonical, _userId, ct).ConfigureAwait(false);
+            eventsDuringTransaction = _publishedEvents.Count;
+        }).ConfigureAwait(false);
+
+        // Assert
+        var persisted = await _context.Downloads.AsNoTracking()
+            .SingleAsync(d => d.Id == download.Id).ConfigureAwait(false);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(persisted.ReleaseId, Is.EqualTo(canonical.Id));
+            Assert.That(persisted.ReleaseSourceId, Is.EqualTo(canonicalSource.Id));
+            Assert.That(eventsDuringTransaction, Is.Zero);
+            Assert.That(_publishedEvents, Has.Count.EqualTo(1));
+            Assert.That(_publishedEvents[0].Name, Is.EqualTo("download.updated"));
+            Assert.That(_publishedEvents[0].Context["download.id"], Is.EqualTo(download.Id.ToString("D")));
+            Assert.That(_publishedEvents[0].Context["download.changedFields"], Is.EqualTo("ReleaseId,ReleaseSourceId"));
+        }
+    }
+
+    [Test]
     public async Task DeleteWhereAsync_KeepsTheUnmatchedRelease_WhenRetentionDeletesUnobservedReleases()
     {
         // Arrange
@@ -1069,6 +1195,46 @@ public sealed class ReleaseRepositoryTests
             Assert.That(result, Has.Property(nameof(result.Size)).EqualTo(2048));
             Assert.That(result, Has.Property(nameof(result.CreatedByUserId)).EqualTo(_userId));
             Assert.That(result, Has.Property(nameof(result.CreatedAt)).Not.EqualTo(default(DateTime)));
+        }
+    }
+
+    [Test]
+    public async Task CreateAsync_ReusesTheRelease_WhenItsProviderIdentityAlreadyExists()
+    {
+        // Arrange
+        var existing = new Release
+        {
+            Id = Guid.Parse("3e1ea5e0-0000-0000-0000-000000000001"),
+            IndexerId = _indexerId,
+            ExternalId = "same-release",
+            Protocol = "torrent",
+            Title = "First observation",
+            CreatedAt = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc)
+        };
+        _context.Releases.Add(existing);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.ChangeTracker.Clear();
+        var incoming = new Release
+        {
+            IndexerId = _indexerId,
+            ExternalId = "same-release",
+            Protocol = "torrent",
+            Title = "Updated observation"
+        };
+
+        // Act
+        var result = await _subject.CreateAsync(incoming, _userId).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.Id, Is.EqualTo(Guid.Parse("3e1ea5e0-0000-0000-0000-000000000001")));
+            Assert.That(result.CreatedAt, Is.EqualTo(new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc)));
+            Assert.That(result.Title, Is.EqualTo("Updated observation"));
+            Assert.That(await _context.Releases.CountAsync().ConfigureAwait(false), Is.EqualTo(1));
+            Assert.That(
+                await _context.AuditRecords.CountAsync(audit => audit.Operation == "Create").ConfigureAwait(false),
+                Is.EqualTo(0));
         }
     }
 
@@ -1712,8 +1878,15 @@ public sealed class ReleaseRepositoryTests
         _context.Downloads.Add(download);
         await _context.SaveChangesAsync().ConfigureAwait(false);
 
+        var eventsDuringTransaction = -1;
+
         // Act
-        var result = await _subject.DeleteAsync(release.Id, _userId).ConfigureAwait(false);
+        var result = await _transactionManager.ExecuteWithTransactionAsync<bool>(async ct =>
+        {
+            var deleted = await _subject.DeleteAsync(release.Id, _userId, ct).ConfigureAwait(false);
+            eventsDuringTransaction = _publishedEvents.Count;
+            return deleted;
+        }).ConfigureAwait(false);
 
         // Assert
         var persisted = await _context.Downloads.AsNoTracking()
@@ -1723,6 +1896,11 @@ public sealed class ReleaseRepositoryTests
             Assert.That(result, Is.True);
             Assert.That(persisted.ReleaseId, Is.Null);
             Assert.That(persisted.ReleaseSourceId, Is.Null);
+            Assert.That(eventsDuringTransaction, Is.Zero);
+            Assert.That(_publishedEvents, Has.Count.EqualTo(1));
+            Assert.That(_publishedEvents[0].Name, Is.EqualTo("download.updated"));
+            Assert.That(_publishedEvents[0].Context["download.id"], Is.EqualTo(download.Id.ToString("D")));
+            Assert.That(_publishedEvents[0].Context["download.changedFields"], Is.EqualTo("ReleaseId,ReleaseSourceId"));
         }
     }
 
@@ -1821,6 +1999,7 @@ public sealed class ReleaseRepositoryTests
                 Mock.Of<IJobExecutionScopeFactory>(),
             timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero))),
             new TransactionManager(_context, NullLogger<TransactionManager>.Instance),
+            _downloads,
             NullLoggerFactory.Instance.CreateLogger<ReleaseRepository>(),
             agedTime);
         var aged = await agedRepository.CreateAsync(
@@ -1871,6 +2050,7 @@ public sealed class ReleaseRepositoryTests
                 Mock.Of<IJobExecutionScopeFactory>(),
             timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero))),
             new TransactionManager(_context, NullLogger<TransactionManager>.Instance),
+            _downloads,
             NullLoggerFactory.Instance.CreateLogger<ReleaseRepository>(),
             agedTime);
         var failedBacked = await agedRepository.CreateAsync(

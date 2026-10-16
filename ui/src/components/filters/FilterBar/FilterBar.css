@@ -2,7 +2,9 @@
     .filter-bar .monitoring-toggle__segments {
         align-items: stretch;
         min-height: 32px;
+    }
 
+    .filter-bar .monitoring-toggle__option {
         @media (pointer: coarse) {
             min-height: var(--touch-target-min);
         }

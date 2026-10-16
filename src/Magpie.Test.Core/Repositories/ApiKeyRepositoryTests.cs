@@ -466,7 +466,7 @@ public sealed class ApiKeyRepositoryTests
             Assert.That(
                 _publishedEvents.Select(magpieEvent => magpieEvent.Name),
                 Is.EqualTo(["apiKey.updated"]));
-            Assert.That(_publishedEvents[0].Context.Values, Does.Contain("enabled"));
+            Assert.That(_publishedEvents[0].Context.Values, Does.Contain("Enabled"));
             Assert.That(_publishedEvents[0].Context["user.id"], Is.EqualTo(_userId.ToString("D")));
         }
     }
@@ -608,7 +608,7 @@ public sealed class ApiKeyRepositoryTests
                 ]));
             Assert.That(_publishedEvents[0].Context.Values, Does.Contain(created.Id.ToString("D")));
             Assert.That(_publishedEvents[0].Context.Values, Does.Contain(_userId.ToString("D")));
-            Assert.That(_publishedEvents[1].Context.Values, Does.Contain("name,enabled"));
+            Assert.That(_publishedEvents[1].Context.Values, Does.Contain("Name,Enabled"));
             Assert.That(_publishedEvents[1].Context["user.id"], Is.EqualTo(_userId.ToString("D")));
         }
     }

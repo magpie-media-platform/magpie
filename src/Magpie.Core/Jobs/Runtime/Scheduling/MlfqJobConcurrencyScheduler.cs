@@ -81,6 +81,7 @@ internal sealed class MlfqJobConcurrencyScheduler : IJobConcurrencyScheduler
     private readonly int[] _occupancy = new int[LevelCount];
     private readonly TimeProvider _time;
     private readonly Config _config;
+    private readonly Dictionary<string, int> _nodeLimits;
 
     private IReadOnlyList<JobClaimCandidate>? _pageSource;
     private int _pageSourceCount;
@@ -89,10 +90,14 @@ internal sealed class MlfqJobConcurrencyScheduler : IJobConcurrencyScheduler
     public MlfqJobConcurrencyScheduler(
         JobRuntimeOptions options,
         TimeProvider time,
+        IJobRegistry registry,
         ILogger<MlfqJobConcurrencyScheduler> logger)
     {
         _time = time;
         _config = Create(options, logger);
+        _nodeLimits = registry.ListJobSpecs()
+            .Where(spec => spec.ConcurrencyLimit is { PerNode: true })
+            .ToDictionary(spec => spec.JobType, spec => spec.ConcurrencyLimit!.Max, StringComparer.Ordinal);
 
         _ = JobsTelemetry.Meter.CreateObservableGauge("magpie.jobs.mlfq_level_occupancy", ObserveLevelOccupancy);
         _ = JobsTelemetry.Meter.CreateObservableGauge("magpie.jobs.mlfq_level_capacity", ObserveLevelCapacity);
@@ -179,7 +184,7 @@ internal sealed class MlfqJobConcurrencyScheduler : IJobConcurrencyScheduler
             for (var step = 0; step < _typeOrder.Count; step++)
             {
                 var type = _typeOrder[(_cursor + step) % _typeOrder.Count];
-                if (!_pageByType.TryGetValue(type, out var queue))
+                if (!_pageByType.TryGetValue(type, out var queue) || IsAtNodeLimit(type))
                 {
                     continue;
                 }
@@ -202,6 +207,9 @@ internal sealed class MlfqJobConcurrencyScheduler : IJobConcurrencyScheduler
             return false;
         }
     }
+
+    private bool IsAtNodeLimit(string type) =>
+        _nodeLimits.TryGetValue(type, out var max) && _jobs.Values.Count(job => job.JobType == type) >= max;
 
     public void CommitAdmission(JobClaimCandidate candidate)
     {

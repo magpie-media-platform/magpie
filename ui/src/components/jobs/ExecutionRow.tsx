@@ -46,7 +46,7 @@ export function ExecutionRow({ execution, autoExpand = false }: ExecutionRowProp
     const isActive = displayStatus === 'running' || displayStatus === 'pending' || displayStatus === 'queued';
     const statusLabel = statusLabels[displayStatus];
 
-    const deferredUntil =
+    const pendingUntil =
         displayStatus === 'pending' && execution.notBeforeAt ? formatJobDateTime(execution.notBeforeAt) : null;
 
     const StatusIcon = useMemo(() => {
@@ -117,7 +117,7 @@ export function ExecutionRow({ execution, autoExpand = false }: ExecutionRowProp
                     type="button"
                     className="execution-row__trigger"
                     aria-expanded={isExpanded}
-                    aria-label={`${jobName} - ${statusLabel}. Click to ${isExpanded ? 'hide' : 'show'} details.`}
+                    aria-label={`${jobName} - ${statusLabel}${pendingUntil ? ` until ${pendingUntil}` : ''}. Click to ${isExpanded ? 'hide' : 'show'} details.`}
                     data-testid="execution-row__trigger"
                 >
                     <div className="execution-row__main">
@@ -131,12 +131,7 @@ export function ExecutionRow({ execution, autoExpand = false }: ExecutionRowProp
                         <div className="execution-row__info">
                             <div className="execution-row__header">
                                 <span className="execution-row__name">{jobName}</span>
-                                <Badge
-                                    variant={badgeVariant}
-                                    size="sm"
-                                    data-testid="execution-row__status-badge"
-                                    title={deferredUntil ? `Deferred until ${deferredUntil}` : undefined}
-                                >
+                                <Badge variant={badgeVariant} size="sm" data-testid="execution-row__status-badge">
                                     {statusLabel}
                                 </Badge>
                             </div>
@@ -145,6 +140,14 @@ export function ExecutionRow({ execution, autoExpand = false }: ExecutionRowProp
                                     <ClockIcon weight="regular" aria-hidden="true" />
                                     {formatJobDateTime(execution.createdAt)}
                                 </span>
+                                {pendingUntil && (
+                                    <span className="execution-row__time">
+                                        <HourglassIcon weight="regular" aria-hidden="true" />
+                                        <span>
+                                            Pending until <time dateTime={execution.notBeforeAt!}>{pendingUntil}</time>
+                                        </span>
+                                    </span>
+                                )}
                                 {execution.completedAt && <span className="execution-row__duration">{duration}</span>}
                             </div>
                             {execution.statusMessage && (

@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 
 using Magpie.Abstractions;
@@ -32,6 +34,8 @@ public sealed class QualityTierRepositoryTests
     private MagpieDbContext _context = null!;
     private SqliteConnection _template = null!;
     private IQualityTierRepository _subject = null!;
+    private List<MagpieEvent> _publishedEvents = null!;
+    private bool _publishedInsideTransaction;
     private Guid _userId;
 
     [OneTimeSetUp]
@@ -85,10 +89,23 @@ public sealed class QualityTierRepositoryTests
 
         var transactionManager = new TransactionManager(_context, NullLogger<TransactionManager>.Instance);
 
+        _publishedEvents = [];
+        _publishedInsideTransaction = false;
+        var events = new Mock<IEventBus>();
+        events
+            .Setup(bus => bus.PublishAsync(It.IsAny<MagpieEvent>(), It.IsAny<CancellationToken>()))
+            .Callback((MagpieEvent magpieEvent, CancellationToken _) =>
+            {
+                _publishedEvents.Add(magpieEvent);
+                _publishedInsideTransaction |= _context.Database.CurrentTransaction is not null;
+            })
+            .Returns(Task.CompletedTask);
+
         _subject = new QualityTierRepository(
             _context,
             auditRecordRepository,
             transactionManager,
+            events.Object,
             NullLogger<QualityTierRepository>.Instance,
             timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
     }
@@ -378,6 +395,131 @@ public sealed class QualityTierRepositoryTests
             Assert.That(auditRecords, Has.One.With.Property(nameof(AuditRecord.EntityType)).EqualTo("QualityTier"));
             Assert.That(auditRecords, Has.One.With.Property(nameof(AuditRecord.UserId)).EqualTo(_userId));
         }
+    }
+
+    [Test]
+    public async Task UpdateAsync_RaisesTierUpdatedOnceAfterCommit_WhenRulesChange()
+    {
+        // Arrange
+        var qualityTier = new QualityTier
+        {
+            Id = Guid.Parse("0d69fede-afb4-451b-be67-59f2bdadc539"),
+            Name = "HD",
+            Criteria = new() { And = [] },
+            CreatedAt = DateTime.UtcNow
+        };
+        _context.QualityTiers.Add(qualityTier);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        qualityTier.Name = "Renamed";
+        qualityTier.Rules = [new() { Name = "No CAM", Kind = RuleKind.Exclude, Criteria = new() { And = [] } }];
+
+        // Act
+        await _subject.UpdateAsync(qualityTier, _userId).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(_publishedInsideTransaction, Is.False);
+            Assert.That(_publishedEvents, Has.Count.EqualTo(1));
+            Assert.That(_publishedEvents[0].Name, Is.EqualTo("qualityTier.updated"));
+            Assert.That(
+                _publishedEvents[0].Context["qualityTier.id"],
+                Is.EqualTo("0d69fede-afb4-451b-be67-59f2bdadc539"));
+            Assert.That(_publishedEvents[0].Context["qualityTier.changedFields"], Is.EqualTo("Rules"));
+        }
+    }
+
+    [Test]
+    public async Task PatchAsync_RaisesTierUpdatedOnceAfterCommit_WhenCriteriaChange()
+    {
+        // Arrange
+        var qualityTier = new QualityTier
+        {
+            Id = Guid.Parse("a41e5dc1-3f57-4476-923d-bddbf533ff88"),
+            Name = "HD",
+            Criteria = new() { And = [] },
+            CreatedAt = DateTime.UtcNow
+        };
+        _context.QualityTiers.Add(qualityTier);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        var patch = new QualityTierPatch
+        {
+            Id = qualityTier.Id,
+            Criteria = new()
+            {
+                Value = new()
+                {
+                    And = [new()
+                    {
+                        Items = new()
+                        {
+                            ["resolution"] = new() { Operator = CriteriaValueOperator.Equals, Values = ["1080p"] }
+                        }
+                    }]
+                }
+            }
+        };
+
+        // Act
+        await _subject.PatchAsync(patch, _userId).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(_publishedInsideTransaction, Is.False);
+            Assert.That(_publishedEvents, Has.Count.EqualTo(1));
+            Assert.That(_publishedEvents[0].Name, Is.EqualTo("qualityTier.updated"));
+            Assert.That(
+                _publishedEvents[0].Context["qualityTier.id"],
+                Is.EqualTo("a41e5dc1-3f57-4476-923d-bddbf533ff88"));
+            Assert.That(_publishedEvents[0].Context["qualityTier.changedFields"], Is.EqualTo("Criteria"));
+        }
+    }
+
+    [Test]
+    public async Task UpdateAsync_RaisesNoEvent_WhenOnlyTheNameChanges()
+    {
+        // Arrange
+        var qualityTier = new QualityTier
+        {
+            Name = "HD",
+            Criteria = new() { And = [] },
+            CreatedAt = DateTime.UtcNow
+        };
+        _context.QualityTiers.Add(qualityTier);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        qualityTier.Name = "Renamed";
+
+        // Act
+        await _subject.UpdateAsync(qualityTier, _userId).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(_publishedEvents, Is.Empty);
+    }
+
+    [Test]
+    public async Task PatchAsync_RaisesNoEvent_WhenOnlyTheNameChanges()
+    {
+        // Arrange
+        var qualityTier = new QualityTier
+        {
+            Name = "HD",
+            Criteria = new() { And = [] },
+            CreatedAt = DateTime.UtcNow
+        };
+        _context.QualityTiers.Add(qualityTier);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        var patch = new QualityTierPatch { Id = qualityTier.Id, Name = new() { Value = "Renamed" } };
+
+        // Act
+        await _subject.PatchAsync(patch, _userId).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(_publishedEvents, Is.Empty);
     }
 
     [Test]

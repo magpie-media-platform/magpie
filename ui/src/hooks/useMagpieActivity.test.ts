@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { apiGet } from '@/lib/api';
 import { useEventStream } from './useEventStream';
-import { useJobExecutionAudits } from './useMagpieActivity';
+import { useJobExecutionAudits, useJobExecutionTreeActivity } from './useMagpieActivity';
 
 vi.mock('@/lib/api', async (importOriginal) => ({
     ...(await importOriginal<typeof import('@/lib/api')>()),
@@ -23,6 +23,44 @@ const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false,
 const wrapper = ({ children }: { children: React.ReactNode }) =>
     createElement(QueryClientProvider, { client: queryClient }, children);
 const mockApiGet = vi.mocked(apiGet);
+
+describe('useJobExecutionTreeActivity', () => {
+    beforeEach(() => {
+        vi.resetAllMocks();
+        queryClient.clear();
+    });
+
+    it('keeps the selected subtree separate from the full related-activity tree', async () => {
+        // Arrange
+        const item = {
+            id: 'item-1',
+            jobType: 'ReleaseSearchItem',
+            status: 'Queued',
+            createdAt: '2024-01-15T12:00:00Z',
+            children: [],
+        };
+        const scan = {
+            ...item,
+            id: 'scan-1',
+            jobType: 'ReleaseSearchScan',
+            children: [item, { ...item, id: 'sibling-1' }],
+        };
+        mockApiGet.mockResolvedValueOnce({ root: scan, totalCount: 3 });
+        const fullTree = renderHook(() => useJobExecutionTreeActivity('item-1', true), { wrapper });
+        await waitFor(() => expect(fullTree.result.current.activity?.entries).toHaveLength(3));
+        mockApiGet.mockResolvedValueOnce({ root: item, totalCount: 1 });
+
+        // Act
+        const subtree = renderHook(() => useJobExecutionTreeActivity('item-1'), { wrapper });
+
+        // Assert
+        await waitFor(() => expect(subtree.result.current.activity?.entries).toHaveLength(1));
+        expect(subtree.result.current.activity?.entries[0].id).toBe('item-1');
+        expect(fullTree.result.current.activity?.entries).toHaveLength(3);
+        expect(mockApiGet).toHaveBeenNthCalledWith(1, '/jobs/item-1/execution-tree?include-siblings=true');
+        expect(mockApiGet).toHaveBeenNthCalledWith(2, '/jobs/item-1/execution-tree?include-siblings=false');
+    });
+});
 
 describe('useJobExecutionAudits', () => {
     beforeEach(() => {

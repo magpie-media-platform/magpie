@@ -7,29 +7,12 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 
-using Magpie.Models;
-
 namespace Magpie.Sdk.Http;
 
-internal sealed class UpstreamCooldown(TimeProvider timeProvider) : IUpstreamCooldown
+internal sealed class UpstreamCooldown(TimeProvider timeProvider, HttpOptions options) : IUpstreamCooldown
 {
     private readonly object _sync = new();
     private readonly Dictionary<string, Cooldown> _cooldowns = new(StringComparer.Ordinal);
-
-    /// <inheritdoc />
-    public void Check(HttpRequestMessage request, string? authenticationScope, CancellationToken cancellationToken)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        var key = Key(request, authenticationScope);
-        lock (_sync)
-        {
-            var now = timeProvider.GetUtcNow();
-            if (_cooldowns.TryGetValue(key, out var cooldown) && (cooldown.RetryAt > now || cooldown.Recovering))
-            {
-                throw new UpstreamThrottledException(cooldown.RetryAt > now ? cooldown.RetryAt : now.AddSeconds(1));
-            }
-        }
-    }
 
     /// <inheritdoc />
     public async Task<HttpResponseMessage> SendAsync(
@@ -38,73 +21,131 @@ internal sealed class UpstreamCooldown(TimeProvider timeProvider) : IUpstreamCoo
         Func<CancellationToken, Task<HttpResponseMessage>> send,
         CancellationToken cancellationToken)
     {
-        cancellationToken.ThrowIfCancellationRequested();
         var key = Key(request, authenticationScope);
-        Cooldown? recovery = null;
-        lock (_sync)
+        var remainingWait = options.Timeout;
+        while (true)
         {
-            var now = timeProvider.GetUtcNow();
-            if (_cooldowns.TryGetValue(key, out var cooldown))
+            cancellationToken.ThrowIfCancellationRequested();
+            Cooldown? recovery = null;
+            Task? recovering = null;
+            var delay = TimeSpan.Zero;
+            lock (_sync)
             {
-                if (cooldown.RetryAt > now || cooldown.Recovering)
+                var now = timeProvider.GetUtcNow();
+                if (_cooldowns.TryGetValue(key, out var cooldown))
                 {
-                    throw new UpstreamThrottledException(cooldown.RetryAt > now ? cooldown.RetryAt : now.AddSeconds(1));
-                }
-
-                if (cooldown.RecoveryUntil != default && cooldown.RecoveryUntil <= now)
-                {
-                    _cooldowns.Remove(key);
-                }
-                else
-                {
-                    cooldown.Recovering = true;
-                    if (cooldown.RecoveryUntil == default)
+                    if (cooldown.Recovering)
                     {
-                        cooldown.RecoveryUntil = now.AddSeconds(30);
+                        recovering = cooldown.Completed.Task;
                     }
+                    else if (cooldown.RetryAt > now)
+                    {
+                        delay = cooldown.RetryAt - now;
+                    }
+                    else if (cooldown.RecoveryUntil != default && cooldown.RecoveryUntil <= now)
+                    {
+                        _cooldowns.Remove(key);
+                    }
+                    else
+                    {
+                        cooldown.Recovering = true;
+                        cooldown.Completed = new TaskCompletionSource<bool>(
+                            TaskCreationOptions.RunContinuationsAsynchronously);
+                        if (cooldown.RecoveryUntil == default)
+                        {
+                            cooldown.RecoveryUntil = now.AddSeconds(30);
+                        }
 
-                    recovery = cooldown;
+                        recovery = cooldown;
+                    }
                 }
             }
-        }
 
-        try
-        {
-            var response = await send(cancellationToken).ConfigureAwait(false);
-            if (response.StatusCode == HttpStatusCode.TooManyRequests ||
-                response.StatusCode == HttpStatusCode.ServiceUnavailable && response.Headers.Contains("Retry-After"))
+            if (recovering is not null || delay > TimeSpan.Zero)
             {
-                var throttle = RecordThrottle(request, authenticationScope, response);
-                response.Dispose();
-                throw throttle;
+                var started = timeProvider.GetTimestamp();
+                using var timeout = timeProvider.CreateCancellationTokenSource(remainingWait);
+                using var waiting = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeout.Token);
+                try
+                {
+                    if (recovering is not null)
+                    {
+                        await recovering.WaitAsync(Timeout.InfiniteTimeSpan, timeProvider, waiting.Token)
+                            .ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        if (delay > remainingWait)
+                        {
+                            delay = remainingWait;
+                        }
+
+                        await TimeProviderTaskExtensions.Delay(timeProvider, delay, waiting.Token)
+                            .ConfigureAwait(false);
+                    }
+                }
+                catch (OperationCanceledException) when (
+                    timeout.IsCancellationRequested &&
+                    !cancellationToken.IsCancellationRequested)
+                {
+                    throw new TaskCanceledException("The HTTP request timed out.", new TimeoutException());
+                }
+
+                remainingWait -= timeProvider.GetElapsedTime(started);
+                cancellationToken.ThrowIfCancellationRequested();
+                if (remainingWait <= TimeSpan.Zero)
+                {
+                    throw new TaskCanceledException("The HTTP request timed out.", new TimeoutException());
+                }
+
+                continue;
             }
 
-            return response;
-        }
-        finally
-        {
-            if (recovery is not null)
+            try
             {
-                lock (_sync)
+                var response = await send(cancellationToken).ConfigureAwait(false);
+                if (response.StatusCode == HttpStatusCode.TooManyRequests ||
+                    response.StatusCode == HttpStatusCode.ServiceUnavailable &&
+                    response.Headers.Contains("Retry-After"))
                 {
-                    recovery.Recovering = false;
-                    var next = timeProvider.GetUtcNow().AddSeconds(1);
-                    if (next > recovery.RetryAt)
+                    RecordThrottle(key, response);
+                    response.Dispose();
+                    continue;
+                }
+
+                return response;
+            }
+            finally
+            {
+                if (recovery is not null)
+                {
+                    lock (_sync)
                     {
-                        recovery.RetryAt = next;
+                        recovery.Recovering = false;
+                        var next = timeProvider.GetUtcNow().AddSeconds(1);
+                        if (next > recovery.RetryAt)
+                        {
+                            recovery.RetryAt = next;
+                        }
+
+                        recovery.Completed.TrySetResult(true);
                     }
                 }
             }
         }
     }
 
-    /// <inheritdoc />
-    public UpstreamThrottledException RecordThrottle(
-        HttpRequestMessage request,
-        string? authenticationScope,
-        HttpResponseMessage response)
+    private static string Key(HttpRequestMessage request, string? authenticationScope)
     {
-        var key = Key(request, authenticationScope);
+        var origin = request.RequestUri?.GetLeftPart(UriPartial.Authority)
+            ?? throw new InvalidOperationException("The upstream request requires an absolute URI.");
+        using var hash = SHA256.Create();
+        return origin.ToUpperInvariant() + "|" +
+            Convert.ToBase64String(hash.ComputeHash(Encoding.UTF8.GetBytes(authenticationScope ?? string.Empty)));
+    }
+
+    private void RecordThrottle(string key, HttpResponseMessage response)
+    {
         lock (_sync)
         {
             var now = timeProvider.GetUtcNow();
@@ -133,17 +174,7 @@ internal sealed class UpstreamCooldown(TimeProvider timeProvider) : IUpstreamCoo
             }
 
             cooldown.RecoveryUntil = default;
-            return new UpstreamThrottledException(cooldown.RetryAt, requestSent: true);
         }
-    }
-
-    private static string Key(HttpRequestMessage request, string? authenticationScope)
-    {
-        var origin = request.RequestUri?.GetLeftPart(UriPartial.Authority)
-            ?? throw new InvalidOperationException("The upstream request requires an absolute URI.");
-        using var hash = SHA256.Create();
-        return origin.ToUpperInvariant() + "|" +
-            Convert.ToBase64String(hash.ComputeHash(Encoding.UTF8.GetBytes(authenticationScope ?? string.Empty)));
     }
 
     private sealed record Cooldown
@@ -155,5 +186,8 @@ internal sealed class UpstreamCooldown(TimeProvider timeProvider) : IUpstreamCoo
         public int Throttles { get; set; }
 
         public bool Recovering { get; set; }
+
+        public TaskCompletionSource<bool> Completed { get; set; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
     }
 }

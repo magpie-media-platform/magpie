@@ -2155,12 +2155,92 @@ internal sealed class SearchExecutorTests
         _client.Verify(client => client.SearchShowsAsync("once", It.IsAny<CancellationToken>()), Times.Once);
     }
 
-    [Test]
-    public void ExecuteAsync_Throws_WhenTheOnlyFetchFails()
+    [TestCase(false, false, false, false)]
+    [TestCase(false, true, false, false)]
+    [TestCase(false, false, true, false)]
+    [TestCase(false, true, true, false)]
+    [TestCase(false, false, false, true)]
+    [TestCase(true, false, false, false)]
+    [TestCase(true, true, false, false)]
+    [TestCase(true, false, true, false)]
+    [TestCase(true, true, true, false)]
+    [TestCase(true, false, false, true)]
+    public async Task ExecuteAsync_KeepsSuccessfulAnswer_WhenAnotherRequestFails(
+        bool lookup,
+        bool empty,
+        bool failureFirst,
+        bool filterOut)
+    {
+        // Arrange
+        _client.Setup(client => client.SearchShowsAsync("healthy", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(empty ? [] : [new SearchHitDto { Show = GameOfThrones }]);
+        _client.Setup(client => client.SearchShowsAsync("failing", It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new TaskCanceledException("Request timed out.", new TimeoutException()));
+        _client.Setup(client => client.GetShowWithEmbedsAsync(
+                82, Array.Empty<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(empty ? null : GameOfThrones);
+        _client.Setup(client => client.GetShowWithEmbedsAsync(
+                83, Array.Empty<string>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new HttpRequestException("Provider unavailable."));
+        var plan = new QueryPlan
+        {
+            Query = new(),
+            Metadata = new(),
+            MaximumResults = 10,
+            Dispositions = [],
+            Root = new FilterPlanNode
+            {
+                Id = 2,
+                Contributes = "verified",
+                Child = new FetchPlanNode
+                {
+                    Id = 1,
+                    Contributes = "search",
+                    AnchorKind = lookup ? SearchAnchorKind.NativeId : SearchAnchorKind.Title,
+                    Seed = lookup
+                        ? new SearchSeed.IdLookup(
+                        [
+                            new(Constants.ProviderType, "first", failureFirst ? 83 : 82),
+                            new(Constants.ProviderType, "second", failureFirst ? 82 : 83)
+                        ])
+                        : new SearchSeed.FuzzyShow(
+                            failureFirst ? ["failing", "healthy"] : ["healthy", "failing"],
+                            IsAka: false)
+                },
+                HitFilters = filterOut
+                    ? [new LocalFilter
+                    {
+                        Kind = LocalFilterKind.Title,
+                        Operator = CriteriaValueOperator.Equals,
+                        StringValues = ["No match"]
+                    }]
+                    : [],
+                AkaFilters = [],
+                RelationshipResiduals = [],
+                ImageResiduals = []
+            }
+        };
+
+        // Act
+        var result = await _executor.ExecuteAsync(plan, default).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.Matches, Has.Count.EqualTo(empty || filterOut ? 0 : 1));
+            Assert.That(result.Warnings, Is.Not.Empty);
+        }
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public void ExecuteAsync_Throws_WhenTheOnlyFetchFails(bool timeout)
     {
         // Arrange
         _client.Setup(client => client.GetShowWithEmbedsAsync(82, Array.Empty<string>(), It.IsAny<CancellationToken>()))
-            .ThrowsAsync(new HttpRequestException("corrupt payload"));
+            .ThrowsAsync(timeout
+                ? new TaskCanceledException("Request timed out.", new TimeoutException())
+                : new HttpRequestException("corrupt payload"));
         var root = new FilterPlanNode
         {
             Id = 2,
@@ -2385,7 +2465,7 @@ internal sealed class SearchExecutorTests
     }
 
     [Test]
-    public void ExecuteAsync_Throws_WhenAkaVerificationFailsForEveryCandidate()
+    public async Task ExecuteAsync_ReturnsWarnings_WhenAkaVerificationFailsAfterSearchAnswers()
     {
         // Arrange
         _client.Setup(client => client.SearchShowsAsync("show", It.IsAny<CancellationToken>())).ReturnsAsync(
@@ -2432,10 +2512,14 @@ internal sealed class SearchExecutorTests
         };
 
         // Act
-        var execute = () => _executor.ExecuteAsync(plan, default);
+        var result = await _executor.ExecuteAsync(plan, default).ConfigureAwait(false);
 
         // Assert
-        Assert.That(execute, Throws.TypeOf<InvalidOperationException>());
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.Matches, Is.Empty);
+            Assert.That(result.Warnings, Is.Not.Empty);
+        }
     }
 
     [Test]

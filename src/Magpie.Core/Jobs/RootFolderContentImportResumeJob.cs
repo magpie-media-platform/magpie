@@ -27,8 +27,7 @@ internal sealed class RootFolderContentImportResumeJob(
     {
         JobType = MagpieJobs.Types.RootFolderContentImportResume,
         DisplayName = "Root folder content import resume",
-        Description = "Resumes the library imports that waited for the metadata refresh of an item after that " +
-            "refresh ends.",
+        Description = "Continues library imports that waited for a metadata refresh.",
         Category = "Content",
         Scope = JobScope.Content,
         Enabled = true,

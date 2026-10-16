@@ -26,11 +26,11 @@
 
     <Feature Id="Magpie" Title="Magpie" AllowAbsent="no" AllowAdvertise="no" Display="expand">
       <Files Include="$(var.AppDir)\**">
-        <Exclude Files="$(var.AppDir)\Magpie.App.exe" />
+        <Exclude Files="$(var.AppDir)\magpie.exe" />
       </Files>
 
       <Component Directory="INSTALLFOLDER">
-        <File Source="$(var.AppDir)\Magpie.App.exe" KeyPath="yes" />
+        <File Source="$(var.AppDir)\magpie.exe" KeyPath="yes" />
         <ServiceInstall Name="Magpie"
                         DisplayName="Magpie"
                         Type="ownProcess"
@@ -44,7 +44,7 @@
                        Name="Environment"
                        Type="multiString"
                        Value="ASPNETCORE_URLS=http://+:8080" />
-        <util:EventSource Name="Magpie.App"
+        <util:EventSource Name="magpie"
                           Log="Application"
                           EventMessageFile="[INSTALLFOLDER]System.Diagnostics.EventLog.Messages.dll" />
         <fw:FirewallException Name="Magpie"

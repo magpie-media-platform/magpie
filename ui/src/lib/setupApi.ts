@@ -36,11 +36,16 @@ export async function createSetupAdmin(request: CreateAdminRequest): Promise<Cre
 interface SetupDatabaseStatus {
     initialized: boolean;
     provider: string;
+    jobTypes?: Record<string, string>;
 }
+
+export type NodeRole = 'Ui' | 'Api' | 'JobRunner';
 
 interface ConfigureSetupDatabaseRequest {
     provider: string;
     connectionString: string | null;
+    roles?: NodeRole[];
+    jobTypes?: string[];
 }
 
 interface ConfigureSetupDatabaseResponse {

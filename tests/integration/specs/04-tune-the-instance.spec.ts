@@ -105,7 +105,9 @@ test.describe.serial('Journey 4: make it ours', () => {
             await page.getByLabel('Instance Name').fill('Journey Tune');
             await page.getByLabel('Base URL').fill('https://tune.magpie.invalid');
             await page.locator('[data-action="save-settings"]').click();
-            await expect(page.getByText(/ updated the general settings\.$/)).toBeVisible();
+            await expect(
+                page.locator('[data-component="toast"]').getByText(/ updated the general settings\.$/),
+            ).toBeVisible();
 
             expect(
                 Object.fromEntries(

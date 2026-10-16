@@ -32,8 +32,7 @@ internal sealed class MediaInfoExtractScanJob(
     {
         JobType = MagpieJobs.Types.MediaInfoExtractScan,
         DisplayName = "Media info extract scan",
-        Description = "Queues media information extraction for the files of a target that the media info policy " +
-            "selects.",
+        Description = "Finds and queues files that need media information.",
         Category = "Metadata",
         Scope = JobScope.Content,
         Enabled = true,
@@ -80,7 +79,6 @@ internal sealed class MediaInfoExtractScanJob(
 
     private const int DefaultMaxAgeHours = 24;
     private const int MaximumMaxAgeHours = 36500 * 24;
-    private const int MaxFilesPerRun = 500;
 
     private const string NoExtractorMessage = "The scan stopped because no media information extractor is registered.";
 
@@ -217,17 +215,8 @@ internal sealed class MediaInfoExtractScanJob(
                 _ => null
             }
         };
-        if (contentHierarchyItemId is not null || query.MediaInfoStaleBefore is null)
-        {
-            return await mediaFileRepository.QueryAllAsync(query, cancellationToken: cancellationToken)
-                .ConfigureAwait(false);
-        }
-
-        return (await mediaFileRepository.QueryAsync(
-            query,
-            new() { PageNumber = 1, PageSize = MaxFilesPerRun },
-            null,
-            cancellationToken).ConfigureAwait(false)).Items.ToList();
+        return await mediaFileRepository.QueryAllAsync(query, cancellationToken: cancellationToken)
+            .ConfigureAwait(false);
     }
 
     private int ReadPositiveIntParameter(IReadOnlyDictionary<string, string> parameters)

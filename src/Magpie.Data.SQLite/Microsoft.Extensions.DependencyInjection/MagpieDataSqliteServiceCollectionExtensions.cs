@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using Magpie.Abstractions.Database;
 using Magpie.Data;
 using Magpie.Data.SQLite;
+using Magpie.Models;
 using Magpie.Models.Data;
 
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -33,11 +34,12 @@ public static class MagpieDataSqliteServiceCollectionExtensions
         ArgumentException.ThrowIfNullOrWhiteSpace(connectionString);
 
         services.AddDbContext<MagpieDbContext>(
-            options => MagpieDbContextFactory.ConfigureOptions(
+            (serviceProvider, options) => MagpieDbContextFactory.ConfigureOptions(
                 options,
                 connectionString,
                 defaultScheduleTriggers,
-                defaultEventTriggers));
+                defaultEventTriggers,
+                serviceProvider.GetRequiredService<DatabaseMigrationState>()));
 
         services.TryAddScoped<IDatabaseManagementProvider, SQLiteDatabaseManagementProvider>();
 

@@ -9,14 +9,12 @@ using Magpie.Abstractions;
 using Magpie.Abstractions.Content;
 using Magpie.Abstractions.Repositories;
 using Magpie.Core.Content;
-using Magpie.Core.Jobs;
 using Magpie.Core.Subjects;
 using Magpie.Models;
 using Magpie.Models.Api;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
-using Magpie.Models.Jobs;
 using Magpie.Models.Paging;
 using Magpie.Models.Patch;
 using Magpie.Sdk.Content;
@@ -43,7 +41,6 @@ public sealed class ContentFileServiceTests
     private Mock<IContentRepository> _contentItems = null!;
     private Mock<IAuditRecordRepository> _auditRecords = null!;
     private Mock<ITransactionManager> _transactionManager = null!;
-    private Mock<IJobManager> _jobManager = null!;
     private Dictionary<string, long> _files = null!;
     private RootFolder _rootFolder = null!;
     private ContentHierarchyItem _leaf = null!;
@@ -127,11 +124,6 @@ public sealed class ContentFileServiceTests
         _mediaFiles = new Mock<IMediaFileRepository> { CallBase = true };
         _contentItems = new Mock<IContentRepository> { CallBase = true };
         _auditRecords = new Mock<IAuditRecordRepository> { CallBase = true };
-        _jobManager = new Mock<IJobManager>();
-        _jobManager.Setup(manager => manager.ExecuteAsync(
-                It.IsAny<JobEnqueueRequest>(),
-                It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Guid.NewGuid());
         _transactionManager = new Mock<ITransactionManager>();
         _transactionManager
             .Setup(manager => manager.ExecuteWithTransactionAsync(
@@ -168,7 +160,6 @@ public sealed class ContentFileServiceTests
             _contentItems.Object,
             _auditRecords.Object,
             _transactionManager.Object,
-            _jobManager.Object,
             TimeProvider.System,
             NullLogger<ContentFileService>.Instance);
     }
@@ -1602,15 +1593,6 @@ public sealed class ContentFileServiceTests
             Assert.That(result.Result.MediaFile.FilePath, Is.EqualTo(path));
             Assert.That(contentItem.Fulfillment, Is.EqualTo(FulfillmentStatus.Fulfilled));
             Assert.That(mediaFiles, Has.Count.EqualTo(1));
-            _jobManager.Verify(manager => manager.ExecuteAsync(
-                It.Is<JobEnqueueRequest>(request =>
-                    request.JobType == MagpieJobs.Types.MediaInfoExtractScan &&
-                    request.Mode == JobExecutionMode.Queue &&
-                    request.UserId == actingUserId &&
-                    request.Parameters != null &&
-                    request.Parameters[MagpieJobs.Parameters.ContentHierarchyItemId] == _leaf.Id.ToString("D") &&
-                    request.Parameters[MagpieJobs.Parameters.MediaInfoPolicy] == "All"),
-                It.IsAny<CancellationToken>()), Times.Once);
         }
     }
 
@@ -1930,9 +1912,6 @@ public sealed class ContentFileServiceTests
             _mediaFiles.Verify(repository => repository.CreateAsync(
                 It.IsAny<MediaFile>(),
                 It.IsAny<Guid?>(),
-                It.IsAny<CancellationToken>()), Times.Never);
-            _jobManager.Verify(manager => manager.ExecuteAsync(
-                It.IsAny<JobEnqueueRequest>(),
                 It.IsAny<CancellationToken>()), Times.Never);
         }
     }

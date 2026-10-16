@@ -49,6 +49,7 @@ type MyJobsFilters = JobExecutionFilterState & {
     tab: string;
     rootsOnly: string;
     correlationId: string;
+    originalExecutionId: string;
     [key: string]: string;
 };
 
@@ -58,6 +59,7 @@ const DEFAULT_FILTERS: MyJobsFilters = {
     status: '',
     rootsOnly: '1',
     correlationId: '',
+    originalExecutionId: '',
 };
 
 function specsToTemplateOptions(specs: ReturnType<typeof useJobSpecs>['specs']): TemplateOption[] {
@@ -89,7 +91,8 @@ export function MyJobsPage() {
     });
 
     const activeTab = filters.tab;
-    const rootsOnly = filters.rootsOnly !== '0';
+    const originalExecutionId = filters.originalExecutionId || undefined;
+    const rootsOnly = !originalExecutionId && filters.rootsOnly !== '0';
     const correlationId = filters.correlationId || undefined;
     const executionFilters: JobExecutionFilterState = useMemo(
         () => ({ template: filters.template, status: filters.status }),
@@ -98,7 +101,11 @@ export function MyJobsPage() {
 
     const setActiveTab = useCallback(
         (tab: string) => {
-            setFilters(tab !== 'executions' ? { tab, template: '', status: '', correlationId: '' } : { tab });
+            setFilters(
+                tab !== 'executions'
+                    ? { tab, template: '', status: '', correlationId: '', originalExecutionId: '' }
+                    : { tab },
+            );
         },
         [setFilters],
     );
@@ -117,8 +124,8 @@ export function MyJobsPage() {
         [setFilters],
     );
 
-    const clearCorrelationFilter = useCallback(() => {
-        setFilters({ correlationId: '' });
+    const clearExecutionGroupFilter = useCallback(() => {
+        setFilters({ correlationId: '', originalExecutionId: '' });
     }, [setFilters]);
 
     const { hasPermission, hasRole, user } = useAuth();
@@ -144,8 +151,11 @@ export function MyJobsPage() {
         if (correlationId) {
             params.correlationId = correlationId;
         }
+        if (originalExecutionId) {
+            params.originalExecutionId = originalExecutionId;
+        }
         return params;
-    }, [rootsOnly, correlationId, page, executionFilters.template, executionFilters.status]);
+    }, [rootsOnly, correlationId, originalExecutionId, page, executionFilters.template, executionFilters.status]);
 
     const {
         jobs: userJobs,
@@ -234,7 +244,9 @@ export function MyJobsPage() {
     const totalExecutions = pagination?.totalItems ?? 0;
     const totalPages = Math.max(1, Math.ceil(totalExecutions / EXECUTIONS_PAGE_SIZE));
     const hasActiveFilters =
-        executionFilters.template !== '' || executionFilters.status !== '' || Boolean(correlationId);
+        executionFilters.template !== '' ||
+        executionFilters.status !== '' ||
+        Boolean(correlationId || originalExecutionId);
 
     const handleRefresh = useCallback(async () => {
         await Promise.all([refetchJobs(), schedCrud.refetch(), eventCrud.refetch()]);
@@ -314,15 +326,19 @@ export function MyJobsPage() {
                                 statusOptions={statusFilterOptions}
                                 onChange={setExecutionFilters}
                             />
-                            {correlationId && (
+                            {(correlationId || originalExecutionId) && (
                                 <div className="my-jobs-page__chain-filter" data-control="chain-filter">
-                                    <span className="my-jobs-page__chain-filter-label" title={correlationId}>
-                                        Chain:{' '}
-                                        {correlationId.length > 12 ? `${correlationId.slice(0, 8)}…` : correlationId}
+                                    <span
+                                        className="my-jobs-page__chain-filter-label"
+                                        title={originalExecutionId ?? correlationId}
+                                    >
+                                        {originalExecutionId
+                                            ? 'All attempts'
+                                            : `Chain: ${correlationId!.length > 12 ? `${correlationId!.slice(0, 8)}…` : correlationId}`}
                                     </span>
                                     <ClearFiltersButton
-                                        label="Clear chain filter"
-                                        onClick={clearCorrelationFilter}
+                                        label={originalExecutionId ? 'Clear attempts filter' : 'Clear chain filter'}
+                                        onClick={clearExecutionGroupFilter}
                                         data-action="clear-chain-filter"
                                     />
                                 </div>
@@ -336,6 +352,7 @@ export function MyJobsPage() {
                                     id="my-jobs-page-roots-only"
                                     size="sm"
                                     checked={rootsOnly}
+                                    disabled={Boolean(originalExecutionId)}
                                     onCheckedChange={setRootsOnly}
                                     aria-label="Show top level only"
                                     data-action="toggle-roots-only"

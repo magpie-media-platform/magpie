@@ -184,6 +184,30 @@ public interface IContentFileService
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Places a staged output file for a media file and updates ancestor fulfillment in the same transaction.
+    /// </summary>
+    /// <param name="contentHierarchyItemId">The id of the content hierarchy item</param>
+    /// <param name="mediaFileId">The id of the media file that the output replaces</param>
+    /// <param name="stagedPath">
+    /// The full path of the staged output file, named <c>&lt;outputFileName&gt;.&lt;lineage&gt;.partial</c>
+    /// </param>
+    /// <param name="outputFileName">The file name of the output</param>
+    /// <param name="mediaInfo">The media information of the output</param>
+    /// <param name="actingUserId">The id of the user that replaces the file</param>
+    /// <param name="materializeFulfillmentAsync">The operation that updates ancestor fulfillment</param>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
+    /// <returns>The media file of the output, or <see langword="null"/> when the content item does not exist</returns>
+    Task<MediaFile?> ReplaceAsync(
+        Guid contentHierarchyItemId,
+        Guid mediaFileId,
+        string stagedPath,
+        string outputFileName,
+        MediaInfo mediaInfo,
+        Guid? actingUserId,
+        Func<CancellationToken, Task> materializeFulfillmentAsync,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Reconciles direct fulfillment against the accepted primary files of a content hierarchy item.
     /// </summary>
     /// <param name="contentHierarchyItemId">The id of the content hierarchy item</param>

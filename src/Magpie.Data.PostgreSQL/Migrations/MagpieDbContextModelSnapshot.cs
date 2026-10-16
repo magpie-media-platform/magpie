@@ -196,6 +196,9 @@ namespace Magpie.Data.PostgreSQL.Migrations
                     b.Property<Guid?>("CorrelationId")
                         .HasColumnType("uuid");
 
+                    b.Property<string>("Data")
+                        .HasColumnType("text");
+
                     b.Property<string>("Detail")
                         .HasColumnType("text");
 

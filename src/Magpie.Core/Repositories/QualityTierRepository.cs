@@ -1,15 +1,18 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 
 using Magpie.Abstractions;
 using Magpie.Abstractions.Repositories;
+using Magpie.Core.Events;
 using Magpie.Data;
 using Magpie.Models;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
+using Magpie.Sdk.Services;
 
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
@@ -20,10 +23,30 @@ internal sealed class QualityTierRepository(
     MagpieDbContext context,
     IAuditRecordRepository auditRecordRepository,
     ITransactionManager transactionManager,
+    IEventBus eventBus,
     ILogger<QualityTierRepository> logger,
     TimeProvider timeProvider) : IQualityTierRepository
 {
     private readonly TimeProvider _time = timeProvider;
+
+    private static List<string> ChangedMatchingFields(
+        QualityTier current,
+        QualityTierCriteria criteria,
+        List<QualityTierRule> rules)
+    {
+        var fields = new List<string>();
+        if (JsonSerializer.Serialize(current.Criteria) != JsonSerializer.Serialize(criteria))
+        {
+            fields.Add(nameof(QualityTier.Criteria));
+        }
+
+        if (JsonSerializer.Serialize(current.Rules) != JsonSerializer.Serialize(rules))
+        {
+            fields.Add(nameof(QualityTier.Rules));
+        }
+
+        return fields;
+    }
 
     public async Task<IEnumerable<QualityTier>> ListAllAsync(CancellationToken cancellationToken)
     {
@@ -109,6 +132,15 @@ internal sealed class QualityTierRepository(
                 async _ =>
                 {
                     var now = _time.GetUtcNow().UtcDateTime;
+                    var current = await context.QualityTiers.AsNoTracking()
+                        .FirstOrDefaultAsync(q => q.Id == model.Id, cancellationToken)
+                        .ConfigureAwait(false);
+                    if (current is null)
+                    {
+                        return false;
+                    }
+
+                    var changedFields = ChangedMatchingFields(current, model.Criteria, model.Rules);
                     var updated = await context.QualityTiers
                         .Where(q => q.Id == model.Id)
                         .ExecuteUpdateAsync(
@@ -134,6 +166,15 @@ internal sealed class QualityTierRepository(
                                 Timestamp = now,
                                 UserId = modifiedByUserId
                             },
+                            cancellationToken).ConfigureAwait(false);
+                    }
+
+                    if (updated > 0 && changedFields.Count > 0)
+                    {
+                        await transactionManager.OnCommittedAsync(
+                            token => eventBus.PublishAsync(
+                                ConfigurationEventBuilder.BuildQualityTierUpdatedEvent(model.Id, changedFields),
+                                token),
                             cancellationToken).ConfigureAwait(false);
                     }
 
@@ -226,6 +267,10 @@ internal sealed class QualityTierRepository(
                     }
 
                     var now = _time.GetUtcNow().UtcDateTime;
+                    var changedFields = ChangedMatchingFields(
+                        model,
+                        patch.Criteria?.Value ?? model.Criteria,
+                        patch.Rules?.Value ?? model.Rules);
 
                     if (patch.Name is not null)
                     {
@@ -260,6 +305,15 @@ internal sealed class QualityTierRepository(
                                 Timestamp = now,
                                 UserId = modifiedByUserId
                             },
+                            cancellationToken).ConfigureAwait(false);
+                    }
+
+                    if (updated > 0 && changedFields.Count > 0)
+                    {
+                        await transactionManager.OnCommittedAsync(
+                            token => eventBus.PublishAsync(
+                                ConfigurationEventBuilder.BuildQualityTierUpdatedEvent(patch.Id, changedFields),
+                                token),
                             cancellationToken).ConfigureAwait(false);
                     }
 

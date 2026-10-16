@@ -6,7 +6,7 @@ namespace Magpie.Models;
 /// A release payload that was rejected, so the download client added no download for it.
 /// </summary>
 /// <param name="message">The reason, without URLs, credentials, cookies or passkeys</param>
-/// <param name="transient">Whether the rejection can go away, for example a rate limit or a server error</param>
+/// <param name="transient">Whether the rejection can go away, for example a timeout or a server error</param>
 public sealed class ReleasePayloadRejectedException(string message, bool transient) : Exception(message)
 {
     /// <summary>

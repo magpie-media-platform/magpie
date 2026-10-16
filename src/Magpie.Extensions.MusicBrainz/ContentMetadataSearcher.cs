@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using System.Net.Http;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -105,21 +106,41 @@ internal sealed class ContentMetadataSearcher(
         var exhausted = previousState?.Exhausted.ToArray() ?? new bool[targets.Count];
         var pending = previousState?.Pending.ToList() ?? [];
         var warnings = new List<string>();
+        var answered = pending.Count > 0;
+        Exception? failure = null;
         if (maxResults == 0)
         {
             for (var index = 0; index < targets.Count; index++)
             {
                 progress[index].ValidateOnly = true;
-                var validation = await ExecutePlanAsync(new QueryRequest
+                QueryResult validation;
+                try
                 {
-                    Target = targets[index],
-                    Criteria = metadata,
-                    RequestedPage = 1,
-                    MaxResults = 1,
-                    Settings = settings with { FreshSearch = true },
-                    Progress = progress[index]
-                }, cancellationToken).ConfigureAwait(false);
+                    validation = await ExecutePlanAsync(new QueryRequest
+                    {
+                        Target = targets[index],
+                        Criteria = metadata,
+                        RequestedPage = 1,
+                        MaxResults = 1,
+                        Settings = settings with { FreshSearch = true },
+                        Progress = progress[index]
+                    }, cancellationToken).ConfigureAwait(false);
+                    answered = true;
+                }
+                catch (Exception exception) when (exception is HttpRequestException or JsonException ||
+                    exception is OperationCanceledException && !cancellationToken.IsCancellationRequested)
+                {
+                    failure = exception;
+                    warnings.Add("MusicBrainz could not complete a search target. More results may remain.");
+                    continue;
+                }
+
                 warnings.AddRange(validation.Warnings);
+            }
+
+            if (!answered && failure is not null)
+            {
+                throw new HttpRequestException("MusicBrainz could not complete any search target.", failure);
             }
 
             return new MetadataSearchBatch
@@ -136,15 +157,28 @@ internal sealed class ContentMetadataSearcher(
                 continue;
             }
 
-            var result = await ExecutePlanAsync(new QueryRequest
+            QueryResult result;
+            try
             {
-                Target = targets[index],
-                Criteria = metadata,
-                RequestedPage = 1,
-                MaxResults = Math.Max(1, maxResults - pending.Count),
-                Settings = settings with { FreshSearch = true },
-                Progress = progress[index]
-            }, cancellationToken).ConfigureAwait(false);
+                result = await ExecutePlanAsync(new QueryRequest
+                {
+                    Target = targets[index],
+                    Criteria = metadata,
+                    RequestedPage = 1,
+                    MaxResults = Math.Max(1, maxResults - pending.Count),
+                    Settings = settings with { FreshSearch = true },
+                    Progress = progress[index]
+                }, cancellationToken).ConfigureAwait(false);
+                answered = true;
+            }
+            catch (Exception exception) when (exception is HttpRequestException or JsonException ||
+                exception is OperationCanceledException && !cancellationToken.IsCancellationRequested)
+            {
+                failure = exception;
+                warnings.Add("MusicBrainz could not complete a search target. More results may remain.");
+                continue;
+            }
+
             warnings.AddRange(result.Warnings);
             foreach (var hit in result.Hits)
             {
@@ -155,6 +189,11 @@ internal sealed class ContentMetadataSearcher(
             }
 
             exhausted[index] = !result.PageInfo.HasMore && result.Warnings.Count == 0;
+        }
+
+        if (!answered && failure is not null)
+        {
+            throw new HttpRequestException("MusicBrainz could not complete any search target.", failure);
         }
 
         var matches = pending.Take(maxResults).Select(hit => hit.ToCandidate()).ToArray();
@@ -221,6 +260,9 @@ internal sealed class ContentMetadataSearcher(
         CancellationToken cancellationToken)
     {
         var results = new List<QueryResult>(targets.Count);
+        var warnings = new List<string>();
+        var answered = false;
+        Exception? failure = null;
         var hits = new List<SearchHit>();
         var seen = new HashSet<(QueryTarget Target, string Mbid)>();
         var hasMore = false;
@@ -233,7 +275,10 @@ internal sealed class ContentMetadataSearcher(
                 break;
             }
 
-            var result = await ExecutePlanAsync(
+            QueryResult result;
+            try
+            {
+                result = await ExecutePlanAsync(
                 new QueryRequest
                 {
                     Target = targets[index],
@@ -243,6 +288,16 @@ internal sealed class ContentMetadataSearcher(
                     Settings = settings
                 },
                 cancellationToken).ConfigureAwait(false);
+                answered = true;
+            }
+            catch (Exception exception) when (exception is HttpRequestException or JsonException ||
+                exception is OperationCanceledException && !cancellationToken.IsCancellationRequested)
+            {
+                failure = exception;
+                warnings.Add("MusicBrainz could not complete a search target. More results may remain.");
+                continue;
+            }
+
             results.Add(result);
             hasMore |= result.PageInfo.HasMore;
             foreach (var hit in result.Hits)
@@ -260,13 +315,19 @@ internal sealed class ContentMetadataSearcher(
             }
         }
 
+        if (!answered && failure is not null)
+        {
+            throw new HttpRequestException("MusicBrainz could not complete any search target.", failure);
+        }
+
+        hasMore |= failure is not null;
         var matches = hits.Select(hit => hit.ToCandidate()).ToArray();
         return new MetadataSearchPage
         {
             Supported = results.Any(result => result.Supported),
             Matches = matches,
             PageInfo = new ProviderSearchPageInfo { RequestedPage = requestedPage, HasMore = hasMore },
-            Warnings = [.. results.SelectMany(result => result.Warnings).Distinct()]
+            Warnings = [.. results.SelectMany(result => result.Warnings).Concat(warnings).Distinct()]
         };
     }
 

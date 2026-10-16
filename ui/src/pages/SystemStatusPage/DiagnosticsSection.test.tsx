@@ -346,7 +346,7 @@ describe('DiagnosticsSection', () => {
                     diagnosticCheckId: 'core.health.integrations',
                     severity: 'Warning',
                     title: 'Indexer is degraded',
-                    detail: 'The indexer is rate limited.',
+                    detail: 'The indexer returned a server error.',
                     affectedEntity: 'IndexerConnection:99f4c2b3-1111-2222-3333-444455556666',
                     repairId: null,
                     detectedAt: '2026-05-01T00:00:00Z',

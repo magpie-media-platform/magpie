@@ -147,6 +147,32 @@ internal sealed class DefaultJobRetryPolicy(
         return retry;
     }
 
+    public async Task<JobExecution?> BuildInterruptedRequeueAsync(
+        JobExecution interrupted,
+        bool countsAsAttempt,
+        CancellationToken cancellationToken = default)
+    {
+        var attempt = interrupted.Attempt;
+        if (countsAsAttempt)
+        {
+            var resolvedPolicy = await ResolveAsync(cancellationToken).ConfigureAwait(false);
+            attempt = (interrupted.Attempt ?? 1) + 1;
+            if (attempt > resolvedPolicy.MaxAttempts)
+            {
+                JobsTelemetry.RetryAttemptsExhaustedTotal.Add(
+                    1,
+                    new KeyValuePair<string, object?>("job.type", interrupted.JobType));
+                return null;
+            }
+        }
+
+        var requeue = BuildRequeue(interrupted, interrupted.OriginalExecutionId ?? interrupted.Id);
+        requeue.Attempt = attempt;
+        InjectCurrentTrace(requeue.TriggerContext);
+
+        return requeue;
+    }
+
     private async Task<JobRetryPolicy> ResolveAsync(CancellationToken cancellationToken)
     {
         try

@@ -36,9 +36,6 @@ internal static class Telemetry
     internal static readonly Counter<long> Cache = Meter.CreateCounter<long>(
         "magpie.query.cache");
 
-    internal static readonly Counter<long> Throttled = Meter.CreateCounter<long>(
-        "magpie.query.throttled");
-
     internal static readonly Histogram<int> Results = Meter.CreateHistogram<int>(
         "magpie.query.results");
 }

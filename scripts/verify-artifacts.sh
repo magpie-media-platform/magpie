@@ -28,7 +28,7 @@ fail() {
 magpie() {
     local app="$1"
     shift
-    docker exec --workdir "$app" "$host" "$app/Magpie.App" "$@" > "$work/out" 2> "$work/log"
+    docker exec --workdir "$app" "$host" "$app/magpie" "$@" > "$work/out" 2> "$work/log"
 }
 
 upload() {
@@ -171,7 +171,7 @@ grep -qF "Extension package $fixture_id is built against ABI $next, which is not
 docker exec "$host" mkdir -p /serve
 docker cp - "$host:/serve" < "$app_archive"
 docker exec --detach --workdir /serve --env ASPNETCORE_URLS=http://127.0.0.1:8080 "$host" \
-    bash -c 'echo $$ > /serve/sentinel.pid && exec /serve/Magpie.App sentinel > /serve/out.log 2>&1'
+    bash -c 'echo $$ > /serve/sentinel.pid && exec /serve/magpie sentinel > /serve/out.log 2>&1'
 if ! serves; then
     docker exec "$host" tail -n 50 /serve/out.log >&2
     fail "a new instance of the archive does not serve /api/system/ready"

@@ -42,6 +42,8 @@ internal sealed class QueryExecutor(
 
         public bool Failed { get; set; }
 
+        public bool Answered { get; set; }
+
         public bool Exhausted { get; set; }
 
         public bool HasUnverifiableCriteria { get; set; }
@@ -1104,13 +1106,18 @@ internal sealed class QueryExecutor(
         {
             throw;
         }
-        catch (Exception ex) when (ex is HttpRequestException or TimeoutException or InvalidOperationException)
+        catch (Exception ex) when (ex is HttpRequestException or OperationCanceledException or
+            TimeoutException or InvalidOperationException)
         {
             logger.LogWarning(ex, "Open Library search execution failed");
             execution.Failed = true;
             activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
             activity?.AddException(ex);
             activity?.SetTag("error.type", ex.GetType().FullName);
+            if (!execution.Answered)
+            {
+                throw;
+            }
         }
 
         var hasMore = hits.Count > desired ||
@@ -1634,6 +1641,11 @@ internal sealed class QueryExecutor(
             }
 
             activity?.SetTag("magpie.request.rows", lookup.Found ? 1 : 0);
+            if (execution is not null)
+            {
+                execution.Answered = true;
+            }
+
             return lookup.Author;
         }
         catch (Exception ex)
@@ -1668,6 +1680,7 @@ internal sealed class QueryExecutor(
                 var response = await client.GetJsonAsync<SearchResponseDto>(request, context, cancellationToken)
                     .ConfigureAwait(false)
                     ?? throw new InvalidOperationException("Open Library returned no search response.");
+                execution.Answered = true;
                 return response.ToSourcePage();
             }
 
@@ -1683,6 +1696,7 @@ internal sealed class QueryExecutor(
                 },
                 cancellationToken).ConfigureAwait(false);
             activity?.SetTag("magpie.request.rows", page.SourceRowCount);
+            execution.Answered = true;
             return page;
         }
         catch (Exception ex)
@@ -1731,7 +1745,8 @@ internal sealed class QueryExecutor(
             {
                 throw;
             }
-            catch (Exception ex) when (ex is HttpRequestException or TimeoutException or InvalidOperationException)
+            catch (Exception ex) when (ex is HttpRequestException or OperationCanceledException or
+                TimeoutException or InvalidOperationException)
             {
                 logger.LogWarning(ex, "Open Library author hydration failed for {AuthorOlid}", olid);
                 faulted = true;

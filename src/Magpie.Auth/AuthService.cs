@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Globalization;
 using System.IdentityModel.Tokens.Jwt;
 using System.Linq;
 using System.Security.Cryptography;
@@ -13,13 +12,11 @@ using Magpie.Abstractions;
 using Magpie.Abstractions.Auth;
 using Magpie.Abstractions.Repositories;
 using Magpie.Abstractions.Security;
-using Magpie.Models;
 using Magpie.Models.Authorization;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
 using Magpie.Models.Security;
 using Magpie.Sdk.Auth;
-using Magpie.Sdk.Events;
 using Magpie.Sdk.Services;
 
 using Microsoft.Extensions.Logging;
@@ -31,8 +28,6 @@ internal sealed class AuthService(
     IEnumerable<ICredentialAuthenticationProvider> credentialProviders,
     ITokenService tokenService,
     IUserService userService,
-    IEventBus eventBus,
-    AccountLockoutOptions lockoutOptions,
     TimeProvider timeProvider,
     ILogger<AuthService> logger,
     ITransactionManager transactionManager,
@@ -105,23 +100,6 @@ internal sealed class AuthService(
         }
     }
 
-    private static MagpieEvent BuildUserLockedOut(
-        Guid userId,
-        string username,
-        int failedAttemptCount,
-        DateTime lockedUntil)
-    {
-        var context = new Dictionary<string, string>
-        {
-            [MagpieEvents.Keys.UserId] = userId.ToString("D", CultureInfo.InvariantCulture),
-            [MagpieEvents.Keys.UserUsername] = username ?? string.Empty,
-            [MagpieEvents.Keys.UserFailedAttemptCount] = failedAttemptCount.ToString(CultureInfo.InvariantCulture),
-            [MagpieEvents.Keys.UserLockedUntil] = lockedUntil.ToString("o", CultureInfo.InvariantCulture),
-        };
-
-        return new MagpieEvent(Guid.Empty, MagpieEvents.Names.UserLockedOut, context, default, default, null);
-    }
-
     public async Task<User?> VerifyCredentialsAsync(
         string username,
         string password,
@@ -150,38 +128,11 @@ internal sealed class AuthService(
         string password,
         CancellationToken cancellationToken = default)
     {
-        var wasLocked = false;
-        if (lockoutOptions.Enabled)
-        {
-            var existing = await userService.GetAuthenticationUserAsync(username, cancellationToken)
-                .ConfigureAwait(false);
-            wasLocked = existing?.LockedUntil is { } locked && locked > timeProvider.GetUtcNow().UtcDateTime;
-        }
-
         var user = await VerifyCredentialsAsync(username, password, cancellationToken)
             .ConfigureAwait(false);
 
         if (user is null)
         {
-            if (lockoutOptions.Enabled && !wasLocked)
-            {
-                var current = await userService.GetAuthenticationUserAsync(username, cancellationToken)
-                    .ConfigureAwait(false);
-                if (current?.LockedUntil is { } lockedUntil && lockedUntil > timeProvider.GetUtcNow().UtcDateTime)
-                {
-                    await eventBus
-                        .PublishAsync(
-                            BuildUserLockedOut(
-                                current.Id,
-                                current.Username,
-                                current.FailedLoginAttempts,
-                                lockedUntil),
-                            cancellationToken)
-                        .ConfigureAwait(false);
-                    Telemetry.Lockouts.Add(1);
-                }
-            }
-
             Telemetry.LoginAttempts.Add(1, new KeyValuePair<string, object?>("outcome", "failure"));
             return null;
         }

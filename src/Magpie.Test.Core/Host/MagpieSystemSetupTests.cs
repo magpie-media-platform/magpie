@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Text.Json.Nodes;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -104,6 +105,43 @@ public sealed class MagpieSystemSetupTests
                 configurationPath,
                 true));
         }
+    }
+
+    [Test]
+    public async Task ConfigureDatabaseAsync_WritesTheClusterRolesAndJobList_WhenTheNodeJoinsACluster()
+    {
+        // Arrange
+        var written = new MemoryStream();
+        _fileSystem.Setup(fileSystem => fileSystem.FileExists(It.IsAny<string>())).Returns(false);
+        _fileSystem.Setup(fileSystem => fileSystem.CreateFile(It.IsAny<string>())).Returns(written);
+
+        // Act
+        await _subject.ConfigureDatabaseAsync(
+            "postgresql",
+            "Host=db;Database=magpie",
+            [NodeRole.JobRunner],
+            ["MediaInfoExtractItem"]).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(
+            JsonNode.Parse(written.ToArray())!.ToJsonString(),
+            Is.EqualTo(
+                "{\"Magpie\":{\"Database\":{\"Provider\":\"postgresql\"," +
+                "\"ConnectionString\":\"Host=db;Database=magpie\"}," +
+                "\"Cluster\":{\"Mode\":\"MultiNodeSharedExtensions\",\"Roles\":[\"JobRunner\"]}}," +
+                "\"Jobs\":{\"JobTypes\":[\"MediaInfoExtractItem\"]}}"));
+    }
+
+    [Test]
+    public void ConfigureDatabaseAsync_Throws_WhenANodeJoinsAClusterOnSqlite()
+    {
+        // Act
+        // Assert
+        Assert.That(
+            async () => await _subject.ConfigureDatabaseAsync("sqlite", null, [NodeRole.JobRunner], [])
+                .ConfigureAwait(false),
+            Throws.TypeOf<MagpieException>()
+                .With.Message.EqualTo("A cluster requires the postgresql or sqlserver provider."));
     }
 
     [TestCase("postgresql")]

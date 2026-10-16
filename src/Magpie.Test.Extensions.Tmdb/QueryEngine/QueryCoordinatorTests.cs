@@ -399,6 +399,52 @@ public class QueryCoordinatorTests
     }
 
     [Test]
+    public async Task GetSubjectResolutionsAsync_DoesNotCachePartialFailure_WhenSomeSubjectsResolved()
+    {
+        // Arrange
+        var cache = new QueryCoordinator(_scopeFactory, Mock.Of<IHostApplicationLifetime>());
+        var calls = 0;
+
+        // Act
+        var first = await cache.GetSubjectResolutionsAsync(
+            "company|contains|regency",
+            0,
+            (_, _) =>
+            {
+                calls++;
+                return Task.FromResult<IReadOnlyList<SubjectResolution>>(
+                [
+                    new SubjectResolution
+                    {
+                        Kind = SubjectResolutionKind.Resolved,
+                        Id = 508,
+                        Name = "Regency Enterprises",
+                        Incomplete = true
+                    },
+                    new SubjectResolution { Kind = SubjectResolutionKind.Failed }
+                ]);
+            },
+            default).ConfigureAwait(false);
+        var second = await cache.GetSubjectResolutionsAsync(
+            "company|contains|regency",
+            0,
+            (_, _) =>
+            {
+                calls++;
+                return Task.FromResult<IReadOnlyList<SubjectResolution>>([]);
+            },
+            default).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(calls, Is.EqualTo(2));
+            Assert.That(first, Has.Count.EqualTo(2));
+            Assert.That(second, Is.Empty);
+        }
+    }
+
+    [Test]
     public async Task GetSubjectResolutionAsync_KeepsTheSharedLoadRunning_WhenOneWaiterCancels()
     {
         // Arrange

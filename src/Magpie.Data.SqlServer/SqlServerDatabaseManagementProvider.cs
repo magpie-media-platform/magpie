@@ -138,6 +138,13 @@ internal sealed class SqlServerDatabaseManagementProvider(
         return [.. applied];
     }
 
+    public async Task<IReadOnlyCollection<string>> GetUnknownMigrationsAsync(
+        CancellationToken cancellationToken = default)
+    {
+        var applied = await context.Database.GetAppliedMigrationsAsync(cancellationToken).ConfigureAwait(false);
+        return [.. applied.Except(context.Database.GetMigrations(), StringComparer.Ordinal)];
+    }
+
     public async Task<string> BackupAsync(BackupCreateOptions options, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(options);

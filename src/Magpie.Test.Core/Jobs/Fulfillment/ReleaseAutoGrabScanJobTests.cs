@@ -28,8 +28,6 @@ public sealed class ReleaseAutoGrabScanJobTests
 {
     private readonly IProgressReporter _progressReporter = Mock.Of<IProgressReporter>();
 
-    private const int DefaultBackpressureThreshold = 50;
-
     private Mock<IJobManager> _jobManager = null!;
     private Mock<IJobExecutionRepository> _jobExecutionRepository = null!;
     private Mock<IContentHierarchyItemRepository> _hierarchyRepository = null!;
@@ -293,218 +291,65 @@ public sealed class ReleaseAutoGrabScanJobTests
         }
     }
 
-    [Test]
-    public async Task ExecuteAsync_Bails_WhenReleaseAcquisitionBacklogIsOlderThanOneHour()
+    [TestCase(JobExecutionStatus.Queued, false, "ReleaseSearchItem")]
+    [TestCase(JobExecutionStatus.Running, false, "ReleaseSearchItem")]
+    [TestCase(JobExecutionStatus.Queued, true, "ReleaseAutoGrabItem")]
+    [TestCase(JobExecutionStatus.Running, true, "ReleaseAutoGrabItem")]
+    public async Task ExecuteAsync_QueuesEligibleWork_WhenManyDownloadsAreAlreadyActive(
+        JobExecutionStatus status,
+        bool previouslySearched,
+        string expectedJobType)
     {
         // Arrange
-        _hierarchyRepository
-            .Setup(r => r.QueryAsync(
-                It.Is<ContentHierarchyItemCriteria>(c => c.AfterId == null),
-                It.IsAny<PagingParameter>(),
-                It.IsAny<SortParameter?>(),
-                It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new PagedList<ContentHierarchyItem>
-            {
-                Items =
-                [
-                    new ContentHierarchyItem
-                    {
-                        Id = Guid.NewGuid(),
-                        ContentType = "movie",
-                        Level = "movie",
-                        Slug = "x",
-                        Name = "X",
-                        EffectiveMonitoring = MonitoringMode.Monitored,
-                        ContentItem = new ContentItem
-                        {
-                            Id = Guid.NewGuid(),
-                            Fulfillment = FulfillmentStatus.Missing,
-                            DateLastSearched = DateTime.UtcNow.AddDays(-1)
-                        }
-                    }
-                ]
-            });
-        var rows = Enumerable.Range(0, DefaultBackpressureThreshold + 1)
-            .Select(_ => new JobExecution
-            {
-                JobType = "ReleaseDownloadItem",
-                Scope = JobScope.System,
-                Status = JobExecutionStatus.Queued,
-                CreatedAt = DateTime.UtcNow.AddHours(-2)
-            })
-            .ToList();
-        _jobExecutionRepository
-            .Setup(r => r.QueryAsync(
-                It.IsAny<JobExecutionQuery>(),
-                It.IsAny<PagingParameter>(),
-                It.IsAny<SortParameter?>(),
-                It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new PagedList<JobExecution> { Items = rows, TotalItems = rows.Count });
-
-        // Act
-        await _subject.ExecuteAsync(_jobContext).ConfigureAwait(false);
-
-        // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            _jobExecutionRepository.Verify(
-                r => r.QueryAsync(
-                    It.Is<JobExecutionQuery>(q =>
-                        q.JobType == "ReleaseDownloadItem" &&
-                        q.Timestamp == null),
-                    It.IsAny<PagingParameter>(),
-                    It.IsAny<SortParameter?>(),
-                    It.IsAny<CancellationToken>()),
-                Times.Once);
-            _jobManager.Verify(
-                m => m.ExecuteAsync(It.IsAny<JobEnqueueRequest>(), It.IsAny<CancellationToken>()),
-                Times.Never);
-        }
-    }
-
-    [Test]
-    public async Task ExecuteAsync_Bails_WhenReleaseAcquisitionBacklogExceedsThreshold()
-    {
-        // Arrange
-        _hierarchyRepository
-            .Setup(r => r.QueryAsync(
-                It.Is<ContentHierarchyItemCriteria>(c => c.AfterId == null),
-                It.IsAny<PagingParameter>(),
-                It.IsAny<SortParameter?>(),
-                It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new PagedList<ContentHierarchyItem>
-            {
-                Items =
-                [
-                    new ContentHierarchyItem
-                    {
-                        Id = Guid.NewGuid(),
-                        ContentType = "movie",
-                        Level = "movie",
-                        Slug = "x",
-                        Name = "X",
-                        EffectiveMonitoring = MonitoringMode.Monitored,
-                        ContentItem = new ContentItem
-                        {
-                            Id = Guid.NewGuid(),
-                            Fulfillment = FulfillmentStatus.Missing,
-                            DateLastSearched = DateTime.UtcNow.AddDays(-1)
-                        }
-                    }
-                ]
-            });
-        var rows = Enumerable.Range(0, DefaultBackpressureThreshold + 1)
-            .Select(_ => new JobExecution
-            {
-                JobType = "ReleaseDownloadItem",
-                Scope = JobScope.System,
-                Status = JobExecutionStatus.Queued,
-                CreatedAt = DateTime.UtcNow
-            })
-            .ToList();
-        _jobExecutionRepository
-            .Setup(r => r.QueryAsync(
-                It.IsAny<JobExecutionQuery>(),
-                It.IsAny<PagingParameter>(),
-                It.IsAny<SortParameter?>(),
-                It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new PagedList<JobExecution> { Items = rows, TotalItems = rows.Count });
-
-        // Act
-        await _subject.ExecuteAsync(_jobContext).ConfigureAwait(false);
-
-        // Assert
-        _jobManager.Verify(
-            m => m.ExecuteAsync(It.IsAny<JobEnqueueRequest>(), It.IsAny<CancellationToken>()),
-            Times.Never);
-    }
-
-    [Test]
-    public async Task ExecuteAsync_Bails_WhenReleaseAcquisitionBacklogExceedsAThresholdAboveThePageSizeLimit()
-    {
-        // Arrange
-        var context = _jobContext with
-        {
-            Parameters = new Dictionary<string, string> { ["backpressureThreshold"] = "2000" }
-        };
-        _jobExecutionRepository
-            .Setup(r => r.QueryAsync(
-                It.IsAny<JobExecutionQuery>(),
-                It.IsAny<PagingParameter>(),
-                It.IsAny<SortParameter?>(),
-                It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new PagedList<JobExecution> { TotalItems = 2001 });
-
-        // Act
-        await _subject.ExecuteAsync(context).ConfigureAwait(false);
-
-        // Assert
-        _jobManager.Verify(
-            m => m.ExecuteAsync(It.IsAny<JobEnqueueRequest>(), It.IsAny<CancellationToken>()),
-            Times.Never);
-    }
-
-    [Test]
-    public async Task ExecuteAsync_ProceedsWithFanOut_WhenReleaseAcquisitionBacklogIsAtThreshold()
-    {
-        // Arrange
+        var hierarchyId = Guid.NewGuid();
         var contentItemId = Guid.NewGuid();
         _hierarchyRepository
-            .Setup(r => r.QueryAsync(
-                It.Is<ContentHierarchyItemCriteria>(c => c.AfterId == null),
+            .Setup(repository => repository.QueryAsync(
+                It.Is<ContentHierarchyItemCriteria>(criteria => criteria.AfterId == null),
                 It.IsAny<PagingParameter>(),
                 It.IsAny<SortParameter?>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(new PagedList<ContentHierarchyItem>
             {
-                Items =
-                [
-                    new ContentHierarchyItem
+                Items = [new ContentHierarchyItem
+                {
+                    Id = hierarchyId,
+                    ContentType = "movie",
+                    Level = "movie",
+                    Slug = "movie",
+                    Name = "Movie",
+                    EffectiveMonitoring = MonitoringMode.Monitored,
+                    ContentItem = new ContentItem
                     {
-                        Id = Guid.NewGuid(),
-                        ContentType = "movie",
-                        Level = "movie",
-                        Slug = "x",
-                        Name = "X",
-                        EffectiveMonitoring = MonitoringMode.Monitored,
-                        ContentItem = new ContentItem
-                        {
-                            Id = contentItemId,
-                            Fulfillment = FulfillmentStatus.Missing,
-                            DateLastSearched = DateTime.UtcNow.AddDays(-1)
-                        }
+                        Id = contentItemId,
+                        ContentHierarchyItemId = hierarchyId,
+                        Fulfillment = FulfillmentStatus.Missing,
+                        DateLastSearched = previouslySearched ? DateTime.UtcNow.AddDays(-1) : null
                     }
-                ]
+                }]
             });
-        var rows = Enumerable.Range(0, DefaultBackpressureThreshold)
-            .Select(_ => new JobExecution
-            {
-                JobType = "ReleaseDownloadItem",
-                Scope = JobScope.System,
-                Status = JobExecutionStatus.Queued,
-                CreatedAt = DateTime.UtcNow
-            })
-            .ToList();
         _jobExecutionRepository
-            .Setup(r => r.QueryAsync(
+            .Setup(repository => repository.QueryAsync(
                 It.IsAny<JobExecutionQuery>(),
                 It.IsAny<PagingParameter>(),
                 It.IsAny<SortParameter?>(),
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new PagedList<JobExecution> { Items = rows, TotalItems = rows.Count });
+            .ReturnsAsync(new PagedList<JobExecution>
+            {
+                Items = [new JobExecution { JobType = "ReleaseDownloadItem", Status = status }],
+                TotalItems = 2001
+            });
 
         // Act
         await _subject.ExecuteAsync(_jobContext).ConfigureAwait(false);
 
         // Assert
-        _jobManager.Verify(
-            m => m.ExecuteAsync(
-                It.Is<JobEnqueueRequest>(r =>
-                    r.JobType == "ReleaseAutoGrabItem" &&
-                    r.Parameters != null &&
-                    r.Parameters["contentItemId"] == contentItemId.ToString()),
-                It.IsAny<CancellationToken>()),
-            Times.Once);
+        _jobManager.Verify(manager => manager.ExecuteAsync(
+            It.Is<JobEnqueueRequest>(request =>
+                request.JobType == expectedJobType &&
+                request.Mode == JobExecutionMode.Queue &&
+                request.UserId == _userId),
+            It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Test]

@@ -28,7 +28,7 @@ internal sealed class RetentionCleanupJob(
     {
         JobType = MagpieJobs.Types.RetentionCleanup,
         DisplayName = "Retention cleanup",
-        Description = "Deletes old job history, activity records, and releases based on retention settings.",
+        Description = "Deletes old job history, activity records, and releases.",
         Category = "System",
         Scope = JobScope.Administrative,
         Enabled = true,

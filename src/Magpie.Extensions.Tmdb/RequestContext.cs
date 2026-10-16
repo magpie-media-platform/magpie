@@ -14,5 +14,7 @@ internal sealed record RequestContext
 
     internal QueryTelemetry? Telemetry { get; init; }
 
+    internal QueryExecutionDiagnostics? Diagnostics { get; init; }
+
     internal int? PlanNodeId { get; init; }
 }

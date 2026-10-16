@@ -22,7 +22,6 @@ public class CredentialTimingEqualizationTests
 {
     private Mock<IUserService> _userService = null!;
     private Mock<IUserRepository> _userRepository = null!;
-    private Mock<IEventBus> _eventBus = null!;
     private LocalCredentialAuthenticationProvider _subject = null!;
 
     [SetUp]
@@ -30,7 +29,6 @@ public class CredentialTimingEqualizationTests
     {
         _userService = new Mock<IUserService>();
         _userRepository = new Mock<IUserRepository>();
-        _eventBus = new Mock<IEventBus>();
         _userService
             .Setup(s => s.VerifyPasswordAsync(It.IsAny<User>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(false);
@@ -46,7 +44,6 @@ public class CredentialTimingEqualizationTests
             _userService.Object,
             _userRepository.Object,
             options,
-            _eventBus.Object,
             TimeProvider.System,
             NullLogger<LocalCredentialAuthenticationProvider>.Instance);
     }

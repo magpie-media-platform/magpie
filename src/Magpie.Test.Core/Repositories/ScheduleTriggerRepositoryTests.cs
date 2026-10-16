@@ -469,63 +469,6 @@ public sealed class ScheduleTriggerRepositoryTests
     }
 
     [Test]
-    public async Task UpdateAsync_UpdatesTrigger_WhenExists()
-    {
-        // Arrange
-        var trigger = new ScheduleTrigger
-        {
-            Name = "OriginalTrigger",
-            JobType = "OriginalJob",
-            Scope = JobScope.System,
-            Schedule = "0 0 * * *",
-            Enabled = true,
-            CreatedAt = DateTime.UtcNow
-        };
-        _context.ScheduleTriggers.Add(trigger);
-        await _context.SaveChangesAsync().ConfigureAwait(false);
-
-        trigger.Name = "UpdatedTrigger";
-        trigger.Schedule = "0 12 * * *";
-        trigger.Enabled = false;
-
-        // Act
-        var result = await _subject.UpdateAsync(trigger, _userId).ConfigureAwait(false);
-
-        // Assert
-        Assert.That(result, Is.True);
-
-        var updated = await _subject.GetByIdAsync(trigger.Id).ConfigureAwait(false);
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(updated, Has.Property(nameof(updated.Name)).EqualTo("UpdatedTrigger"));
-            Assert.That(updated, Has.Property(nameof(updated.Schedule)).EqualTo("0 12 * * *"));
-            Assert.That(updated, Has.Property(nameof(updated.Enabled)).False);
-            Assert.That(updated, Has.Property(nameof(updated.ModifiedByUserId)).EqualTo(_userId));
-        }
-    }
-
-    [Test]
-    public async Task UpdateAsync_ReturnsFalse_WhenNotExists()
-    {
-        // Arrange
-        var trigger = new ScheduleTrigger
-        {
-            Id = Guid.NewGuid(),
-            Name = "NonExistent",
-            JobType = "Job",
-            Scope = JobScope.System,
-            Schedule = "0 0 * * *",
-            Enabled = true
-        };
-
-        // Act
-        var result = await _subject.UpdateAsync(trigger, _userId).ConfigureAwait(false);
-
-        // Assert
-        Assert.That(result, Is.False);
-    }
-
-    [Test]
     public async Task DeleteAsync_DeletesTrigger_WhenExists()
     {
         // Arrange
@@ -687,7 +630,7 @@ public sealed class ScheduleTriggerRepositoryTests
             Assert.That(patched!.NextRunAt, Is.EqualTo(new DateTime(2026, 8, 5, 12, 0, 0, DateTimeKind.Utc)));
             Assert.That(
                 published.Context["scheduleTrigger.changedFields"],
-                Is.EqualTo("nextRunAt"));
+                Is.EqualTo("NextRunAt"));
         }
     }
 

@@ -43,6 +43,11 @@ public record AuditRecord
     public string? Detail { get; set; }
 
     /// <summary>
+    /// The JSON data of the audited operation.
+    /// </summary>
+    public string? Data { get; set; }
+
+    /// <summary>
     /// The UTC time of the audited operation.
     /// </summary>
     public DateTime Timestamp { get; set; }

@@ -85,6 +85,29 @@ public interface ILibraryImportCandidateRepository :
         CancellationToken cancellationToken);
 
     /// <summary>
+    /// Deletes every import candidate of a root folder, whatever its status.
+    /// </summary>
+    /// <param name="rootFolderId">The id of the root folder that owns the candidates</param>
+    /// <param name="deletedByUserId">
+    /// The id of the user that deletes the records, or <c>null</c> when no user started it.
+    /// </param>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
+    /// <returns>The number of records that the delete removed</returns>
+    Task<int> DeleteAllByRootFolderAsync(
+        Guid rootFolderId,
+        Guid? deletedByUserId,
+        CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Invalidates the pending candidates whose files are outside every root folder.
+    /// </summary>
+    /// <param name="modifiedByUserId">
+    /// The id of the user that changes the records, or <c>null</c> when no user started it.
+    /// </param>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
+    Task InvalidateOutsideRootFoldersAsync(Guid? modifiedByUserId, CancellationToken cancellationToken);
+
+    /// <summary>
     /// Claims a pending or failed candidate and moves it to <see cref="LibraryImportCandidateStatus.Queued"/>.
     /// </summary>
     /// <param name="candidateId">The id of the import candidate</param>

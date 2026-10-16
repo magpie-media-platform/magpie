@@ -162,7 +162,7 @@ public sealed class DownloadCapacityRecoveryTests
         _contentService = contentService;
         contentService.Setup(service => service.GetOrCreateContentItemAsync(node.Id, It.IsAny<DateTime>(),
             It.IsAny<Guid?>(), null, It.IsAny<CancellationToken>())).ReturnsAsync(content);
-        var scopes = new DownloadScopeRepository(_context, transactions, audits,
+        var scopes = new DownloadScopeRepository(_context, transactions, audits, _downloads,
             NullLogger<DownloadScopeRepository>.Instance, _time);
         var media = new MediaFileRepository(_context, NullLogger<MediaFileRepository>.Instance, transactions,
             contents.Object, nodes.Object, events);

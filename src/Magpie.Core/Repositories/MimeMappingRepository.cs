@@ -103,7 +103,9 @@ internal sealed class MimeMappingRepository(
             {
                 await transactionManager.OnCommittedAsync(
                     token => eventBus.PublishAsync(
-                        MimeMappingEventBuilder.BuildMimeMappingUpdatedEvent(model.Extension, ["mimeType"]),
+                        MimeMappingEventBuilder.BuildMimeMappingUpdatedEvent(
+                            model.Extension,
+                            [nameof(MimeMapping.MimeType)]),
                         token),
                     cancellationToken).ConfigureAwait(false);
             }

@@ -36,7 +36,7 @@ internal sealed class WishlistRefreshItemJob(
     {
         JobType = MagpieJobs.Types.WishlistRefreshItem,
         DisplayName = "Wishlist refresh item",
-        Description = "Searches all metadata sources for one wishlist and adds new matches to the library.",
+        Description = "Finds new matches for a wishlist and adds them to the library.",
         Category = "Content",
         Scope = JobScope.Administrative,
         Enabled = true,

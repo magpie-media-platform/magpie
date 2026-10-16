@@ -203,16 +203,6 @@ internal sealed class DefaultJobScheduleDiagnostic(
             MissingDefaultJobRepair.Id);
     }
 
-    private static DiagnosticFinding UnboundEventTriggerFinding(EventTrigger trigger, EventTrigger entry)
-    {
-        return Warning(
-            $"Event trigger {trigger.Name} has no parameters",
-            $"The built-in {trigger.JobType} event trigger has no parameters, and the built-in trigger binds " +
-            $"{string.Join(", ", entry.Parameters.Keys)}.",
-            JobDiagnosticAffectedEntityPrefixes.EventTrigger + trigger.Id,
-            MissingDefaultJobRepair.Id);
-    }
-
     private static DiagnosticFinding DisabledEventTriggerFinding(EventTrigger trigger)
     {
         return Warning(
@@ -727,7 +717,7 @@ internal sealed class DefaultJobScheduleDiagnostic(
                 group => group.OrderBy(trigger => trigger.CreatedAt).ThenBy(trigger => trigger.Id).ToList(),
                 StringComparer.Ordinal);
 
-        foreach (var entry in DefaultJobTriggerCatalog.EventTriggers)
+        foreach (var entry in DefaultJobTriggerCatalog.EventTriggers.DistinctBy(entry => entry.JobType))
         {
             cancellationToken.ThrowIfCancellationRequested();
 
@@ -741,10 +731,6 @@ internal sealed class DefaultJobScheduleDiagnostic(
             {
                 findings.Add(DisabledEventTriggerFinding(triggers[0]));
             }
-
-            findings.AddRange(triggers
-                .Where(trigger => MissingDefaultJobRepair.IsUnboundDefaultEventTrigger(trigger, entry))
-                .Select(trigger => UnboundEventTriggerFinding(trigger, entry)));
         }
 
         var referencedJobTypes = triggersByJobType.Values

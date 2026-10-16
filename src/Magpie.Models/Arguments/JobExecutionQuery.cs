@@ -61,6 +61,11 @@ public sealed record JobExecutionQuery
     public Guid? CorrelationId { get; init; }
 
     /// <summary>
+    /// The original execution id to match, including that execution and its retry attempts.
+    /// </summary>
+    public Guid? OriginalExecutionId { get; init; }
+
+    /// <summary>
     /// Whether to match only root executions.
     /// </summary>
     public bool RootsOnly { get; init; }

@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 
 using Magpie.Abstractions.Repositories;
@@ -10,6 +12,7 @@ using Magpie.Data.SQLite;
 using Magpie.Models;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
+using Magpie.Sdk.Events;
 using Magpie.Sdk.Services;
 
 using Microsoft.Data.Sqlite;
@@ -31,6 +34,8 @@ public sealed class ContentRepositoryTests
     private IContentRepository _subject = null!;
     private FakeTimeProvider _time = null!;
     private ContentHierarchyItem _hierarchyItem = null!;
+    private List<MagpieEvent> _events = null!;
+    private bool _publishedInTransaction;
 
     [OneTimeSetUp]
     public void CreateTemplate()
@@ -82,10 +87,20 @@ public sealed class ContentRepositoryTests
                 new() { Slug = "episode", DisplayName = "Episode", CustomMetadataFields = [] }
             ]
         });
+        _events = [];
+        _publishedInTransaction = false;
+        var eventBus = new Mock<IEventBus>();
+        eventBus.Setup(bus => bus.PublishAsync(It.IsAny<MagpieEvent>(), It.IsAny<CancellationToken>()))
+            .Callback((MagpieEvent magpieEvent, CancellationToken _) =>
+            {
+                _events.Add(magpieEvent);
+                _publishedInTransaction |= _context.Database.CurrentTransaction is not null;
+            })
+            .Returns(Task.CompletedTask);
         _subject = new ContentRepository(
             _context,
             new TransactionManager(_context, NullLogger<TransactionManager>.Instance),
-            Mock.Of<IEventBus>(),
+            eventBus.Object,
             _time,
             NullLogger<ContentRepository>.Instance, registry.Object,
             Mock.Of<IFileSystem>(), Mock.Of<IAuditRecordRepository>());
@@ -227,6 +242,68 @@ public sealed class ContentRepositoryTests
         Assert.That(
             (await _subject.GetByIdAsync(item.Id).ConfigureAwait(false))!.FulfilledAt,
             Is.Null);
+    }
+
+    [Test]
+    public async Task UpdateAsync_PublishesTheChangedFieldsAfterCommit_WhenTheQualityStatusChanges()
+    {
+        // Arrange
+        var item = new ContentItem
+        {
+            ContentHierarchyItemId = _hierarchyItem.Id,
+            Fulfillment = FulfillmentStatus.Fulfilled,
+            QualityStatus = QualityStatus.Met,
+            CreatedAt = DateTime.UtcNow
+        };
+        _context.ContentItems.Add(item);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        item.QualityStatus = QualityStatus.UpgradeWanted;
+
+        // Act
+        await _subject.UpdateAsync(item, null).ConfigureAwait(false);
+
+        // Assert
+        var published = _events.Single();
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(_publishedInTransaction, Is.False);
+            Assert.That(published.Name, Is.EqualTo(MagpieEvents.Names.ContentHierarchyItemUpdated));
+            Assert.That(published.Context[MagpieEvents.Keys.ContentHierarchyItemId],
+                Is.EqualTo(_hierarchyItem.Id.ToString("D")));
+            Assert.That(published.Context[MagpieEvents.Keys.ContentChangedFields], Is.EqualTo("QualityStatus"));
+        }
+    }
+
+    [Test]
+    public async Task UpdateMediaStateAsync_PublishesTheChangedFieldsAfterCommit_WhenTheQualityChanges()
+    {
+        // Arrange
+        var item = new ContentItem
+        {
+            ContentHierarchyItemId = _hierarchyItem.Id,
+            Fulfillment = FulfillmentStatus.Fulfilled,
+            QualityStatus = QualityStatus.UpgradeWanted,
+            CurrentFileQualityRank = 2,
+            PrimaryMediaFileCount = 1,
+            CreatedAt = DateTime.UtcNow
+        };
+        _context.ContentItems.Add(item);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        // Act
+        await _subject.UpdateMediaStateAsync(
+            item with { QualityStatus = QualityStatus.Met, CurrentFileQualityRank = 1 },
+            null).ConfigureAwait(false);
+
+        // Assert
+        var published = _events.Single();
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(_publishedInTransaction, Is.False);
+            Assert.That(published.Name, Is.EqualTo(MagpieEvents.Names.ContentHierarchyItemUpdated));
+            Assert.That(published.Context[MagpieEvents.Keys.ContentChangedFields],
+                Is.EqualTo("QualityStatus,CurrentFileQualityRank"));
+        }
     }
 
     [Test]

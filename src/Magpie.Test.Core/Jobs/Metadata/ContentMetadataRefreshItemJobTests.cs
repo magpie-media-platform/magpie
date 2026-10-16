@@ -56,9 +56,6 @@ public sealed class ContentMetadataRefreshItemJobTests
         yield return new TestCaseData(
             new OperationCanceledException(new CancellationToken(true)),
             new CancellationToken(true));
-        yield return new TestCaseData(
-            new UpstreamThrottledException(new DateTimeOffset(2099, 1, 1, 0, 0, 0, TimeSpan.Zero)),
-            CancellationToken.None);
     }
 
     public static IEnumerable<TestCaseData> WaitingImports()
@@ -298,7 +295,7 @@ public sealed class ContentMetadataRefreshItemJobTests
     }
 
     [Test]
-    public void ExecuteAsync_SavesHealthyMetadataBeforeDeferral_WhenAnotherProviderThrottles()
+    public async Task ExecuteAsync_SavesHealthyMetadata_WhenAnotherProviderFails()
     {
         // Arrange
         var healthy = new Mock<IContentHierarchyMetadataProvider>();
@@ -310,26 +307,24 @@ public sealed class ContentMetadataRefreshItemJobTests
             {
                 Contribution = new MetadataContribution { ProviderType = "healthy", Title = "The Matrix" }
             });
-        var throttled = new Mock<IContentHierarchyMetadataProvider>();
-        throttled.SetupGet(provider => provider.ProviderType).Returns("throttled");
-        throttled.SetupGet(provider => provider.SupportedContentTypes).Returns(["movie"]);
-        throttled.Setup(provider => provider.TryGetMetadataAsync(
+        var failing = new Mock<IContentHierarchyMetadataProvider>();
+        failing.SetupGet(provider => provider.ProviderType).Returns("failing");
+        failing.SetupGet(provider => provider.SupportedContentTypes).Returns(["movie"]);
+        failing.Setup(provider => provider.TryGetMetadataAsync(
                 It.IsAny<MetadataFetchRequest>(), It.IsAny<CancellationToken>()))
-            .ThrowsAsync(new UpstreamThrottledException(new DateTimeOffset(2027, 1, 1, 0, 0, 0, TimeSpan.Zero)));
+            .ThrowsAsync(new InvalidOperationException("Provider unavailable."));
         var subject = new ContentMetadataRefreshItemJob(
-            [healthy.Object, throttled.Object], _contentRepository.Object, _containerRepository.Object,
+            [healthy.Object, failing.Object], _contentRepository.Object, _containerRepository.Object,
             _subjectRepository.Object, _eventBus.Object, _contentTypeRegistry.Object, _transactionManager.Object,
             _jobManager.Object, Mock.Of<ILibraryImportCandidateRepository>(), _subjectKindRegistry.Object,
             TimeProvider.System, NullLogger<ContentMetadataRefreshItemJob>.Instance, _progressReporter);
 
         // Act
-        var result = Assert.ThrowsAsync<UpstreamThrottledException>(() =>
-            subject.ExecuteAsync(_jobContext));
+        await subject.ExecuteAsync(_jobContext).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(result!.RetryAt, Is.EqualTo(new DateTimeOffset(2027, 1, 1, 0, 0, 0, TimeSpan.Zero)));
             _containerRepository.Verify(repository => repository.AddContributionAsync(_containerId,
                 It.Is<MetadataContribution>(value => value.ProviderType == "healthy" && value.Title == "The Matrix"),
                 It.IsAny<Guid?>(), It.IsAny<CancellationToken>()), Times.Once);

@@ -2,6 +2,7 @@ import type { SetupStatus } from '@/lib/setupApi';
 
 export type SetupStepId =
     | 'db'
+    | 'join'
     | 'admin'
     | 'extensions'
     | 'metadata'
@@ -23,8 +24,11 @@ export const SETUP_STEP_ORDER: readonly SetupStepId[] = [
     'done',
 ] as const;
 
+const databaseStep = (instanceName: string) => `Database ${instanceName} will use.`;
+
 export const SETUP_STEPS: Record<SetupStepId, (instanceName: string) => string> = {
-    db: (instanceName) => `Database ${instanceName} will use.`,
+    db: databaseStep,
+    join: databaseStep,
     admin: () => 'Create the first administrator account to get started.',
     extensions: () => 'Install extensions.',
     metadata: (instanceName) => `Provide API keys so ${instanceName} can fetch art and details.`,

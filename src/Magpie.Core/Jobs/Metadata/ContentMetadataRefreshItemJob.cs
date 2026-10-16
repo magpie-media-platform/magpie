@@ -63,7 +63,7 @@ internal sealed class ContentMetadataRefreshItemJob(
     {
         JobType = MagpieJobs.Types.ContentMetadataRefreshItem,
         DisplayName = "Content metadata refresh item",
-        Description = "Refreshes metadata for one content item.",
+        Description = "Refreshes the metadata of a content item.",
         Category = "Content",
         Scope = JobScope.Content,
         Enabled = true,
@@ -569,7 +569,6 @@ internal sealed class ContentMetadataRefreshItemJob(
 
         var fetchResults = await Task.WhenAll(providerTasks).ConfigureAwait(false);
         var fetchByProvider = fetchResults.ToDictionary(r => r.Provider);
-        var throttles = fetchResults.Select(result => result.Exception).OfType<UpstreamThrottledException>().ToList();
 
         var replacements = new List<ContributionReplacement>();
         var childDefinitions = new List<ProviderChildDefinition>();
@@ -642,11 +641,6 @@ internal sealed class ContentMetadataRefreshItemJob(
                     {
                         throw;
                     }
-                    catch (UpstreamThrottledException ex)
-                    {
-                        throttles.Add(ex);
-                        continue;
-                    }
                     catch (Exception ex)
                     {
                         expandActivity?.SetStatus(ActivityStatusCode.Error, ex.Message);
@@ -673,11 +667,6 @@ internal sealed class ContentMetadataRefreshItemJob(
         }
 
         cancellationToken.ThrowIfCancellationRequested();
-        if (throttles.Count > 0 && replacements.Count == 0 && childDefinitions.Count == 0)
-        {
-            throw new UpstreamThrottledException(throttles.Max(throttle => throttle.RetryAt));
-        }
-
         var resolvedTitle = ResolveCanonicalTitle(existingContributions);
         var resolvedYear = existingContributions
             .OrderBy(c => c.Ordinal)
@@ -692,11 +681,6 @@ internal sealed class ContentMetadataRefreshItemJob(
         var onlyFailuresReturned = anyProviderFailed && replacements.Count == 0 && childDefinitions.Count == 0;
         if (stillPlaceholder || onlyFailuresReturned)
         {
-            if (throttles.Count > 0)
-            {
-                throw new UpstreamThrottledException(throttles.Max(throttle => throttle.RetryAt));
-            }
-
             if (providers.Length == 0)
             {
                 logger.LogInformation(
@@ -780,11 +764,6 @@ internal sealed class ContentMetadataRefreshItemJob(
                 ex,
                 "The refresh finished but failed to publish metadata.refreshed for item {ContentHierarchyItemId}",
                 item.Id);
-        }
-
-        if (throttles.Count > 0)
-        {
-            throw new UpstreamThrottledException(throttles.Max(throttle => throttle.RetryAt));
         }
 
         progress.Report(1, "The metadata refresh completed.");

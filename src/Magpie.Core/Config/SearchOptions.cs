@@ -21,9 +21,4 @@ public sealed class SearchOptions
     /// The age a search result must have before a scan searches the same content again.
     /// </summary>
     public TimeSpan MinimumSearchAge { get; set; } = TimeSpan.FromHours(24);
-
-    /// <summary>
-    /// The number of leaf searches above which a scan applies backpressure.
-    /// </summary>
-    public int BackpressureThreshold { get; set; } = 50;
 }

@@ -31,15 +31,17 @@ internal sealed class DownloadClientRepository(
 {
     private static readonly (string Name, Func<DownloadClient, DownloadClient, bool> Changed)[] UpdateFields =
     [
-        ("name", (current, model) => !Equals(current.Name, model.Name)),
-        ("providerType", (current, model) => !Equals(current.ProviderType, model.ProviderType)),
-        ("enabled", (current, model) => !Equals(current.Enabled, model.Enabled)),
-        ("priority", (current, model) => !Equals(current.Priority, model.Priority)),
-        ("status", (current, model) => !Equals(current.Status, model.Status)),
-        ("lastChecked", (current, model) => !Equals(current.LastChecked, model.LastChecked)),
-        ("cleanupDeleteFiles", (current, model) => !Equals(current.CleanupDeleteFiles, model.CleanupDeleteFiles)),
-        ("keepFailedOnClient", (current, model) => !Equals(current.KeepFailedOnClient, model.KeepFailedOnClient)),
-        ("settings", (current, model) => !SettingsEqual(current.Settings, model.Settings)),
+        (nameof(DownloadClient.Name), (current, model) => !Equals(current.Name, model.Name)),
+        (nameof(DownloadClient.ProviderType), (current, model) => !Equals(current.ProviderType, model.ProviderType)),
+        (nameof(DownloadClient.Enabled), (current, model) => !Equals(current.Enabled, model.Enabled)),
+        (nameof(DownloadClient.Priority), (current, model) => !Equals(current.Priority, model.Priority)),
+        (nameof(DownloadClient.Status), (current, model) => !Equals(current.Status, model.Status)),
+        (nameof(DownloadClient.LastChecked), (current, model) => !Equals(current.LastChecked, model.LastChecked)),
+        (nameof(DownloadClient.CleanupDeleteFiles), (current, model) =>
+            !Equals(current.CleanupDeleteFiles, model.CleanupDeleteFiles)),
+        (nameof(DownloadClient.KeepFailedOnClient), (current, model) =>
+            !Equals(current.KeepFailedOnClient, model.KeepFailedOnClient)),
+        (nameof(DownloadClient.Settings), (current, model) => !SettingsEqual(current.Settings, model.Settings)),
     ];
 
     private readonly TimeProvider _time = timeProvider;
@@ -88,57 +90,57 @@ internal sealed class DownloadClientRepository(
         var fields = new List<string>();
         if (patch.Name is not null)
         {
-            fields.Add("name");
+            fields.Add(nameof(DownloadClient.Name));
         }
 
         if (patch.Enabled is not null)
         {
-            fields.Add("enabled");
+            fields.Add(nameof(DownloadClient.Enabled));
         }
 
         if (patch.Priority is not null)
         {
-            fields.Add("priority");
+            fields.Add(nameof(DownloadClient.Priority));
         }
 
         if (patch.CleanupDeleteFiles is not null)
         {
-            fields.Add("cleanupDeleteFiles");
+            fields.Add(nameof(DownloadClient.CleanupDeleteFiles));
         }
 
         if (patch.KeepFailedOnClient is not null)
         {
-            fields.Add("keepFailedOnClient");
+            fields.Add(nameof(DownloadClient.KeepFailedOnClient));
         }
 
         if (patch.Settings is not null)
         {
-            fields.Add("settings");
+            fields.Add(nameof(DownloadClient.Settings));
         }
 
         if (patch.Status is not null)
         {
-            fields.Add("status");
+            fields.Add(nameof(DownloadClient.Status));
         }
 
         if (patch.LastChecked is not null)
         {
-            fields.Add("lastChecked");
+            fields.Add(nameof(DownloadClient.LastChecked));
         }
 
         if (patch.LastError is not null)
         {
-            fields.Add("lastError");
+            fields.Add(nameof(DownloadClient.LastError));
         }
 
         if (patch.ConsecutiveFailures is not null)
         {
-            fields.Add("consecutiveFailures");
+            fields.Add(nameof(DownloadClient.ConsecutiveFailures));
         }
 
         if (patch.Tags is not null)
         {
-            fields.Add("tags");
+            fields.Add(nameof(DownloadClientPatch.Tags));
         }
 
         return fields;

@@ -40,7 +40,7 @@ public sealed class MediaInfoExtractScanJobTests
     private JobContext _scheduledContext = null!;
     private JobContext _manualContext = null!;
     private JobContext _eventContext = null!;
-    private MagpieEvent _downloadImportedEvent = null!;
+    private MagpieEvent _mediaFilesChangedEvent = null!;
 
     [SetUp]
     public void SetUp()
@@ -55,16 +55,20 @@ public sealed class MediaInfoExtractScanJobTests
             Parameters: new Dictionary<string, string>(),
             Event: null);
         _manualContext = _scheduledContext with { ScheduleTriggerId = null, ManualTriggerUserId = Guid.NewGuid() };
-        _downloadImportedEvent = new MagpieEvent(
-            Guid.NewGuid(), "download.imported",
-            new Dictionary<string, string> { ["content.hierarchyItemId"] = _targetHierarchyItemId.ToString("D") },
+        _mediaFilesChangedEvent = new MagpieEvent(
+            Guid.NewGuid(), "content.hierarchyItem.updated",
+            new Dictionary<string, string>
+            {
+                ["content.hierarchyItemId"] = _targetHierarchyItemId.ToString("D"),
+                ["content.changedFields"] = "MediaFiles"
+            },
             new DateTime(2026, 5, 20, 12, 0, 0, DateTimeKind.Utc),
             new DateTime(2026, 5, 20, 12, 0, 0, DateTimeKind.Utc), null);
         _eventContext = _scheduledContext with
         {
             ScheduleTriggerId = null,
             EventTriggerId = Guid.NewGuid(),
-            Event = _downloadImportedEvent
+            Event = _mediaFilesChangedEvent
         };
         _mediaFileRepository = new Mock<IMediaFileRepository> { CallBase = true };
         _mediaFileRepository
@@ -127,20 +131,33 @@ public sealed class MediaInfoExtractScanJobTests
     }
 
     [Test]
-    public void EventTriggers_BindTheImportedItemAndTheMissingPolicy_WhenCatalogInspected()
+    public void EventTriggers_BindTheChangedItemAndTheMissingPolicy_WhenCatalogInspected()
     {
         // Act
         var trigger = DefaultJobTriggerCatalog.EventTriggers
             .Single(candidate => candidate.JobType == "MediaInfoExtractScan");
+        var schedule = DefaultJobTriggerCatalog.ScheduleTriggers
+            .Single(candidate => candidate.JobType == "MediaInfoExtractScan");
 
         // Assert
-        Assert.That(
-            trigger.Parameters,
-            Is.EquivalentTo(new Dictionary<string, string>
-            {
-                ["contentHierarchyItemId"] = "${event.content.hierarchyItemId}",
-                ["mediaInfoPolicy"] = "Missing"
-            }));
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(trigger.EventFilter.EventName!.Value, Is.EqualTo("content.hierarchyItem.updated"));
+            Assert.That(
+                trigger.EventFilter.EventContext!.Items["content.changedFields"].Value,
+                Is.EqualTo("MediaFiles"));
+            Assert.That(
+                trigger.Parameters,
+                Is.EquivalentTo(new Dictionary<string, string>
+                {
+                    ["contentHierarchyItemId"] = "${event.content.hierarchyItemId}",
+                    ["mediaInfoPolicy"] = "Missing"
+                }));
+            Assert.That(schedule.Schedule, Is.EqualTo("0 2 * * *"));
+            Assert.That(
+                schedule.Parameters,
+                Is.EquivalentTo(new Dictionary<string, string> { ["mediaInfoPolicy"] = "Missing" }));
+        }
     }
 
     [Test]
@@ -232,7 +249,7 @@ public sealed class MediaInfoExtractScanJobTests
     }
 
     [Test]
-    public async Task ExecuteAsync_QueuesAtMostFiveHundredFiles_WhenThePageIsFull()
+    public async Task ExecuteAsync_QueuesEveryFile_WhenTheLibraryHasOneFullPage()
     {
         // Arrange
         var candidates = Enumerable.Range(0, 500)
@@ -272,10 +289,10 @@ public sealed class MediaInfoExtractScanJobTests
     [TestCase(true, "Missing", 501)]
     [TestCase(true, "MissingOrStale", 501)]
     [TestCase(true, "All", 501)]
-    [TestCase(false, "Missing", 500)]
-    [TestCase(false, "MissingOrStale", 500)]
+    [TestCase(false, "Missing", 501)]
+    [TestCase(false, "MissingOrStale", 501)]
     [TestCase(false, "All", 501)]
-    public async Task ExecuteAsync_QueuesFilesFromEveryPage_WhenTheScanIsTargetedOrSelectsAll(
+    public async Task ExecuteAsync_QueuesFilesFromEveryPage_WhenTheScanHasMoreThanFiveHundredEligibleFiles(
         bool targeted,
         string policy,
         int expectedQueued)
@@ -521,9 +538,8 @@ public sealed class MediaInfoExtractScanJobTests
         }
     }
 
-    [TestCase("content.imported")]
-    [TestCase("download.imported")]
-    public async Task ExecuteAsync_IgnoresTheEventPayload_WhenTheTriggerBindsNoParameters(string eventName)
+    [Test]
+    public async Task ExecuteAsync_IgnoresTheEventPayload_WhenTheTriggerBindsNoParameters()
     {
         // Arrange
         MediaFileQuery? capturedQuery = null;
@@ -549,7 +565,7 @@ public sealed class MediaInfoExtractScanJobTests
                 ],
                 TotalItems = 1
             });
-        var jobContext = _eventContext with { Event = _downloadImportedEvent with { Name = eventName } };
+        var jobContext = _eventContext;
 
         // Act
         await _job.ExecuteAsync(jobContext, default).ConfigureAwait(false);
@@ -570,7 +586,7 @@ public sealed class MediaInfoExtractScanJobTests
         var eventHierarchyItemId = Guid.NewGuid();
         var jobContext = _eventContext with
         {
-            Event = _downloadImportedEvent with
+            Event = _mediaFilesChangedEvent with
             {
                 Context = new Dictionary<string, string>
                 { ["content.hierarchyItemId"] = eventHierarchyItemId.ToString("D") }

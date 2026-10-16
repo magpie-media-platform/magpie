@@ -94,9 +94,21 @@ internal sealed class DefaultDataProtectionProvider : IDataProtectionProvider
             options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
         }
 
-        using var stream = new FileStream(path, options);
-        stream.Write(Utf8NoBom.GetBytes(contents));
-        stream.Flush(flushToDisk: true);
+        var temporaryPath = Path.Combine(directory, $".{Path.GetFileName(path)}.{Guid.NewGuid():N}.tmp");
+        try
+        {
+            using (var stream = new FileStream(temporaryPath, options))
+            {
+                stream.Write(Utf8NoBom.GetBytes(contents));
+                stream.Flush(flushToDisk: true);
+            }
+
+            File.Move(temporaryPath, path, overwrite: false);
+        }
+        finally
+        {
+            File.Delete(temporaryPath);
+        }
     }
 
     private static byte[] ParseEnvironmentKey(string value)

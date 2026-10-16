@@ -391,7 +391,9 @@ public sealed class DownloadRefreshJobAcquisitionTests
         {
             Assert.That(_context.Downloads.AsNoTracking().Single(d => d.Id == FailingId).Progress, Is.EqualTo(10m));
             Assert.That(_context.Downloads.AsNoTracking().Single(d => d.Id == LeadingId).Progress, Is.EqualTo(43m));
-            Assert.That(_events.Single().Context["download.id"], Is.EqualTo("00000000-0000-0000-0000-000000000002"));
+            Assert.That(
+                _events.Single(e => e.Name.StartsWith("download.", StringComparison.Ordinal)).Context["download.id"],
+                Is.EqualTo("00000000-0000-0000-0000-000000000002"));
             Assert.That(
                 _context.ContentItems.AsNoTracking().Single(c => c.Id == _sharedItemId).ActiveAcquisitionStatus,
                 Is.EqualTo(DownloadStatus.Downloading));
@@ -434,7 +436,13 @@ public sealed class DownloadRefreshJobAcquisitionTests
             Assert.That(
                 _context.ContentItems.AsNoTracking().Single(c => c.Id == _singleItemId).ActiveAcquisitionStatus,
                 Is.EqualTo(DownloadStatus.Downloading));
-            Assert.That(_events, Has.Count.EqualTo(2));
+            Assert.That(
+                _events.Count(e => e.Name.StartsWith("download.", StringComparison.Ordinal)),
+                Is.EqualTo(2));
+            Assert.That(
+                _events.Single(e => e.Name == "content.hierarchyItem.updated").Context,
+                Does.ContainKey("content.itemId").WithValue(_singleItemId.ToString())
+                    .And.ContainKey("content.changedFields").WithValue("ActiveAcquisitionStatus"));
         }
     }
 
@@ -523,7 +531,7 @@ public sealed class DownloadRefreshJobAcquisitionTests
         await _subject.ExecuteAsync(_jobContext).ConfigureAwait(false);
 
         // Assert
-        var updated = _events.Single();
+        var updated = _events.Single(e => e.Name.StartsWith("download.", StringComparison.Ordinal));
         using (Assert.EnterMultipleScope())
         {
             Assert.That(transitions, Is.EqualTo(["magpie.downloads.transitions:Stalled,Downloading"]));
@@ -572,7 +580,7 @@ public sealed class DownloadRefreshJobAcquisitionTests
         Assert.CatchAsync<OperationCanceledException>(() => _subject.ExecuteAsync(_jobContext, cancellation.Token));
 
         // Assert
-        var updated = _events.Single();
+        var updated = _events.Single(e => e.Name.StartsWith("download.", StringComparison.Ordinal));
         using (Assert.EnterMultipleScope())
         {
             Assert.That(updated.Name, Is.EqualTo("download.updated"));
@@ -608,7 +616,8 @@ public sealed class DownloadRefreshJobAcquisitionTests
                 It.IsAny<IEnumerable<string>>(),
                 It.IsAny<IReadOnlyDictionary<string, string>>(),
                 It.IsAny<CancellationToken>()))
-            .Callback(() => eventsAtLookup.Add(_events.Count))
+            .Callback(() => eventsAtLookup.Add(
+                _events.Count(e => e.Name.StartsWith("download.", StringComparison.Ordinal))))
             .ReturnsAsync(() => new BatchDownloadStatusResult(
                 _statuses,
                 new Dictionary<string, Exception>(StringComparer.Ordinal)));

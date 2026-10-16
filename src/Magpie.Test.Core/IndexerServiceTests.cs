@@ -87,8 +87,8 @@ public sealed class IndexerServiceTests
         _indexerConnectionRepository
             .Setup(repository => repository.ListAllAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync([]);
-        _indexerConnectionRepository
-            .Setup(repository => repository.CreateAsync(
+        _indexerRepository
+            .Setup(repository => repository.CreateConnectionAsync(
                 It.IsAny<IndexerConnection>(),
                 It.IsAny<Guid?>(),
                 It.IsAny<CancellationToken>()))
@@ -100,14 +100,14 @@ public sealed class IndexerServiceTests
                 null,
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(new PagedList<IndexerConnection>());
-        _indexerConnectionRepository
-            .Setup(repository => repository.DeleteAsync(
+        _indexerRepository
+            .Setup(repository => repository.DeleteConnectionAsync(
                 It.IsAny<Guid>(),
                 It.IsAny<Guid?>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(true);
-        _indexerConnectionRepository
-            .Setup(repository => repository.PatchAsync(
+        _indexerRepository
+            .Setup(repository => repository.PatchConnectionAsync(
                 It.IsAny<IndexerConnectionPatch>(),
                 It.IsAny<Guid?>(),
                 It.IsAny<CancellationToken>()))
@@ -439,9 +439,6 @@ public sealed class IndexerServiceTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(result, Is.True);
-            _indexerConnectionRepository.Verify(
-                repository => repository.DeleteAsync(connectionId, _userId, It.IsAny<CancellationToken>()),
-                Times.Once);
             _indexerRepository.Verify(
                 repository => repository.DeleteAsync(indexerId, _userId, It.IsAny<CancellationToken>()),
                 Times.Once);
@@ -464,8 +461,8 @@ public sealed class IndexerServiceTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(result, Is.True);
-            _indexerConnectionRepository.Verify(
-                repository => repository.DeleteAsync(
+            _indexerRepository.Verify(
+                repository => repository.DeleteConnectionAsync(
                     It.IsAny<Guid>(),
                     It.IsAny<Guid?>(),
                     It.IsAny<CancellationToken>()),
@@ -627,8 +624,11 @@ public sealed class IndexerServiceTests
             _indexerRepository.Verify(
                 repository => repository.DeleteAsync(orphanId, It.IsAny<Guid?>(), It.IsAny<CancellationToken>()),
                 Times.Never);
-            _indexerConnectionRepository.Verify(
-                repository => repository.DeleteAsync(connectionId, It.IsAny<Guid?>(), It.IsAny<CancellationToken>()),
+            _indexerRepository.Verify(
+                repository => repository.DeleteConnectionAsync(
+                    connectionId,
+                    It.IsAny<Guid?>(),
+                    It.IsAny<CancellationToken>()),
                 Times.Never);
         }
     }
@@ -704,8 +704,11 @@ public sealed class IndexerServiceTests
             _indexerRepository.Verify(
                 repository => repository.DeleteAsync(orphanId, It.IsAny<Guid?>(), It.IsAny<CancellationToken>()),
                 Times.Never);
-            _indexerConnectionRepository.Verify(
-                repository => repository.DeleteAsync(connectionId, It.IsAny<Guid?>(), It.IsAny<CancellationToken>()),
+            _indexerRepository.Verify(
+                repository => repository.DeleteConnectionAsync(
+                    connectionId,
+                    It.IsAny<Guid?>(),
+                    It.IsAny<CancellationToken>()),
                 Times.Never);
             _indexerRepository.Verify(
                 repository => repository.CreateAsync(
@@ -819,8 +822,8 @@ public sealed class IndexerServiceTests
                     It.IsAny<Guid?>(),
                     It.IsAny<CancellationToken>()),
                 Times.Never);
-            _indexerConnectionRepository.Verify(
-                repository => repository.DeleteAsync(
+            _indexerRepository.Verify(
+                repository => repository.DeleteConnectionAsync(
                     It.IsAny<Guid>(),
                     It.IsAny<Guid?>(),
                     It.IsAny<CancellationToken>()),
@@ -999,8 +1002,8 @@ public sealed class IndexerServiceTests
                     It.IsAny<Guid?>(),
                     It.IsAny<CancellationToken>()),
                 Times.Never);
-            _indexerConnectionRepository.Verify(
-                repository => repository.DeleteAsync(
+            _indexerRepository.Verify(
+                repository => repository.DeleteConnectionAsync(
                     It.IsAny<Guid>(),
                     It.IsAny<Guid?>(),
                     It.IsAny<CancellationToken>()),
@@ -1511,6 +1514,48 @@ public sealed class IndexerServiceTests
                 Assert.That(response.ConnectionsAttempted, Is.EqualTo(0));
                 Assert.That(response.ConnectionsSkipped, Is.EqualTo(1));
             }
+        }
+
+        [TestCase(false, false)]
+        [TestCase(true, false)]
+        [TestCase(true, true)]
+        [TestCase(false, true)]
+        public async Task SearchAsync_UsesProviderOutcomes_WhenNoProviderReturnsMatches(
+            bool includeHealthy,
+            bool includeFailing)
+        {
+            // Arrange
+            _integrationA
+                .Setup(integration => integration.SearchAsync(
+                    It.IsAny<ReleaseSearchRequest>(),
+                    It.IsAny<IReadOnlyDictionary<string, string>>(),
+                    It.IsAny<CancellationToken>()))
+                .ReturnsAsync([]);
+            _integrationB
+                .Setup(integration => integration.SearchAsync(
+                    It.IsAny<ReleaseSearchRequest>(),
+                    It.IsAny<IReadOnlyDictionary<string, string>>(),
+                    It.IsAny<CancellationToken>()))
+                .ThrowsAsync(new TaskCanceledException("The request timed out.", new TimeoutException()));
+            var request = new IndexerSearchRequest
+            {
+                ConnectionIds =
+                [
+                    .. includeHealthy ? new[] { ConnectionAId } : [],
+                    .. includeFailing ? new[] { ConnectionBId } : [],
+                ],
+                Query = new ReleaseSearchRequest { Title = "the salt roads" },
+            };
+
+            // Act and Assert
+            if (includeFailing && !includeHealthy)
+            {
+                Assert.ThrowsAsync<InvalidOperationException>(() => _subject.SearchAsync(request));
+                return;
+            }
+
+            var response = await _subject.SearchAsync(request).ConfigureAwait(false);
+            Assert.That(response!.Candidates, Is.Empty);
         }
 
         [Test]

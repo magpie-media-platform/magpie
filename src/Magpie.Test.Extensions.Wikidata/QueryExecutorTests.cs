@@ -1876,7 +1876,7 @@ internal sealed class QueryExecutorTests
     }
 
     [Test]
-    public async Task SearchAsync_ReturnsRateLimitWarningWithoutHits_WhenTerminalFailure()
+    public async Task SearchAsync_RetainsHits_WhenLaterWindowFails()
     {
         // Arrange
         var context = new RequestContext
@@ -1906,8 +1906,7 @@ internal sealed class QueryExecutorTests
                 ["titleWindowExceeded"] = new SparqlBindingDto { Value = "1" }
             }
         ];
-        var rateLimited = new HttpRequestException("Wikidata request remained rate limited.");
-        rateLimited.Data["wikidata.rate-limited"] = true;
+        var failure = new HttpRequestException("Wikidata request failed.");
         var cache = new Mock<IQueryCoordinator>();
         cache.SetupSequence(value => value.GetSearchAsync(
             It.IsAny<string>(),
@@ -1916,7 +1915,74 @@ internal sealed class QueryExecutorTests
             It.IsAny<Action<SearchCacheProvenance>?>()))
             .ReturnsAsync(new SearchCacheResult(rows, SearchCacheProvenance.Remote))
             .ReturnsAsync(new SearchCacheResult(rows, SearchCacheProvenance.Remote))
-            .ThrowsAsync(rateLimited);
+            .ThrowsAsync(failure);
+        IQueryExecutor subject = new QueryExecutor(
+            new Mock<IWikidataClient>(MockBehavior.Strict).Object,
+            cache.Object,
+            NullLogger<QueryExecutor>.Instance);
+        var plan = new QueryPlan
+        {
+            EntityKind = EntityKind.Movie,
+            Strategy = QueryStrategy.TitleSearch,
+            Filters = [],
+            Warnings = [],
+            Page = 1,
+            UsesLocalPaging = true,
+            OrdinaryTerm = "movie"
+        };
+
+        // Act
+        var result = await subject.SearchAsync(plan, context, default).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.Hits.Select(hit => hit.Qid), Does.Contain("Q1"));
+            Assert.That(result.Warnings.Select(warning => warning), Has.Some.Contains("failed"));
+        }
+    }
+
+    [Test]
+    public async Task SearchAsync_ReturnsPartialEmptyPage_WhenAnsweredWindowsHaveNoMatchesAndLaterWindowFails()
+    {
+        // Arrange
+        var context = new RequestContext
+        {
+            Language = "en",
+            FallbackLanguages = ["en"],
+            UserAgent = "Magpie/test"
+        };
+        IReadOnlyList<Dictionary<string, SparqlBindingDto>> rows =
+        [
+            new()
+            {
+                ["item"] = new SparqlBindingDto { Value = "Q1" },
+                ["itemLabel"] = new SparqlBindingDto { Value = "Q1" },
+                ["type"] = new SparqlBindingDto { Value = "Q11424" }
+            },
+            new()
+            {
+                ["item"] = new SparqlBindingDto { Value = "Q2" },
+                ["itemLabel"] = new SparqlBindingDto { Value = "Q2" },
+                ["type"] = new SparqlBindingDto { Value = "Q11424" }
+            },
+            new()
+            {
+                ["item"] = new SparqlBindingDto { Value = "Q1" },
+                ["itemLabel"] = new SparqlBindingDto { Value = "Q1" },
+                ["titleWindowExceeded"] = new SparqlBindingDto { Value = "1" }
+            }
+        ];
+        var failure = new HttpRequestException("Wikidata request failed.");
+        var cache = new Mock<IQueryCoordinator>();
+        cache.SetupSequence(value => value.GetSearchAsync(
+            It.IsAny<string>(),
+            It.IsAny<Func<CancellationToken, Task<IReadOnlyList<Dictionary<string, SparqlBindingDto>>>>>(),
+            It.IsAny<CancellationToken>(),
+            It.IsAny<Action<SearchCacheProvenance>?>()))
+            .ReturnsAsync(new SearchCacheResult(rows, SearchCacheProvenance.Remote))
+            .ReturnsAsync(new SearchCacheResult(rows, SearchCacheProvenance.Remote))
+            .ThrowsAsync(failure);
         IQueryExecutor subject = new QueryExecutor(
             new Mock<IWikidataClient>(MockBehavior.Strict).Object,
             cache.Object,
@@ -1939,7 +2005,7 @@ internal sealed class QueryExecutorTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(result.Hits, Is.Empty);
-            Assert.That(result.Warnings.Select(warning => warning), Has.Some.Contains("rate limited"));
+            Assert.That(result.Warnings.Select(warning => warning), Has.Some.Contains("failed"));
         }
     }
 
@@ -2365,7 +2431,7 @@ internal sealed class QueryExecutorTests
     }
 
     [Test]
-    public async Task SearchAsync_ReturnsRateLimitWarningWithoutHits_WhenRelationshipSeed()
+    public async Task SearchAsync_ReturnsPartialEmptyPage_WhenRelationshipSeedAnswersBeforeCandidateFailure()
     {
         // Arrange
         var context = new RequestContext
@@ -2382,8 +2448,7 @@ internal sealed class QueryExecutorTests
             new() { ["item"] = new SparqlBindingDto { Value = "P31" } },
             new() { ["item"] = new SparqlBindingDto { Value = "not-a-qid" } }
         ];
-        var rateLimited = new HttpRequestException("Wikidata request remained rate limited.");
-        rateLimited.Data["wikidata.rate-limited"] = true;
+        var failure = new HttpRequestException("Wikidata request failed.");
         var cache = new Mock<IQueryCoordinator>();
         cache.SetupSequence(value => value.GetSearchAsync(
             It.IsAny<string>(),
@@ -2391,7 +2456,7 @@ internal sealed class QueryExecutorTests
             It.IsAny<CancellationToken>(),
             It.IsAny<Action<SearchCacheProvenance>?>()))
             .ReturnsAsync(new SearchCacheResult(seedRows, SearchCacheProvenance.Remote))
-            .ThrowsAsync(rateLimited);
+            .ThrowsAsync(failure);
         IQueryExecutor subject = new QueryExecutor(
             new Mock<IWikidataClient>(MockBehavior.Strict).Object,
             cache.Object,
@@ -2436,7 +2501,7 @@ internal sealed class QueryExecutorTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(result.Hits, Is.Empty);
-            Assert.That(result.Warnings.Select(warning => warning), Has.Some.Contains("rate limited"));
+            Assert.That(result.Warnings, Has.Some.Contains("failed"));
         }
     }
 
@@ -2842,7 +2907,7 @@ internal sealed class QueryExecutorTests
     }
 
     [Test]
-    public async Task SearchAsync_ReturnsWarningWithoutHits_WhenRateLimitedWindow()
+    public void SearchAsync_PropagatesFailure_WhenRequestFails()
     {
         // Arrange
         var context = new RequestContext
@@ -2851,14 +2916,13 @@ internal sealed class QueryExecutorTests
             FallbackLanguages = ["en"],
             UserAgent = "Magpie/test"
         };
-        var rateLimited = new HttpRequestException("Wikidata request remained rate limited.");
-        rateLimited.Data["wikidata.rate-limited"] = true;
+        var failure = new HttpRequestException("Wikidata request failed.");
         var client = new Mock<IWikidataClient>();
         client.Setup(value => value.ExecuteSparqlAsync(
             It.IsAny<SparqlRequest>(),
             It.IsAny<RequestContext>(),
             It.IsAny<CancellationToken>()))
-            .ThrowsAsync(rateLimited);
+            .ThrowsAsync(failure);
         var cache = new Mock<IQueryCoordinator>();
         cache.Setup(value => value.GetSearchAsync(
             It.IsAny<string>(),
@@ -2906,21 +2970,13 @@ internal sealed class QueryExecutorTests
             ProjectCandidateDetails = true
         };
 
-        // Act
-        var result = await subject.SearchAsync(plan, context, default).ConfigureAwait(false);
-
-        // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(result.Hits, Is.Empty);
-            Assert.That(result.Warnings, Has.Count.EqualTo(1));
-            Assert.That(result.Warnings.Select(warning => warning), Has.Some.Contains("rate limited"));
-            Assert.That(result.PageInfo.HasMore, Is.False);
-        }
+        // Act and assert
+        Assert.ThrowsAsync<HttpRequestException>(async () =>
+            await subject.SearchAsync(plan, context, default).ConfigureAwait(false));
     }
 
     [Test]
-    public async Task SearchAsync_ReturnsTimeoutWarning_WhenProviderCancellation()
+    public void SearchAsync_PropagatesTimeout_WhenProviderCancellation()
     {
         // Arrange
         var context = new RequestContext
@@ -2962,20 +3018,13 @@ internal sealed class QueryExecutorTests
             ProjectCandidateDetails = true
         };
 
-        // Act
-        var result = await subject.SearchAsync(plan, context, default).ConfigureAwait(false);
-
-        // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(result.Hits, Is.Empty);
-            Assert.That(result.Warnings, Has.Count.EqualTo(1));
-            Assert.That(result.Warnings.Select(warning => warning), Has.Some.Contains("timed out"));
-        }
+        // Act and assert
+        Assert.ThrowsAsync<OperationCanceledException>(async () =>
+            await subject.SearchAsync(plan, context, default).ConfigureAwait(false));
     }
 
     [Test]
-    public async Task SearchAsync_ReturnsFailureWarning_WhenHttpFailure()
+    public void SearchAsync_PropagatesFailure_WhenHttpFailure()
     {
         // Arrange
         var context = new RequestContext
@@ -3004,15 +3053,9 @@ internal sealed class QueryExecutorTests
             Page = 1
         };
 
-        // Act
-        var result = await subject.SearchAsync(plan, context, default).ConfigureAwait(false);
-
-        // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(result.Hits, Is.Empty);
-            Assert.That(result.Warnings.Select(warning => warning), Has.Some.Contains("search failed"));
-        }
+        // Act and assert
+        Assert.ThrowsAsync<HttpRequestException>(async () =>
+            await subject.SearchAsync(plan, context, default).ConfigureAwait(false));
     }
 
     [Test]

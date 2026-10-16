@@ -4,6 +4,7 @@ using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 
 using Magpie.Abstractions.Jobs;
+using Magpie.Core.Config;
 using Magpie.Models;
 using Magpie.Sdk.Jobs;
 
@@ -16,7 +17,10 @@ internal sealed class JobRegistry : IJobRegistry
     private readonly Dictionary<string, JobRegistration> _registrations;
     private readonly IReadOnlyList<JobSpec> _specs;
 
-    public JobRegistry(IEnumerable<JobRegistration> registrations, ILogger<JobRegistry> logger)
+    public JobRegistry(
+        IEnumerable<JobRegistration> registrations,
+        JobRuntimeOptions options,
+        ILogger<JobRegistry> logger)
     {
         _registrations = new();
         foreach (var registration in registrations)
@@ -31,7 +35,25 @@ internal sealed class JobRegistry : IJobRegistry
                     existing.HandlerType.FullName);
             }
 
-            _registrations[registration.Spec.JobType] = registration;
+            var spec = registration.Spec;
+            if (spec.ConcurrencyLimit is { } limit && options.ConcurrencyLimits.TryGetValue(spec.JobType, out var max))
+            {
+                spec = spec with { ConcurrencyLimit = limit with { Max = max } };
+            }
+
+            if (spec.ConcurrencyLimit is { Max: < 1 })
+            {
+                throw new InvalidOperationException(
+                    $"The concurrency limit of job type {spec.JobType} is less than 1.");
+            }
+
+            if (spec.ConcurrencyLimit is not null && spec.SupportsImmediate)
+            {
+                throw new InvalidOperationException(
+                    $"Job type {spec.JobType} has a concurrency limit and supports immediate runs.");
+            }
+
+            _registrations[spec.JobType] = registration with { Spec = spec };
         }
 
         _specs =

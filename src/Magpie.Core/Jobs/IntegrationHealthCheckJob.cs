@@ -28,7 +28,7 @@ internal sealed class IntegrationHealthCheckJob(
     {
         JobType = MagpieJobs.Types.IntegrationHealthCheck,
         DisplayName = "Integration health check",
-        Description = "Checks indexers, download clients, and media servers whose health status may be stale.",
+        Description = "Checks the health of indexers, download clients, and media servers.",
         Category = "Integrations",
         Scope = JobScope.Administrative,
         Enabled = true,

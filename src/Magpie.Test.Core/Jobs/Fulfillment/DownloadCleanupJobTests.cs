@@ -1,9 +1,11 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
 using Magpie.Abstractions.Repositories;
+using Magpie.Core.Jobs;
 using Magpie.Core.Jobs.Downloads;
 using Magpie.Models;
 using Magpie.Models.Data;
@@ -93,6 +95,25 @@ public sealed class DownloadCleanupJobTests
             ExecutionMode: JobExecutionMode.Queue,
             Parameters: new Dictionary<string, string>(),
             Event: null);
+    }
+
+    [Test]
+    public void DefaultTriggers_CleanUpWhenTheHoldChanges_WhenSeeded()
+    {
+        // Act
+        var schedule = DefaultJobTriggerCatalog.ScheduleTriggers.Single(trigger =>
+            trigger.JobType == "DownloadCleanup");
+        var trigger = DefaultJobTriggerCatalog.EventTriggers.Single(candidate =>
+            candidate.JobType == "DownloadCleanup" && candidate.EventFilter.EventName!.Value == "download.updated");
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(schedule.Schedule, Is.EqualTo("0 */6 * * *"));
+            Assert.That(
+                trigger.EventFilter.EventContext!.Items["download.changedFields"].Value,
+                Is.EqualTo("HeldByPolicy"));
+        }
     }
 
     [Test]

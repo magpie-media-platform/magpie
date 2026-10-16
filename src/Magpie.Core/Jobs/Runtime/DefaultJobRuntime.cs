@@ -29,6 +29,7 @@ internal sealed class DefaultJobRuntime(
     MagpieHostEnvironment hostEnvironment,
     IEventBus eventBus,
     JobShutdownSignal shutdownSignal,
+    DatabaseMigrationState databaseMigration,
     TimeProvider timeProvider,
     ILogger<DefaultJobRuntime> logger) : IJobRuntime
 {
@@ -55,6 +56,7 @@ internal sealed class DefaultJobRuntime(
     private readonly TimeProvider _timeProvider = timeProvider;
     private readonly ConcurrentDictionary<Guid, RunningExecution> _running = new();
     private readonly JobShutdownSignal _shutdownSignal = shutdownSignal;
+    private readonly DatabaseMigrationState _databaseMigration = databaseMigration;
     private string _nodeId = hostEnvironment.NodeId;
 
     private volatile bool _disposing;
@@ -79,6 +81,7 @@ internal sealed class DefaultJobRuntime(
         var executions = repos.ServiceProvider.GetRequiredService<IJobExecutionRepository>();
         var transactionManager = repos.ServiceProvider.GetRequiredService<ITransactionManager>();
         var retryPolicy = repos.ServiceProvider.GetRequiredService<IJobRetryPolicy>();
+        var defaultRetryPolicy = repos.ServiceProvider.GetRequiredService<DefaultJobRetryPolicy>();
 
         var execution = await executions.GetByIdAsync(executionId, default).ConfigureAwait(false);
         if (execution is null)
@@ -91,6 +94,14 @@ internal sealed class DefaultJobRuntime(
             string.Equals(execution.NodeId, _nodeId, StringComparison.Ordinal);
         if (execution.Status is not JobExecutionStatus.Queued && !alreadyStartedByThisNode)
         {
+            return;
+        }
+
+        if (!alreadyStartedByThisNode && !_databaseMigration.IsSchemaKnown)
+        {
+            _logger.LogDebug(
+                "Job execution {ExecutionId} stays queued because the database schema is newer than this node",
+                executionId);
             return;
         }
 
@@ -333,26 +344,28 @@ internal sealed class DefaultJobRuntime(
                 const string reason = "Interrupted by host shutdown";
                 outcome = OutcomeFailed;
                 activity?.SetStatus(ActivityStatusCode.Error, reason);
-                var failedByThisRun = await TransitionFailureAsync(
+                var interruption = await TransitionInterruptedAsync(
                     executions,
                     transactionManager,
-                    retryPolicy,
+                    defaultRetryPolicy,
                     execution,
-                    failurePolicy,
                     reason)
                     .ConfigureAwait(false);
-                if (failedByThisRun)
+                if (interruption.Transitioned)
                 {
                     JobsTelemetry.FailuresTotal.Add(
                         1,
                         new KeyValuePair<string, object?>("job.type", execution.JobType),
                         new KeyValuePair<string, object?>("reason_kind", "host_shutdown"));
+                    JobsTelemetry.RetriesTotal.Add(
+                        1,
+                        new KeyValuePair<string, object?>("job.type", execution.JobType));
                     _logger.LogWarning(
                         "The host shutdown interrupted execution {ExecutionId} ({JobType}), so the runtime " +
-                        "applied the {Policy} policy",
+                        "requeued it as execution {NextExecutionId}",
                         executionId,
                         execution.JobType,
-                        failurePolicy);
+                        interruption.Retry?.Id);
                 }
                 else
                 {
@@ -370,30 +383,6 @@ internal sealed class DefaultJobRuntime(
                             execution.JobType);
                     }
                 }
-            }
-        }
-        catch (UpstreamThrottledException ex)
-        {
-            var now = _timeProvider.GetUtcNow();
-            var retryAt = ex.RetryAt > now ? ex.RetryAt : now.AddSeconds(1);
-            var spread = executionId.ToByteArray()[0] % 30;
-            var notBefore = (retryAt < DateTimeOffset.MaxValue.AddSeconds(-spread)
-                ? retryAt.AddSeconds(spread) : DateTimeOffset.MaxValue).UtcDateTime;
-            var deferred = await executions.TryDeferRunningAsync(executionId, _nodeId, notBefore, default)
-                .ConfigureAwait(false);
-            if (deferred)
-            {
-                outcome = "deferred";
-                activity?.SetTag("job.not_before", notBefore);
-                _logger.LogInformation(
-                    "Upstream throttling deferred execution {ExecutionId} until {NotBefore:O}",
-                    executionId,
-                    notBefore);
-            }
-            else if (await executions.TryMarkCancellationRequestedCancelledAsync(executionId, null, default)
-                .ConfigureAwait(false))
-            {
-                outcome = OutcomeCancelled;
             }
         }
         catch (Exception ex)
@@ -512,6 +501,41 @@ internal sealed class DefaultJobRuntime(
 
                 await executions.CreateAsync(retry, failed.CreatedByUserId, transactionToken).ConfigureAwait(false);
                 result = new(true, retry);
+            },
+            default).ConfigureAwait(false);
+
+        return result;
+    }
+
+    private static async Task<JobFailureTransitionResult> TransitionInterruptedAsync(
+        IJobExecutionRepository executions,
+        ITransactionManager transactionManager,
+        DefaultJobRetryPolicy retryPolicy,
+        JobExecution interrupted,
+        string reason)
+    {
+        var result = new JobFailureTransitionResult(false, null);
+        await transactionManager.ExecuteWithTransactionAsync(
+            async transactionToken =>
+            {
+                var transitioned = await executions
+                    .TryMarkRunningFailedAsync(interrupted.Id, reason, transactionToken)
+                    .ConfigureAwait(false);
+                if (!transitioned)
+                {
+                    return;
+                }
+
+                var requeue = await retryPolicy
+                    .BuildInterruptedRequeueAsync(interrupted, countsAsAttempt: false, transactionToken)
+                    .ConfigureAwait(false);
+                if (requeue is not null)
+                {
+                    await executions.CreateAsync(requeue, interrupted.CreatedByUserId, transactionToken)
+                        .ConfigureAwait(false);
+                }
+
+                result = new(true, requeue);
             },
             default).ConfigureAwait(false);
 

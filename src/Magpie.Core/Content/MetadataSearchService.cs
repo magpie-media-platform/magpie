@@ -410,6 +410,13 @@ internal sealed class MetadataSearchService(
                 cancellationToken)))
             .ToArray();
         var results = await Task.WhenAll(tasks).ConfigureAwait(false);
+        if (results.Length > 0 && results.All(result => result.Warning is not null))
+        {
+            throw new InvalidOperationException(
+                "Metadata search failed; no provider answered successfully. " +
+                string.Join(" ", results.Select(result => result.Warning).Distinct(StringComparer.Ordinal)));
+        }
+
         var deduplicated = DeduplicateAcrossProviders([.. results.Select(result => result.Matches)]);
         return new MetadataSearchPage
         {
@@ -487,6 +494,8 @@ internal sealed class MetadataSearchService(
         }
 
         var failed = new HashSet<int>();
+        var requestFailed = false;
+        var answered = false;
         var validationIndexes = Enumerable.Range(0, progress.Length)
             .Where(index => progress[index].Continuation is not null).ToArray();
         var validations = await Task.WhenAll(validationIndexes.Select(index => SearchProviderAsync(
@@ -501,6 +510,7 @@ internal sealed class MetadataSearchService(
         for (var index = 0; index < validations.Length; index++)
         {
             var validation = validations[index];
+            requestFailed |= validation.Warning is not null;
             AddWarning(validation.Warning, warningsSeen, warnings);
             foreach (var warning in validation.Result?.Page.Warnings ?? [])
             {
@@ -539,6 +549,7 @@ internal sealed class MetadataSearchService(
                 var execution = results[resultIndex];
                 if (execution.Warning is not null || execution.Result is null)
                 {
+                    requestFailed = true;
                     AddWarning(execution.Warning, warningsSeen, warnings);
                     failed.Add(index);
                     continue;
@@ -546,6 +557,7 @@ internal sealed class MetadataSearchService(
 
                 var batch = execution.Result;
                 var result = batch.Page;
+                answered = true;
                 foreach (var warning in result.Warnings)
                 {
                     AddWarning(
@@ -588,6 +600,12 @@ internal sealed class MetadataSearchService(
             {
                 break;
             }
+        }
+
+        if (requestFailed && !answered && rows.Count == 0)
+        {
+            throw new InvalidOperationException(
+                "Metadata search failed; no provider answered successfully. " + string.Join(" ", warnings));
         }
 
         var page = rows.Take(ProviderSearchPageSize).ToArray();
@@ -813,15 +831,6 @@ internal sealed class MetadataSearchService(
         catch (MetadataSearchContinuationException)
         {
             throw;
-        }
-        catch (UpstreamThrottledException ex)
-        {
-            activity?.SetTag("magpie.result.incomplete", true);
-            return new ProviderSearchExecution(
-                invocation,
-                null,
-                $"{NormalizedProvider(invocation.Provider.ProviderType)} is throttled until {ex.RetryAt:O}. " +
-                "The search is incomplete.");
         }
         catch (Exception exception) when (exception is TimeoutException or OperationCanceledException)
         {
@@ -1986,13 +1995,6 @@ internal sealed class MetadataSearchService(
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                 {
                     throw;
-                }
-                catch (UpstreamThrottledException ex)
-                {
-                    warnings[index] =
-                        $"{NormalizedProvider(provider.ProviderType)} is throttled until {ex.RetryAt:O}. " +
-                        "The search is incomplete.";
-                    return;
                 }
                 catch (Exception ex)
                 {

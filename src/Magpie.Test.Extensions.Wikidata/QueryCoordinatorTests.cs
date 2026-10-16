@@ -13,10 +13,10 @@ using Magpie.Extensions.Wikidata.Mapping;
 using Magpie.Extensions.Wikidata.QueryEngine;
 using Magpie.Models.Enums;
 using Magpie.Sdk.Caching;
-using Magpie.Sdk.Http;
 
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Time.Testing;
 
 using Moq;
 
@@ -30,8 +30,6 @@ namespace Magpie.Test.Extensions.Wikidata;
 [NonParallelizable]
 internal sealed class QueryCoordinatorTests
 {
-    private ServiceProvider _cooldownServices = null!;
-
     private Mock<ICacheFactory> _cacheFactory = null!;
 
     private IServiceScopeFactory _scopeFactory = null!;
@@ -39,8 +37,6 @@ internal sealed class QueryCoordinatorTests
     [SetUp]
     public void SetUp()
     {
-        _cooldownServices = new ServiceCollection().AddHttpClient("test-cooldown")
-            .AddUpstreamCooldown().Services.BuildServiceProvider();
         _cacheFactory = new Mock<ICacheFactory>();
         _cacheFactory.Setup(factory => factory.GetOrCreate(It.IsAny<string>(), It.IsAny<Func<CachePolicy>>()))
             .Returns(() =>
@@ -67,9 +63,6 @@ internal sealed class QueryCoordinatorTests
         scopeFactory.Setup(value => value.CreateScope()).Returns(scope.Object);
         _scopeFactory = scopeFactory.Object;
     }
-
-    [TearDown]
-    public void DisposeCooldownServices() => _cooldownServices.Dispose();
 
     [Test]
     public async Task GetEntitiesAsync_CompletesEveryBatch_WhenPendingIdsExceedCacheCapacity()
@@ -106,9 +99,9 @@ internal sealed class QueryCoordinatorTests
     [TestCase(true, false, false, 3)]
     [TestCase(false, true, false, 3)]
     [TestCase(true, true, false, 3)]
-    [TestCase(false, false, true, 1)]
-    [TestCase(true, false, true, 1)]
-    [TestCase(false, true, true, 1)]
+    [TestCase(false, false, true, 4)]
+    [TestCase(true, false, true, 4)]
+    [TestCase(false, true, true, 4)]
     [TestCase(true, true, true, 4)]
     public async Task SearchAsync_ReportsEverySharedRequest_WhenWaitersCancelOrUpstreamThrottles(
         bool cancelOwner, bool cancelFollower, bool retry, int expectedRequests)
@@ -177,13 +170,14 @@ internal sealed class QueryCoordinatorTests
                     Content = new StringContent("{\"results\":{\"bindings\":[]}}")
                 };
             });
-        var factory = new Mock<IHttpClientFactory>();
-        factory.Setup(value => value.CreateClient(WikidataClient.HttpClientName))
-            .Returns(() => new HttpClient(http, disposeHandler: false));
-        var client = new WikidataClient(
-            factory.Object,
-            _cooldownServices.GetRequiredService<IUpstreamCooldown>(),
-            TimeProvider.System);
+        var registrations = new ServiceCollection().AddSingleton<TimeProvider>(
+            new FakeTimeProvider { AutoAdvanceAmount = TimeSpan.FromSeconds(2) });
+        new WikidataExtension().RegisterServices(registrations);
+        registrations.AddHttpClient(WikidataClient.HttpClientName)
+            .ConfigurePrimaryHttpMessageHandler(() => http);
+        using var transport = registrations.BuildServiceProvider();
+        var factory = transport.GetRequiredService<IHttpClientFactory>();
+        var client = new WikidataClient(factory);
         using var coordinator = new QueryCoordinator(client, _scopeFactory);
         var subject = new QueryExecutor(client, coordinator, NullLogger<QueryExecutor>.Instance);
         var context = new RequestContext
@@ -234,33 +228,11 @@ internal sealed class QueryCoordinatorTests
                 ? "{\"error\":{\"code\":\"maxlag\"}}"
                 : "{\"search\":[],\"search-continue\":50}")
         };
-        response.Headers.RetryAfter = new System.Net.Http.Headers.RetryConditionHeaderValue(TimeSpan.Zero);
+        response.Headers.RetryAfter = new System.Net.Http.Headers.RetryConditionHeaderValue(TimeSpan.FromSeconds(1));
         firstResponse.SetResult(response);
         var survivingQuery = cancelOwner && cancelFollower
             ? subject.SearchAsync(plan, context, default)
             : cancelFollower ? owner : follower;
-        if (retry && !(cancelOwner && cancelFollower))
-        {
-            // Assert
-            Assert.ThrowsAsync<Magpie.Models.UpstreamThrottledException>(async () =>
-                await survivingQuery.WaitAsync(TimeSpan.FromSeconds(10)).ConfigureAwait(false));
-            if (!cancelOwner)
-            {
-                Assert.ThrowsAsync<Magpie.Models.UpstreamThrottledException>(async () =>
-                    await owner.WaitAsync(TimeSpan.FromSeconds(10)).ConfigureAwait(false));
-            }
-
-            Assert.ThrowsAsync<Magpie.Models.UpstreamThrottledException>(async () =>
-                await subject.SearchAsync(plan, context, default).ConfigureAwait(false));
-            using (Assert.EnterMultipleScope())
-            {
-                Assert.That(sends, Is.EqualTo(1));
-                Assert.That(snapshots.Sum(snapshot => snapshot.Requests), Is.EqualTo(1));
-            }
-
-            return;
-        }
-
         var result = await survivingQuery
             .WaitAsync(TimeSpan.FromSeconds(10)).ConfigureAwait(false);
         if (!cancelOwner)
@@ -679,13 +651,13 @@ internal sealed class QueryCoordinatorTests
                     Content = new StringContent("{\"entities\":{\"Q51\":{\"id\":\"Q51\"}}}")
                 };
             });
-        var factory = new Mock<IHttpClientFactory>();
-        factory.Setup(value => value.CreateClient(WikidataClient.HttpClientName))
-            .Returns(() => new HttpClient(http, disposeHandler: false));
-        var client = new WikidataClient(
-            factory.Object,
-            _cooldownServices.GetRequiredService<IUpstreamCooldown>(),
-            TimeProvider.System);
+        var registrations = new ServiceCollection().AddSingleton<TimeProvider>(TimeProvider.System);
+        new WikidataExtension().RegisterServices(registrations);
+        registrations.AddHttpClient(WikidataClient.HttpClientName)
+            .ConfigurePrimaryHttpMessageHandler(() => http);
+        using var transport = registrations.BuildServiceProvider();
+        var factory = transport.GetRequiredService<IHttpClientFactory>();
+        var client = new WikidataClient(factory);
         using var subject = new QueryCoordinator(client, _scopeFactory);
         var context = new RequestContext
         {

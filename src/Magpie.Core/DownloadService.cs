@@ -592,7 +592,7 @@ internal sealed class DownloadService(
     }
 
     /// <inheritdoc />
-    public async Task<bool> UpdateRefreshedClientStateAsync(
+    public async Task<IReadOnlyList<string>> UpdateRefreshedClientStateAsync(
         Download download,
         DownloadInfo info,
         Guid? userId,
@@ -601,7 +601,7 @@ internal sealed class DownloadService(
         var now = timeProvider.GetUtcNow().UtcDateTime;
         if (BuildRefreshedChange(download, info, now) is not { } refreshed)
         {
-            return false;
+            return [];
         }
 
         if (download.Status == refreshed.Status &&
@@ -618,23 +618,23 @@ internal sealed class DownloadService(
                 refreshed.FailedAt,
                 now,
                 userId,
-                cancellationToken).ConfigureAwait(false))
+                cancellationToken).ConfigureAwait(false) is { } changedFields)
         {
-            return true;
+            return changedFields;
         }
 
         await ApplyRefreshedClientStateAsync(download, info, refreshed, now, userId, cancellationToken)
             .ConfigureAwait(false);
-        return false;
+        return [];
     }
 
     /// <inheritdoc />
     public Task PublishRefreshedStatusAsync(
-        IReadOnlyCollection<Guid> downloadIds,
+        IReadOnlyDictionary<Guid, IReadOnlyList<string>> changedFields,
         Guid? userId,
         CancellationToken cancellationToken)
     {
-        return downloadRepository.PublishRefreshedStatusAsync(downloadIds, userId, cancellationToken);
+        return downloadRepository.PublishRefreshedStatusAsync(changedFields, userId, cancellationToken);
     }
 
     private static RefreshedDownloadState? BuildRefreshedChange(Download download, DownloadInfo info, DateTime now)

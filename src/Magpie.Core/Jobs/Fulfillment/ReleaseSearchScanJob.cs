@@ -6,7 +6,6 @@ using System.Threading.Tasks;
 
 using Magpie.Abstractions.Repositories;
 using Magpie.Models;
-using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
 using Magpie.Models.Filtering;
@@ -21,7 +20,6 @@ namespace Magpie.Core.Jobs.Fulfillment;
 
 internal sealed class ReleaseSearchScanJob(
     IJobManager jobManager,
-    IJobExecutionRepository jobExecutionRepository,
     IContentHierarchyItemRepository contentHierarchyItemRepository,
     TimeProvider timeProvider,
     ILogger<ReleaseSearchScanJob> logger,
@@ -31,8 +29,7 @@ internal sealed class ReleaseSearchScanJob(
     {
         JobType = MagpieJobs.Types.ReleaseSearchScan,
         DisplayName = "Release search scan",
-        Description = "Enqueues a recursive release search at the root of every monitored subtree that still " +
-            "has a missing or below-cutoff item.",
+        Description = "Queues release searches for monitored content that is missing or below the quality cutoff.",
         Category = "Content",
         Scope = JobScope.Content,
         Enabled = true,
@@ -42,12 +39,6 @@ internal sealed class ReleaseSearchScanJob(
         ConcurrencyScope = ConcurrencyScope.PerType,
         Parameters =
         [
-            new(
-                MagpieJobs.Parameters.BackpressureThreshold,
-                "Maximum queued or running downstream ReleaseSearchItem executions before the sweep skips.",
-                DataType.Number,
-                false,
-                DefaultBackpressureThreshold.ToString(CultureInfo.InvariantCulture)),
             new(
                 MagpieJobs.Parameters.LeadTimeDays,
                 "Days before its publish date that the scan starts to search content. Content with no publish " +
@@ -60,52 +51,17 @@ internal sealed class ReleaseSearchScanJob(
 
     private const int PageSize = 500;
 
-    private const int DefaultBackpressureThreshold = 50;
-
     private const int DefaultLeadTimeDays = 1;
 
     public async Task ExecuteAsync(JobContext jobContext, CancellationToken cancellationToken = default)
     {
         var userId = jobContext.ManualTriggerUserId;
         var correlationId = jobContext.CorrelationId;
-        var backpressureThreshold = ReadIntParameter(
-            jobContext.Parameters,
-            MagpieJobs.Parameters.BackpressureThreshold,
-            DefaultBackpressureThreshold,
-            minimum: 1);
         var leadTimeDays = ReadIntParameter(
             jobContext.Parameters,
             MagpieJobs.Parameters.LeadTimeDays,
             DefaultLeadTimeDays,
             minimum: 0);
-
-        var activeReleaseSearches = await jobExecutionRepository
-            .QueryAsync(
-                new JobExecutionQuery
-                {
-                    JobType = MagpieJobs.Types.ReleaseSearchItem,
-                    Statuses = [JobExecutionStatus.Queued, JobExecutionStatus.Running],
-                },
-                new()
-                {
-                    PageNumber = 1,
-                    PageSize = 1,
-                },
-                sort: null,
-                cancellationToken)
-            .ConfigureAwait(false);
-        if (activeReleaseSearches.TotalItems > backpressureThreshold)
-        {
-            logger.LogInformation(
-                "ReleaseSearchItem has {ActiveCount} queued or running executions (threshold {Threshold})," +
-                " so the release search scan skipped this run",
-                activeReleaseSearches.TotalItems,
-                backpressureThreshold);
-            progressReporter.Report(
-                1,
-                "The scan stopped because the ReleaseSearchItem queue is above its backpressure threshold.");
-            return;
-        }
 
         progressReporter.Report(0, "The scan will select the monitored hierarchy roots.");
 

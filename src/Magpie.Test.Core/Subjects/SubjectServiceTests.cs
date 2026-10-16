@@ -40,7 +40,6 @@ public sealed class SubjectServiceTests
         _subject = new SubjectService(
             _subjectRepository.Object,
             _metadataContainerRepository.Object,
-            Mock.Of<IEventBus>(),
             _transactionManager.Object);
     }
 

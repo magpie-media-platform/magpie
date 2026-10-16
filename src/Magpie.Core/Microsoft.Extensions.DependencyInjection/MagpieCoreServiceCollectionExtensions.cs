@@ -27,12 +27,14 @@ using Magpie.Core.Releases;
 using Magpie.Core.Repositories;
 using Magpie.Core.Security;
 using Magpie.Core.Subjects;
+using Magpie.Data;
 using Magpie.Models;
 using Magpie.Models.Data;
 using Magpie.Sdk.Caching;
 using Magpie.Sdk.Content;
 using Magpie.Sdk.Diagnostics;
 using Magpie.Sdk.Extensions;
+using Magpie.Sdk.Http;
 using Magpie.Sdk.Jobs;
 using Magpie.Sdk.Notifications;
 using Magpie.Sdk.Security;
@@ -88,7 +90,8 @@ public static class MagpieCoreServiceCollectionExtensions
     /// </summary>
     /// <param name="services">The service collection to register into</param>
     /// <param name="hosted">Whether Magpie runs as a service host</param>
-    public static IServiceCollection AddMagpieCore(this IServiceCollection services, bool hosted)
+    /// <param name="jobRunner">Whether the host runs jobs</param>
+    public static IServiceCollection AddMagpieCore(this IServiceCollection services, bool hosted, bool jobRunner)
     {
         services.AddSingleton(TimeProvider.System);
         services.AddSingleton<IEventBus, EventBus>();
@@ -138,8 +141,17 @@ public static class MagpieCoreServiceCollectionExtensions
         services.AddScoped<IMagpieSystem, MagpieSystem>();
         services.AddScoped<ISetupService, SetupService>();
 
+        services.TryAddSingleton<HttpOptions>();
         services.AddHttpClient(WebhookNotificationProvider.HttpClientName)
             .AddStandardResilienceHandler()
+            .Configure((options, provider) =>
+            {
+                options.TotalRequestTimeout.Timeout = provider.GetRequiredService<HttpOptions>().Timeout;
+                if (options.AttemptTimeout.Timeout > options.TotalRequestTimeout.Timeout)
+                {
+                    options.AttemptTimeout.Timeout = options.TotalRequestTimeout.Timeout;
+                }
+            })
             .SelectPipelineByAuthority();
         services.AddHttpClient(ExtensionService.HttpClientName)
             .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
@@ -147,16 +159,27 @@ public static class MagpieCoreServiceCollectionExtensions
                 AutomaticDecompression = DecompressionMethods.All
             })
             .AddStandardResilienceHandler()
+            .Configure((options, provider) =>
+            {
+                options.TotalRequestTimeout.Timeout = provider.GetRequiredService<HttpOptions>().Timeout;
+                if (options.AttemptTimeout.Timeout > options.TotalRequestTimeout.Timeout)
+                {
+                    options.AttemptTimeout.Timeout = options.TotalRequestTimeout.Timeout;
+                }
+            })
             .SelectPipelineByAuthority();
         services.AddScoped<IExtensionService, ExtensionService>();
 
         services.RegisterJobs();
         services.RegisterDiagnostics();
+        services.AddSingleton<DatabaseMigrationState>();
 
         if (hosted)
         {
-            services.AddSingleton<DatabaseMigrationState>();
-            services.RegisterHostedServices();
+            services.AddSingleton<ExtensionActivationBackgroundService.DatabaseFailureInterceptor>();
+            services.ConfigureDbContext<MagpieDbContext>((provider, options) => options.AddInterceptors(
+                provider.GetRequiredService<ExtensionActivationBackgroundService.DatabaseFailureInterceptor>()));
+            services.RegisterHostedServices(jobRunner);
         }
 
         return services;
@@ -240,6 +263,7 @@ public static class MagpieCoreServiceCollectionExtensions
         services.AddScoped<IDiagnosticCheck, DefaultJobScheduleDiagnostic>();
         services.AddScoped<IDiagnosticCheck, DuplicateRootDiagnostic>();
         services.AddScoped<IDiagnosticCheck, ExtensionLoadDiagnostic>();
+        services.AddScoped<IDiagnosticCheck, NodeStatusDiagnostic>();
         services.AddScoped<IDiagnosticRepair, ContentDefaultsRepair>();
         services.AddScoped<IDiagnosticRepair, MissingDefaultJobRepair>();
 
@@ -251,6 +275,7 @@ public static class MagpieCoreServiceCollectionExtensions
         services.AddSingleton<JobShutdownSignal>();
         services.AddSingleton<IJobConcurrencyScheduler, MlfqJobConcurrencyScheduler>();
         services.AddSingleton<IJobRegistry, JobRegistry>();
+        services.AddScoped<DefaultJobRetryPolicy>();
 
         services.RegisterJob<SendNotificationJob>(SendNotificationJob.Spec);
         services.RegisterJob<ContentMetadataRefreshItemJob>(ContentMetadataRefreshItemJob.Spec);
@@ -293,12 +318,15 @@ public static class MagpieCoreServiceCollectionExtensions
         return services;
     }
 
-    private static IServiceCollection RegisterHostedServices(this IServiceCollection services)
+    private static IServiceCollection RegisterHostedServices(this IServiceCollection services, bool jobRunner)
     {
         services.AddHostedService<ClusterBackplaneBackgroundService>();
         services.AddHostedService<EventDispatchBackgroundService>();
         services.AddHostedService<ExtensionActivationBackgroundService>();
-        services.AddHostedService<JobRuntimeBackgroundService>();
+        if (jobRunner)
+        {
+            services.AddHostedService<JobRuntimeBackgroundService>();
+        }
 
         return services;
     }

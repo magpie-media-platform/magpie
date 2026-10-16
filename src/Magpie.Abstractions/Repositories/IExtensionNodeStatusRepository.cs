@@ -8,7 +8,7 @@ namespace Magpie.Abstractions.Repositories;
 /// <summary>
 /// The repository contract for the extension activation heartbeat of each node.
 /// </summary>
-public interface IExtensionNodeStatusRepository : IRepository
+public interface IExtensionNodeStatusRepository : IRepository<ExtensionNodeStatus>
 {
     /// <summary>
     /// Gets the status of one node by node id.

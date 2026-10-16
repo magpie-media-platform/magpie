@@ -1,4 +1,7 @@
+using System.Collections.Generic;
+
 using Magpie.Core.Extensions;
+using Magpie.Models.Enums;
 
 namespace Magpie.Core.Config;
 
@@ -16,4 +19,9 @@ public sealed record ClusterHostOptions
     /// The node identifier for cluster-visible heartbeats and job ownership.
     /// </summary>
     public string? NodeId { get; init; }
+
+    /// <summary>
+    /// The roles that the node serves.
+    /// </summary>
+    public IReadOnlyList<NodeRole> Roles { get; init; } = [];
 }

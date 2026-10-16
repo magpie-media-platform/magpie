@@ -168,6 +168,9 @@ namespace Magpie.Data.SQLite.Migrations
                     b.Property<Guid?>("CorrelationId")
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("Data")
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("Detail")
                         .HasColumnType("TEXT");
 

@@ -55,8 +55,8 @@ internal sealed class ClusterBackplaneBackgroundService(
         {
             using var listener = eventBus.CreateListener(eventName: null, localOnly: false, callSite: "backplane");
             _listenerReady.TrySetResult();
-            await databaseMigration.Completion.WaitAsync(cancellationToken)
-                .ConfigureAwait(false);
+
+            await databaseMigration.Migrated.WaitAsync(cancellationToken).ConfigureAwait(false);
             await foreach (var magpieEvent in listener.ReadAllAsync(cancellationToken).ConfigureAwait(false))
             {
                 try
@@ -93,7 +93,7 @@ internal sealed class ClusterBackplaneBackgroundService(
         using var listener = backplane!.CreateListener();
         try
         {
-            await databaseMigration.Completion.WaitAsync(cancellationToken)
+            await Task.WhenAny(databaseMigration.Migrated, databaseMigration.Completion).WaitAsync(cancellationToken)
                 .ConfigureAwait(false);
             await foreach (var magpieEvent in listener.ReadAllAsync(cancellationToken).ConfigureAwait(false))
             {

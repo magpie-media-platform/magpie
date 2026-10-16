@@ -25,26 +25,32 @@ namespace Magpie.Core.Repositories;
 internal sealed class UserRepository(
     MagpieDbContext context,
     IAuditRecordRepository auditRecordRepository,
+    IApiKeyRepository apiKeyRepository,
     ITransactionManager transactionManager,
     IEventBus eventBus,
     ILogger<UserRepository> logger,
     TimeProvider timeProvider) : IUserRepository
 {
+    private const string UnlockReasonAdmin = "admin";
+    private const string UnlockReasonExpiry = "expiry";
+    private const string UnlockReasonPassword = "password";
+
     private static readonly (string Name, Func<User, User, bool> Changed)[] UpdateFields =
     [
-        ("username", (current, model) => !Equals(current.Username, model.Username)),
-        ("email", (current, model) => !Equals(current.Email, model.Email)),
-        ("extensionId", (current, model) => !Equals(current.ExtensionId, model.ExtensionId)),
-        ("providerType", (current, model) => !Equals(current.ProviderType, model.ProviderType)),
-        ("externalId", (current, model) => !Equals(current.ExternalId, model.ExternalId)),
-        ("settings", (current, model) => !SettingsEqual(current.Settings, model.Settings)),
+        (nameof(User.Username), (current, model) => !Equals(current.Username, model.Username)),
+        (nameof(User.Email), (current, model) => !Equals(current.Email, model.Email)),
+        (nameof(User.ExtensionId), (current, model) => !Equals(current.ExtensionId, model.ExtensionId)),
+        (nameof(User.ProviderType), (current, model) => !Equals(current.ProviderType, model.ProviderType)),
+        (nameof(User.ExternalId), (current, model) => !Equals(current.ExternalId, model.ExternalId)),
+        (nameof(User.Settings), (current, model) => !SettingsEqual(current.Settings, model.Settings)),
         (MagpieEvents.Fields.UserEnabled, (current, model) => !Equals(current.Enabled, model.Enabled)),
         (MagpieEvents.Fields.UserRole, (current, model) => !Equals(current.Role, model.Role)),
-        ("credentials", (current, model) => !Equals(current.PasswordHash, model.PasswordHash) ||
+        ("Credentials", (current, model) => !Equals(current.PasswordHash, model.PasswordHash) ||
             !Equals(current.PasswordSalt, model.PasswordSalt)),
-        ("failedLoginAttempts", (current, model) => !Equals(current.FailedLoginAttempts, model.FailedLoginAttempts)),
-        ("lockedUntil", (current, model) => !Equals(current.LockedUntil, model.LockedUntil)),
-        ("lastLoginAt", (current, model) => !Equals(current.LastLoginAt, model.LastLoginAt)),
+        (nameof(User.FailedLoginAttempts), (current, model) =>
+            !Equals(current.FailedLoginAttempts, model.FailedLoginAttempts)),
+        (nameof(User.LockedUntil), (current, model) => !Equals(current.LockedUntil, model.LockedUntil)),
+        (nameof(User.LastLoginAt), (current, model) => !Equals(current.LastLoginAt, model.LastLoginAt)),
     ];
 
     private readonly TimeProvider _time = timeProvider;
@@ -287,10 +293,16 @@ internal sealed class UserRepository(
                         .Where(token => token.UserId == id)
                         .ExecuteDeleteAsync(cancellationToken)
                         .ConfigureAwait(false);
-                    await context.ApiKeys
+                    var apiKeyIds = await context.ApiKeys.AsNoTracking()
                         .Where(key => key.UserId == id)
-                        .ExecuteDeleteAsync(cancellationToken)
+                        .Select(key => key.Id)
+                        .ToListAsync(cancellationToken)
                         .ConfigureAwait(false);
+                    foreach (var apiKeyId in apiKeyIds)
+                    {
+                        await apiKeyRepository.DeleteAsync(apiKeyId, deletedByUserId, cancellationToken)
+                            .ConfigureAwait(false);
+                    }
 
                     var deleted = await context.Users
                         .Where(u => u.Id == id)
@@ -415,8 +427,6 @@ internal sealed class UserRepository(
                             s => s
                                 .SetProperty(u => u.PasswordHash, passwordHash)
                                 .SetProperty(u => u.PasswordSalt, passwordSalt)
-                                .SetProperty(u => u.FailedLoginAttempts, 0)
-                                .SetProperty(u => u.LockedUntil, (DateTime?)null)
                                 .SetProperty(u => u.ModifiedAt, now)
                                 .SetProperty(u => u.ModifiedByUserId, modifiedByUserId),
                             cancellationToken)
@@ -424,6 +434,8 @@ internal sealed class UserRepository(
 
                     if (updated > 0)
                     {
+                        await UnlockAsync(userId, UnlockReasonPassword, cancellationToken).ConfigureAwait(false);
+
                         await context.RefreshTokens
                             .Where(token => token.UserId == userId)
                             .ExecuteDeleteAsync(cancellationToken)
@@ -462,30 +474,53 @@ internal sealed class UserRepository(
     {
         try
         {
-            await context.Users
-                .Where(u => u.Id == userId)
-                .ExecuteUpdateAsync(
-                    s => s
-                        .SetProperty(u => u.FailedLoginAttempts, u => u.FailedLoginAttempts + 1)
-                        .SetProperty(
-                            u => u.LockedUntil,
-                            u => u.FailedLoginAttempts + 1 >= maxFailedAttempts ? lockedUntil : u.LockedUntil),
-                    cancellationToken)
-                .ConfigureAwait(false);
+            return await transactionManager.ExecuteWithTransactionAsync(
+                async _ =>
+                {
+                    var now = _time.GetUtcNow().UtcDateTime;
+                    await context.Users
+                        .Where(u => u.Id == userId)
+                        .ExecuteUpdateAsync(
+                            s => s.SetProperty(u => u.FailedLoginAttempts, u => u.FailedLoginAttempts + 1),
+                            cancellationToken)
+                        .ConfigureAwait(false);
 
-            var snapshot = await (
-                from u in context.Users.AsNoTracking()
-                where u.Id == userId
-                select new { u.FailedLoginAttempts, u.LockedUntil })
-                .FirstOrDefaultAsync(cancellationToken)
-                .ConfigureAwait(false);
+                    // Only the failure that moves the user from unlocked to locked sets the lock.
+                    var lockedOut = await context.Users
+                        .Where(u => u.Id == userId &&
+                            u.FailedLoginAttempts >= maxFailedAttempts &&
+                            (u.LockedUntil == null || u.LockedUntil <= now))
+                        .ExecuteUpdateAsync(s => s.SetProperty(u => u.LockedUntil, lockedUntil), cancellationToken)
+                        .ConfigureAwait(false) > 0;
 
-            if (snapshot is null)
-            {
-                return new(0, null);
-            }
+                    var snapshot = await (
+                        from u in context.Users.AsNoTracking()
+                        where u.Id == userId
+                        select new { u.Username, u.FailedLoginAttempts, u.LockedUntil })
+                        .FirstOrDefaultAsync(cancellationToken)
+                        .ConfigureAwait(false);
 
-            return new(snapshot.FailedLoginAttempts, snapshot.LockedUntil);
+                    if (snapshot is null)
+                    {
+                        return new FailedLoginResult(0, null);
+                    }
+
+                    if (lockedOut)
+                    {
+                        await transactionManager.OnCommittedAsync(
+                            token => eventBus.PublishAsync(
+                                SecurityEventBuilder.BuildUserLockedOutEvent(
+                                    userId,
+                                    snapshot.Username,
+                                    snapshot.FailedLoginAttempts,
+                                    lockedUntil),
+                                token),
+                            cancellationToken).ConfigureAwait(false);
+                    }
+
+                    return new FailedLoginResult(snapshot.FailedLoginAttempts, snapshot.LockedUntil);
+                },
+                cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -523,15 +558,9 @@ internal sealed class UserRepository(
             return await transactionManager.ExecuteWithTransactionAsync(
                 async _ =>
                 {
-                    var updated = await context.Users
-                        .Where(u => u.Id == userId)
-                        .ExecuteUpdateAsync(
-                            s => s
-                                .SetProperty(u => u.FailedLoginAttempts, 0)
-                                .SetProperty(u => u.LockedUntil, (DateTime?)null),
-                            cancellationToken)
-                        .ConfigureAwait(false);
-                    if (updated == 0)
+                    // Without an acting user, the sign-in path is clearing a lockout that ran out.
+                    var unlockReason = modifiedByUserId is null ? UnlockReasonExpiry : UnlockReasonAdmin;
+                    if (!await UnlockAsync(userId, unlockReason, cancellationToken).ConfigureAwait(false))
                     {
                         return false;
                     }
@@ -558,6 +587,40 @@ internal sealed class UserRepository(
             logger.LogError(ex, "The user repository failed to reset the lockout of user {UserId}.", userId);
             throw;
         }
+    }
+
+    private async Task<bool> UnlockAsync(Guid userId, string unlockReason, CancellationToken cancellationToken)
+    {
+        var user = await (
+            from u in context.Users.AsNoTracking()
+            where u.Id == userId
+            select new { u.Username, u.FailedLoginAttempts, u.LockedUntil })
+            .FirstOrDefaultAsync(cancellationToken)
+            .ConfigureAwait(false);
+        if (user is null)
+        {
+            return false;
+        }
+
+        if (user.LockedUntil is null && user.FailedLoginAttempts == 0)
+        {
+            return true;
+        }
+
+        await context.Users
+            .Where(u => u.Id == userId)
+            .ExecuteUpdateAsync(
+                s => s
+                    .SetProperty(u => u.FailedLoginAttempts, 0)
+                    .SetProperty(u => u.LockedUntil, (DateTime?)null),
+                cancellationToken)
+            .ConfigureAwait(false);
+        await transactionManager.OnCommittedAsync(
+            token => eventBus.PublishAsync(
+                SecurityEventBuilder.BuildUserUnlockedEvent(userId, user.Username, unlockReason),
+                token),
+            cancellationToken).ConfigureAwait(false);
+        return true;
     }
 
     public async Task<PagedList<User>> QueryAsync(

@@ -89,26 +89,6 @@ public sealed class SubjectMetadataRefreshItemJobTests
     }
 
     [Test]
-    public void ExecuteAsync_DefersWithoutMarkingRefreshed_WhenTheProviderThrottles()
-    {
-        // Arrange
-        _provider.Setup(value => value.TryGetMetadataAsync(It.IsAny<Subject>(),
-                It.IsAny<IEnumerable<MetadataContribution>>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
-            .ThrowsAsync(new UpstreamThrottledException(new DateTimeOffset(2027, 1, 1, 0, 0, 0, TimeSpan.Zero)));
-
-        // Act
-        var throttle = Assert.ThrowsAsync<UpstreamThrottledException>(() => _subject.ExecuteAsync(_jobContext));
-
-        // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(throttle!.RetryAt, Is.EqualTo(new DateTimeOffset(2027, 1, 1, 0, 0, 0, TimeSpan.Zero)));
-            _subjectRepository.Verify(repository => repository.PatchAsync(It.IsAny<SubjectRowPatch>(),
-                It.IsAny<Guid?>(), It.IsAny<CancellationToken>()), Times.Never);
-        }
-    }
-
-    [Test]
     public async Task ExecuteAsync_StampsTheRefreshTimeWithoutRewritingTheSubject_WhenTheRefreshCompletes()
     {
         // Arrange

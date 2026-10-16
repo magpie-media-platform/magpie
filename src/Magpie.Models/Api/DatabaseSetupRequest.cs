@@ -1,3 +1,7 @@
+using System.Collections.Generic;
+
+using Magpie.Models.Enums;
+
 namespace Magpie.Models.Api;
 
 /// <summary>
@@ -14,4 +18,14 @@ public sealed record DatabaseSetupRequest
     /// The connection string for the database, when the provider requires one.
     /// </summary>
     public string? ConnectionString { get; init; }
+
+    /// <summary>
+    /// The roles of a node that joins a cluster.
+    /// </summary>
+    public IReadOnlyList<NodeRole>? Roles { get; init; }
+
+    /// <summary>
+    /// The job types that a node that joins a cluster runs.
+    /// </summary>
+    public IReadOnlyList<string> JobTypes { get; init; } = [];
 }

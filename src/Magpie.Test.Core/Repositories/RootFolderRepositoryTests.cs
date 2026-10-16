@@ -35,6 +35,7 @@ public sealed class RootFolderRepositoryTests
     private IRootFolderRepository _subject = null!;
     private Mock<IContentHierarchyItemRepository> _contentHierarchyItems = null!;
     private List<MagpieEvent> _publishedEvents = null!;
+    private bool _publishedInsideTransaction;
     private Guid _userId;
     private string _contentType = null!;
 
@@ -89,10 +90,15 @@ public sealed class RootFolderRepositoryTests
             timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
         var transactionManager = new TransactionManager(_context, NullLogger<TransactionManager>.Instance);
         _publishedEvents = [];
+        _publishedInsideTransaction = false;
         var events = new Mock<IEventBus>(MockBehavior.Strict);
         events
             .Setup(x => x.PublishAsync(It.IsAny<MagpieEvent>(), It.IsAny<CancellationToken>()))
-            .Callback((MagpieEvent magpieEvent, CancellationToken _) => _publishedEvents.Add(magpieEvent))
+            .Callback((MagpieEvent magpieEvent, CancellationToken _) =>
+            {
+                _publishedEvents.Add(magpieEvent);
+                _publishedInsideTransaction |= _context.Database.CurrentTransaction is not null;
+            })
             .Returns(Task.CompletedTask);
 
         _contentHierarchyItems = new Mock<IContentHierarchyItemRepository>();
@@ -102,6 +108,13 @@ public sealed class RootFolderRepositoryTests
             auditRecordRepository,
             transactionManager,
             _contentHierarchyItems.Object,
+            new LibraryImportCandidateRepository(
+                _context,
+                auditRecordRepository,
+                transactionManager,
+                events.Object,
+                NullLogger<LibraryImportCandidateRepository>.Instance,
+                new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero))),
             events.Object,
             NullLogger<RootFolderRepository>.Instance,
             timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
@@ -597,6 +610,54 @@ public sealed class RootFolderRepositoryTests
     }
 
     [Test]
+    public async Task DeleteAsync_RaisesAnUpdateForEachImportCandidateAfterCommit_WhenTheFolderHasCandidates()
+    {
+        // Arrange
+        var rootFolder = new RootFolder
+        {
+            Name = "ToDelete",
+            Path = "/media/to-delete",
+            ContentType = _contentType,
+            CreatedAt = DateTime.UtcNow,
+            CreatedByUserId = _userId
+        };
+        _context.RootFolders.Add(rootFolder);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        var candidates = new[] { LibraryImportCandidateStatus.Pending, LibraryImportCandidateStatus.Queued }
+            .Select(status => new LibraryImportCandidate
+            {
+                RootFolderId = rootFolder.Id,
+                ScanRunId = Guid.NewGuid(),
+                FilePath = $"/media/to-delete/{status}.mkv",
+                ContentType = _contentType,
+                Status = status,
+                CreatedAt = DateTime.UtcNow
+            })
+            .ToList();
+        _context.LibraryImportCandidates.AddRange(candidates);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        // Act
+        await _subject.DeleteAsync(rootFolder.Id, _userId).ConfigureAwait(false);
+
+        // Assert
+        var remaining = await _context.LibraryImportCandidates.CountAsync().ConfigureAwait(false);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(remaining, Is.Zero);
+            Assert.That(_publishedInsideTransaction, Is.False);
+            Assert.That(
+                _publishedEvents
+                    .Where(magpieEvent => magpieEvent.Name == "library.importCandidate.updated")
+                    .Select(magpieEvent => magpieEvent.Context["library.importCandidateId"]),
+                Is.EquivalentTo(candidates.Select(candidate => candidate.Id.ToString("D"))));
+            Assert.That(
+                _publishedEvents,
+                Has.One.With.Property(nameof(MagpieEvent.Name)).EqualTo("library.rootFolder.deleted"));
+        }
+    }
+
+    [Test]
     public async Task DeleteAsync_PromotesTheOldestRemainingFolder_WhenTheDeletedFolderWasTheDefault()
     {
         // Arrange
@@ -819,6 +880,7 @@ public sealed class RootFolderRepositoryTests
             auditRecordRepository,
             transactionManager,
             Mock.Of<IContentHierarchyItemRepository>(),
+            Mock.Of<ILibraryImportCandidateRepository>(),
             failing.Object,
             NullLogger<RootFolderRepository>.Instance,
             timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
@@ -1038,7 +1100,7 @@ public sealed class RootFolderRepositoryTests
             Assert.That(stored.QualityTierListId, Is.EqualTo(secondTierList.Id));
             Assert.That(
                 published.Context["rootFolder.changedFields"],
-                Does.Contain("defaults"));
+                Does.Contain("Defaults"));
         }
 
         _contentHierarchyItems.Verify(
@@ -1144,7 +1206,7 @@ public sealed class RootFolderRepositoryTests
             Assert.That(stored.Defaults["book"].QualityTierListId, Is.EqualTo(tierList.Id));
             Assert.That(
                 published.Context["rootFolder.changedFields"],
-                Is.EqualTo("name"));
+                Is.EqualTo("Name"));
         }
     }
 
@@ -1348,7 +1410,7 @@ public sealed class RootFolderRepositoryTests
             Assert.That(afterCreate.AutoImport, Is.False);
             Assert.That(result, Is.True);
             Assert.That(stored.AutoImport, Is.True);
-            Assert.That(published.Context["rootFolder.changedFields"], Is.EqualTo("autoImport"));
+            Assert.That(published.Context["rootFolder.changedFields"], Is.EqualTo("AutoImport"));
         }
     }
 }

@@ -6,7 +6,6 @@ using System.Threading.Tasks;
 using Magpie.Abstractions;
 using Magpie.Abstractions.Repositories;
 using Magpie.Abstractions.Security;
-using Magpie.Core.Events;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Paging;
@@ -21,7 +20,6 @@ internal sealed class UserService(
     IRefreshTokenRepository refreshTokens,
     IPasswordHasher passwordHasher,
     IPasswordPolicy passwordPolicy,
-    IEventBus eventBus,
     ITransactionManager transactionManager,
     TimeProvider timeProvider) : IUserService
 {
@@ -155,15 +153,7 @@ internal sealed class UserService(
             return true;
         }
 
-        var reset = await users.ResetLockoutAsync(userId, callerUserId, cancellationToken).ConfigureAwait(false);
-        if (reset)
-        {
-            await eventBus.PublishAsync(
-                SecurityEventBuilder.BuildUserUnlockedEvent(user),
-                cancellationToken).ConfigureAwait(false);
-        }
-
-        return reset;
+        return await users.ResetLockoutAsync(userId, callerUserId, cancellationToken).ConfigureAwait(false);
     }
 
     public Task<User?> GetProfileAsync(Guid callerUserId, CancellationToken cancellationToken = default) =>

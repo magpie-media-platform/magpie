@@ -4,6 +4,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
+using Magpie.Models;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
 using Magpie.Models.Filtering;
@@ -101,27 +102,39 @@ public static class MagpieSeedingExtensions
     /// <param name="optionsBuilder">The options builder to configure</param>
     /// <param name="scheduleTriggers">The default schedule triggers to seed</param>
     /// <param name="eventTriggers">The default event triggers to seed</param>
+    /// <param name="migrationState">The migration state that holds the migrations that this host applies</param>
     /// <returns>The same options builder for chaining</returns>
     public static DbContextOptionsBuilder UseMagpieSeeding(
         this DbContextOptionsBuilder optionsBuilder,
         IReadOnlyList<ScheduleTrigger> scheduleTriggers,
-        IReadOnlyList<EventTrigger> eventTriggers)
+        IReadOnlyList<EventTrigger> eventTriggers,
+        DatabaseMigrationState? migrationState = null)
     {
         ArgumentNullException.ThrowIfNull(optionsBuilder);
         ArgumentNullException.ThrowIfNull(scheduleTriggers);
         ArgumentNullException.ThrowIfNull(eventTriggers);
 
+        // Another node can apply the pending migrations while this node waits for the migration lock.
         return optionsBuilder
-            .UseSeeding((context, _) =>
-                context.SeedAsync(scheduleTriggers, eventTriggers, default).GetAwaiter().GetResult())
-            .UseAsyncSeeding((context, _, cancellationToken) =>
-                context.SeedAsync(scheduleTriggers, eventTriggers, cancellationToken));
+            .UseSeeding((context, storeManagementPerformed) =>
+                context.SeedAsync(
+                    scheduleTriggers,
+                    eventTriggers,
+                    storeManagementPerformed ? migrationState?.PendingMigrations ?? [] : [],
+                    default).GetAwaiter().GetResult())
+            .UseAsyncSeeding((context, storeManagementPerformed, cancellationToken) =>
+                context.SeedAsync(
+                    scheduleTriggers,
+                    eventTriggers,
+                    storeManagementPerformed ? migrationState?.PendingMigrations ?? [] : [],
+                    cancellationToken));
     }
 
     private static async Task SeedAsync(
         this DbContext context,
         IReadOnlyList<ScheduleTrigger> scheduleTriggers,
         IReadOnlyList<EventTrigger> eventTriggers,
+        IReadOnlyCollection<string> appliedMigrations,
         CancellationToken cancellationToken)
     {
         var firstSeed = !await context.Set<User>()
@@ -142,9 +155,26 @@ public static class MagpieSeedingExtensions
 
         var now = DateTime.UtcNow;
 
-        if (!await context.Set<ScheduleTrigger>().AnyAsync(cancellationToken).ConfigureAwait(false))
+        if (firstSeed)
         {
             context.Set<ScheduleTrigger>().AddRange(scheduleTriggers);
+            context.Set<EventTrigger>().AddRange(eventTriggers);
+        }
+        else if (appliedMigrations.Any(id => id.EndsWith("_audit_record_data", StringComparison.Ordinal)))
+        {
+            var storedNames = await context.Set<EventTrigger>()
+                .Select(trigger => trigger.Name)
+                .ToListAsync(cancellationToken)
+                .ConfigureAwait(false);
+            context.Set<EventTrigger>().AddRange(eventTriggers.Where(trigger =>
+                !storedNames.Contains(trigger.Name) &&
+                trigger.Name is
+                    "Media info extract on file change" or
+                    "Media server refresh on file change" or
+                    "Download cleanup on hold change" or
+                    "Release auto-grab scan on fulfillment change" or
+                    "Content fulfillment reconciliation on quality tier change" or
+                    "Indexer feed sync on creation"));
         }
 
         await context.Set<ScheduleTrigger>()
@@ -164,11 +194,6 @@ public static class MagpieSeedingExtensions
             .Where(finding => finding.DiagnosticCheckId == "core.content.duplicate-subject")
             .ExecuteDeleteAsync(cancellationToken)
             .ConfigureAwait(false);
-
-        if (!await context.Set<EventTrigger>().AnyAsync(cancellationToken).ConfigureAwait(false))
-        {
-            context.Set<EventTrigger>().AddRange(eventTriggers);
-        }
 
         if (!await context.Set<MimeMapping>().AnyAsync(cancellationToken).ConfigureAwait(false))
         {

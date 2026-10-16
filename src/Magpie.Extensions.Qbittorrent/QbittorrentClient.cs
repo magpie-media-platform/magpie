@@ -22,6 +22,8 @@ internal sealed class QbittorrentClient(
     ILogger<QbittorrentClient> logger,
     ICacheFactory cacheFactory) : IQbittorrentClient, IDisposable
 {
+    internal const string AuthenticationScopeKey = "Qbittorrent.Authentication";
+
     private static readonly Version Qbit5BoundaryVersion = new(5, 0);
 
     private static readonly JsonSerializerOptions JsonOptions = new()
@@ -124,6 +126,11 @@ internal sealed class QbittorrentClient(
         string path)
     {
         var request = new HttpRequestMessage(method, new Uri(settings.Host, path));
+        if (settings.HasCredentials)
+        {
+            request.Properties[AuthenticationScopeKey] = settings.Username!;
+        }
+
         request.Headers.Referrer = settings.Host;
         return request;
     }

@@ -497,7 +497,7 @@ public sealed class SubjectFilterRepositoryTests
             It.Is<MagpieEvent>(e =>
                 e.Name == "subjectFilter.updated" &&
                 e.Context.ContainsKey("subjectFilter.changedFields") &&
-                e.Context["subjectFilter.changedFields"] == "name"),
+                e.Context["subjectFilter.changedFields"] == "Name"),
             It.IsAny<CancellationToken>()), Times.Once);
     }
 

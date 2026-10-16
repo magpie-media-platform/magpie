@@ -353,7 +353,8 @@ internal sealed class QueryCoordinator : IQueryCoordinator, IDisposable
         try
         {
             var result = await loader(state, shared.Cancellation.Token).ConfigureAwait(false);
-            if (result.Any(value => value.Kind == SubjectResolutionKind.Resolved))
+            if (result.Any(value => value.Kind == SubjectResolutionKind.Resolved) &&
+                result.All(value => value.Kind != SubjectResolutionKind.Failed))
             {
                 _positiveSubjectSets.Set(key, result);
             }

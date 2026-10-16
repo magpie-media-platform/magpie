@@ -7,7 +7,6 @@ using System.Threading.Tasks;
 
 using Magpie.Abstractions.Repositories;
 using Magpie.Models;
-using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
 using Magpie.Models.Filtering;
@@ -32,7 +31,7 @@ internal sealed class ReleaseAutoGrabScanJob(
     {
         JobType = MagpieJobs.Types.ReleaseAutoGrabScan,
         DisplayName = "Release auto-grab scan",
-        Description = "Queues an automatic release grab for every monitored item that is ready to download.",
+        Description = "Finds and queues monitored items that are ready to download.",
         Category = "Content",
         Scope = JobScope.Content,
         Enabled = true,
@@ -53,19 +52,11 @@ internal sealed class ReleaseAutoGrabScanJob(
                     int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var hours) &&
                     hours > utcNow.Ticks / TimeSpan.TicksPerHour
                         ? "exceeds the supported date range." : null
-            },
-            new(
-                MagpieJobs.Parameters.BackpressureThreshold,
-                "Maximum queued or running downstream ReleaseDownloadItem executions before the sweep skips.",
-                DataType.Number,
-                false,
-                DefaultBackpressureThreshold.ToString(CultureInfo.InvariantCulture))
+            }
         ],
     };
 
     private const int PageSize = 500;
-
-    private const int DefaultBackpressureThreshold = 50;
 
     public async Task ExecuteAsync(JobContext context, CancellationToken cancellationToken = default)
     {
@@ -77,38 +68,6 @@ internal sealed class ReleaseAutoGrabScanJob(
             MagpieJobs.ParameterValues.DefaultRetryCooldownHours,
             minimum: 0);
         var retryCooldown = TimeSpan.FromHours(retryCooldownHours);
-        var backpressureThreshold = ReadIntParameter(
-            context.Parameters,
-            MagpieJobs.Parameters.BackpressureThreshold,
-            DefaultBackpressureThreshold);
-
-        var activeAcquisitions = await jobExecutionRepository
-            .QueryAsync(
-                new JobExecutionQuery
-                {
-                    JobType = MagpieJobs.Types.ReleaseDownloadItem,
-                    Statuses = [JobExecutionStatus.Queued, JobExecutionStatus.Running],
-                },
-                new()
-                {
-                    PageNumber = 1,
-                    PageSize = 1,
-                },
-                sort: null,
-                cancellationToken)
-            .ConfigureAwait(false);
-        if (activeAcquisitions.TotalItems > backpressureThreshold)
-        {
-            logger.LogInformation(
-                "{ActiveCount} ReleaseDownloadItem executions are active (threshold {Threshold}), so the" +
-                " auto-grab scan skipped this run",
-                activeAcquisitions.TotalItems,
-                backpressureThreshold);
-            progressReporter.Report(
-                1,
-                "The scan stopped because the ReleaseDownloadItem queue is above its backpressure threshold.");
-            return;
-        }
 
         progressReporter.Report(0, "The scan will load the monitored content.");
 
@@ -332,7 +291,7 @@ internal sealed class ReleaseAutoGrabScanJob(
         IReadOnlyDictionary<string, string> parameters,
         string parameterName,
         int defaultValue,
-        int minimum = 1)
+        int minimum)
     {
         if (!parameters.TryGetValue(parameterName, out var raw))
         {

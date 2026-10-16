@@ -32,7 +32,7 @@ internal sealed class DownloadRefreshJob(
     {
         JobType = MagpieJobs.Types.DownloadRefresh,
         DisplayName = "Download refresh",
-        Description = "Polls enabled download clients and updates tracked downloads.",
+        Description = "Updates the status of downloads from the download clients.",
         Category = "Integrations",
         Scope = JobScope.Administrative,
         Enabled = true,
@@ -81,7 +81,7 @@ internal sealed class DownloadRefreshJob(
                 enabledClients.Length,
                 $"The download refresh will process client {client.Name}.");
 
-            var updated = new List<Guid>();
+            var updated = new Dictionary<Guid, IReadOnlyList<string>>();
             try
             {
                 var integration = downloadClientIntegrations.LastOrDefault(
@@ -188,11 +188,12 @@ internal sealed class DownloadRefreshJob(
 
                     try
                     {
-                        if (await downloadService
+                        var changedFields = await downloadService
                             .UpdateRefreshedClientStateAsync(download, info, userId, cancellationToken)
-                            .ConfigureAwait(false))
+                            .ConfigureAwait(false);
+                        if (changedFields.Count > 0)
                         {
-                            updated.Add(download.Id);
+                            updated[download.Id] = changedFields;
                         }
                     }
                     catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -321,7 +322,7 @@ internal sealed class DownloadRefreshJob(
         };
     }
 
-    private async Task PublishRefreshedStatusAsync(List<Guid> updated, Guid? userId)
+    private async Task PublishRefreshedStatusAsync(Dictionary<Guid, IReadOnlyList<string>> updated, Guid? userId)
     {
         if (updated.Count == 0)
         {

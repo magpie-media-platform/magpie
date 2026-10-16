@@ -30,7 +30,7 @@ internal sealed class ContentMetadataRefreshScanJob(
     {
         JobType = MagpieJobs.Types.ContentMetadataRefreshScan,
         DisplayName = "Content metadata refresh scan",
-        Description = "Finds content still using placeholder metadata and queues one metadata refresh per item.",
+        Description = "Finds and queues content that needs a metadata refresh.",
         Category = "Metadata",
         Scope = JobScope.Administrative,
         Enabled = true,

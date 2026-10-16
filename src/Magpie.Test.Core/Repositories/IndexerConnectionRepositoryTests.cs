@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 
 using Magpie.Abstractions.Jobs;
@@ -9,6 +10,7 @@ using Magpie.Abstractions.Security;
 using Magpie.Core;
 using Magpie.Core.Repositories;
 using Magpie.Data;
+using Magpie.Models;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
@@ -31,7 +33,9 @@ public sealed class IndexerConnectionRepositoryTests
 {
     private MagpieDbContext _context = null!;
     private SqliteConnection _template = null!;
+    private Mock<IEventBus> _eventBus = null!;
     private IIndexerConnectionRepository _subject = null!;
+    private IIndexerRepository _indexers = null!;
     private Guid _userId;
     private Guid _indexerId;
 
@@ -106,9 +110,16 @@ public sealed class IndexerConnectionRepositoryTests
 
         _subject = new IndexerConnectionRepository(
             _context,
+            NullLogger<IndexerConnectionRepository>.Instance,
+            protector.Object);
+
+        _eventBus = new Mock<IEventBus>();
+        _indexers = new IndexerRepository(
+            _context,
             auditRecordRepository,
             transactionManager,
-            NullLogger<IndexerConnectionRepository>.Instance,
+            _eventBus.Object,
+            NullLogger<IndexerRepository>.Instance,
             protector.Object,
             timeProvider: new FakeTimeProvider(new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero)));
     }
@@ -174,7 +185,7 @@ public sealed class IndexerConnectionRepositoryTests
         var checkedAt = new DateTime(2026, 5, 29, 12, 0, 0, DateTimeKind.Utc);
 
         // Act
-        var updated = await _subject.PatchAsync(
+        var updated = await _indexers.PatchConnectionAsync(
             new()
             {
                 Id = connection.Id,
@@ -209,7 +220,7 @@ public sealed class IndexerConnectionRepositoryTests
         await _context.SaveChangesAsync().ConfigureAwait(false);
 
         var checkedAt = new DateTime(2026, 5, 29, 12, 0, 0, DateTimeKind.Utc);
-        await _subject.PatchAsync(
+        await _indexers.PatchConnectionAsync(
             new()
             {
                 Id = connection.Id,
@@ -235,7 +246,7 @@ public sealed class IndexerConnectionRepositoryTests
     public async Task PatchAsync_ReturnsFalse_WhenConnectionDoesNotExist()
     {
         // Act
-        var updated = await _subject.PatchAsync(
+        var updated = await _indexers.PatchConnectionAsync(
             new()
             {
                 Id = Guid.NewGuid(),
@@ -266,7 +277,7 @@ public sealed class IndexerConnectionRepositoryTests
         var checkedAt = new DateTime(2026, 5, 29, 12, 0, 0, DateTimeKind.Utc);
 
         // Act
-        await _subject.PatchAsync(
+        await _indexers.PatchConnectionAsync(
             new()
             {
                 Id = connection.Id,
@@ -278,7 +289,7 @@ public sealed class IndexerConnectionRepositoryTests
         var afterError = await _subject.GetByIdAsync(connection.Id).ConfigureAwait(false);
 
         // Act
-        await _subject.PatchAsync(
+        await _indexers.PatchConnectionAsync(
             new()
             {
                 Id = connection.Id,
@@ -317,7 +328,7 @@ public sealed class IndexerConnectionRepositoryTests
         var longMessage = new string('x', 2000);
 
         // Act
-        await _subject.PatchAsync(
+        await _indexers.PatchConnectionAsync(
             new()
             {
                 Id = connection.Id,
@@ -513,7 +524,7 @@ public sealed class IndexerConnectionRepositoryTests
         };
 
         // Act
-        var result = await _subject.CreateAsync(connection, _userId).ConfigureAwait(false);
+        var result = await _indexers.CreateConnectionAsync(connection, _userId).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
@@ -540,7 +551,7 @@ public sealed class IndexerConnectionRepositoryTests
         };
 
         // Act
-        await _subject.CreateAsync(connection, _userId).ConfigureAwait(false);
+        await _indexers.CreateConnectionAsync(connection, _userId).ConfigureAwait(false);
 
         // Assert
         var auditRecords = await _context.AuditRecords.ToListAsync().ConfigureAwait(false);
@@ -556,93 +567,138 @@ public sealed class IndexerConnectionRepositoryTests
         }
     }
 
-    [Test]
-    public async Task UpdateAsync_UpdatesIndexerConnection_WhenExists()
+    [TestCase("create")]
+    [TestCase("patch")]
+    [TestCase("delete")]
+    public async Task IndexerConnectionWrite_PublishesIndexerUpdatedOnceAfterCommit_WhenAConnectionChanges(
+        string write)
     {
         // Arrange
         var connection = new IndexerConnection
         {
             IndexerId = _indexerId,
-            Name = "OriginalConnection",
+            Name = "Evented",
             Enabled = true,
             Status = IntegrationHealthStatus.Healthy,
             CreatedAt = DateTime.UtcNow
         };
-        _context.IndexerConnections.Add(connection);
-        await _context.SaveChangesAsync().ConfigureAwait(false);
-
-        connection.Name = "UpdatedConnection";
-        connection.Enabled = false;
-        connection.Status = IntegrationHealthStatus.Unhealthy;
-
-        // Act
-        var result = await _subject.UpdateAsync(connection, _userId).ConfigureAwait(false);
-
-        // Assert
-        var updated = await _subject.GetByIdAsync(connection.Id).ConfigureAwait(false);
-
-        using (Assert.EnterMultipleScope())
+        if (write != "create")
         {
-            Assert.That(result, Is.True);
-            Assert.That(updated, Has.Property(nameof(updated.Name)).EqualTo("UpdatedConnection"));
-            Assert.That(updated, Has.Property(nameof(updated.Enabled)).False);
-            Assert.That(updated, Has.Property(nameof(updated.Status)).EqualTo(IntegrationHealthStatus.Unhealthy));
-            Assert.That(updated, Has.Property(nameof(updated.ModifiedByUserId)).EqualTo(_userId));
-            Assert.That(updated, Has.Property(nameof(updated.ModifiedAt)).Not.Null);
+            _context.IndexerConnections.Add(connection);
+            await _context.SaveChangesAsync().ConfigureAwait(false);
+            _context.ChangeTracker.Clear();
         }
-    }
 
-    [Test]
-    public async Task UpdateAsync_ReturnsFalse_WhenNotExists()
-    {
-        // Arrange
-        var connection = new IndexerConnection
-        {
-            Id = Guid.NewGuid(),
-            IndexerId = _indexerId,
-            Name = "NonExistent",
-            Enabled = true,
-            Status = IntegrationHealthStatus.Healthy
-        };
+        var publishedInsideTransaction = false;
+        _eventBus
+            .Setup(bus => bus.PublishAsync(It.IsAny<MagpieEvent>(), It.IsAny<CancellationToken>()))
+            .Callback(() => publishedInsideTransaction |= _context.Database.CurrentTransaction is not null)
+            .Returns(Task.CompletedTask);
 
         // Act
-        var result = await _subject.UpdateAsync(connection, _userId).ConfigureAwait(false);
+        Task operation = write switch
+        {
+            "create" => _indexers.CreateConnectionAsync(connection, _userId),
+            "patch" => _indexers.PatchConnectionAsync(
+                new() { Id = connection.Id, Enabled = new() { Value = false } },
+                _userId),
+            _ => _indexers.DeleteConnectionAsync(connection.Id, _userId),
+        };
+        await operation.ConfigureAwait(false);
 
         // Assert
-        Assert.That(result, Is.False);
+        Assert.That(publishedInsideTransaction, Is.False);
+        _eventBus.Verify(
+            bus => bus.PublishAsync(
+                It.Is<MagpieEvent>(e => e.Name == "indexer.updated" &&
+                    e.Context["indexer.id"] == _indexerId.ToString() &&
+                    e.Context["indexer.changedFields"] == "Connections"),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
+        _eventBus.Verify(
+            bus => bus.PublishAsync(It.IsAny<MagpieEvent>(), It.IsAny<CancellationToken>()),
+            Times.Once);
     }
 
-    [Test]
-    public async Task UpdateAsync_CreatesAuditRecord_WhenConnectionIsUpdated()
+    [TestCase(false, 0)]
+    [TestCase(true, 1)]
+    public async Task PatchConnectionAsync_PublishesIndexerUpdatedOnlyForConfiguration_WhenAProbeWritesHealth(
+        bool rename,
+        int expectedEvents)
     {
         // Arrange
         var connection = new IndexerConnection
         {
             IndexerId = _indexerId,
-            Name = "ToUpdate",
+            Name = "Probed",
             Enabled = true,
             Status = IntegrationHealthStatus.Healthy,
             CreatedAt = DateTime.UtcNow
         };
         _context.IndexerConnections.Add(connection);
         await _context.SaveChangesAsync().ConfigureAwait(false);
-
-        connection.Name = "Updated";
+        _context.ChangeTracker.Clear();
 
         // Act
-        await _subject.UpdateAsync(connection, _userId).ConfigureAwait(false);
+        var patched = await _indexers.PatchConnectionAsync(
+            new()
+            {
+                Id = connection.Id,
+                Name = new() { Value = rename ? "Renamed" : "Probed" },
+                Status = new() { Value = IntegrationHealthStatus.Unhealthy },
+                LastChecked = new() { Value = DateTime.UtcNow },
+                LastError = new() { Value = "Timed out" },
+                ConsecutiveFailures = new() { Value = 1 }
+            },
+            null).ConfigureAwait(false);
 
         // Assert
-        var auditRecords = await _context.AuditRecords.ToListAsync().ConfigureAwait(false);
+        Assert.That(patched, Is.True);
+        _eventBus.Verify(
+            bus => bus.PublishAsync(
+                It.Is<MagpieEvent>(e => e.Name == "indexer.updated"),
+                It.IsAny<CancellationToken>()),
+            Times.Exactly(expectedEvents));
+    }
+
+    [Test]
+    public async Task DeleteAsync_OfTheIndexer_DeletesAndAuditsConnectionsWithOnlyTheDeletedEvent()
+    {
+        // Arrange
+        _context.IndexerConnections.Add(new IndexerConnection
+        {
+            IndexerId = _indexerId,
+            Name = "Removed with the indexer",
+            Enabled = true,
+            Status = IntegrationHealthStatus.Healthy,
+            CreatedAt = DateTime.UtcNow
+        });
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.ChangeTracker.Clear();
+
+        // Act
+        var deleted = await _indexers.DeleteAsync(_indexerId, _userId).ConfigureAwait(false);
+
+        // Assert
+        var connections = await _context.IndexerConnections.AsNoTracking().ToListAsync().ConfigureAwait(false);
+        var audits = await _context.AuditRecords.AsNoTracking().ToListAsync().ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(auditRecords, Has.Count.EqualTo(1));
-            Assert.That(auditRecords, Has.One.With.Property(nameof(AuditRecord.Operation)).EqualTo("Update"));
+            Assert.That(deleted, Is.True);
+            Assert.That(connections, Is.Empty);
             Assert.That(
-                auditRecords,
-                Has.One.With.Property(nameof(AuditRecord.EntityType))
-                    .EqualTo("IndexerConnection"));
+                audits,
+                Has.One.With.Property(nameof(AuditRecord.EntityType)).EqualTo(nameof(IndexerConnection)));
         }
+
+        _eventBus.Verify(
+            bus => bus.PublishAsync(
+                It.Is<MagpieEvent>(e => e.Name == "indexer.deleted"),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
+        _eventBus.Verify(
+            bus => bus.PublishAsync(It.IsAny<MagpieEvent>(), It.IsAny<CancellationToken>()),
+            Times.Once);
     }
 
     [Test]
@@ -661,7 +717,7 @@ public sealed class IndexerConnectionRepositoryTests
         await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
-        var result = await _subject.DeleteAsync(connection.Id, _userId).ConfigureAwait(false);
+        var result = await _indexers.DeleteConnectionAsync(connection.Id, _userId).ConfigureAwait(false);
 
         // Assert
         var deleted = await _subject.GetByIdAsync(connection.Id).ConfigureAwait(false);
@@ -676,7 +732,7 @@ public sealed class IndexerConnectionRepositoryTests
     public async Task DeleteAsync_ReturnsFalse_WhenNotExists()
     {
         // Act
-        var result = await _subject.DeleteAsync(Guid.NewGuid(), _userId).ConfigureAwait(false);
+        var result = await _indexers.DeleteConnectionAsync(Guid.NewGuid(), _userId).ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Is.False);
@@ -698,7 +754,7 @@ public sealed class IndexerConnectionRepositoryTests
         await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
-        await _subject.DeleteAsync(connection.Id, _userId).ConfigureAwait(false);
+        await _indexers.DeleteConnectionAsync(connection.Id, _userId).ConfigureAwait(false);
 
         // Assert
         var auditRecords = await _context.AuditRecords.ToListAsync().ConfigureAwait(false);
@@ -736,7 +792,7 @@ public sealed class IndexerConnectionRepositoryTests
         };
 
         // Act
-        var result = await _subject.PatchAsync(patch, _userId).ConfigureAwait(false);
+        var result = await _indexers.PatchConnectionAsync(patch, _userId).ConfigureAwait(false);
 
         // Assert
         var patched = await _subject.GetByIdAsync(connection.Id).ConfigureAwait(false);
@@ -772,7 +828,7 @@ public sealed class IndexerConnectionRepositoryTests
         };
 
         // Act
-        var result = await _subject.PatchAsync(patch, _userId).ConfigureAwait(false);
+        var result = await _indexers.PatchConnectionAsync(patch, _userId).ConfigureAwait(false);
 
         // Assert
         var patched = await _subject.GetByIdAsync(connection.Id).ConfigureAwait(false);
@@ -810,7 +866,7 @@ public sealed class IndexerConnectionRepositoryTests
         };
 
         // Act
-        var result = await _subject.PatchAsync(patch, _userId).ConfigureAwait(false);
+        var result = await _indexers.PatchConnectionAsync(patch, _userId).ConfigureAwait(false);
 
         // Assert
         var patched = await _subject.GetByIdAsync(connection.Id).ConfigureAwait(false);
@@ -853,7 +909,7 @@ public sealed class IndexerConnectionRepositoryTests
         };
 
         // Act
-        var result = await _subject.PatchAsync(patch, _userId).ConfigureAwait(false);
+        var result = await _indexers.PatchConnectionAsync(patch, _userId).ConfigureAwait(false);
 
         // Assert
         var patched = await _subject.GetByIdAsync(connection.Id).ConfigureAwait(false);
@@ -892,7 +948,7 @@ public sealed class IndexerConnectionRepositoryTests
         };
 
         // Act
-        var result = await _subject.PatchAsync(patch, _userId).ConfigureAwait(false);
+        var result = await _indexers.PatchConnectionAsync(patch, _userId).ConfigureAwait(false);
 
         // Assert
         var patched = await _subject.GetByIdAsync(connection.Id).ConfigureAwait(false);
@@ -926,7 +982,7 @@ public sealed class IndexerConnectionRepositoryTests
         };
 
         // Act
-        var result = await _subject.PatchAsync(patch, _userId).ConfigureAwait(false);
+        var result = await _indexers.PatchConnectionAsync(patch, _userId).ConfigureAwait(false);
 
         // Assert
         var tags = await _context.Tags
@@ -970,7 +1026,7 @@ public sealed class IndexerConnectionRepositoryTests
         };
 
         // Act
-        var result = await _subject.PatchAsync(patch, _userId).ConfigureAwait(false);
+        var result = await _indexers.PatchConnectionAsync(patch, _userId).ConfigureAwait(false);
 
         // Assert
         var tagAfter = await _context.Tags
@@ -995,7 +1051,7 @@ public sealed class IndexerConnectionRepositoryTests
         };
 
         // Act
-        var result = await _subject.PatchAsync(patch, _userId).ConfigureAwait(false);
+        var result = await _indexers.PatchConnectionAsync(patch, _userId).ConfigureAwait(false);
 
         // Assert
         Assert.That(result, Is.False);
@@ -1023,7 +1079,7 @@ public sealed class IndexerConnectionRepositoryTests
         };
 
         // Act
-        await _subject.PatchAsync(patch, _userId).ConfigureAwait(false);
+        await _indexers.PatchConnectionAsync(patch, _userId).ConfigureAwait(false);
 
         // Assert
         var auditRecords = await _context.AuditRecords.ToListAsync().ConfigureAwait(false);
@@ -1061,7 +1117,7 @@ public sealed class IndexerConnectionRepositoryTests
         };
 
         // Act
-        await _subject.PatchAsync(patch, _userId).ConfigureAwait(false);
+        await _indexers.PatchConnectionAsync(patch, _userId).ConfigureAwait(false);
 
         // Assert
         var auditRecords = await _context.AuditRecords.ToListAsync().ConfigureAwait(false);
@@ -1101,7 +1157,7 @@ public sealed class IndexerConnectionRepositoryTests
         };
 
         // Act
-        await _subject.PatchAsync(patch, _userId).ConfigureAwait(false);
+        await _indexers.PatchConnectionAsync(patch, _userId).ConfigureAwait(false);
 
         // Assert
         var auditRecords = await _context.AuditRecords.ToListAsync().ConfigureAwait(false);

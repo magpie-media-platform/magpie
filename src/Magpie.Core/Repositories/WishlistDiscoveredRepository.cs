@@ -311,7 +311,12 @@ internal sealed class WishlistDiscoveredRepository(
                 on mc.MetadataContainerId equals hi.MetadataContainerId
             where eid.Source != null
             group hi.Id by new { eid.Source, eid.Value } into g
-            select new { g.Key.Source, g.Key.Value, HierarchyItemId = (Guid?)g.Min() };
+            select new
+            {
+                g.Key.Source,
+                g.Key.Value,
+                HierarchyItemId = g.OrderBy(id => id).Select(id => (Guid?)id).FirstOrDefault(),
+            };
 
         var linked = await (
             from s in discovered

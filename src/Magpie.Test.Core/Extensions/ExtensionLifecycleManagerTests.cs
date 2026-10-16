@@ -7,12 +7,14 @@ using Magpie.Abstractions.Repositories;
 using Magpie.Core.Extensions;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
+using Magpie.Models.Enums;
 using Magpie.Sdk.Extensions;
 using Magpie.Sdk.Services;
 
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Time.Testing;
 
 using Moq;
 
@@ -25,8 +27,10 @@ public sealed class ExtensionLifecycleManagerTests
 {
     private TestExtension _extension = null!;
     private Mock<IExtensionRepository> _repository = null!;
+    private Mock<IExtensionNodeStatusRepository> _nodeStatuses = null!;
+    private FakeTimeProvider _timeProvider = null!;
     private Mock<IFileSystem> _fileSystem = null!;
-    private Extension? _updatedRow;
+    private Guid? _claimedId;
     private IServiceScopeFactory _scopeFactory = null!;
     private IExtensionLifecycleManager _subject = null!;
 
@@ -34,19 +38,22 @@ public sealed class ExtensionLifecycleManagerTests
     public void SetUp()
     {
         _extension = new TestExtension();
-        _updatedRow = null;
+        _claimedId = null;
         _repository = new Mock<IExtensionRepository>();
         _repository
             .Setup(candidate => candidate.ListAllAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync([]);
         _repository
-            .Setup(candidate => candidate.UpdateAsync(
-                It.IsAny<Extension>(),
-                It.IsAny<Guid?>(),
+            .Setup(candidate => candidate.TrySetLifecycleVersionAsync(
+                It.IsAny<Guid>(),
+                It.IsAny<string?>(),
+                It.IsAny<string?>(),
                 It.IsAny<CancellationToken>()))
-            .Callback<Extension, Guid?, CancellationToken>((row, _, _) => _updatedRow = row)
+            .Callback<Guid, string?, string?, CancellationToken>((id, _, _, _) => _claimedId = id)
             .ReturnsAsync(true);
         _fileSystem = new Mock<IFileSystem>();
+        _nodeStatuses = new Mock<IExtensionNodeStatusRepository>();
+        _timeProvider = new FakeTimeProvider(new DateTimeOffset(2026, 10, 12, 12, 0, 0, TimeSpan.Zero));
 
         var system = new Mock<IMagpieSystem>();
         system.SetupGet(candidate => candidate.NodeId).Returns("test-node");
@@ -72,8 +79,10 @@ public sealed class ExtensionLifecycleManagerTests
             new ExtensionLoadContext([_extension], []),
             _scopeFactory,
             _repository.Object,
+            _nodeStatuses.Object,
             _fileSystem.Object,
             new("test-node", false, false, ".", ".", ".", ".", DateTime.UtcNow),
+            _timeProvider,
             NullLoggerFactory.Instance,
             NullLogger<ExtensionLifecycleManager>.Instance);
     }
@@ -96,8 +105,10 @@ public sealed class ExtensionLifecycleManagerTests
             new ExtensionLoadContext([], [failedRow]),
             _scopeFactory,
             _repository.Object,
+            _nodeStatuses.Object,
             _fileSystem.Object,
             new("test-node", false, false, ".", ".", ".", ".", DateTime.UtcNow),
+            _timeProvider,
             NullLoggerFactory.Instance,
             NullLogger<ExtensionLifecycleManager>.Instance);
 
@@ -156,6 +167,13 @@ public sealed class ExtensionLifecycleManagerTests
         repository
             .Setup(candidate => candidate.ListAllAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync([row]);
+        repository
+            .Setup(candidate => candidate.TrySetLifecycleVersionAsync(
+                extensionId,
+                It.IsAny<string?>(),
+                It.IsAny<string?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
 
         var system = new Mock<IMagpieSystem>();
         system.SetupGet(candidate => candidate.NodeId).Returns("test-node");
@@ -180,8 +198,10 @@ public sealed class ExtensionLifecycleManagerTests
             new ExtensionLoadContext([lifecycle.Object], []),
             scopeFactory.Object,
             repository.Object,
+            _nodeStatuses.Object,
             _fileSystem.Object,
             new("test-node", false, false, ".", ".", ".", ".", DateTime.UtcNow),
+            _timeProvider,
             NullLoggerFactory.Instance,
             NullLogger<ExtensionLifecycleManager>.Instance);
 
@@ -190,15 +210,305 @@ public sealed class ExtensionLifecycleManagerTests
         await subject.DispatchStartupHooksAsync().ConfigureAwait(false);
 
         // Assert
-        Assert.That(row.LifecycleVersion, Is.EqualTo("1.0.0"));
-        lifecycle.Verify(extension => extension.OnExtensionUpgradeAsync(
-            It.IsAny<ExtensionLifecycleContext>(),
-            new Version(1, 0, 0),
-            It.IsAny<CancellationToken>()), Times.Exactly(2));
-        repository.Verify(candidate => candidate.UpdateAsync(
-            It.IsAny<Extension>(),
-            It.IsAny<Guid?>(),
-            It.IsAny<CancellationToken>()), Times.Never);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(row.LifecycleVersion, Is.EqualTo("1.0.0"));
+            lifecycle.Verify(extension => extension.OnExtensionUpgradeAsync(
+                It.IsAny<ExtensionLifecycleContext>(),
+                new Version(1, 0, 0),
+                It.IsAny<CancellationToken>()), Times.Exactly(2));
+            repository.Verify(candidate => candidate.TrySetLifecycleVersionAsync(
+                extensionId,
+                "claim:1.0.0:test-node",
+                "1.0.0",
+                It.IsAny<CancellationToken>()), Times.Exactly(2));
+        }
+    }
+
+    [TestCase(false, 0)]
+    [TestCase(true, 1)]
+    public async Task DispatchStartupHooksAsync_RunsTheInstallHook_WhenThisNodeClaimsIt(
+        bool claimed,
+        int expectedInstallCount)
+    {
+        // Arrange
+        var extensionId = new Guid("11111111-1111-1111-1111-111111111111");
+        var lifecycle = new Mock<IExtensionLifecycle>();
+        lifecycle.SetupGet(extension => extension.Id).Returns(extensionId);
+        lifecycle.SetupGet(extension => extension.Version).Returns(new Version(1, 0, 1));
+        lifecycle.SetupGet(extension => extension.Name).Returns("Test extension");
+        _repository
+            .Setup(candidate => candidate.ListAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(
+            [
+                new Extension
+                {
+                    Id = extensionId,
+                    Name = "Test extension",
+                    Version = "1.0.1",
+                    FilePath = "test-extension.dll",
+                    AssemblyName = "Test.Extension",
+                },
+            ]);
+        _repository
+            .Setup(candidate => candidate.TrySetLifecycleVersionAsync(
+                extensionId,
+                null,
+                "claim::test-node",
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(claimed);
+        var subject = new ExtensionLifecycleManager(
+            new ExtensionLoadContext([lifecycle.Object], []),
+            _scopeFactory,
+            _repository.Object,
+            _nodeStatuses.Object,
+            _fileSystem.Object,
+            new("test-node", true, true, ".", ".", ".", ".", DateTime.UtcNow),
+            _timeProvider,
+            NullLoggerFactory.Instance,
+            NullLogger<ExtensionLifecycleManager>.Instance);
+
+        // Act
+        await subject.DispatchStartupHooksAsync().ConfigureAwait(false);
+
+        // Assert
+        lifecycle.Verify(
+            extension => extension.OnExtensionInstallAsync(
+                It.IsAny<ExtensionLifecycleContext>(),
+                It.IsAny<CancellationToken>()),
+            Times.Exactly(expectedInstallCount));
+    }
+
+    [Test]
+    public async Task DispatchStartupHooksAsync_RemovesTheClaim_WhenTheInstallHookFails()
+    {
+        // Arrange
+        var extensionId = new Guid("11111111-1111-1111-1111-111111111111");
+        var lifecycle = new Mock<IExtensionLifecycle>();
+        lifecycle.SetupGet(extension => extension.Id).Returns(extensionId);
+        lifecycle.SetupGet(extension => extension.Version).Returns(new Version(1, 0, 1));
+        lifecycle.SetupGet(extension => extension.Name).Returns("Test extension");
+        lifecycle
+            .Setup(extension => extension.OnExtensionInstallAsync(
+                It.IsAny<ExtensionLifecycleContext>(),
+                It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("Install failed."));
+        _repository
+            .Setup(candidate => candidate.ListAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(
+            [
+                new Extension
+                {
+                    Id = extensionId,
+                    Name = "Test extension",
+                    Version = "1.0.1",
+                    FilePath = "test-extension.dll",
+                    AssemblyName = "Test.Extension",
+                },
+            ]);
+        var subject = new ExtensionLifecycleManager(
+            new ExtensionLoadContext([lifecycle.Object], []),
+            _scopeFactory,
+            _repository.Object,
+            _nodeStatuses.Object,
+            _fileSystem.Object,
+            new("test-node", true, true, ".", ".", ".", ".", DateTime.UtcNow),
+            _timeProvider,
+            NullLoggerFactory.Instance,
+            NullLogger<ExtensionLifecycleManager>.Instance);
+
+        // Act
+        await subject.DispatchStartupHooksAsync().ConfigureAwait(false);
+
+        // Assert
+        _repository.Verify(
+            candidate => candidate.TrySetLifecycleVersionAsync(
+                extensionId,
+                "claim::test-node",
+                null,
+                It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Test]
+    public async Task DispatchStartupHooksAsync_RemovesTheClaimWithoutTheStopToken_WhenTheHostStopsDuringTheHook()
+    {
+        // Arrange
+        var extensionId = new Guid("11111111-1111-1111-1111-111111111111");
+        var lifecycle = new Mock<IExtensionLifecycle>();
+        lifecycle.SetupGet(extension => extension.Id).Returns(extensionId);
+        lifecycle.SetupGet(extension => extension.Version).Returns(new Version(1, 0, 1));
+        lifecycle.SetupGet(extension => extension.Name).Returns("Test extension");
+        lifecycle
+            .Setup(extension => extension.OnExtensionInstallAsync(
+                It.IsAny<ExtensionLifecycleContext>(),
+                It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new OperationCanceledException());
+        _repository
+            .Setup(candidate => candidate.ListAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(
+            [
+                new Extension
+                {
+                    Id = extensionId,
+                    Name = "Test extension",
+                    Version = "1.0.1",
+                    FilePath = "test-extension.dll",
+                    AssemblyName = "Test.Extension",
+                },
+            ]);
+        var subject = new ExtensionLifecycleManager(
+            new ExtensionLoadContext([lifecycle.Object], []),
+            _scopeFactory,
+            _repository.Object,
+            _nodeStatuses.Object,
+            _fileSystem.Object,
+            new("test-node", true, true, ".", ".", ".", ".", DateTime.UtcNow),
+            _timeProvider,
+            NullLoggerFactory.Instance,
+            NullLogger<ExtensionLifecycleManager>.Instance);
+        using var stop = new CancellationTokenSource();
+        await stop.CancelAsync().ConfigureAwait(false);
+
+        // Act
+        await subject.DispatchStartupHooksAsync(stop.Token).ConfigureAwait(false);
+
+        // Assert
+        _repository.Verify(
+            candidate => candidate.TrySetLifecycleVersionAsync(
+                extensionId,
+                "claim::test-node",
+                null,
+                CancellationToken.None),
+            Times.Once);
+    }
+
+    [Test]
+    public async Task DispatchStartupHooksAsync_RunsTheHookAgain_WhenThisNodeLeftAnUnfinishedClaim()
+    {
+        // Arrange
+        var extensionId = new Guid("11111111-1111-1111-1111-111111111111");
+        var lifecycle = new Mock<IExtensionLifecycle>();
+        lifecycle.SetupGet(extension => extension.Id).Returns(extensionId);
+        lifecycle.SetupGet(extension => extension.Version).Returns(new Version(1, 0, 1));
+        lifecycle.SetupGet(extension => extension.Name).Returns("Test extension");
+        _repository
+            .Setup(candidate => candidate.ListAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(
+            [
+                new Extension
+                {
+                    Id = extensionId,
+                    Name = "Test extension",
+                    Version = "1.0.1",
+                    LifecycleVersion = "claim:1.0.0:test-node",
+                    FilePath = "test-extension.dll",
+                    AssemblyName = "Test.Extension",
+                },
+            ]);
+        var subject = new ExtensionLifecycleManager(
+            new ExtensionLoadContext([lifecycle.Object], []),
+            _scopeFactory,
+            _repository.Object,
+            _nodeStatuses.Object,
+            _fileSystem.Object,
+            new("test-node", true, true, ".", ".", ".", ".", DateTime.UtcNow),
+            _timeProvider,
+            NullLoggerFactory.Instance,
+            NullLogger<ExtensionLifecycleManager>.Instance);
+
+        // Act
+        await subject.DispatchStartupHooksAsync().ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            lifecycle.Verify(
+                extension => extension.OnExtensionUpgradeAsync(
+                    It.IsAny<ExtensionLifecycleContext>(),
+                    new Version(1, 0, 0),
+                    It.IsAny<CancellationToken>()),
+                Times.Once);
+            _repository.Verify(
+                candidate => candidate.TrySetLifecycleVersionAsync(
+                    extensionId,
+                    "claim:1.0.0:test-node",
+                    "1.0.1",
+                    It.IsAny<CancellationToken>()),
+                Times.Once);
+            _nodeStatuses.Verify(
+                repository => repository.GetByNodeIdAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()),
+                Times.Never);
+        }
+    }
+
+    [TestCase(57, 1)]
+    [TestCase(59, 0)]
+    public async Task DispatchStartupHooksAsync_TakesOverTheClaimOfAnotherNode_WhenThatNodeSentNoRecentHeartbeat(
+        int lastSeenMinute,
+        int expectedInstallCount)
+    {
+        // Arrange
+        var extensionId = new Guid("11111111-1111-1111-1111-111111111111");
+        var lifecycle = new Mock<IExtensionLifecycle>();
+        lifecycle.SetupGet(extension => extension.Id).Returns(extensionId);
+        lifecycle.SetupGet(extension => extension.Version).Returns(new Version(1, 0, 1));
+        lifecycle.SetupGet(extension => extension.Name).Returns("Test extension");
+        _repository
+            .Setup(candidate => candidate.ListAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(
+            [
+                new Extension
+                {
+                    Id = extensionId,
+                    Name = "Test extension",
+                    Version = "1.0.1",
+                    LifecycleVersion = "claim::magpie-1",
+                    FilePath = "test-extension.dll",
+                    AssemblyName = "Test.Extension",
+                },
+            ]);
+        _nodeStatuses
+            .Setup(repository => repository.GetByNodeIdAsync("magpie-1", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ExtensionNodeStatus
+            {
+                NodeId = "magpie-1",
+                AppliedGeneration = 1,
+                ExtensionHealth = ExtensionNodeHealth.CurrentHealthy,
+                SchedulerEligible = true,
+                LastSeenAt = new DateTime(2026, 10, 12, 11, lastSeenMinute, 0, DateTimeKind.Utc),
+                Message = "Extension activation is current and healthy.",
+            });
+        var subject = new ExtensionLifecycleManager(
+            new ExtensionLoadContext([lifecycle.Object], []),
+            _scopeFactory,
+            _repository.Object,
+            _nodeStatuses.Object,
+            _fileSystem.Object,
+            new("test-node", true, true, ".", ".", ".", ".", DateTime.UtcNow),
+            _timeProvider,
+            NullLoggerFactory.Instance,
+            NullLogger<ExtensionLifecycleManager>.Instance);
+
+        // Act
+        await subject.DispatchStartupHooksAsync().ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            _repository.Verify(
+                candidate => candidate.TrySetLifecycleVersionAsync(
+                    extensionId,
+                    "claim::magpie-1",
+                    "claim::test-node",
+                    It.IsAny<CancellationToken>()),
+                Times.Exactly(expectedInstallCount));
+            lifecycle.Verify(
+                extension => extension.OnExtensionInstallAsync(
+                    It.IsAny<ExtensionLifecycleContext>(),
+                    It.IsAny<CancellationToken>()),
+                Times.Exactly(expectedInstallCount));
+        }
     }
 
     [Test]
@@ -234,7 +544,7 @@ public sealed class ExtensionLifecycleManagerTests
         // Assert
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(_updatedRow?.Id, Is.EqualTo(idMatch.Id));
+            Assert.That(_claimedId, Is.EqualTo(idMatch.Id));
             _repository.Verify(candidate => candidate.ListAllAsync(It.IsAny<CancellationToken>()), Times.Once);
         }
     }
@@ -279,7 +589,7 @@ public sealed class ExtensionLifecycleManagerTests
         await _subject.DispatchStartupHooksAsync().ConfigureAwait(false);
 
         // Assert
-        Assert.That(_updatedRow?.Id, Is.EqualTo(pathMatch.Id));
+        Assert.That(_claimedId, Is.EqualTo(pathMatch.Id));
     }
 
     [Test]
@@ -315,7 +625,7 @@ public sealed class ExtensionLifecycleManagerTests
         await _subject.DispatchStartupHooksAsync().ConfigureAwait(false);
 
         // Assert
-        Assert.That(_updatedRow?.Id, Is.EqualTo(packageMatch.Id));
+        Assert.That(_claimedId, Is.EqualTo(packageMatch.Id));
     }
 
     [Test]
@@ -339,7 +649,7 @@ public sealed class ExtensionLifecycleManagerTests
         await _subject.DispatchStartupHooksAsync().ConfigureAwait(false);
 
         // Assert
-        Assert.That(_updatedRow?.Id, Is.EqualTo(assemblyMatch.Id));
+        Assert.That(_claimedId, Is.EqualTo(assemblyMatch.Id));
     }
 
     private sealed class TestExtension : IExtensionLifecycle

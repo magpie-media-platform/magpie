@@ -11,7 +11,6 @@ using System.Threading.Tasks;
 
 using Magpie.Extensions.MusicBrainz.Mapping;
 using Magpie.Extensions.MusicBrainz.QueryEngine;
-using Magpie.Sdk.Http;
 
 using Microsoft.Extensions.Logging;
 
@@ -20,8 +19,7 @@ namespace Magpie.Extensions.MusicBrainz;
 internal sealed class MusicBrainzClient(
     IHttpClientFactory httpClientFactory,
     TimeProvider timeProvider,
-    ILogger<MusicBrainzClient> logger,
-    IUpstreamCooldown cooldown) : IMusicBrainzClient
+    ILogger<MusicBrainzClient> logger) : IMusicBrainzClient
 {
     public const string HttpClientName = "magpie.musicbrainz";
 
@@ -30,11 +28,11 @@ internal sealed class MusicBrainzClient(
     private const string DefaultContact = "https://github.com/magpie-app/magpie";
     private const int MaximumIsrcResponseBytes = 8 * 1024 * 1024;
 
+    public static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(20);
+
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };
 
     private static readonly TimeSpan MinimumRequestInterval = TimeSpan.FromSeconds(1);
-
-    private static readonly TimeSpan MaximumRequestInterval = TimeSpan.FromSeconds(30);
 
     private readonly SemaphoreSlim _requestGate = new(1, 1);
 
@@ -405,24 +403,6 @@ internal sealed class MusicBrainzClient(
         return BitConverter.ToString(hash, 0, 6).Replace("-", string.Empty).ToLowerInvariant();
     }
 
-    private TimeSpan RequestInterval(HttpResponseMessage response)
-    {
-        if (response.StatusCode is not (HttpStatusCode.TooManyRequests or HttpStatusCode.ServiceUnavailable))
-        {
-            return MinimumRequestInterval;
-        }
-
-        var retryAfter = response.Headers.RetryAfter;
-        var delay = retryAfter?.Delta ??
-            (retryAfter?.Date is { } date ? date - timeProvider.GetUtcNow() : MinimumRequestInterval);
-        if (delay < MinimumRequestInterval)
-        {
-            return MinimumRequestInterval;
-        }
-
-        return delay > MaximumRequestInterval ? MaximumRequestInterval : delay;
-    }
-
     private async Task<FetchResult<T>> SendJsonAsync<T>(
         string relativeTarget,
         string endpoint,
@@ -439,12 +419,9 @@ internal sealed class MusicBrainzClient(
         request.Headers.TryAddWithoutValidation("User-Agent", BuildUserAgent(settings));
 
         HttpResponseMessage response;
-        var nextInterval = MinimumRequestInterval;
-        cooldown.Check(request, null, cancellationToken);
         await _requestGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            cooldown.Check(request, null, cancellationToken);
             var remaining = _nextSendTimestamp - Stopwatch.GetTimestamp();
             if (remaining > 0)
             {
@@ -469,13 +446,11 @@ internal sealed class MusicBrainzClient(
                 logger.LogWarning(ex, "MusicBrainz transport failed at {Endpoint} ({Key})", endpoint, diagnosticKey);
                 return new FetchResult<T> { Outcome = FetchOutcome.Unavailable };
             }
-
-            nextInterval = RequestInterval(response);
         }
         finally
         {
             _nextSendTimestamp = Stopwatch.GetTimestamp() +
-                (long)(nextInterval.TotalSeconds * Stopwatch.Frequency);
+                (long)(MinimumRequestInterval.TotalSeconds * Stopwatch.Frequency);
             _requestGate.Release();
         }
 
@@ -526,7 +501,7 @@ internal sealed class MusicBrainzClient(
 
             try
             {
-                using var timeout = timeProvider.CreateCancellationTokenSource(client.Timeout);
+                using var timeout = timeProvider.CreateCancellationTokenSource(RequestTimeout);
                 using var reading = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeout.Token);
                 if (maximumBytes is { } limit)
                 {

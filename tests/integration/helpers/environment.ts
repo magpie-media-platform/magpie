@@ -27,7 +27,7 @@ export const integrationEnvironment = {
         executable: appHost || 'dotnet',
         dll: appHost
             ? undefined
-            : resolve(INTEGRATION_ROOT, '..', '..', 'src', 'Magpie.App', 'bin', 'Release', 'net10.0', 'publish', 'Magpie.App.dll'),
+            : resolve(INTEGRATION_ROOT, '..', '..', 'src', 'Magpie.App', 'bin', 'Release', 'net10.0', 'publish', 'magpie.dll'),
         url: process.env['MAGPIE_CLI_URL']?.trim() || process.env['MAGPIE_BASE_URL']?.trim() || 'http://localhost:8080',
         apiKey: process.env['MAGPIE_CLI_API_KEY']?.trim(),
         timeoutMs: 120_000,
