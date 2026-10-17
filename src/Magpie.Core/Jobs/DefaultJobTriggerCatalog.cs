@@ -29,7 +29,7 @@ public static class DefaultJobTriggerCatalog
                     JobType = MagpieJobs.Types.DownloadRefresh,
                     Scope = JobScope.Administrative,
                     Name = "Download refresh schedule",
-                    Schedule = "*/5 * * * *",
+                    Schedule = "* * * * *",
                     ExecutionMode = JobExecutionMode.Queue,
                     Enabled = true,
                     CreatedAt = now,
@@ -333,16 +333,6 @@ public static class DefaultJobTriggerCatalog
                         [MagpieJobs.Parameters.ContentHierarchyItemId] =
                             $"${{event.{MagpieEvents.Keys.ContentHierarchyItemId}}}"
                     },
-                    Enabled = true,
-                    CreatedAt = now,
-                },
-                new()
-                {
-                    JobType = MagpieJobs.Types.DownloadRefresh,
-                    Scope = JobScope.Administrative,
-                    Name = "Download refresh on creation",
-                    EventFilter = SingleEventFilter(MagpieEvents.Names.DownloadCreated),
-                    DelaySeconds = 15,
                     Enabled = true,
                     CreatedAt = now,
                 },

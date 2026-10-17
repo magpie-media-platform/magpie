@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics.Metrics;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -47,6 +48,7 @@ internal sealed class JobRuntimeBackgroundService(
     private static readonly TimeSpan AdmissionRebalanceInterval = TimeSpan.FromSeconds(1);
     private static readonly TimeSpan ErrorBackoff = TimeSpan.FromSeconds(15);
     private static readonly TimeSpan DueTriggerPollInterval = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan QueueCountInterval = TimeSpan.FromSeconds(15);
     private static readonly TimeSpan DefaultNextSchedulerHealCheck = TimeSpan.FromMinutes(30);
     private static readonly DateTime CronIntervalProbeTime = new(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
 
@@ -58,6 +60,14 @@ internal sealed class JobRuntimeBackgroundService(
     private readonly ConcurrentDictionary<Guid, Task> _inFlight = new();
 
     private readonly ConcurrentDictionary<Guid, Task> _immediateOutstanding = new();
+
+    private ObservableGauge<int>? _queuedGauge;
+
+    private ObservableGauge<int>? _deferredGauge;
+
+    private IReadOnlyDictionary<string, JobQueueCount> _queue = new Dictionary<string, JobQueueCount>();
+
+    private DateTimeOffset _queueCountedAt;
 
     private readonly HashSet<string> _jobTypes =
         [.. jobRegistry.ListJobSpecs().Select(spec => spec.JobType)];
@@ -184,6 +194,8 @@ internal sealed class JobRuntimeBackgroundService(
 
         await ReclaimOwnOrphanedRunningAsync(stoppingToken).ConfigureAwait(false);
 
+        _queuedGauge = JobsTelemetry.Meter.CreateObservableGauge("magpie.jobs.queued", ObserveQueued);
+        _deferredGauge = JobsTelemetry.Meter.CreateObservableGauge("magpie.jobs.deferred", ObserveDeferred);
         await Task.WhenAll(
             AdmissionLoopAsync(stoppingToken),
             DueTriggerLoopAsync(stoppingToken),
@@ -288,6 +300,8 @@ internal sealed class JobRuntimeBackgroundService(
 
     internal async Task<bool> TryAdmitAsync(CancellationToken stoppingToken)
     {
+        await RecordQueueAsync(stoppingToken).ConfigureAwait(false);
+
         if (shutdownSignal.Cancellation.IsCancellationRequested || !concurrencyScheduler.HasAdmissionCapacity())
         {
             return false;
@@ -353,6 +367,63 @@ internal sealed class JobRuntimeBackgroundService(
         }
 
         return admittedAny;
+    }
+
+    private async Task RecordQueueAsync(CancellationToken cancellationToken)
+    {
+        var now = timeProvider.GetUtcNow();
+        if (_queuedGauge is not { Enabled: true } && _deferredGauge is not { Enabled: true } ||
+            !databaseMigration.IsSchemaKnown ||
+            now - _queueCountedAt < QueueCountInterval)
+        {
+            return;
+        }
+
+        _queueCountedAt = now;
+        try
+        {
+            var scope = scopeFactory.CreateAsyncScope();
+            await using var scopeHandle = scope.ConfigureAwait(false);
+            var counts = await scope.ServiceProvider.GetRequiredService<IJobExecutionRepository>()
+                .CountQueuedAsync(cancellationToken)
+                .ConfigureAwait(false);
+            var queue = _queue.Keys.ToDictionary(
+                jobType => jobType,
+                jobType => new JobQueueCount(jobType, 0, 0, 0),
+                StringComparer.Ordinal);
+            foreach (var count in counts)
+            {
+                queue[count.JobType] = count;
+            }
+
+            _queue = queue;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "The job runtime worker could not record the queue length");
+        }
+    }
+
+    private IEnumerable<Measurement<int>> ObserveQueued()
+    {
+        return _queue.Values.Select(count =>
+            new Measurement<int>(count.Ready, new KeyValuePair<string, object?>("job_type", count.JobType)));
+    }
+
+    private IEnumerable<Measurement<int>> ObserveDeferred()
+    {
+        return _queue.Values
+            .Select(count => new Measurement<int>(
+                count.Deferred,
+                new KeyValuePair<string, object?>("job_type", count.JobType),
+                new KeyValuePair<string, object?>("retry", false)))
+            .Concat(_queue.Values.Select(count => new Measurement<int>(
+                count.Retrying,
+                new KeyValuePair<string, object?>("job_type", count.JobType),
+                new KeyValuePair<string, object?>("retry", true))));
     }
 
     private void Dispatch(Guid executionId)

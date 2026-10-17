@@ -10,13 +10,11 @@ using Magpie.Abstractions;
 using Magpie.Abstractions.Releases;
 using Magpie.Abstractions.Repositories;
 using Magpie.Core.Events;
-using Magpie.Core.Jobs;
 using Magpie.Models;
 using Magpie.Models.Arguments;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
 using Magpie.Models.Integrations;
-using Magpie.Models.Jobs;
 using Magpie.Models.Paging;
 using Magpie.Models.Releases;
 using Magpie.Sdk.Integrations;
@@ -47,7 +45,6 @@ internal sealed class ReleaseService(
     IRootFolderService rootFolderService,
     IFileSystem fileSystem,
     IAuditRecordRepository auditRecordRepository,
-    IJobManager jobManager,
     ITransactionManager transactionManager,
     IEventBus eventBus,
     IReleaseEvaluationService releaseEvaluationService,
@@ -682,7 +679,6 @@ internal sealed class ReleaseService(
         if (existingDownload is not null)
         {
             progress?.Report(1, "The acquisition stopped because another acquisition is active for this release.");
-            await QueueDownloadRefreshIfNeededAsync(existingDownload, cancellationToken).ConfigureAwait(false);
             return existingDownload;
         }
 
@@ -947,36 +943,6 @@ internal sealed class ReleaseService(
             cancellationToken).ConfigureAwait(false);
 
         throw new InvalidOperationException(allFailedReason, lastFailure);
-    }
-
-    private async Task QueueDownloadRefreshIfNeededAsync(Download download, CancellationToken cancellationToken)
-    {
-        if (download.Status is DownloadStatus.Imported or DownloadStatus.Failed or DownloadStatus.Faulted)
-        {
-            return;
-        }
-
-        try
-        {
-            await jobManager.ExecuteAsync(
-                new JobEnqueueRequest
-                {
-                    JobType = MagpieJobs.Types.DownloadRefresh,
-                    Mode = JobExecutionMode.Queue,
-                },
-                cancellationToken).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            logger.LogWarning(
-                ex,
-                "The release service failed to enqueue the DownloadRefresh job for download {DownloadId}",
-                download.Id);
-        }
     }
 
     private async Task CheckDestinationCapacityAsync(

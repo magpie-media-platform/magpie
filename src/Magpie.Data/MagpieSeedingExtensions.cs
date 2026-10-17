@@ -190,6 +190,18 @@ public static class MagpieSeedingExtensions
                 cancellationToken)
             .ConfigureAwait(false);
 
+        await context.Set<EventTrigger>()
+            .Where(trigger => trigger.JobType == "DownloadRefresh" && trigger.Name == "Download refresh on creation")
+            .ExecuteDeleteAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        await context.Set<ScheduleTrigger>()
+            .Where(trigger => trigger.JobType == "DownloadRefresh" && trigger.Schedule == "*/5 * * * *")
+            .ExecuteUpdateAsync(
+                setters => setters.SetProperty(trigger => trigger.Schedule, "* * * * *"),
+                cancellationToken)
+            .ConfigureAwait(false);
+
         await context.Set<DiagnosticFinding>()
             .Where(finding => finding.DiagnosticCheckId == "core.content.duplicate-subject")
             .ExecuteDeleteAsync(cancellationToken)

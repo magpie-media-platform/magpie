@@ -106,11 +106,6 @@ public sealed class ReleaseCapacityStatusTests
             NullLogger<DownloadRepository>.Instance, Mock.Of<IDataProtectionService>(), _time);
         var downloadScopes = new DownloadScopeRepository(_context, transactions, audits,
             _downloads, NullLogger<DownloadScopeRepository>.Instance, _time);
-        var registry = new Mock<IJobRegistry>();
-        registry.Setup(value => value.ListJobSpecs()).Returns([ReleaseDownloadItemJob.Spec]);
-        var jobs = new JobManager(Mock.Of<IJobRuntime>(), registry.Object, _executions,
-            Mock.Of<IScheduleTriggerRepository>(), Mock.Of<IEventTriggerRepository>(),
-            Mock.Of<IJobConcurrencyScheduler>(), scopes, _time, NullLogger<JobManager>.Instance, transactions);
         var root = new RootFolder { Name = "Library", Path = "/library", ContentType = "movie" };
         var metadata = new MetadataContainer();
         var tierList = new QualityTierList { Name = "Quality" };
@@ -209,7 +204,6 @@ public sealed class ReleaseCapacityStatusTests
             roots.Object,
             _files.Object,
             audits,
-            jobs,
             transactions,
             events,
             evaluation.Object,
@@ -567,7 +561,7 @@ public sealed class ReleaseCapacityStatusTests
             Assert.That(acquired.FailureReason, Is.Null);
             Assert.That(
                 await _context.JobExecutions.Select(value => value.JobType).ToListAsync().ConfigureAwait(false),
-                Is.EqualTo([MagpieJobs.Types.DownloadRefresh]));
+                Is.Empty);
             _client.Verify(
                 value => value.GrabAsync(
                     It.IsAny<Release>(),

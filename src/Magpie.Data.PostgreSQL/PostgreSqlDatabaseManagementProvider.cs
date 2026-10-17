@@ -93,7 +93,8 @@ internal sealed partial class PostgreSqlDatabaseManagementProvider(
         CancellationToken cancellationToken = default)
     {
         var applied = await context.Database.GetAppliedMigrationsAsync(cancellationToken).ConfigureAwait(false);
-        return [.. applied.Except(context.Database.GetMigrations(), StringComparer.Ordinal)];
+        var newest = context.Database.GetMigrations().Max(StringComparer.Ordinal);
+        return [.. applied.Where(migration => string.CompareOrdinal(migration, newest) > 0)];
     }
 
     public async Task<string> BackupAsync(BackupCreateOptions options, CancellationToken cancellationToken = default)

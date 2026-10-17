@@ -410,11 +410,11 @@ public sealed class ContentFileServiceReplaceTests
         {
             Assert.That(_steps, Is.EqualTo(["create record The Matrix.mkv", "delete record The Matrix.mkv"]));
             Assert.That(_records, Is.EqualTo([_source]));
-            Assert.That(_files.Keys, Is.EquivalentTo(new[]
-            {
+            Assert.That(_files.Keys, Is.EquivalentTo(
+            [
                 Path.Combine(_folder, "The Matrix.avi"),
                 Path.Combine(_folder, $"The Matrix.mkv.{Lineage}.partial")
-            }));
+            ]));
         }
     }
 

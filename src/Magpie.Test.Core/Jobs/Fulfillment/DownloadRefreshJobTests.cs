@@ -37,7 +37,6 @@ public sealed class DownloadRefreshJobTests
     private Dictionary<Guid, List<Download>> _downloadsByClient = null!;
     private Mock<IDownloadClientRepository> _downloadClientRepository = null!;
     private Mock<IDownloadRepository> _downloadRepository = null!;
-    private Mock<IJobManager> _jobManager = null!;
     private Mock<IDownloadService> _downloadService = null!;
     private FakeTimeProvider _timeProvider = null!;
     private IJob _subject = null!;
@@ -76,11 +75,6 @@ public sealed class DownloadRefreshJobTests
                 return new PagedList<Download> { Items = items };
             });
 
-        _jobManager = new Mock<IJobManager>();
-        _jobManager
-            .Setup(r => r.ExecuteAsync(It.IsAny<JobEnqueueRequest>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Guid.NewGuid());
-
         _downloadService = new Mock<IDownloadService>();
         _downloadService
             .Setup(s => s.UpdateRefreshedClientStateAsync(
@@ -94,10 +88,8 @@ public sealed class DownloadRefreshJobTests
             _integrations,
             _downloadClientRepository.Object,
             _downloadRepository.Object,
-            _jobManager.Object,
             NullLogger<DownloadRefreshJob>.Instance,
             _downloadService.Object,
-            _timeProvider,
             _progressReporter);
 
         _userId = Guid.NewGuid();
@@ -398,537 +390,6 @@ public sealed class DownloadRefreshJobTests
                 _userId,
                 It.IsAny<CancellationToken>()),
             Times.Once);
-    }
-
-    [TestCase(0, 60, 50, 5)]
-    [TestCase(0, 300, 50, 15)]
-    [TestCase(0, 900, 50, 30)]
-    [TestCase(0, 1200, 50, 60)]
-    [TestCase(90, 60, 100, 5)]
-    [TestCase(40, 60, 40, 60)]
-    [TestCase(60, 60, 50, 60)]
-    public async Task ExecuteAsync_SchedulesSuccessor_WhenProgressIsReported(
-        decimal stored,
-        int elapsedSeconds,
-        decimal reported,
-        int expectedDelaySeconds)
-    {
-        // Arrange
-        var client = new DownloadClient
-        {
-            Id = Guid.NewGuid(),
-            Name = "Enabled",
-            ProviderType = "fake",
-            Enabled = true,
-            Status = IntegrationHealthStatus.Healthy,
-            Settings = [],
-            CreatedAt = _now
-        };
-        _clients.Add(client);
-        _downloadsByClient[client.Id] =
-        [
-            new Download
-            {
-                Id = Guid.NewGuid(),
-                DownloadClientId = client.Id,
-                ExternalId = "ext-1",
-                Title = "Download ext-1",
-                Status = DownloadStatus.Downloading,
-                Progress = stored,
-                LastProgressAt = _now.AddSeconds(-elapsedSeconds),
-                CreatedAt = _now.AddSeconds(-elapsedSeconds)
-            }
-        ];
-        var integration = new Mock<IDownloadClientIntegration>();
-        integration.SetupGet(i => i.ProviderType).Returns("fake");
-        integration
-            .Setup(i => i.GetDownloadsAsync(
-                It.IsAny<IEnumerable<string>>(),
-                It.IsAny<IReadOnlyDictionary<string, string>>(),
-                It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new BatchDownloadStatusResult(
-                new Dictionary<string, DownloadInfo>(StringComparer.Ordinal)
-                {
-                    ["ext-1"] = new DownloadInfo
-                    {
-                        ExternalId = "ext-1",
-                        Status = DownloadStatus.Downloading,
-                        ProgressPercent = reported
-                    }
-                },
-                new Dictionary<string, Exception>(StringComparer.Ordinal)));
-        _integrations.Add(integration.Object);
-
-        // Act
-        await _subject.ExecuteAsync(_jobContext).ConfigureAwait(false);
-
-        // Assert
-        _jobManager.Verify(
-            r => r.ExecuteAsync(
-                It.Is<JobEnqueueRequest>(request =>
-                    request.JobType == "DownloadRefresh" &&
-                    request.Mode == JobExecutionMode.Queue &&
-                    request.NotBeforeAt == _now.AddSeconds(expectedDelaySeconds) &&
-                    request.UserId == _userId),
-                It.IsAny<CancellationToken>()),
-            Times.Once);
-    }
-
-    [Test]
-    public async Task ExecuteAsync_MarksTheRequestAsSuccessor_WhenItSchedulesTheNextPoll()
-    {
-        // Arrange
-        var client = new DownloadClient
-        {
-            Id = Guid.NewGuid(),
-            Name = "Enabled",
-            ProviderType = "fake",
-            Enabled = true,
-            Status = IntegrationHealthStatus.Healthy,
-            Settings = [],
-            CreatedAt = _now
-        };
-        _clients.Add(client);
-        _downloadsByClient[client.Id] =
-        [
-            new Download
-            {
-                Id = Guid.NewGuid(),
-                DownloadClientId = client.Id,
-                ExternalId = "ext-1",
-                Title = "Download ext-1",
-                Status = DownloadStatus.Downloading,
-                Progress = 0m,
-                LastProgressAt = _now.AddSeconds(-60),
-                CreatedAt = _now.AddSeconds(-60)
-            }
-        ];
-        var integration = new Mock<IDownloadClientIntegration>();
-        integration.SetupGet(i => i.ProviderType).Returns("fake");
-        integration
-            .Setup(i => i.GetDownloadsAsync(
-                It.IsAny<IEnumerable<string>>(),
-                It.IsAny<IReadOnlyDictionary<string, string>>(),
-                It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new BatchDownloadStatusResult(
-                new Dictionary<string, DownloadInfo>(StringComparer.Ordinal)
-                {
-                    ["ext-1"] = new DownloadInfo
-                    {
-                        ExternalId = "ext-1",
-                        Status = DownloadStatus.Downloading,
-                        ProgressPercent = 50m
-                    }
-                },
-                new Dictionary<string, Exception>(StringComparer.Ordinal)));
-        _integrations.Add(integration.Object);
-
-        // Act
-        await _subject.ExecuteAsync(_jobContext).ConfigureAwait(false);
-
-        // Assert
-        _jobManager.Verify(
-            r => r.ExecuteAsync(
-                It.Is<JobEnqueueRequest>(request =>
-                    request.JobType == "DownloadRefresh" &&
-                    request.IsSuccessor &&
-                    request.CorrelationId == null),
-                It.IsAny<CancellationToken>()),
-            Times.Once);
-    }
-
-    [Test]
-    public async Task ExecuteAsync_SchedulesFifteenSecondSuccessor_WhenFormingTheFirstUsableBaseline()
-    {
-        // Arrange
-        var client = new DownloadClient
-        {
-            Id = Guid.NewGuid(),
-            Name = "Enabled",
-            ProviderType = "fake",
-            Enabled = true,
-            Status = IntegrationHealthStatus.Healthy,
-            Settings = [],
-            CreatedAt = _now
-        };
-        _clients.Add(client);
-        _downloadsByClient[client.Id] =
-        [
-            new Download
-            {
-                Id = Guid.NewGuid(),
-                DownloadClientId = client.Id,
-                ExternalId = "ext-1",
-                Title = "Download ext-1",
-                Status = DownloadStatus.Downloading,
-                Progress = null,
-                LastProgressAt = null,
-                CreatedAt = _now.AddSeconds(-60)
-            }
-        ];
-        var integration = new Mock<IDownloadClientIntegration>();
-        integration.SetupGet(i => i.ProviderType).Returns("fake");
-        integration
-            .Setup(i => i.GetDownloadsAsync(
-                It.IsAny<IEnumerable<string>>(),
-                It.IsAny<IReadOnlyDictionary<string, string>>(),
-                It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new BatchDownloadStatusResult(
-                new Dictionary<string, DownloadInfo>(StringComparer.Ordinal)
-                {
-                    ["ext-1"] = new DownloadInfo
-                    {
-                        ExternalId = "ext-1",
-                        Status = DownloadStatus.Downloading,
-                        ProgressPercent = 25m
-                    }
-                },
-                new Dictionary<string, Exception>(StringComparer.Ordinal)));
-        _integrations.Add(integration.Object);
-
-        // Act
-        await _subject.ExecuteAsync(_jobContext).ConfigureAwait(false);
-
-        // Assert
-        _jobManager.Verify(
-            r => r.ExecuteAsync(
-                It.Is<JobEnqueueRequest>(request =>
-                    request.JobType == "DownloadRefresh" &&
-                    request.Mode == JobExecutionMode.Queue &&
-                    request.NotBeforeAt == _now.AddSeconds(15) &&
-                    request.UserId == _userId),
-                It.IsAny<CancellationToken>()),
-            Times.Once);
-    }
-
-    [Test]
-    public async Task ExecuteAsync_SchedulesFifteenSecondSuccessor_WhenDownloadTransitionsIntoActive()
-    {
-        // Arrange
-        var client = new DownloadClient
-        {
-            Id = Guid.NewGuid(),
-            Name = "Enabled",
-            ProviderType = "fake",
-            Enabled = true,
-            Status = IntegrationHealthStatus.Healthy,
-            Settings = [],
-            CreatedAt = _now
-        };
-        _clients.Add(client);
-        _downloadsByClient[client.Id] =
-        [
-            new Download
-            {
-                Id = Guid.NewGuid(),
-                DownloadClientId = client.Id,
-                ExternalId = "ext-1",
-                Title = "Download ext-1",
-                Status = DownloadStatus.Grabbed,
-                Progress = 0m,
-                LastProgressAt = _now.AddSeconds(-60),
-                CreatedAt = _now.AddSeconds(-60)
-            }
-        ];
-        var integration = new Mock<IDownloadClientIntegration>();
-        integration.SetupGet(i => i.ProviderType).Returns("fake");
-        integration
-            .Setup(i => i.GetDownloadsAsync(
-                It.IsAny<IEnumerable<string>>(),
-                It.IsAny<IReadOnlyDictionary<string, string>>(),
-                It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new BatchDownloadStatusResult(
-                new Dictionary<string, DownloadInfo>(StringComparer.Ordinal)
-                {
-                    ["ext-1"] = new DownloadInfo
-                    {
-                        ExternalId = "ext-1",
-                        Status = DownloadStatus.Downloading,
-                        ProgressPercent = 50m
-                    }
-                },
-                new Dictionary<string, Exception>(StringComparer.Ordinal)));
-        _integrations.Add(integration.Object);
-
-        // Act
-        await _subject.ExecuteAsync(_jobContext).ConfigureAwait(false);
-
-        // Assert
-        _jobManager.Verify(
-            r => r.ExecuteAsync(
-                It.Is<JobEnqueueRequest>(request =>
-                    request.JobType == "DownloadRefresh" &&
-                    request.Mode == JobExecutionMode.Queue &&
-                    request.NotBeforeAt == _now.AddSeconds(15) &&
-                    request.UserId == _userId),
-                It.IsAny<CancellationToken>()),
-            Times.Once);
-    }
-
-    [Test]
-    public async Task ExecuteAsync_SchedulesSixtySecondSuccessor_WhenActiveButQueued()
-    {
-        // Arrange
-        var client = new DownloadClient
-        {
-            Id = Guid.NewGuid(),
-            Name = "Enabled",
-            ProviderType = "fake",
-            Enabled = true,
-            Status = IntegrationHealthStatus.Healthy,
-            Settings = [],
-            CreatedAt = _now
-        };
-        _clients.Add(client);
-        _downloadsByClient[client.Id] =
-        [
-            new Download
-            {
-                Id = Guid.NewGuid(),
-                DownloadClientId = client.Id,
-                ExternalId = "ext-1",
-                Title = "Download ext-1",
-                Status = DownloadStatus.Downloading,
-                Progress = 40m,
-                LastProgressAt = _now.AddSeconds(-60),
-                CreatedAt = _now.AddSeconds(-60)
-            }
-        ];
-        var integration = new Mock<IDownloadClientIntegration>();
-        integration.SetupGet(i => i.ProviderType).Returns("fake");
-        integration
-            .Setup(i => i.GetDownloadsAsync(
-                It.IsAny<IEnumerable<string>>(),
-                It.IsAny<IReadOnlyDictionary<string, string>>(),
-                It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new BatchDownloadStatusResult(
-                new Dictionary<string, DownloadInfo>(StringComparer.Ordinal)
-                {
-                    ["ext-1"] = new DownloadInfo
-                    {
-                        ExternalId = "ext-1",
-                        Status = DownloadStatus.Queued,
-                        ProgressPercent = 40m
-                    }
-                },
-                new Dictionary<string, Exception>(StringComparer.Ordinal)));
-        _integrations.Add(integration.Object);
-
-        // Act
-        await _subject.ExecuteAsync(_jobContext).ConfigureAwait(false);
-
-        // Assert
-        _jobManager.Verify(
-            r => r.ExecuteAsync(
-                It.Is<JobEnqueueRequest>(request =>
-                    request.JobType == "DownloadRefresh" &&
-                    request.Mode == JobExecutionMode.Queue &&
-                    request.NotBeforeAt == _now.AddSeconds(60) &&
-                    request.UserId == _userId),
-                It.IsAny<CancellationToken>()),
-            Times.Once);
-    }
-
-    [Test]
-    public async Task ExecuteAsync_SchedulesNoSuccessor_WhenNoDownloadIsActive()
-    {
-        // Arrange
-        var client = new DownloadClient
-        {
-            Id = Guid.NewGuid(),
-            Name = "Enabled",
-            ProviderType = "fake",
-            Enabled = true,
-            Status = IntegrationHealthStatus.Healthy,
-            Settings = [],
-            CreatedAt = DateTime.UtcNow
-        };
-        _clients.Add(client);
-        _downloadsByClient[client.Id] =
-        [
-            new Download
-            {
-                Id = Guid.NewGuid(),
-                DownloadClientId = client.Id,
-                ExternalId = "ext-seed",
-                Title = "Download ext-seed",
-                Status = DownloadStatus.Downloading,
-                CreatedAt = DateTime.UtcNow
-            }
-        ];
-        var integration = new Mock<IDownloadClientIntegration>();
-        integration.SetupGet(i => i.ProviderType).Returns("fake");
-        integration
-            .Setup(i => i.GetDownloadsAsync(
-                It.IsAny<IEnumerable<string>>(),
-                It.IsAny<IReadOnlyDictionary<string, string>>(),
-                It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new BatchDownloadStatusResult(
-                new Dictionary<string, DownloadInfo>(StringComparer.Ordinal)
-                {
-                    ["ext-seed"] = new DownloadInfo { ExternalId = "ext-seed", Status = DownloadStatus.Downloaded }
-                },
-                new Dictionary<string, Exception>(StringComparer.Ordinal)));
-        _integrations.Add(integration.Object);
-
-        // Act
-        await _subject.ExecuteAsync(_jobContext).ConfigureAwait(false);
-
-        // Assert
-        _jobManager.Verify(
-            r => r.ExecuteAsync(It.IsAny<JobEnqueueRequest>(), It.IsAny<CancellationToken>()),
-            Times.Never);
-    }
-
-    [Test]
-    public async Task ExecuteAsync_SchedulesSixtySecondSuccessor_WhenProgressIsMissing()
-    {
-        // Arrange
-        var client = new DownloadClient
-        {
-            Id = Guid.NewGuid(),
-            Name = "Enabled",
-            ProviderType = "fake",
-            Enabled = true,
-            Status = IntegrationHealthStatus.Healthy,
-            Settings = [],
-            CreatedAt = _now
-        };
-        _clients.Add(client);
-        _downloadsByClient[client.Id] =
-        [
-            new Download
-            {
-                Id = Guid.NewGuid(),
-                DownloadClientId = client.Id,
-                ExternalId = "ext-1",
-                Title = "Download ext-1",
-                Status = DownloadStatus.Downloading,
-                Progress = 30m,
-                LastProgressAt = _now.AddSeconds(-60),
-                CreatedAt = _now.AddSeconds(-60)
-            }
-        ];
-        var integration = new Mock<IDownloadClientIntegration>();
-        integration.SetupGet(i => i.ProviderType).Returns("fake");
-        integration
-            .Setup(i => i.GetDownloadsAsync(
-                It.IsAny<IEnumerable<string>>(),
-                It.IsAny<IReadOnlyDictionary<string, string>>(),
-                It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new BatchDownloadStatusResult(
-                new Dictionary<string, DownloadInfo>(StringComparer.Ordinal)
-                {
-                    ["ext-1"] = new DownloadInfo
-                    {
-                        ExternalId = "ext-1",
-                        Status = DownloadStatus.Downloading,
-                        ProgressPercent = null
-                    }
-                },
-                new Dictionary<string, Exception>(StringComparer.Ordinal)));
-        _integrations.Add(integration.Object);
-
-        // Act
-        await _subject.ExecuteAsync(_jobContext).ConfigureAwait(false);
-
-        // Assert
-        _jobManager.Verify(
-            r => r.ExecuteAsync(
-                It.Is<JobEnqueueRequest>(request =>
-                    request.JobType == "DownloadRefresh" &&
-                    request.Mode == JobExecutionMode.Queue &&
-                    request.NotBeforeAt == _now.AddSeconds(60) &&
-                    request.UserId == _userId),
-                It.IsAny<CancellationToken>()),
-            Times.Once);
-    }
-
-    [Test]
-    public async Task ExecuteAsync_SchedulesShortestSuccessorAndEnqueuesOnce_WhenSeveralDownloadsAreActive()
-    {
-        // Arrange
-        var client = new DownloadClient
-        {
-            Id = Guid.NewGuid(),
-            Name = "Enabled",
-            ProviderType = "fake",
-            Enabled = true,
-            Status = IntegrationHealthStatus.Healthy,
-            Settings = [],
-            CreatedAt = _now
-        };
-        _clients.Add(client);
-        _downloadsByClient[client.Id] =
-        [
-            new Download
-            {
-                Id = Guid.NewGuid(),
-                DownloadClientId = client.Id,
-                ExternalId = "ext-slow",
-                Title = "Download ext-slow",
-                Status = DownloadStatus.Downloading,
-                Progress = 40m,
-                LastProgressAt = _now.AddSeconds(-60),
-                CreatedAt = _now.AddSeconds(-60)
-            },
-            new Download
-            {
-                Id = Guid.NewGuid(),
-                DownloadClientId = client.Id,
-                ExternalId = "ext-fast",
-                Title = "Download ext-fast",
-                Status = DownloadStatus.Downloading,
-                Progress = 0m,
-                LastProgressAt = _now.AddSeconds(-60),
-                CreatedAt = _now.AddSeconds(-60)
-            }
-        ];
-        var integration = new Mock<IDownloadClientIntegration>();
-        integration.SetupGet(i => i.ProviderType).Returns("fake");
-        integration
-            .Setup(i => i.GetDownloadsAsync(
-                It.IsAny<IEnumerable<string>>(),
-                It.IsAny<IReadOnlyDictionary<string, string>>(),
-                It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new BatchDownloadStatusResult(
-                new Dictionary<string, DownloadInfo>(StringComparer.Ordinal)
-                {
-                    ["ext-slow"] = new DownloadInfo
-                    {
-                        ExternalId = "ext-slow",
-                        Status = DownloadStatus.Downloading,
-                        ProgressPercent = 41m
-                    },
-                    ["ext-fast"] = new DownloadInfo
-                    {
-                        ExternalId = "ext-fast",
-                        Status = DownloadStatus.Downloading,
-                        ProgressPercent = 50m
-                    }
-                },
-                new Dictionary<string, Exception>(StringComparer.Ordinal)));
-        _integrations.Add(integration.Object);
-
-        // Act
-        await _subject.ExecuteAsync(_jobContext).ConfigureAwait(false);
-
-        // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            _jobManager.Verify(
-                r => r.ExecuteAsync(
-                    It.Is<JobEnqueueRequest>(request =>
-                        request.JobType == "DownloadRefresh" &&
-                        request.Mode == JobExecutionMode.Queue &&
-                        request.NotBeforeAt == _now.AddSeconds(5) &&
-                        request.UserId == _userId),
-                    It.IsAny<CancellationToken>()),
-                Times.Once);
-            _jobManager.Verify(
-                r => r.ExecuteAsync(It.IsAny<JobEnqueueRequest>(), It.IsAny<CancellationToken>()),
-                Times.Once);
-        }
     }
 
     [Test]
@@ -1260,70 +721,6 @@ public sealed class DownloadRefreshJobTests
     }
 
     [Test]
-    public async Task ExecuteAsync_CompletesTheRefresh_WhenPublishRefreshedStatusThrows()
-    {
-        // Arrange
-        var client = new DownloadClient
-        {
-            Id = Guid.NewGuid(),
-            Name = "Enabled",
-            ProviderType = "fake",
-            Enabled = true,
-            Status = IntegrationHealthStatus.Healthy,
-            Settings = [],
-            CreatedAt = DateTime.UtcNow
-        };
-        _clients.Add(client);
-        var download = new Download
-        {
-            Id = Guid.NewGuid(),
-            DownloadClientId = client.Id,
-            ExternalId = "ext-1",
-            Title = "Download ext-1",
-            Status = DownloadStatus.Downloading,
-            CreatedAt = DateTime.UtcNow
-        };
-        _downloadsByClient[client.Id] = [download];
-        var integration = new Mock<IDownloadClientIntegration>();
-        integration.SetupGet(i => i.ProviderType).Returns("fake");
-        integration
-            .Setup(i => i.GetDownloadsAsync(
-                It.IsAny<IEnumerable<string>>(),
-                It.IsAny<IReadOnlyDictionary<string, string>>(),
-                It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new BatchDownloadStatusResult(
-                new Dictionary<string, DownloadInfo>(StringComparer.Ordinal)
-                {
-                    ["ext-1"] = new DownloadInfo { ExternalId = "ext-1", Status = DownloadStatus.Downloading }
-                },
-                new Dictionary<string, Exception>(StringComparer.Ordinal)));
-        _integrations.Add(integration.Object);
-        _downloadService
-            .Setup(s => s.UpdateRefreshedClientStateAsync(
-                It.IsAny<Download>(),
-                It.IsAny<DownloadInfo>(),
-                It.IsAny<Guid?>(),
-                It.IsAny<CancellationToken>()))
-            .ReturnsAsync(["Progress"]);
-        _downloadService
-            .Setup(s => s.PublishRefreshedStatusAsync(
-                It.IsAny<IReadOnlyDictionary<Guid, IReadOnlyList<string>>>(),
-                It.IsAny<Guid?>(),
-                It.IsAny<CancellationToken>()))
-            .ThrowsAsync(new InvalidOperationException("boom"));
-
-        // Act
-        await _subject.ExecuteAsync(_jobContext).ConfigureAwait(false);
-
-        // Assert
-        _jobManager.Verify(
-            r => r.ExecuteAsync(
-                It.Is<JobEnqueueRequest>(request => request.JobType == "DownloadRefresh"),
-                It.IsAny<CancellationToken>()),
-            Times.Once);
-    }
-
-    [Test]
     public async Task ExecuteAsync_ContinuesProcessingSiblingClients_WhenOneClientBatchThrows()
     {
         // Arrange
@@ -1597,7 +994,7 @@ public sealed class DownloadRefreshJobTests
     }
 
     [Test]
-    public async Task ExecuteAsync_AnchorsSuccessorOnSchedulingTime_WhenPassOutlastsChosenDelay()
+    public async Task ExecuteAsync_CompletesTheRefresh_WhenPublishRefreshedStatusThrows()
     {
         // Arrange
         var client = new DownloadClient
@@ -1608,24 +1005,19 @@ public sealed class DownloadRefreshJobTests
             Enabled = true,
             Status = IntegrationHealthStatus.Healthy,
             Settings = [],
-            CreatedAt = _now
+            CreatedAt = DateTime.UtcNow
         };
         _clients.Add(client);
-        _downloadsByClient[client.Id] =
-        [
-            new Download
-            {
-                Id = Guid.NewGuid(),
-                DownloadClientId = client.Id,
-                ExternalId = "ext-1",
-                Title = "Download ext-1",
-                Status = DownloadStatus.Downloading,
-                Progress = 0m,
-                LastProgressAt = _now,
-                CreatedAt = _now
-            }
-        ];
-        var passDuration = TimeSpan.FromSeconds(10);
+        var download = new Download
+        {
+            Id = Guid.NewGuid(),
+            DownloadClientId = client.Id,
+            ExternalId = "ext-1",
+            Title = "Download ext-1",
+            Status = DownloadStatus.Downloading,
+            CreatedAt = DateTime.UtcNow
+        };
+        _downloadsByClient[client.Id] = [download];
         var integration = new Mock<IDownloadClientIntegration>();
         integration.SetupGet(i => i.ProviderType).Returns("fake");
         integration
@@ -1633,37 +1025,31 @@ public sealed class DownloadRefreshJobTests
                 It.IsAny<IEnumerable<string>>(),
                 It.IsAny<IReadOnlyDictionary<string, string>>(),
                 It.IsAny<CancellationToken>()))
-            .Callback(() => _timeProvider.Advance(passDuration))
             .ReturnsAsync(new BatchDownloadStatusResult(
                 new Dictionary<string, DownloadInfo>(StringComparer.Ordinal)
                 {
-                    ["ext-1"] = new DownloadInfo
-                    {
-                        ExternalId = "ext-1",
-                        Status = DownloadStatus.Downloading,
-                        ProgressPercent = 50m
-                    }
+                    ["ext-1"] = new DownloadInfo { ExternalId = "ext-1", Status = DownloadStatus.Downloading }
                 },
                 new Dictionary<string, Exception>(StringComparer.Ordinal)));
         _integrations.Add(integration.Object);
+        _downloadService
+            .Setup(s => s.UpdateRefreshedClientStateAsync(
+                It.IsAny<Download>(),
+                It.IsAny<DownloadInfo>(),
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(["Progress"]);
+        _downloadService
+            .Setup(s => s.PublishRefreshedStatusAsync(
+                It.IsAny<IReadOnlyDictionary<Guid, IReadOnlyList<string>>>(),
+                It.IsAny<Guid?>(),
+                It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("boom"));
 
         // Act
-        await _subject.ExecuteAsync(_jobContext).ConfigureAwait(false);
+        var act = () => _subject.ExecuteAsync(_jobContext);
 
         // Assert
-        var completedAt = _now.Add(passDuration);
-        using (Assert.EnterMultipleScope())
-        {
-            _jobManager.Verify(
-                r => r.ExecuteAsync(
-                    It.Is<JobEnqueueRequest>(request =>
-                        request.JobType == "DownloadRefresh" &&
-                        request.Mode == JobExecutionMode.Queue &&
-                        request.NotBeforeAt == completedAt.AddSeconds(5) &&
-                        request.NotBeforeAt > completedAt &&
-                        request.UserId == _userId),
-                    It.IsAny<CancellationToken>()),
-                Times.Once);
-        }
+        Assert.That(act, Throws.Nothing);
     }
 }

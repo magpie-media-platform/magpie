@@ -335,7 +335,6 @@ internal sealed class MediaFileReconciliationJob(
                     {
                         FileSize = state.Size,
                         FileModifiedAt = state.LastWriteTimeUtc,
-                        ReplacedAt = replacement ? now : current.ReplacedAt,
                         DownloadId = replacement ? null : current.DownloadId,
                         MediaInfo = mediaInfo,
                         MimeType = mimeType ?? current.MimeType,
@@ -514,7 +513,6 @@ internal sealed class MediaFileReconciliationJob(
                 FilePath = renamed.Path,
                 FileSize = renamed.State.Size,
                 FileModifiedAt = renamed.State.LastWriteTimeUtc,
-                ReplacedAt = renamed.Recoded ? now : current.ReplacedAt,
                 DownloadId = renamed.Recoded ? null : current.DownloadId,
                 MediaInfo = renamed.MediaInfo ?? (renamed.Recoded ? null : current.MediaInfo),
                 MimeType = mimeType ?? current.MimeType,

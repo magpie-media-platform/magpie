@@ -45,7 +45,6 @@ public sealed class ReleaseServiceTests
     private Mock<IContentHierarchyItemRepository> _acquisitionHierarchyItems = null!;
     private Mock<IRootFolderService> _acquisitionRootFolders = null!;
     private Mock<IFileSystem> _capacityFileSystem = null!;
-    private Mock<IJobManager> _acquisitionJobs = null!;
     private IReleaseService _acquisitionSubject = null!;
     private Guid _acquisitionReleaseId;
     private Guid _acquisitionLeafId;
@@ -327,7 +326,6 @@ public sealed class ReleaseServiceTests
             _capacityFileSystem = new Mock<IFileSystem>();
             _capacityFileSystem.Setup(fileSystem => fileSystem.GetStorageCapacity(It.IsAny<string>()))
                 .Returns(new StorageCapacity { VolumeId = "library", AvailableBytes = 1000 });
-            _acquisitionJobs = new Mock<IJobManager>();
 
             var transactionManager = new Mock<ITransactionManager>();
             transactionManager
@@ -420,7 +418,6 @@ public sealed class ReleaseServiceTests
                 _acquisitionRootFolders.Object,
                 _capacityFileSystem.Object,
                 Mock.Of<IAuditRecordRepository>(),
-                _acquisitionJobs.Object,
                 transactionManager.Object,
                 Mock.Of<IEventBus>(),
                 releaseEvaluationService,
@@ -741,7 +738,6 @@ public sealed class ReleaseServiceTests
                 Mock.Of<IRootFolderService>(),
                 Mock.Of<IFileSystem>(),
                 Mock.Of<IAuditRecordRepository>(),
-                Mock.Of<IJobManager>(),
                 transactionManager.Object,
                 Mock.Of<IEventBus>(),
                 releaseEvaluationService,
@@ -1111,7 +1107,6 @@ public sealed class ReleaseServiceTests
                 Mock.Of<IRootFolderService>(),
                 Mock.Of<IFileSystem>(),
                 _selectionAuditRecords.Object,
-                Mock.Of<IJobManager>(),
                 transactionManager.Object,
                 Mock.Of<IEventBus>(),
                 releaseEvaluationService,
@@ -1249,7 +1244,6 @@ public sealed class ReleaseServiceTests
                 Mock.Of<IRootFolderService>(),
                 Mock.Of<IFileSystem>(),
                 Mock.Of<IAuditRecordRepository>(),
-                Mock.Of<IJobManager>(),
                 transactionManager.Object,
                 Mock.Of<IEventBus>(),
                 releaseEvaluationService,
@@ -1297,7 +1291,6 @@ public sealed class ReleaseServiceTests
                 Times.Once);
             progress.Verify(reporter => reporter.Report(1, exception.Message), Times.Once);
             _acquisitionDownloadService.VerifyNoOtherCalls();
-            _acquisitionJobs.VerifyNoOtherCalls();
         }
     }
 

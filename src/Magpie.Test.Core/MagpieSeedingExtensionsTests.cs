@@ -8,6 +8,7 @@ using Magpie.Data;
 using Magpie.Models;
 using Magpie.Models.Data;
 using Magpie.Models.Enums;
+using Magpie.Models.Filtering;
 
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
@@ -112,6 +113,63 @@ public sealed class MagpieSeedingExtensionsTests
         }
     }
 
+    [TestCase("*/5 * * * *", "* * * * *")]
+    [TestCase("*/2 * * * *", "*/2 * * * *")]
+    public async Task UseMagpieSeeding_RefreshesDownloadsOnlyOnTheSchedule_WhenTheOldDownloadRefreshTriggersExist(
+        string schedule,
+        string expectedSchedule)
+    {
+        // Arrange
+        _context.ScheduleTriggers.Add(new ScheduleTrigger
+        {
+            JobType = "DownloadRefresh",
+            Scope = JobScope.Administrative,
+            Name = "Old download refresh schedule",
+            Schedule = schedule,
+            Enabled = true,
+            CreatedAt = DateTime.UnixEpoch
+        });
+        _context.EventTriggers.Add(new EventTrigger
+        {
+            JobType = "DownloadRefresh",
+            Scope = JobScope.Administrative,
+            Name = "Download refresh on creation",
+            EventFilter = new EventFilter
+            {
+                EventName = new PropertyCriterion<string>
+                {
+                    Operator = CriteriaValueOperator.Equals,
+                    Value = "download.created"
+                }
+            },
+            DelaySeconds = 15,
+            Enabled = true,
+            CreatedAt = DateTime.UnixEpoch
+        });
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.ChangeTracker.Clear();
+
+        // Act
+        await _context.Database.EnsureCreatedAsync().ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(
+                await _context.ScheduleTriggers.AsNoTracking()
+                    .Where(trigger => trigger.Name == "Old download refresh schedule")
+                    .Select(trigger => trigger.Schedule)
+                    .SingleAsync()
+                    .ConfigureAwait(false),
+                Is.EqualTo(expectedSchedule));
+            Assert.That(
+                await _context.EventTriggers.AsNoTracking()
+                    .AnyAsync(trigger => trigger.JobType == "DownloadRefresh")
+                    .ConfigureAwait(false),
+                Is.False);
+        }
+    }
+
     [TestCase("Orphaned subject pruning schedule", "Subject maintenance schedule")]
     [TestCase("Nightly subject cleanup", "Nightly subject cleanup")]
     public async Task UseMagpieSeeding_MovesTheScheduleToSubjectMaintenance_WhenAPruneOrphanedSubjectsScheduleExists(
@@ -211,7 +269,7 @@ public sealed class MagpieSeedingExtensionsTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(await _context.ScheduleTriggers.CountAsync().ConfigureAwait(false), Is.EqualTo(20));
-            Assert.That(await _context.EventTriggers.CountAsync().ConfigureAwait(false), Is.EqualTo(16));
+            Assert.That(await _context.EventTriggers.CountAsync().ConfigureAwait(false), Is.EqualTo(15));
         }
     }
 
@@ -235,7 +293,7 @@ public sealed class MagpieSeedingExtensionsTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(await _context.ScheduleTriggers.CountAsync().ConfigureAwait(false), Is.EqualTo(19));
-            Assert.That(await _context.EventTriggers.CountAsync().ConfigureAwait(false), Is.EqualTo(15));
+            Assert.That(await _context.EventTriggers.CountAsync().ConfigureAwait(false), Is.EqualTo(14));
         }
     }
 
@@ -251,15 +309,15 @@ public sealed class MagpieSeedingExtensionsTests
         // Assert
         Assert.That(
             await _context.EventTriggers.Select(trigger => trigger.Name).ToListAsync().ConfigureAwait(false),
-            Is.EquivalentTo(new[]
-            {
+            Is.EquivalentTo(
+            [
                 "Media info extract on file change",
                 "Media server refresh on file change",
                 "Download cleanup on hold change",
                 "Release auto-grab scan on fulfillment change",
                 "Content fulfillment reconciliation on quality tier change",
                 "Indexer feed sync on creation",
-            }));
+            ]));
     }
 
     [TestCase("20261010042727_audit_record_data", false)]
@@ -286,6 +344,6 @@ public sealed class MagpieSeedingExtensionsTests
         await _seed(_context, true, CancellationToken.None).ConfigureAwait(false);
 
         // Assert
-        Assert.That(await _context.EventTriggers.CountAsync().ConfigureAwait(false), Is.EqualTo(16));
+        Assert.That(await _context.EventTriggers.CountAsync().ConfigureAwait(false), Is.EqualTo(15));
     }
 }

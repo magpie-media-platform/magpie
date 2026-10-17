@@ -1327,6 +1327,74 @@ public sealed class JobExecutionRepositoryTests
         Assert.That(candidates.Select(candidate => candidate.Id), Does.Not.Contain(queued.Id));
     }
 
+    [Test]
+    public async Task CountQueuedAsync_CountsReadyDeferredAndRetryingExecutions_WhenTheyAreUnclaimed()
+    {
+        // Arrange
+        _context.JobExecutions.AddRange(
+            new JobExecution
+            {
+                Id = Guid.NewGuid(),
+                JobType = "ReleaseSearchItem",
+                Scope = JobScope.System,
+                Status = JobExecutionStatus.Queued,
+                CreatedAt = Now.UtcDateTime,
+            },
+            new JobExecution
+            {
+                Id = Guid.NewGuid(),
+                JobType = "ReleaseSearchItem",
+                Scope = JobScope.System,
+                Status = JobExecutionStatus.Queued,
+                NotBeforeAt = Now.UtcDateTime.AddMinutes(-1),
+                CreatedAt = Now.UtcDateTime,
+            },
+            new JobExecution
+            {
+                Id = Guid.NewGuid(),
+                JobType = "ReleaseSearchItem",
+                Scope = JobScope.System,
+                Status = JobExecutionStatus.Queued,
+                NotBeforeAt = Now.UtcDateTime.AddMinutes(5),
+                CreatedAt = Now.UtcDateTime,
+            },
+            new JobExecution
+            {
+                Id = Guid.NewGuid(),
+                JobType = "ReleaseSearchItem",
+                Scope = JobScope.System,
+                Status = JobExecutionStatus.Queued,
+                NotBeforeAt = Now.UtcDateTime.AddMinutes(5),
+                Attempt = 2,
+                CreatedAt = Now.UtcDateTime,
+            },
+            new JobExecution
+            {
+                Id = Guid.NewGuid(),
+                JobType = "ReleaseSearchItem",
+                Scope = JobScope.System,
+                Status = JobExecutionStatus.Queued,
+                NodeId = "node-a",
+                CreatedAt = Now.UtcDateTime,
+            },
+            new JobExecution
+            {
+                Id = Guid.NewGuid(),
+                JobType = "ReleaseSearchItem",
+                Scope = JobScope.System,
+                Status = JobExecutionStatus.Running,
+                CreatedAt = Now.UtcDateTime,
+            });
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.ChangeTracker.Clear();
+
+        // Act
+        var counts = await _subject.CountQueuedAsync().ConfigureAwait(false);
+
+        // Assert
+        Assert.That(counts, Is.EqualTo((JobQueueCount[])[new("ReleaseSearchItem", 2, 1, 1)]));
+    }
+
     [TestCase("item-a", "item-b", null)]
     [TestCase("item-a", null, null)]
     [TestCase("item-a", "item-a", "item-a")]

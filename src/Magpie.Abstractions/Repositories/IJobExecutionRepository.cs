@@ -131,6 +131,12 @@ public interface IJobExecutionRepository :
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Counts the unclaimed queued executions of each job type.
+    /// </summary>
+    /// <param name="cancellationToken">The token that cancels the operation</param>
+    Task<IReadOnlyList<JobQueueCount>> CountQueuedAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Gets the ancestors and the descendants of an execution.
     /// </summary>
     /// <param name="executionId">The id of the job execution</param>

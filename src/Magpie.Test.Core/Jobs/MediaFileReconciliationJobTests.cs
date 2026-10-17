@@ -132,7 +132,7 @@ public sealed class MediaFileReconciliationJobTests
             Task.FromResult<MediaInfo?>(null),
             1_584L,
             new DateTime(2026, 9, 27, 2, 0, 0, DateTimeKind.Utc),
-            new DateTime(2026, 9, 27, 3, 0, 0, DateTimeKind.Utc)
+            null
         ],
         [
             new DateTime(2026, 9, 21, 0, 0, 0, DateTimeKind.Utc),

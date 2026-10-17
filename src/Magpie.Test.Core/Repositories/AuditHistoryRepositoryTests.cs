@@ -606,4 +606,58 @@ public sealed class AuditHistoryRepositoryTests
             Assert.That(page.Items.Select(entry => entry.EntityName), Is.EqualTo(["The Matrix", "The Matrix"]));
         }
     }
+
+    [Test]
+    public async Task QueryAsync_ReturnsTheActivityOfTheContentItem_WhenTheContentIsGiven()
+    {
+        // Arrange
+        var metadataContainer = new MetadataContainer { CreatedAt = Now };
+        _context.MetadataContainers.Add(metadataContainer);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.ContentHierarchyItems.Add(new()
+        {
+            Id = GrabbedHierarchyItemId,
+            MetadataContainerId = metadataContainer.Id,
+            ContentType = "movie",
+            Level = "movie",
+            Slug = "the-matrix",
+            Name = "The Matrix",
+            CreatedAt = Now
+        });
+        _context.ContentItems.Add(new()
+        {
+            Id = GrabbedContentItemId,
+            ContentHierarchyItemId = GrabbedHierarchyItemId,
+            Fulfillment = FulfillmentStatus.Missing,
+            CreatedAt = Now
+        });
+        _context.AuditRecords.Add(new()
+        {
+            Category = AuditCategories.Jobs,
+            Operation = "GrabAttempted",
+            EntityId = GrabbedContentItemId.ToString("D"),
+            EntityType = nameof(ContentItem),
+            Timestamp = Now
+        });
+        _context.JobExecutions.Add(new()
+        {
+            JobType = "ReleaseAutoGrabItem",
+            Status = JobExecutionStatus.Queued,
+            Parameters = new() { ["contentItemId"] = GrabbedContentItemId.ToString("D") },
+            CreatedAt = Now.AddMinutes(-1)
+        });
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+        _context.ChangeTracker.Clear();
+        var query = new AuditHistoryQuery
+        {
+            Paging = new() { PageNumber = 1, PageSize = 25 },
+            ContentId = GrabbedHierarchyItemId
+        };
+
+        // Act
+        var page = await _subject.QueryAsync(query, ["00000000-0000-0000-0000-0000000000c2"]).ConfigureAwait(false);
+
+        // Assert
+        Assert.That(page.Items.Select(entry => entry.Label), Is.EqualTo(["GrabAttempted", "ReleaseAutoGrabItem"]));
+    }
 }

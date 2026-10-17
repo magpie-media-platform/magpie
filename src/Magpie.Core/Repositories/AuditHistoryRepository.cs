@@ -116,8 +116,14 @@ internal sealed class AuditHistoryRepository(
             var nameSearch = search is null
                 ? null
                 : string.Concat(search.Where(character => !char.IsWhiteSpace(character)));
-            var jobExecutions = FilterJobExecutions(query, parameterValueReferences, systemUserIds, search, nameSearch);
-            var auditRecords = FilterAuditRecords(query, systemUserIds, search, nameSearch);
+            var contentEntityIds = query.ContentId is { } contentId
+                ? await ListContentEntityIdsAsync(contentId, cancellationToken).ConfigureAwait(false)
+                : null;
+            var references = parameterValueReferences is null || contentEntityIds is null
+                ? parameterValueReferences
+                : [.. parameterValueReferences, .. contentEntityIds];
+            var jobExecutions = FilterJobExecutions(query, references, systemUserIds, search, nameSearch);
+            var auditRecords = FilterAuditRecords(query, contentEntityIds, systemUserIds, search, nameSearch);
             var jobKeys = jobExecutions is null
                 ? null
                 : SelectJobKeys(
@@ -360,8 +366,20 @@ internal sealed class AuditHistoryRepository(
         return jobExecutions;
     }
 
+    private async Task<string[]> ListContentEntityIdsAsync(Guid contentId, CancellationToken cancellationToken)
+    {
+        var contentItemIds = await context.ContentItems
+            .AsNoTracking()
+            .Where(item => item.ContentHierarchyItemId == contentId)
+            .Select(item => item.Id)
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+        return [contentId.ToString("D"), .. contentItemIds.Select(id => id.ToString("D"))];
+    }
+
     private IQueryable<AuditRecord>? FilterAuditRecords(
         AuditHistoryQuery query,
+        string[]? contentEntityIds,
         List<Guid?> systemUserIds,
         string? search,
         string? nameSearch)
@@ -373,10 +391,10 @@ internal sealed class AuditHistoryRepository(
 
         var auditRecords = context.AuditRecords.AsNoTracking();
 
-        if (query.ContentId is { } contentId)
+        if (contentEntityIds is not null)
         {
-            var entityId = contentId.ToString();
-            auditRecords = auditRecords.Where(record => record.EntityId == entityId);
+            auditRecords = auditRecords.Where(record =>
+                record.EntityId != null && contentEntityIds.Contains(record.EntityId));
         }
 
         if (query.JobExecutionId is { } jobExecutionId)

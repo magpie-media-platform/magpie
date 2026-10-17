@@ -91,7 +91,8 @@ internal sealed class SQLiteDatabaseManagementProvider(
         CancellationToken cancellationToken = default)
     {
         var applied = await context.Database.GetAppliedMigrationsAsync(cancellationToken).ConfigureAwait(false);
-        return [.. applied.Except(context.Database.GetMigrations(), StringComparer.Ordinal)];
+        var newest = context.Database.GetMigrations().Max(StringComparer.Ordinal);
+        return [.. applied.Where(migration => string.CompareOrdinal(migration, newest) > 0)];
     }
 
     private static string GetDataDirectory(string liveDatabasePath)

@@ -81,7 +81,6 @@ rules that require judgment.
 - Use SQLite in-memory for repository tests. Do not use EF Core InMemory.
 - Unit tests do not use the physical file system, database migrations, a real host or `TestServer`, or real delays.
   Use fakes, `FakeTimeProvider`, and SQLite in-memory.
-- Put a test that needs one of these in `Magpie.Test.Integration`.
 - Use `NullLogger` or `NullLoggerFactory`. Do not write to the console or to `TestContext.Out`.
 - Name tests `Method_Result_WhenCondition`.
 - Use Arrange, Act, and Assert comments.

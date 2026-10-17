@@ -208,8 +208,8 @@ public sealed class DownloadRefreshJobAcquisitionTests
             NullLogger<DownloadRepository>.Instance, Mock.Of<IDataProtectionService>(), time);
         var service = new DownloadService([_integration.Object], _clients.Object, downloads,
             Mock.Of<IJobManager>(), transactions, time, NullLogger<DownloadService>.Instance);
-        _subject = new DownloadRefreshJob([_integration.Object], _clients.Object, downloads, Mock.Of<IJobManager>(),
-            NullLogger<DownloadRefreshJob>.Instance, service, time, Mock.Of<IProgressReporter>());
+        _subject = new DownloadRefreshJob([_integration.Object], _clients.Object, downloads,
+            NullLogger<DownloadRefreshJob>.Instance, service, Mock.Of<IProgressReporter>());
         _jobContext = new JobContext(
             ExecutionId: Guid.NewGuid(),
             ScheduleTriggerId: null,

@@ -148,7 +148,6 @@ public sealed class ReleaseUnmatchTests
             Mock.Of<IRootFolderService>(),
             Mock.Of<IFileSystem>(),
             Mock.Of<IAuditRecordRepository>(),
-            Mock.Of<IJobManager>(),
             transactionManager,
             Mock.Of<IEventBus>(),
             Mock.Of<IReleaseEvaluationService>(),

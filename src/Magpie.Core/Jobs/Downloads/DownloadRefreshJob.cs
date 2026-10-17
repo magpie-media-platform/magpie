@@ -22,10 +22,8 @@ internal sealed class DownloadRefreshJob(
     IEnumerable<IDownloadClientIntegration> downloadClientIntegrations,
     IDownloadClientRepository downloadClientRepository,
     IDownloadRepository downloadRepository,
-    IJobManager jobManager,
     ILogger<DownloadRefreshJob> logger,
     IDownloadService downloadService,
-    TimeProvider timeProvider,
     IProgressReporter progressReporter) : IJob
 {
     public static readonly JobSpec Spec = new()
@@ -38,18 +36,10 @@ internal sealed class DownloadRefreshJob(
         Enabled = true,
         OnDemand = true,
         FailurePolicy = JobFailurePolicy.Retry,
-        SupportedTriggerModes = [JobTriggerMode.Manual, JobTriggerMode.Schedule, JobTriggerMode.Event],
+        SupportedTriggerModes = [JobTriggerMode.Manual, JobTriggerMode.Schedule],
         ConcurrencyScope = ConcurrencyScope.PerType,
         Parameters = [],
     };
-
-    private static readonly TimeSpan FastDelay = TimeSpan.FromSeconds(5);
-
-    private static readonly TimeSpan CalibrationDelay = TimeSpan.FromSeconds(15);
-
-    private static readonly TimeSpan ModerateDelay = TimeSpan.FromSeconds(30);
-
-    private static readonly TimeSpan SlowDelay = TimeSpan.FromSeconds(60);
 
     public async Task ExecuteAsync(JobContext jobContext, CancellationToken cancellationToken = default)
     {
@@ -69,8 +59,6 @@ internal sealed class DownloadRefreshJob(
             progressReporter.Report(1, "The refresh stopped because no enabled download client is configured.");
             return;
         }
-
-        TimeSpan? successorDelay = null;
 
         for (var i = 0; i < enabledClients.Length; i++)
         {
@@ -178,14 +166,6 @@ internal sealed class DownloadRefreshJob(
                         continue;
                     }
 
-                    var isActive = info.Status is DownloadStatus.Downloading
-                        or DownloadStatus.Queued
-                        or DownloadStatus.Stalled;
-
-                    var beforeStatus = download.Status;
-                    var beforeProgress = download.Progress;
-                    var beforeProgressAt = download.LastProgressAt;
-
                     try
                     {
                         var changedFields = await downloadService
@@ -208,23 +188,6 @@ internal sealed class DownloadRefreshJob(
                             "from client {DownloadClientName}",
                             download.Id,
                             client.Name);
-                        continue;
-                    }
-
-                    if (!isActive)
-                    {
-                        continue;
-                    }
-
-                    var delay = ComputeSuccessorDelay(
-                        beforeStatus,
-                        beforeProgress,
-                        beforeProgressAt,
-                        info,
-                        timeProvider.GetUtcNow().UtcDateTime);
-                    if (delay < successorDelay || successorDelay is null)
-                    {
-                        successorDelay = delay;
                     }
                 }
             }
@@ -242,84 +205,7 @@ internal sealed class DownloadRefreshJob(
             }
         }
 
-        if (successorDelay is { } chosen)
-        {
-            var notBefore = timeProvider.GetUtcNow().UtcDateTime.Add(chosen);
-            await jobManager.ExecuteAsync(
-                new JobEnqueueRequest
-                {
-                    JobType = MagpieJobs.Types.DownloadRefresh,
-                    IsSuccessor = true,
-                    NotBeforeAt = notBefore,
-                    UserId = userId,
-                    Mode = JobExecutionMode.Queue,
-                },
-                cancellationToken).ConfigureAwait(false);
-
-            logger.LogDebug(
-                "Because downloads are active, DownloadRefresh scheduled an adaptive successor at {NotBefore:o}",
-                notBefore);
-        }
-
         progressReporter.Report(1, "The download refresh completed.");
-    }
-
-    private static TimeSpan ComputeSuccessorDelay(
-        DownloadStatus beforeStatus,
-        decimal? beforeProgress,
-        DateTime? beforeProgressAt,
-        DownloadInfo info,
-        DateTime now)
-    {
-        if (info.Status is DownloadStatus.Queued or DownloadStatus.Stalled)
-        {
-            return SlowDelay;
-        }
-
-        if (info.ProgressPercent is not { } afterProgress)
-        {
-            return SlowDelay;
-        }
-
-        if (afterProgress >= 100m)
-        {
-            return FastDelay;
-        }
-
-        var wasActive = beforeStatus is DownloadStatus.Downloading
-            or DownloadStatus.Queued
-            or DownloadStatus.Stalled;
-        if (!wasActive)
-        {
-            return CalibrationDelay;
-        }
-
-        if (beforeProgress is not { } startProgress || beforeProgressAt is not { } startAt)
-        {
-            return CalibrationDelay;
-        }
-
-        var elapsed = now - startAt;
-        if (elapsed <= TimeSpan.Zero)
-        {
-            return CalibrationDelay;
-        }
-
-        var movement = afterProgress - startProgress;
-        if (movement <= 0m)
-        {
-            return SlowDelay;
-        }
-
-        var etaSeconds = elapsed.TotalSeconds * (double)(100m - afterProgress) / (double)movement;
-
-        return etaSeconds switch
-        {
-            <= 60d => FastDelay,
-            <= 300d => CalibrationDelay,
-            <= 900d => ModerateDelay,
-            _ => SlowDelay,
-        };
     }
 
     private async Task PublishRefreshedStatusAsync(Dictionary<Guid, IReadOnlyList<string>> updated, Guid? userId)

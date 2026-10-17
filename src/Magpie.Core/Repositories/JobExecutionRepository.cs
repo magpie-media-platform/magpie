@@ -1801,4 +1801,27 @@ internal sealed class JobExecutionRepository(
             throw;
         }
     }
+
+    public async Task<IReadOnlyList<JobQueueCount>> CountQueuedAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            var now = _time.GetUtcNow().UtcDateTime;
+            return await context.JobExecutions.AsNoTracking()
+                .Where(e => e.Status == JobExecutionStatus.Queued && e.NodeId == null)
+                .GroupBy(e => e.JobType)
+                .Select(g => new JobQueueCount(
+                    g.Key,
+                    g.Count(e => e.NotBeforeAt == null || e.NotBeforeAt <= now),
+                    g.Count(e => e.NotBeforeAt > now && e.Attempt == null),
+                    g.Count(e => e.NotBeforeAt > now && e.Attempt != null)))
+                .ToListAsync(cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "The job execution repository failed to count the queued executions.");
+            throw;
+        }
+    }
 }
