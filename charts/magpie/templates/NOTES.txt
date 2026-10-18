@@ -1,0 +1,14 @@
+{{- $fullname := include "magpie.fullname" . -}}
+{{- if .Values.ingress.enabled }}
+Open Magpie at:
+{{- range .Values.ingress.hosts }}
+  {{ if $.Values.ingress.tls }}https{{ else }}http{{ end }}://{{ . }}/
+{{- end }}
+{{- else }}
+Open Magpie with:
+  kubectl --namespace {{ .Release.Namespace }} port-forward service/{{ $fullname }} 8080:{{ .Values.service.port }}
+{{- end }}
+{{- if not .Values.keys.existingSecret }}
+
+Back up Magpie's keys with the database. A database backup is not usable without its keys.
+{{- end }}

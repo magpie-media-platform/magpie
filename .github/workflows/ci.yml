@@ -280,8 +280,37 @@ jobs:
           bash scripts/verify-artifacts.sh "$VERSION"
           "artifacts/app/magpie-$VERSION-linux-x64.tar.gz" artifacts/packages
 
+  chart:
+    needs: build
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.build.outputs.version }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
+        with:
+          version: v3.16.4
+
+      - name: Install kubeconform
+        run: |
+          archive="$RUNNER_TEMP/kubeconform.tar.gz"
+          url=https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz
+          curl -fsSLo "$archive" "$url"
+          echo "95f14e87aa28c09d5941f11bd024c1d02fdc0303ccaa23f61cef67bc92619d73  $archive" | sha256sum --check
+          sudo tar -xzf "$archive" -C /usr/local/bin kubeconform
+
+      - run: bash scripts/verify-chart.sh charts/magpie
+
+      - run: helm package charts/magpie --version "$VERSION" --app-version "$VERSION" --destination artifacts/chart
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: chart
+          path: artifacts/chart/*.tgz
+
   publish:
-    needs: [build, pack, app, installer, image, verify]
+    needs: [build, pack, app, installer, image, verify, chart]
     if: >-
       github.event_name == 'push' &&
       (github.ref == 'refs/heads/develop' || startsWith(github.ref, 'refs/tags/v')) &&
@@ -349,6 +378,18 @@ jobs:
             fi
           done
 
+      - uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
+        with:
+          version: v3.16.4
+
+      - name: Publish chart
+        env:
+          REGISTRY_USERNAME: ${{ github.actor }}
+          REGISTRY_PASSWORD: ${{ github.token }}
+        run: |
+          echo "$REGISTRY_PASSWORD" | helm registry login ghcr.io --username "$REGISTRY_USERNAME" --password-stdin
+          helm push "artifacts/chart/magpie-$VERSION.tgz" oci://ghcr.io/magpie-media-platform/charts
+
       - name: Create the GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -362,5 +403,5 @@ jobs:
           if [[ "$VERSION" == *-* ]]; then
             release_args+=(--prerelease --latest=false)
           fi
-          gh release create "$tag" artifacts/app-*/*.tar.gz artifacts/installer/*.msi \
+          gh release create "$tag" artifacts/app-*/*.tar.gz artifacts/installer/*.msi artifacts/chart/*.tgz \
             --title "$VERSION" --notes "" "${release_args[@]}"

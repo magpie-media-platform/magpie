@@ -11,12 +11,21 @@ RUN chmod +x magpie && ln -s /app/data/config /app/config && mkdir -p /app/exten
 COPY --chmod=755 <<'EOF' /usr/local/bin/magpie-entrypoint
 #!/bin/sh
 set -e
-# When started as root, run Magpie as PUID:PGID (the app user by default), so that its files in the data volume and
-# in mounted media folders get that owner. Data from images that ran Magpie as root gets the new owner one time.
-if [ "$(id -u)" = 0 ]; then
+if [ "$(id -u)" = 0 ] && [ "${PUID:-$APP_UID}" != 0 ]; then
     uid="${PUID:-$APP_UID}"
     gid="${PGID:-$uid}"
-    [ "$(stat -c %u:%g /app/data)" = "$uid:$gid" ] || chown -R "$uid:$gid" /app/data
+    chown "$uid:$gid" /app/data 2> /dev/null || echo "magpie-entrypoint: /app/data could not be given to $uid:$gid" >&2
+    find /app/data -mindepth 1 -maxdepth 1 ! -type l -writable -print |
+        while IFS= read -r entry; do
+            if [ "$(stat -c %u:%g "$entry")" != "$uid:$gid" ] &&
+                ! { chown "$uid:$gid" "$entry" 2> /dev/null && [ "$(stat -c %u:%g "$entry")" = "$uid:$gid" ]; }; then
+                echo "magpie-entrypoint: $entry could not be given to $uid:$gid" >&2
+                continue
+            fi
+            find "$entry" ! -type l \( ! -user "$uid" -o ! -group "$gid" \) -writable \
+                -exec chown "$uid:$gid" {} + 2> /dev/null ||
+                echo "magpie-entrypoint: some of $entry could not be given to $uid:$gid" >&2
+        done
     chown -R "$uid:$gid" /home/app
     export HOME=/home/app
     exec setpriv --reuid="$uid" --regid="$gid" --clear-groups "$0" "$@"
@@ -24,19 +33,15 @@ fi
 mkdir -p /app/data/config
 extensions=/app/data/extensions
 if [ -e "$extensions/.bundled" ]; then
-    # A .bundled-copy-* folder older than 60 minutes is from a pod that stopped during its copy.
     find "$extensions" -maxdepth 1 -type d -name '.bundled-copy-*' -mmin +60 -exec rm -rf {} + 2> /dev/null || true
 else
     mkdir -p "$extensions"
-    # A package appears only through an atomic rename of a complete copy, and a .bundled-copy-* folder stays until
-    # the copy is complete. Packages without a .bundled-copy-* folder or a marker are from an image before the marker.
     if ls -d "$extensions"/.bundled-copy-* > /dev/null 2>&1 ||
         [ -z "$(ls -A "$extensions" | grep -vx lost+found)" ]; then
         staging="$(mktemp -d "$extensions/.bundled-copy-XXXXXX")"
         cp -R /app/extensions/. "$staging"
         for package in "$staging"/*; do
             [ -e "$package" ] || continue
-            # The move fails, and does not nest, if another node moved the same package first.
             mv "$package" "$extensions/" 2> /dev/null || [ -d "$extensions/${package##*/}" ]
         done
         rm -rf "$staging"

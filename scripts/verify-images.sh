@@ -82,6 +82,28 @@ docker run --rm --entrypoint chown --volume "$volume-root:/app/data" "$standard"
 docker run --rm --env PUID=1000 --env PGID=1001 --volume "$volume-root:/app/data" "$standard" version > /dev/null
 [[ "$(docker run --rm --entrypoint stat --volume "$volume-root:/app/data" "$standard" -c %u:%g /app/data/config)" == 1000:1001 ]] ||
     fail "a Standard instance with PUID and PGID did not give its data to that user"
+timeout 120 docker run --rm --init --env PUID=0 --volume "$volume-root:/app/data" "$standard" version > /dev/null ||
+    fail "a Standard instance with PUID 0 did not start"
+chart=(--cap-drop ALL --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add SETUID --cap-add SETGID
+    --security-opt no-new-privileges --volume "$volume-root:/app/data")
+docker run --rm "${chart[@]}" "$standard" version > /dev/null ||
+    fail "a Standard instance did not start with the capabilities of the Helm chart"
+docker run --rm --entrypoint mkdir --volume "$volume-root:/app/data" "$standard" /app/data/subpath
+docker run --rm "${chart[@]}" "$standard" version > /dev/null ||
+    fail "a Standard instance did not start after root made a folder in its data"
+[[ "$(docker run --rm --entrypoint stat --volume "$volume-root:/app/data" "$standard" -c %u:%g /app/data/subpath)" == 1654:1654 ]] ||
+    fail "a Standard instance did not take over a folder that root made in its data, as Kubernetes makes a subPath"
+docker run --rm --entrypoint chown --volume "$volume-root:/app/data" "$standard" -R 0:0 /app/data
+docker run --rm "${chart[@]}" --tmpfs /app/data/keys:ro "$standard" version > /dev/null ||
+    fail "a Standard instance did not start with a read-only mount in its data, as keys from a Secret"
+[[ "$(docker run --rm --entrypoint stat --volume "$volume-root:/app/data" "$standard" -c %u:%g /app/data/config)" == 1654:1654 ]] ||
+    fail "a Standard instance with a read-only mount in its data did not take over the rest of its data"
+docker run --rm --entrypoint sh --volume "$volume-root:/app/data" "$standard" -c \
+    'mkdir -p /app/data/config/nested && chown 0:0 /app/data/config/nested && chown 1654:1654 /app/data/config'
+docker run --rm "${chart[@]}" "$standard" version > /dev/null ||
+    fail "a Standard instance did not start after an interrupted takeover of its data"
+[[ "$(docker run --rm --entrypoint stat --volume "$volume-root:/app/data" "$standard" -c %u:%g /app/data/config/nested)" == 1654:1654 ]] ||
+    fail "a Standard instance did not finish an interrupted takeover of its data"
 
 [[ "$(inventory "$standard" "$volume-standard")" == "$preset" ]] ||
     fail "a Standard instance changed its extensions on a restart"

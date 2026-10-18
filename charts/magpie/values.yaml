@@ -1,0 +1,107 @@
+image:
+  repository: ghcr.io/magpie-media-platform/magpie
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+cluster:
+  enabled: false
+
+replicaCount: 1
+
+modeChange:
+  to: ""
+
+database:
+  provider: sqlite
+  existingSecret: ""
+  connectionStringKey: connection-string
+
+keys:
+  existingSecret: ""
+
+secretKey:
+  existingSecret: ""
+  key: secret-key
+
+knownProxies: []
+
+env: []
+
+persistence:
+  data:
+    existingClaim: ""
+    storageClass: ""
+    accessModes:
+      - ReadWriteOnce
+    size: 10Gi
+  shared:
+    volume: {}
+    existingClaim: ""
+
+service:
+  type: ClusterIP
+  port: 8080
+  annotations: {}
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts: []
+  tls: []
+
+podSecurityContext:
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  privileged: false
+  capabilities:
+    drop:
+      - ALL
+    add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - SETUID
+      - SETGID
+
+terminationGracePeriodSeconds: 35
+
+startupProbe:
+  httpGet:
+    path: /api/system/ready
+    port: http
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 180
+
+livenessProbe:
+  httpGet:
+    path: /api/system/health
+    port: http
+  periodSeconds: 30
+  timeoutSeconds: 10
+  failureThreshold: 20
+
+readinessProbe:
+  httpGet:
+    path: /api/system/ready
+    port: http
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 3
+
+resources: {}
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity: {}
+
+extraVolumes: []
+
+extraVolumeMounts: []

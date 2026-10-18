@@ -1,0 +1,9 @@
+apiVersion: v2
+name: magpie
+description: Magpie on Kubernetes, as a single node or as a multi-node cluster.
+type: application
+version: 0.0.0
+appVersion: "0.0.0"
+kubeVersion: ">=1.23.0-0"
+sources:
+  - https://github.com/magpie-media-platform/magpie
