@@ -188,8 +188,7 @@ internal sealed class ExtensionActivationBackgroundService(
                 health = ExtensionNodeHealth.StaleRequiresRestart;
             }
 
-            // A restart request exits with success, and systemd restarts a unit only on failure.
-            var canRestart = hostStatus.Mode is HostMode.Sentinel or HostMode.WindowsService;
+            var canRestart = hostStatus.Mode is HostMode.Sentinel or HostMode.WindowsService or HostMode.Systemd;
 
             await repository.UpsertAsync(
                 new ExtensionNodeStatus

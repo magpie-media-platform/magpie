@@ -26,7 +26,6 @@ scalar level string
 scalar monitoring enum Monitored|Shotgun|Unmonitored
 scalar name string
 scalar originalTitle string
-scalar overview string
 scalar parentId guid
 scalar path string
 scalar pendingMetadataRefresh boolean

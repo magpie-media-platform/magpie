@@ -55,6 +55,7 @@ public sealed class MagpieSystemTests
 
     [TestCase(HostMode.Sentinel)]
     [TestCase(HostMode.WindowsService)]
+    [TestCase(HostMode.Systemd)]
     public async Task RequestRestartAsync_SetsShutdownExitCodeToRestart_WhenModeReadsIt(HostMode mode)
     {
         // Arrange
@@ -87,6 +88,7 @@ public sealed class MagpieSystemTests
 
     [TestCase(HostMode.Sentinel)]
     [TestCase(HostMode.WindowsService)]
+    [TestCase(HostMode.Systemd)]
     public async Task RequestShutdownAsync_SetsShutdownExitCodeToShutdown_WhenModeReadsIt(HostMode mode)
     {
         // Arrange
@@ -97,23 +99,6 @@ public sealed class MagpieSystemTests
 
         // Assert
         Assert.That(_hostStatus.ShutdownExitCode, Is.EqualTo(8));
-    }
-
-    [Test]
-    public async Task RequestRestartAsync_LeavesShutdownExitCodeNull_WhenSystemd()
-    {
-        // Arrange
-        _hostStatus.Mode = HostMode.Systemd;
-
-        // Act
-        await _subject.RequestRestartAsync(null, CancellationToken.None).ConfigureAwait(false);
-
-        // Assert
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(_hostStatus.ShutdownExitCode, Is.Null);
-            _lifetime.Verify(applicationLifetime => applicationLifetime.StopApplication(), Times.Once);
-        }
     }
 
     [Test]

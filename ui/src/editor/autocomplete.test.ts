@@ -288,7 +288,6 @@ describe('Filter Query Autocomplete', () => {
                 'parentId',
                 'title',
                 'originalTitle',
-                'overview',
                 'language',
                 'publishDate',
                 'duration',
@@ -597,7 +596,7 @@ describe('Filter Query Autocomplete', () => {
             expect(fieldNames).toContain('level');
             expect(fieldNames).toContain('monitoring');
             expect(fieldNames).toContain('title');
-            expect(fieldNames).toContain('overview');
+            expect(fieldNames).not.toContain('overview');
             expect(fieldNames).toContain('publishDate');
             expect(fieldNames).toContain('duration');
             expect(fieldNames).not.toContain('fileSize');

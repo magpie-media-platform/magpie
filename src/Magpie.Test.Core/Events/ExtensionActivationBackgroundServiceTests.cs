@@ -145,6 +145,7 @@ public sealed class ExtensionActivationBackgroundServiceTests
 
     [TestCase(HostMode.Sentinel)]
     [TestCase(HostMode.WindowsService)]
+    [TestCase(HostMode.Systemd)]
     public async Task RefreshNodeStatusAsync_RequestsRestartAtOnce_WhenAStaleNodeThatCanRestartItselfIsAlone(
         HostMode mode)
     {
@@ -286,11 +287,6 @@ public sealed class ExtensionActivationBackgroundServiceTests
         }
     }
 
-    [TestCase(
-        true,
-        HostMode.Systemd,
-        false,
-        "Extension changes require a restart. Restart this node manually.")]
     [TestCase(
         true,
         HostMode.Default,

@@ -45,7 +45,6 @@ describe('Field Registry', () => {
             parentId: 'guid',
             title: 'string',
             originalTitle: 'string',
-            overview: 'string',
             language: 'string',
             publishDate: 'date',
             duration: 'timespan',

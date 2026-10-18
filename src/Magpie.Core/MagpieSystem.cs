@@ -100,7 +100,7 @@ internal sealed class MagpieSystem(
 
         try
         {
-            if (hostStatus.Mode is HostMode.Sentinel or HostMode.WindowsService)
+            if (hostStatus.Mode is HostMode.Sentinel or HostMode.WindowsService or HostMode.Systemd)
             {
                 hostStatus.ShutdownExitCode = exitCode;
             }

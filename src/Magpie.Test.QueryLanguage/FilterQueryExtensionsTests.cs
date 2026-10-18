@@ -102,6 +102,16 @@ public class FilterQueryExtensionsTests
         Assert.That(result.IsSuccess, Is.True);
     }
 
+    [Test]
+    public void ParseContentFilter_Fails_WhenOverviewIsUsed()
+    {
+        // Act
+        var result = "overview contains \"x\"".ParseContentFilter();
+
+        // Assert
+        Assert.That(result.IsSuccess, Is.False);
+    }
+
     [TestCase("RootFolderId in (null)")]
     [TestCase("Monitoring in (null)")]
     [TestCase("Name in (null)")]

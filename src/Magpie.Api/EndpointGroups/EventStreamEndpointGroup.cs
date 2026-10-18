@@ -27,6 +27,8 @@ namespace Magpie.Api.EndpointGroups;
 
 internal sealed class EventStreamEndpointGroup : IApiEndpointGroup
 {
+    internal static readonly TimeSpan KeepAliveInterval = TimeSpan.FromSeconds(30);
+
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
@@ -292,6 +294,7 @@ internal sealed class EventStreamEndpointGroup : IApiEndpointGroup
         HttpContext httpContext,
         [FromServices] IEventBus eventBus,
         [FromServices] IHostApplicationLifetime applicationLifetime,
+        [FromServices] TimeProvider timeProvider,
         [FromServices] ILogger<EventStreamEndpointGroup> logger,
         AuthenticatedUser user,
         CancellationToken cancellationToken)
@@ -319,8 +322,31 @@ internal sealed class EventStreamEndpointGroup : IApiEndpointGroup
 
             await WriteRawAsync(response, ": connected\n\n", streamCts.Token).ConfigureAwait(false);
 
-            await foreach (var evt in listener.ReadAllAsync(streamCts.Token).ConfigureAwait(false))
+            var events = listener.ReadAllAsync(streamCts.Token).GetAsyncEnumerator(streamCts.Token);
+            var next = events.MoveNextAsync().AsTask();
+            while (true)
             {
+                bool hasEvent;
+                try
+                {
+                    hasEvent = await next
+                        .WaitAsync(KeepAliveInterval, timeProvider, streamCts.Token)
+                        .ConfigureAwait(false);
+                }
+                catch (TimeoutException)
+                {
+                    await WriteRawAsync(response, ": keepalive\n\n", streamCts.Token).ConfigureAwait(false);
+                    continue;
+                }
+
+                if (!hasEvent)
+                {
+                    break;
+                }
+
+                var evt = events.Current;
+                next = events.MoveNextAsync().AsTask();
+
                 if (RevokesSessionOf(evt, user))
                 {
                     disconnectReason = "session_revoked";

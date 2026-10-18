@@ -83,7 +83,6 @@ export const contentFieldRegistry: FieldRegistry = {
         { name: 'parentId', type: 'guid', description: 'Parent content ID' },
         { name: 'title', type: 'string', description: 'Metadata title' },
         { name: 'originalTitle', type: 'string', description: 'Original language title' },
-        { name: 'overview', type: 'string', description: 'Description' },
         { name: 'language', type: 'string', description: 'Language code' },
         { name: 'publishDate', type: 'date', description: 'Publish/release date' },
         { name: 'duration', type: 'timespan', description: 'Duration: "1h30m" or "02:00:00"' },

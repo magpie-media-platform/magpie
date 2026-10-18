@@ -278,11 +278,6 @@ internal static class FilterFieldRegistryExtensions
                 {
                     OriginalTitle = AddCriterion(ctx.Metadata.OriginalTitle, op, v, vs)
                 })),
-            [nameof(MetadataCriteria.Overview)] = new StringField<ContentTransformContext>(
-                (ctx, op, v, vs) => ctx.SetMetadata(ctx.Metadata with
-                {
-                    Overview = AddCriterion(ctx.Metadata.Overview, op, v, vs)
-                })),
             [nameof(MetadataCriteria.Language)] = new StringField<ContentTransformContext>(
                 (ctx, op, v, vs) => ctx.SetMetadata(ctx.Metadata with
                 {
