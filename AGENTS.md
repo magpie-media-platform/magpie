@@ -14,8 +14,14 @@ rules that require judgment.
 - Fix failures outside the current change.
 - If a gate cannot pass, report the blocker.
 - If the user requests a commit, use `type(scope): summary`.
-- Write the commit summary in lowercase and imperative form.
+- Write commit summaries in imperative form. Use lowercase for commit prose, disclosure labels, values, and model names; preserve case-sensitive identifiers.
 - Do not add a `Co-Authored-By` trailer.
+- Follow the [AI Usage Policy](AI_POLICY.md) for every commit's authorship tag, disclosure fields, and final review statement.
+- Leave a blank line after the commit summary and the `authorship:` line, and between attribution fields.
+- Base attribution on all changes in the commit, including human work already present before the agent started.
+- Credit the actual human and AI contributions. Do not claim human-written changes as AI-written, or AI-written changes as human-written.
+- Use `human assisted` only when the human contribution was review and edits of AI-written content. Use `ai assisted` for human design, detailed implementation direction, or original content combined with AI work. Credit human-designed, AI-written work as partial human authorship even when AI wrote all the code.
+- Do not invent human review or understanding. Obtain human confirmation before adding the required review statement for an AI-category commit.
 
 ## Frontend
 
