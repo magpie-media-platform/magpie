@@ -1,0 +1,60 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: magpie
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: magpie
+  template:
+    metadata:
+      labels:
+        app: magpie
+    spec:
+      nodeSelector:
+        kubernetes.io/os: linux
+      terminationGracePeriodSeconds: 35
+      containers:
+        - name: magpie
+          image: ghcr.io/magpie-media-platform/magpie:VERSION
+          ports:
+            - name: http
+              containerPort: 8080
+          startupProbe:
+            httpGet:
+              path: /api/system/ready
+              port: http
+            periodSeconds: 5
+            failureThreshold: 120
+          readinessProbe:
+            httpGet:
+              path: /api/system/ready
+              port: http
+            periodSeconds: 10
+          volumeMounts:
+            - name: data
+              mountPath: /app/data
+            - name: media
+              mountPath: /media
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: magpie-data
+        - name: media
+          persistentVolumeClaim:
+            claimName: magpie-media
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: magpie
+spec:
+  selector:
+    app: magpie
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http

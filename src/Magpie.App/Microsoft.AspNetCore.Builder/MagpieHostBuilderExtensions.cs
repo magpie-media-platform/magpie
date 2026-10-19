@@ -27,6 +27,7 @@ using Magpie.Models.Enums;
 using Magpie.Sdk.Extensions;
 using Magpie.Sdk.Http;
 
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Data.Sqlite;
@@ -61,6 +62,8 @@ public static class MagpieHostBuilderExtensions
     private const string DatabaseProviderKey = "Magpie:Database:Provider";
 
     private const string DatabaseConnectionStringKey = "Magpie:Database:ConnectionString";
+
+    private const string DefaultUrl = "http://localhost:8080";
 
     private const string CommandLineLoggingKey = "Magpie:CommandLineLogging";
 
@@ -105,6 +108,11 @@ public static class MagpieHostBuilderExtensions
         else if (hostStatus.Mode == HostMode.Systemd)
         {
             builder.Services.AddSystemd();
+        }
+
+        if (!HasConfiguredAddress(builder.Configuration))
+        {
+            builder.WebHost.UseUrls(DefaultUrl);
         }
 
         var options = builder.Configuration.GetSection(MagpieHostOptions.SectionName).Get<MagpieHostOptions>()
@@ -175,6 +183,12 @@ public static class MagpieHostBuilderExtensions
         }
 
         return options;
+    }
+
+    internal static bool HasConfiguredAddress(IConfiguration configuration)
+    {
+        return new[] { "urls", "http_ports", "https_ports" }.Any(key => !string.IsNullOrEmpty(configuration[key])) ||
+            configuration.GetSection("Kestrel:Endpoints").Exists();
     }
 
     internal static bool IsNewInstance(bool hasSchema, long activationGeneration, bool hasExtensions)

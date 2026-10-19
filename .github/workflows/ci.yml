@@ -107,10 +107,20 @@ jobs:
 
   app:
     needs: build
-    runs-on: ubuntu-latest
     strategy:
       matrix:
-        rid: [win-x64, linux-x64, linux-arm64]
+        include:
+          - rid: win-x64
+            runner: ubuntu-latest
+          - rid: linux-x64
+            runner: ubuntu-latest
+          - rid: linux-arm64
+            runner: ubuntu-latest
+          - rid: osx-arm64
+            runner: macos-latest
+          - rid: osx-x64
+            runner: macos-latest
+    runs-on: ${{ matrix.runner }}
     env:
       VERSION: ${{ needs.build.outputs.version }}
       RID: ${{ matrix.rid }}

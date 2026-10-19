@@ -8,6 +8,16 @@
     <PackageTags>magpie</PackageTags>
   </PropertyGroup>
 
+  <PropertyGroup Condition="($(MSBuildProjectName.StartsWith('Magpie.Extensions.')) Or '$(MSBuildProjectName)' == 'Magpie.Sdk') And Exists('$(MSBuildProjectDirectory)/README.md')">
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageIcon>logo.png</PackageIcon>
+  </PropertyGroup>
+
+  <ItemGroup Condition="($(MSBuildProjectName.StartsWith('Magpie.Extensions.')) Or '$(MSBuildProjectName)' == 'Magpie.Sdk') And Exists('$(MSBuildProjectDirectory)/README.md')">
+    <None Include="README.md" Pack="true" PackagePath="\" />
+    <None Include="logo.png" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
   <Target Name="PackExtensionDependencies" DependsOnTargets="ResolvePackageAssets">
     <ItemGroup>
       <BuildOutputInPackage Include="@(RuntimeCopyLocalItems)" />
