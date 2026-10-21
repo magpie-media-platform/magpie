@@ -6,6 +6,7 @@ Magpie is a self-hosted media manager. These pages cover installing it, using it
 
 ## Getting started
 
+- [Showcase](showcase.md)
 - [Quick start](quick-start.md)
 - [Installation](installation/README.md)
 - [First download](installation/first-download.md)
