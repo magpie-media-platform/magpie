@@ -429,7 +429,9 @@ test.describe.serial('Journey 11: browse it like a member of the household', () 
                     partial: 4,
                 });
                 await page.goto('/');
-                const stats = page.locator('[data-component="content-stats-widget"]');
+                const stats = page
+                    .locator('[data-component="content-stats-widget"]')
+                    .filter({ has: page.getByRole('heading', { name: 'Library', exact: true }) });
                 await expect(stats.locator('.content-stats-widget__total')).toHaveText('87');
                 await expect(stats.locator('[data-component="status-row"][data-status="fulfilled"]')).toContainText('1');
                 await expect(stats.locator('[data-component="status-row"][data-status="missing"]')).toContainText('79');
@@ -440,8 +442,13 @@ test.describe.serial('Journey 11: browse it like a member of the household', () 
 
             await test.step('the dashboard widgets link through to the pages behind them', async () => {
                 await page.goto('/');
-                const stats = page.locator('[data-component="content-stats-widget"]');
-                await expect(stats.getByRole('link', { name: 'View all content' })).toHaveAttribute('href', '/library');
+                const stats = page
+                    .locator('[data-component="content-stats-widget"]')
+                    .filter({ has: page.getByRole('heading', { name: 'Library', exact: true }) });
+                await expect(stats.getByRole('link', { name: 'View all content' })).toHaveAttribute(
+                    'href',
+                    '/library/all?sort=dateAdded&sortDir=desc',
+                );
                 await expect(stats.getByRole('link', { name: 'View 79 missing items' })).toHaveAttribute(
                     'href',
                     '/library/all?fulfillment=missing&levels=all',
@@ -450,7 +457,10 @@ test.describe.serial('Journey 11: browse it like a member of the household', () 
                     'href',
                     `/library/${ids.recent}`,
                 );
-                await expect(page.getByRole('link', { name: 'View all jobs' })).toHaveAttribute('href', '/admin/jobs');
+                await expect(page.getByRole('link', { name: 'View all fulfilled' })).toHaveAttribute(
+                    'href',
+                    '/library/all?fulfillment=fulfilled&levels=all&sort=fulfilledDate&sortDir=desc',
+                );
 
                 const upcoming = page.locator(`[data-component="upcoming-content-widget"] [data-content-id="${ids.upcoming}"]`);
                 await expect(upcoming).toHaveAttribute('href', `/library/${ids.upcoming}`);

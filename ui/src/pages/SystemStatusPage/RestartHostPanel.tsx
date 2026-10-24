@@ -84,8 +84,7 @@ export function RestartHostPanel() {
                         <DialogTitle>Restart {instanceName}?</DialogTitle>
                         <DialogDescription>
                             {instanceName} will shut down and the supervisor will relaunch it. The interface will be
-                            briefly unavailable while it reconnects. Running jobs stop. Each job retries or stays
-                            failed, according to its recovery policy.
+                            briefly unavailable while it reconnects.
                         </DialogDescription>
                     </DialogHeader>
                     <DialogFooter>

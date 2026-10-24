@@ -26,7 +26,7 @@ vi.mock('@/extensions/useExtensions', () => ({
 const mockClientHealthResult = vi.fn();
 const mockServerHealthResult = vi.fn();
 const mockActiveDownloadsResult = vi.fn();
-const mockRecentJobsResult = vi.fn();
+const mockRecentlyFulfilledResult = vi.fn();
 const mockContentCountsResult = vi.fn();
 const mockRecentContentResult = vi.fn();
 const mockUpcomingContentResult = vi.fn();
@@ -37,17 +37,17 @@ vi.mock('@/hooks/useDashboard', () => ({
         downloadClients: ['dashboard', 'download-clients'],
         mediaServers: ['dashboard', 'media-servers'],
         downloads: ['dashboard', 'downloads'],
-        jobs: ['dashboard', 'jobs'],
         contentStats: ['dashboard', 'content-stats'],
         recentContent: ['dashboard', 'recent-content'],
+        recentlyFulfilled: ['dashboard', 'recently-fulfilled'],
         upcomingContent: (today: string) => ['dashboard', 'upcoming-content', today],
     },
     useDownloadClientHealth: () => mockClientHealthResult(),
     useMediaServerHealth: () => mockServerHealthResult(),
     useActiveDownloads: () => mockActiveDownloadsResult(),
-    useRecentJobs: () => mockRecentJobsResult(),
     useContentCounts: () => mockContentCountsResult(),
     useRecentContent: () => mockRecentContentResult(),
+    useRecentlyFulfilled: () => mockRecentlyFulfilledResult(),
     useUpcomingContent: () => mockUpcomingContentResult(),
 }));
 
@@ -84,43 +84,27 @@ const defaultActiveDownloads = {
     ],
 };
 
-const defaultRecentJobs = [
-    {
-        id: '11111111-1111-4111-8111-111111111111',
-        name: 'Content metadata refresh item',
-        status: 'completed' as const,
-        duration: '2m 15s',
-        timestamp: '5 min ago',
-    },
-    {
-        id: '22222222-2222-4222-8222-222222222222',
-        name: 'Search Missing',
-        status: 'running' as const,
-        timestamp: '10 min ago',
-    },
-    {
-        id: '33333333-3333-4333-8333-333333333333',
-        name: 'Sync Plex Library',
-        status: 'completed' as const,
-        duration: '45s',
-        timestamp: '1h ago',
-    },
-];
-
 const defaultContentCounts = {
     total: 307,
     missing: 42,
     upgradable: 15,
     fulfilled: 238,
-    fulfilledExternally: 12,
-    partial: 18,
 };
 
 const defaultRecentContent = [
-    { id: 'content-1', title: 'Shogun (2024)', addedAt: '2h ago', fulfillment: 'fulfilled' as const },
-    { id: 'content-2', title: 'The Gentlemen', addedAt: '5h ago', fulfillment: 'missing' as const },
-    { id: 'content-3', title: '3 Body Problem', addedAt: '1d ago', fulfillment: 'upgradable' as const },
+    { id: 'content-1', title: 'Shogun (2024)', timestamp: '2h ago', fulfillment: 'fulfilled' as const },
+    { id: 'content-2', title: 'The Gentlemen', timestamp: '5h ago', fulfillment: 'missing' as const },
+    { id: 'content-3', title: '3 Body Problem', timestamp: '1d ago', fulfillment: 'upgradable' as const },
 ];
+
+const defaultRecentlyFulfilled = {
+    today: 2,
+    thisWeek: 9,
+    items: [
+        { id: 'content-5', title: 'Severance', timestamp: '1h ago', fulfillment: 'fulfilled' as const },
+        { id: 'content-6', title: 'Andor', timestamp: '3d ago', fulfillment: 'upgradable' as const },
+    ],
+};
 
 const defaultUpcomingContent = [
     {
@@ -153,7 +137,7 @@ function setLoadingMocks() {
     mockClientHealthResult.mockReturnValue(makeResult(undefined, true));
     mockServerHealthResult.mockReturnValue(makeResult(undefined, true));
     mockActiveDownloadsResult.mockReturnValue(makeResult(undefined, true));
-    mockRecentJobsResult.mockReturnValue(makeResult(undefined, true));
+    mockRecentlyFulfilledResult.mockReturnValue(makeResult(undefined, true));
     mockContentCountsResult.mockReturnValue(makeResult(undefined, true));
     mockRecentContentResult.mockReturnValue(makeResult(undefined, true));
     mockUpcomingContentResult.mockReturnValue(makeResult(undefined, true));
@@ -240,7 +224,7 @@ describe('DashboardPage', () => {
         mockClientHealthResult.mockReturnValue(makeResult(defaultClientHealth));
         mockServerHealthResult.mockReturnValue(makeResult(defaultServerHealth));
         mockActiveDownloadsResult.mockReturnValue(makeResult(defaultActiveDownloads));
-        mockRecentJobsResult.mockReturnValue(makeResult(defaultRecentJobs));
+        mockRecentlyFulfilledResult.mockReturnValue(makeResult(defaultRecentlyFulfilled));
         mockContentCountsResult.mockReturnValue(makeResult(defaultContentCounts));
         mockRecentContentResult.mockReturnValue(makeResult(defaultRecentContent));
         mockUpcomingContentResult.mockReturnValue(makeResult(defaultUpcomingContent));
@@ -391,56 +375,47 @@ describe('DashboardPage', () => {
         });
     });
 
-    describe('Recent Jobs Widget', () => {
-        it('renders recent jobs widget', async () => {
+    describe('Fulfillment Widget', () => {
+        it('DashboardPage_ShowsFulfillmentCountsForTodayAndThisWeek_WhenDataLoads', async () => {
+            // Arrange & Act
             await renderDashboard();
 
+            // Assert
             const widgetSection = screen.getByRole('region', { name: /dashboard widgets/i });
-            const jobsWidget = within(widgetSection)
-                .getByRole('heading', { name: 'Recent Jobs' })
-                .closest<HTMLElement>('[data-component="recent-jobs-widget"]');
-
-            expect(jobsWidget).toBeInTheDocument();
+            const fulfilledWidget = within(widgetSection)
+                .getByRole('heading', { name: 'Fulfillment' })
+                .closest<HTMLElement>('[data-component="content-stats-widget"]');
+            expect(within(fulfilledWidget!).getByText('Today').closest('.status-row')).toHaveTextContent('2');
+            expect(within(fulfilledWidget!).getByText('This week').closest('.status-row')).toHaveTextContent('9');
         });
 
-        it('renders job items from API data', async () => {
+        it('DashboardPage_ListsTheNewestFulfilledItemsWithoutStatus_WhenDataLoads', async () => {
+            // Arrange & Act
             await renderDashboard();
 
-            expect(screen.getByText('Content metadata refresh item')).toBeInTheDocument();
-            expect(screen.getByText('Search Missing')).toBeInTheDocument();
-            expect(screen.getByText('Sync Plex Library')).toBeInTheDocument();
+            // Assert
+            const widgetSection = screen.getByRole('region', { name: /dashboard widgets/i });
+            const fulfilledWidget = within(widgetSection)
+                .getByRole('heading', { name: 'Fulfillment' })
+                .closest<HTMLElement>('[data-component="content-stats-widget"]');
+            expect(within(fulfilledWidget!).getByText('Recent')).toBeInTheDocument();
+            expect(within(fulfilledWidget!).getByText('Severance').closest('a')).toHaveAttribute(
+                'href',
+                '/library/content-5',
+            );
+            expect(within(fulfilledWidget!).getByText('Andor')).toBeInTheDocument();
+            expect(fulfilledWidget!.querySelector('.content-stats-widget__item-status')).not.toBeInTheDocument();
         });
 
-        it('links to admin jobs page for admin users', async () => {
-            await renderDashboard(adminUser);
+        it('DashboardPage_LinksViewAllFulfilledToFulfilledContentByFulfilledDate_WhenDataLoads', async () => {
+            // Arrange & Act
+            await renderDashboard();
 
-            const viewAllLink = screen.getByRole('link', { name: /view all jobs/i });
-
-            expect(viewAllLink).toHaveAttribute('href', '/admin/jobs');
-        });
-
-        it('links to my-jobs page for non-admin users', async () => {
-            await renderDashboard(viewerUser);
-
-            const viewAllLink = screen.getByRole('link', { name: /view all jobs/i });
-
-            expect(viewAllLink).toHaveAttribute('href', '/my-jobs');
-        });
-
-        it('generates role-aware job item URLs for admin users', async () => {
-            await renderDashboard(adminUser);
-
-            const jobLink = screen.getByRole('link', { name: /view content metadata refresh item job details/i });
-
-            expect(jobLink).toHaveAttribute('href', '/admin/jobs?job=11111111-1111-4111-8111-111111111111');
-        });
-
-        it('generates role-aware job item URLs for non-admin users', async () => {
-            await renderDashboard(viewerUser);
-
-            const jobLink = screen.getByRole('link', { name: /view content metadata refresh item job details/i });
-
-            expect(jobLink).toHaveAttribute('href', '/my-jobs?job=11111111-1111-4111-8111-111111111111');
+            // Assert
+            expect(screen.getByRole('link', { name: 'View all fulfilled' })).toHaveAttribute(
+                'href',
+                '/library/all?fulfillment=fulfilled&levels=all&sort=fulfilledDate&sortDir=desc',
+            );
         });
     });
 
@@ -450,7 +425,7 @@ describe('DashboardPage', () => {
 
             const statsSection = screen.getByRole('region', { name: /content overview/i });
             const contentWidget = within(statsSection)
-                .getByRole('heading', { name: 'Content' })
+                .getByRole('heading', { name: 'Library' })
                 .closest<HTMLElement>('[data-component="content-stats-widget"]');
 
             expect(contentWidget).toBeInTheDocument();
@@ -461,13 +436,12 @@ describe('DashboardPage', () => {
 
             const statsSection = screen.getByRole('region', { name: /content overview/i });
             const contentWidget = within(statsSection)
-                .getByRole('heading', { name: 'Content' })
+                .getByRole('heading', { name: 'Library' })
                 .closest<HTMLElement>('[data-component="content-stats-widget"]');
 
             expect(within(contentWidget!).getAllByText('Fulfilled').length).toBeGreaterThanOrEqual(1);
             expect(within(contentWidget!).getAllByText('Missing').length).toBeGreaterThanOrEqual(1);
             expect(within(contentWidget!).getAllByText('Upgradable').length).toBeGreaterThanOrEqual(1);
-            expect(within(contentWidget!).getByText('External')).toBeInTheDocument();
         });
 
         it('renders recent content items from API data', async () => {
@@ -475,7 +449,7 @@ describe('DashboardPage', () => {
 
             const statsSection = screen.getByRole('region', { name: /content overview/i });
             const contentWidget = within(statsSection)
-                .getByRole('heading', { name: 'Content' })
+                .getByRole('heading', { name: 'Library' })
                 .closest<HTMLElement>('[data-component="content-stats-widget"]');
 
             expect(within(contentWidget!).getByText('Shogun (2024)')).toBeInTheDocument();
@@ -483,26 +457,27 @@ describe('DashboardPage', () => {
             expect(within(contentWidget!).getByText('3 Body Problem')).toBeInTheDocument();
         });
 
-        it('has link to library page for view all content', async () => {
+        it('DashboardPage_LinksViewAllContentToTheLibraryByDateAdded_WhenDataLoads', async () => {
+            // Arrange & Act
             await renderDashboard();
 
-            const viewAllLink = screen.getByRole('link', { name: /view all content/i });
-
-            expect(viewAllLink).toHaveAttribute('href', '/library');
+            // Assert
+            expect(screen.getByRole('link', { name: /view all content/i })).toHaveAttribute(
+                'href',
+                '/library/all?sort=dateAdded&sortDir=desc',
+            );
         });
 
         it.each([
             ['View 238 fulfilled items', '/library/all?fulfillment=fulfilled&levels=all'],
             ['View 15 upgradable items', '/library/all?fulfillment=upgradable&levels=all'],
-            ['View 18 partial items', '/library/all?fulfillment=partial&levels=all'],
             ['View 42 missing items', '/library/all?fulfillment=missing&levels=all'],
-            ['View 12 external items', '/library/all?fulfillment=fulfilledExternally&levels=all'],
         ])('links "%s" to the library at every level', async (name, href) => {
             // Arrange
             await renderDashboard();
             const statsSection = screen.getByRole('region', { name: /content overview/i });
             const contentWidget = within(statsSection)
-                .getByRole('heading', { name: 'Content' })
+                .getByRole('heading', { name: 'Library' })
                 .closest<HTMLElement>('[data-component="content-stats-widget"]');
 
             // Act
@@ -582,8 +557,11 @@ describe('DashboardPage', () => {
             );
             expect(downloadSkeletons.length).toBe(4);
 
-            const jobSkeletons = screen.getAllByTestId('recent-jobs-widget__item--skeleton');
-            expect(jobSkeletons.length).toBe(3);
+            const fulfilledSkeletons = screen
+                .getByRole('heading', { name: 'Fulfillment' })
+                .closest<HTMLElement>('[data-component="content-stats-widget"]')!
+                .querySelectorAll('.status-row [data-component="skeleton"]');
+            expect(fulfilledSkeletons.length).toBe(2);
         });
 
         it('does not show service names when loading', () => {

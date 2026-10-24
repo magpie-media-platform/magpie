@@ -325,7 +325,11 @@ test.describe.serial('Journey 17: read and navigate a populated library', () => 
         await test.step('read dashboard, downloads, wanted, wishlist, calendar, filters, jobs and extension routes', async () => {
             await page.goto('/');
             await expect(page.getByRole('heading', { name: 'Dashboard' })).toBeVisible();
-            await expect(page.locator('[data-component="content-stats-widget"]')).toContainText('Journey');
+            await expect(
+                page
+                    .locator('[data-component="content-stats-widget"]')
+                    .filter({ has: page.getByRole('heading', { name: 'Library', exact: true }) }),
+            ).toContainText('Journey');
             await expect(page.locator('[data-component="upcoming-content-widget"]')).toContainText('Journey Catalog 26');
 
             await page.goto('/library/subjects/all');

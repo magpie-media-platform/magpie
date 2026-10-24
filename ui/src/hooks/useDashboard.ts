@@ -3,29 +3,30 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useInvalidateQueriesOnEvents } from '@/hooks/useInvalidateQueriesOnEvents';
 import { apiGet, buildUrl } from '@/lib/api';
 import { toLocalDateKey } from '@/lib/dateFormatting';
+import { parseUtcInstant } from '@/lib/dateParsing';
 import { POLLING_INTERVALS } from '@/lib/queryClient';
-import type { ApiContentStats, PagedContentHierarchyItems } from '@/types/content';
+import type { ApiContentHierarchyItem, ApiContentStats, PagedContentHierarchyItems } from '@/types/content';
 import { ACTIVE_DOWNLOAD_STATUSES } from '@/types/downloads';
 import type { PagedList } from '@/types/paging';
 import type { ApiDownloadClient } from './useDownloadClients';
 import { downloadEvents, useDownloadStatusCounts, type ApiDownload } from './useDownloads';
-import { jobExecutionListEvents, type ApiJobExecution } from './useJobs';
 import type { ApiMediaServer } from './useMediaServers';
 
 import {
     calculateHealthCounts,
     mapDownloadStatusCounts,
     mapActiveDownloads,
-    mapRecentJobs,
     calculateContentCounts,
     mapRecentContent,
+    mapRecentlyFulfilled,
     mapUpcomingContent,
+    thisWeekStart,
     type HealthCounts,
     type DownloadCounts,
     type ActiveDownload,
-    type RecentJob,
     type ContentCounts,
     type RecentContentItem,
+    type RecentlyFulfilled,
     type PagedContentWithDates,
     type UpcomingContentItem,
 } from './dashboardTransforms';
@@ -34,20 +35,22 @@ export type {
     HealthCounts,
     DownloadCounts,
     ActiveDownload,
-    RecentJob,
     ContentCounts,
     RecentContentItem,
+    RecentlyFulfilled,
     UpcomingContentItem,
 };
-export type { IntegrationStatus, DownloadStatus, JobExecutionStatus } from './dashboardTransforms';
+export type { IntegrationStatus, DownloadStatus } from './dashboardTransforms';
+
+const FULFILLED_FILTER = 'fulfillment in (Fulfilled, Upgradable)';
 
 export const dashboardQueryKeys = {
     downloadClients: ['dashboard', 'download-clients'] as const,
     mediaServers: ['dashboard', 'media-servers'] as const,
     downloads: ['dashboard', 'downloads'] as const,
-    jobs: ['dashboard', 'jobs'] as const,
     contentStats: ['dashboard', 'content-stats'] as const,
     recentContent: ['dashboard', 'recent-content'] as const,
+    recentlyFulfilled: ['dashboard', 'recently-fulfilled'] as const,
     upcomingContent: (today: string) => ['dashboard', 'upcoming-content', today] as const,
 };
 
@@ -71,10 +74,6 @@ async function fetchDownloads(): Promise<PagedList<ApiDownload>> {
     );
 }
 
-async function fetchJobExecutions(): Promise<PagedList<ApiJobExecution>> {
-    return apiGet<PagedList<ApiJobExecution>>('/jobs?pageSize=10&sortBy=createdAt&sortDirection=Descending');
-}
-
 async function fetchContentStats(): Promise<ApiContentStats> {
     return apiGet<ApiContentStats>('/content/stats');
 }
@@ -87,6 +86,29 @@ async function fetchRecentContent(): Promise<PagedContentHierarchyItems> {
             sortDirection: 'Descending',
         }),
     );
+}
+
+async function fetchRecentlyFulfilled(): Promise<ApiContentHierarchyItem[]> {
+    const weekStart = thisWeekStart(Date.now());
+    const items = new Map<string, ApiContentHierarchyItem>();
+    for (let pageNumber = 1; ; pageNumber += 1) {
+        const page = await apiGet<PagedContentHierarchyItems>(
+            buildUrl('/content', {
+                filter: FULFILLED_FILTER,
+                pageNumber,
+                pageSize: 200,
+                sortBy: 'FulfilledAt',
+                sortDirection: 'Descending',
+            }),
+        );
+        for (const item of page.items) {
+            items.set(item.id, item);
+        }
+        const oldest = page.items[page.items.length - 1]?.contentItem?.fulfilledAt;
+        if (items.size >= page.totalItems || !oldest || parseUtcInstant(oldest).getTime() < weekStart) {
+            return [...items.values()];
+        }
+    }
 }
 
 async function fetchUpcomingContent(today: string): Promise<PagedContentWithDates> {
@@ -199,25 +221,6 @@ export function useActiveDownloads(limit = 5) {
     };
 }
 
-export function useRecentJobs(limit = 5) {
-    const queryClient = useQueryClient();
-    useInvalidateQueriesOnEvents([...jobExecutionListEvents], [dashboardQueryKeys.jobs], {
-        debounceMs: 150,
-        exact: true,
-        maxWaitMs: 600,
-        predicate: (event) => {
-            const executionId = event.context['execution.id'];
-            const current = queryClient.getQueryData<PagedList<ApiJobExecution>>(dashboardQueryKeys.jobs);
-            return event.name === 'job.execution.created' || !!current?.items.some((job) => job.id === executionId);
-        },
-    });
-    return useQuery({
-        queryKey: dashboardQueryKeys.jobs,
-        queryFn: fetchJobExecutions,
-        select: (data) => mapRecentJobs(data.items, limit),
-    });
-}
-
 export function useContentCounts() {
     useInvalidateQueriesOnEvents(
         [
@@ -253,6 +256,26 @@ export function useRecentContent(limit = 3) {
         queryKey: dashboardQueryKeys.recentContent,
         queryFn: fetchRecentContent,
         select: (data) => mapRecentContent(data.items, limit),
+        staleTime: POLLING_INTERVALS.slow / 2,
+    });
+}
+
+export function useRecentlyFulfilled(limit = 5) {
+    useInvalidateQueriesOnEvents(
+        [
+            'content.hierarchyItem.created',
+            'content.hierarchyItem.updated',
+            'content.hierarchyItem.deleted',
+            'content.fulfillment.changed',
+            'metadata.refreshed',
+        ],
+        [dashboardQueryKeys.recentlyFulfilled],
+        { debounceMs: 300, exact: true, maxWaitMs: 1200 },
+    );
+    return useQuery({
+        queryKey: dashboardQueryKeys.recentlyFulfilled,
+        queryFn: fetchRecentlyFulfilled,
+        select: (items) => mapRecentlyFulfilled(items, limit, Date.now()),
         staleTime: POLLING_INTERVALS.slow / 2,
     });
 }

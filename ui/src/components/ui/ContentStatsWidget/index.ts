@@ -1,7 +1,6 @@
 export {
     ContentStatsWidget,
     type ContentStatsWidgetProps,
-    type FulfillmentStatus,
-    type FulfillmentCounts,
+    type ContentStatsRow,
     type RecentContentItem,
 } from './ContentStatsWidget';

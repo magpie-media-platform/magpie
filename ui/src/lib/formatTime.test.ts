@@ -4,7 +4,6 @@ import {
     formatClockTime,
     formatDurationFromMinutes,
     formatDurationFromSeconds,
-    formatElapsedDuration,
     formatPlaybackTime,
     formatRelativeTime,
     formatTimeOfDay,
@@ -208,20 +207,6 @@ describe('formatTimeSpanDuration', () => {
         expect(formatTimeSpanDuration('00:45:00')).toBe('45m');
         expect(formatTimeSpanDuration('01:30:00')).toBe('1h 30m');
         expect(formatTimeSpanDuration('1.02:00:00')).toBe('26h');
-    });
-});
-
-describe('formatElapsedDuration', () => {
-    it('returns undefined when either timestamp is missing', () => {
-        expect(formatElapsedDuration(null, '2025-01-01T00:01:00Z')).toBeUndefined();
-        expect(formatElapsedDuration('2025-01-01T00:00:00Z', null)).toBeUndefined();
-    });
-
-    it('formats elapsed timestamp ranges', () => {
-        expect(formatElapsedDuration('2025-01-01T00:00:00.000Z', '2025-01-01T00:00:00.500Z')).toBe('500ms');
-        expect(formatElapsedDuration('2025-01-01T00:00:00Z', '2025-01-01T00:00:45Z')).toBe('45s');
-        expect(formatElapsedDuration('2025-01-01T00:00:00Z', '2025-01-01T00:02:30Z')).toBe('2m 30s');
-        expect(formatElapsedDuration('2025-01-01T00:00:00Z', '2025-01-01T00:05:00Z')).toBe('5m');
     });
 });
 

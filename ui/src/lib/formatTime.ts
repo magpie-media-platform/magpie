@@ -130,27 +130,6 @@ export function formatTimeSpanDuration(duration: string | null | undefined): str
     return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`;
 }
 
-export function formatElapsedDuration(startedAt?: string | null, completedAt?: string | null): string | undefined {
-    if (!startedAt || !completedAt) {
-        return undefined;
-    }
-
-    const start = new Date(startedAt).getTime();
-    const end = new Date(completedAt).getTime();
-    const ms = end - start;
-
-    if (ms < 1000) {
-        return `${ms}ms`;
-    }
-    if (ms < 60000) {
-        return `${Math.round(ms / 1000)}s`;
-    }
-
-    const minutes = Math.floor(ms / 60000);
-    const seconds = Math.round((ms % 60000) / 1000);
-    return seconds > 0 ? `${minutes}m ${seconds}s` : `${minutes}m`;
-}
-
 export function formatTimeOfDay(dateStr: string): string {
     const date = new Date(dateStr);
     return date.toLocaleTimeString(undefined, {

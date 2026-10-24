@@ -255,6 +255,8 @@ test.describe.serial('Journey 8: pick the right release by hand', () => {
                 await expect(page.locator('[data-page="dashboard"]')).toBeVisible();
                 await expect(page.getByText('No active downloads', { exact: true })).toBeVisible();
                 await expect(page.getByText('No upcoming content', { exact: true })).toBeVisible();
+                await expect(page.getByText('No recent additions', { exact: true })).toBeVisible();
+                await expect(page.getByText('No fulfilled content', { exact: true })).toBeVisible();
             });
 
             await test.step('add one movie and one book to chase', async () => {

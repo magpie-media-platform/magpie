@@ -1,6 +1,7 @@
 import { forwardRef, memo, type HTMLAttributes, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 
+import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadErrorAlert } from '@/components/ui/LoadErrorAlert';
 import { ContentLineageTitle } from '@/components/content/ContentLineageTitle';
 import { ContentMonitoringIndicator } from '@/components/content/ContentCardPrimitives';
@@ -13,15 +14,14 @@ import { Skeleton } from '../Skeleton';
 
 import './ContentStatsWidget.css';
 
-export type { FulfillmentStatus };
+export interface ContentStatsRow {
+    status: FulfillmentStatus;
 
-export interface FulfillmentCounts {
-    total: number;
-    missing: number;
-    upgradable: number;
-    fulfilled: number;
-    fulfilledExternally: number;
-    partial: number;
+    label?: string;
+
+    count: number;
+
+    url?: string;
 }
 
 export interface RecentContentItem {
@@ -29,7 +29,7 @@ export interface RecentContentItem {
     parentId?: string;
     title: string;
 
-    addedAt: string;
+    timestamp: string;
     fulfillment: FulfillmentStatus;
     publishDate?: string;
     publishDatePrecision?: TemporalPrecision;
@@ -42,7 +42,13 @@ export interface ContentStatsWidgetProps extends HTMLAttributes<HTMLDivElement> 
 
     icon?: ReactNode;
 
-    counts: FulfillmentCounts;
+    total?: number;
+
+    rows: ContentStatsRow[];
+
+    recentHeading?: string;
+
+    recentEmptyMessage?: string;
 
     recentItems?: RecentContentItem[];
 
@@ -54,30 +60,22 @@ export interface ContentStatsWidgetProps extends HTMLAttributes<HTMLDivElement> 
 
     onRetry?: () => void;
 
-    getStatusUrl?: (status: FulfillmentStatus) => string;
-
     viewAllUrl?: string;
 
+    viewAllLabel?: string;
+
     getItemUrl?: (item: RecentContentItem) => string;
-}
 
-interface StatusRowProps {
-    status: FulfillmentStatus;
-    count: number;
-    url?: string;
+    showItemStatus?: boolean;
 }
-
-const StatusRow = ({ status, count, url }: StatusRowProps) => {
-    const { label } = getFulfillmentBadge(status);
-    return <SharedStatusRow status={status} label={label} count={count} url={url} />;
-};
 
 interface ContentItemProps {
     item: RecentContentItem;
     url?: string;
+    showStatus: boolean;
 }
 
-const ContentItem = ({ item, url }: ContentItemProps) => {
+const ContentItem = ({ item, url, showStatus }: ContentItemProps) => {
     const isClickable = url !== undefined;
     const { variant, label: statusLabel } = getFulfillmentBadge(item.fulfillment, {
         publishDate: item.publishDate,
@@ -99,10 +97,12 @@ const ContentItem = ({ item, url }: ContentItemProps) => {
                         activeClassName="content-stats-widget__item-monitoring--active"
                     />
                 )}
-                <span className="content-stats-widget__item-status" aria-label={`Status: ${statusLabel}`}>
-                    {statusLabel}
-                </span>
-                <span className="content-stats-widget__item-timestamp">{item.addedAt}</span>
+                {showStatus && (
+                    <span className="content-stats-widget__item-status" aria-label={`Status: ${statusLabel}`}>
+                        {statusLabel}
+                    </span>
+                )}
+                <span className="content-stats-widget__item-timestamp">{item.timestamp}</span>
             </span>
         </>
     );
@@ -145,24 +145,27 @@ const ContentStatsWidgetBase = forwardRef<HTMLDivElement, ContentStatsWidgetProp
         {
             heading = 'Content',
             icon,
-            counts,
+            total,
+            rows,
+            recentHeading = 'Recent Additions',
+            recentEmptyMessage = 'No recent additions',
             recentItems = [],
             maxItems = 3,
             loading = false,
             error = null,
             onRetry,
-            getStatusUrl,
             viewAllUrl,
+            viewAllLabel = 'View all content',
             getItemUrl,
+            showItemStatus = true,
             className,
             ...props
         },
         ref,
     ) => {
         const classes = ['content-stats-widget', className].filter(Boolean).join(' ');
-        const total = counts.total;
         const displayedItems = recentItems.slice(0, maxItems);
-        const hasMore = recentItems.length > maxItems || total > 0;
+        const hasContent = recentItems.length > 0 || (total ?? 0) > 0;
 
         return (
             <div ref={ref} className={classes} data-component="content-stats-widget" {...props}>
@@ -173,61 +176,58 @@ const ContentStatsWidgetBase = forwardRef<HTMLDivElement, ContentStatsWidgetProp
                         </span>
                     )}
                     <h2 className="content-stats-widget__title">{heading}</h2>
-                    <span className="content-stats-widget__total">{loading ? '-' : total}</span>
+                    {total !== undefined && (
+                        <span className="content-stats-widget__total">{loading ? '-' : total}</span>
+                    )}
                 </div>
 
                 <div className="content-stats-widget__summary">
                     {loading ? (
-                        <>
-                            <SharedStatusRow loading />
-                            <SharedStatusRow loading />
-                            <SharedStatusRow loading />
-                            <SharedStatusRow loading />
-                            <SharedStatusRow loading />
-                        </>
+                        rows.map((row) => <SharedStatusRow key={row.label ?? row.status} loading />)
                     ) : error ? (
                         <LoadErrorAlert onRetry={onRetry} />
                     ) : (
-                        <>
-                            <StatusRow status="fulfilled" count={counts.fulfilled} url={getStatusUrl?.('fulfilled')} />
-                            <StatusRow
-                                status="upgradable"
-                                count={counts.upgradable}
-                                url={getStatusUrl?.('upgradable')}
+                        rows.map((row) => (
+                            <SharedStatusRow
+                                key={row.label ?? row.status}
+                                status={row.status}
+                                label={row.label ?? getFulfillmentBadge(row.status).label}
+                                count={row.count}
+                                url={row.url}
                             />
-                            <StatusRow status="partial" count={counts.partial} url={getStatusUrl?.('partial')} />
-                            <StatusRow status="missing" count={counts.missing} url={getStatusUrl?.('missing')} />
-                            <StatusRow
-                                status="fulfilledExternally"
-                                count={counts.fulfilledExternally}
-                                url={getStatusUrl?.('fulfilledExternally')}
-                            />
-                        </>
+                        ))
                     )}
                 </div>
 
-                {(displayedItems.length > 0 || loading) && !error && (
-                    <div className="content-stats-widget__recent">
-                        <div className="content-stats-widget__recent-header">Recent Additions</div>
+                {!error && (
+                    <>
+                        <div className="content-stats-widget__recent-header">{recentHeading}</div>
                         <div className="content-stats-widget__items">
                             {loading ? (
                                 <>
                                     <Skeleton className="content-stats-widget__item" height={48} />
                                     <Skeleton className="content-stats-widget__item" height={48} />
                                 </>
+                            ) : displayedItems.length === 0 ? (
+                                <EmptyState title={recentEmptyMessage} size="sm" />
                             ) : (
                                 displayedItems.map((item) => (
-                                    <ContentItem key={item.id} item={item} url={getItemUrl?.(item)} />
+                                    <ContentItem
+                                        key={item.id}
+                                        item={item}
+                                        url={getItemUrl?.(item)}
+                                        showStatus={showItemStatus}
+                                    />
                                 ))
                             )}
                         </div>
-                    </div>
+                    </>
                 )}
 
-                {hasMore && !loading && viewAllUrl && (
+                {hasContent && !loading && viewAllUrl && (
                     <div className="content-stats-widget__footer">
                         <Link to={viewAllUrl} className="content-stats-widget__view-all" data-action="view-all">
-                            View all content
+                            {viewAllLabel}
                         </Link>
                     </div>
                 )}

@@ -1,11 +1,11 @@
 import { useCallback, useMemo } from 'react';
 import {
     CalendarBlankIcon,
+    CheckCircleIcon,
     CloudArrowDownIcon,
     FilmStripIcon,
     HardDrivesIcon,
     HouseIcon,
-    TimerIcon,
 } from '@phosphor-icons/react';
 
 import { useAuth, Role } from '@/auth';
@@ -13,8 +13,7 @@ import { PageHeader } from '@/components/ui/PageHeader';
 import { PullToRefresh } from '@/components/ui/PullToRefresh';
 import { ServiceHealthBar, type ServiceHealthEntry } from '@/components/ui/ServiceHealthBar';
 import { DownloadQueueWidget } from '@/components/ui/DownloadQueueWidget';
-import { RecentJobsWidget } from '@/components/ui/RecentJobsWidget';
-import { ContentStatsWidget } from '@/components/ui/ContentStatsWidget';
+import { ContentStatsWidget, type ContentStatsRow } from '@/components/ui/ContentStatsWidget';
 import { UpcomingContentWidget } from '@/components/dashboard/UpcomingContentWidget';
 import { Slot } from '@/components/ui/Slot';
 import { OnboardingChecklist } from '@/components/dashboard/OnboardingChecklist';
@@ -22,9 +21,9 @@ import {
     useDownloadClientHealth,
     useMediaServerHealth,
     useActiveDownloads,
-    useRecentJobs,
     useContentCounts,
     useRecentContent,
+    useRecentlyFulfilled,
     useUpcomingContent,
     type HealthCounts,
 } from '@/hooks/useDashboard';
@@ -40,20 +39,27 @@ import './DashboardPage.css';
 
 const EMPTY_HEALTH: HealthCounts = { healthy: 0, unhealthy: 0, degraded: 0, stabilizing: 0, unknown: 0, stale: 0 };
 const EMPTY_DOWNLOAD_COUNTS = { downloading: 0, queued: 0, paused: 0, stalled: 0 };
-const EMPTY_CONTENT_COUNTS = { total: 0, missing: 0, upgradable: 0, fulfilled: 0, fulfilledExternally: 0, partial: 0 };
+const EMPTY_CONTENT_COUNTS = { total: 0, missing: 0, upgradable: 0, fulfilled: 0 };
+const CONTENT_ROW_STATUSES = ['fulfilled', 'upgradable', 'missing'] as const;
+const RECENT_CONTENT_URL = `/library/all?${new URLSearchParams({ sort: 'dateAdded', sortDir: 'desc' }).toString()}`;
+const FULFILLED_CONTENT_URL = `/library/all?${new URLSearchParams({
+    fulfillment: 'fulfilled',
+    levels: 'all',
+    sort: 'fulfilledDate',
+    sortDir: 'desc',
+}).toString()}`;
 
 export function DashboardPage() {
     useDocumentTitle('Dashboard');
     const { hasRole } = useAuth();
     const canManageIntegrations = hasRole(Role.Admin);
-    const jobsBasePath = hasRole(Role.Admin) ? '/admin/jobs' : '/my-jobs';
 
     const clientHealthQuery = useDownloadClientHealth();
     const serverHealthQuery = useMediaServerHealth();
     const activeDownloadsQuery = useActiveDownloads(5);
-    const recentJobsQuery = useRecentJobs(5);
+    const recentlyFulfilledQuery = useRecentlyFulfilled(7);
     const contentCountsQuery = useContentCounts();
-    const recentContentQuery = useRecentContent(3);
+    const recentContentQuery = useRecentContent(5);
     const upcomingContentQuery = useUpcomingContent();
 
     const onboarding = useOnboardingStatus();
@@ -70,8 +76,6 @@ export function DashboardPage() {
     const getClientStatusUrl = useCallback((status: HealthStatus) => `/admin/download-clients?status=${status}`, []);
 
     const getServerStatusUrl = useCallback((status: HealthStatus) => `/admin/media-servers?status=${status}`, []);
-
-    const getJobUrl = useCallback((job: { id: string }) => `${jobsBasePath}?job=${job.id}`, [jobsBasePath]);
 
     const getContentStatusUrl = useCallback(
         (status: FulfillmentStatus) =>
@@ -90,9 +94,9 @@ export function DashboardPage() {
     const retryActiveDownloads = useCallback(() => {
         void activeDownloadsQuery.refetch();
     }, [activeDownloadsQuery]);
-    const retryRecentJobs = useCallback(() => {
-        void recentJobsQuery.refetch();
-    }, [recentJobsQuery]);
+    const retryRecentlyFulfilled = useCallback(() => {
+        void recentlyFulfilledQuery.refetch();
+    }, [recentlyFulfilledQuery]);
     const retryContent = useCallback(() => {
         void contentCountsQuery.refetch();
         void recentContentQuery.refetch();
@@ -106,7 +110,7 @@ export function DashboardPage() {
             clientHealthQuery.refetch(),
             serverHealthQuery.refetch(),
             activeDownloadsQuery.refetch(),
-            recentJobsQuery.refetch(),
+            recentlyFulfilledQuery.refetch(),
             contentCountsQuery.refetch(),
             recentContentQuery.refetch(),
             upcomingContentQuery.refetch(),
@@ -115,7 +119,7 @@ export function DashboardPage() {
         clientHealthQuery,
         serverHealthQuery,
         activeDownloadsQuery,
-        recentJobsQuery,
+        recentlyFulfilledQuery,
         contentCountsQuery,
         recentContentQuery,
         upcomingContentQuery,
@@ -146,6 +150,26 @@ export function DashboardPage() {
 
     const healthLoading = clientHealthQuery.isLoading || serverHealthQuery.isLoading;
     const healthError = queryErrorOrNull(clientHealthQuery) ?? queryErrorOrNull(serverHealthQuery);
+
+    const contentCounts = contentCountsQuery.data ?? EMPTY_CONTENT_COUNTS;
+    const contentRows: ContentStatsRow[] = useMemo(
+        () =>
+            CONTENT_ROW_STATUSES.map((status) => ({
+                status,
+                count: contentCounts[status],
+                url: getContentStatusUrl(status),
+            })),
+        [contentCounts, getContentStatusUrl],
+    );
+
+    const recentlyFulfilled = recentlyFulfilledQuery.data;
+    const fulfilledRows: ContentStatsRow[] = useMemo(
+        () => [
+            { status: 'fulfilled', label: 'Today', count: recentlyFulfilled?.today ?? 0 },
+            { status: 'fulfilled', label: 'This week', count: recentlyFulfilled?.thisWeek ?? 0 },
+        ],
+        [recentlyFulfilled],
+    );
 
     const contentLoading = contentCountsQuery.isLoading || recentContentQuery.isLoading;
     const contentError = queryErrorOrNull(contentCountsQuery) ?? queryErrorOrNull(recentContentQuery);
@@ -189,31 +213,36 @@ export function DashboardPage() {
                                 getStateUrl={getDownloadStateUrl}
                                 viewAllUrl="/downloads"
                             />
-                            <RecentJobsWidget
-                                heading="Recent Jobs"
-                                icon={<TimerIcon weight="duotone" />}
-                                jobs={recentJobsQuery.data ?? []}
-                                maxItems={5}
-                                loading={recentJobsQuery.isLoading}
-                                error={queryErrorOrNull(recentJobsQuery)}
-                                onRetry={retryRecentJobs}
-                                getJobUrl={getJobUrl}
-                                viewAllUrl={jobsBasePath}
+                            <ContentStatsWidget
+                                heading="Fulfillment"
+                                icon={<CheckCircleIcon weight="duotone" />}
+                                rows={fulfilledRows}
+                                recentHeading="Recent"
+                                recentEmptyMessage="No fulfilled content"
+                                recentItems={recentlyFulfilled?.items ?? []}
+                                maxItems={7}
+                                loading={recentlyFulfilledQuery.isLoading}
+                                error={queryErrorOrNull(recentlyFulfilledQuery)}
+                                onRetry={retryRecentlyFulfilled}
+                                viewAllUrl={FULFILLED_CONTENT_URL}
+                                viewAllLabel="View all fulfilled"
+                                getItemUrl={getContentItemUrl}
+                                showItemStatus={false}
                             />
                         </section>
 
                         <section className="dashboard-page__content-section" aria-label="Content overview">
                             <ContentStatsWidget
-                                heading="Content"
+                                heading="Library"
                                 icon={<FilmStripIcon weight="duotone" />}
-                                counts={contentCountsQuery.data ?? EMPTY_CONTENT_COUNTS}
+                                total={contentCounts.total}
+                                rows={contentRows}
                                 recentItems={recentContentQuery.data ?? []}
-                                maxItems={3}
+                                maxItems={5}
                                 loading={contentLoading}
                                 error={contentError}
                                 onRetry={retryContent}
-                                getStatusUrl={getContentStatusUrl}
-                                viewAllUrl="/library"
+                                viewAllUrl={RECENT_CONTENT_URL}
                                 getItemUrl={getContentItemUrl}
                             />
                             <UpcomingContentWidget

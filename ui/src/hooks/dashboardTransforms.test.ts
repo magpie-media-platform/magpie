@@ -5,14 +5,12 @@ import {
     mapDownloadState,
     mapDownloadStatusCounts,
     mapActiveDownloads,
-    mapJobStatus,
-    mapRecentJobs,
     calculateContentCounts,
     mapRecentContent,
+    mapRecentlyFulfilled,
     mapUpcomingContent,
 } from './dashboardTransforms';
 import type { ApiDownload, DownloadStatusValue } from './useDownloads';
-import type { ApiJobExecution, JobExecutionStatusValue } from './useJobs';
 import type { ApiContentHierarchyItem, ApiContentStats } from '@/types/content';
 import type { ApiContentItemWithMetadata } from '@/lib/contentMapping';
 
@@ -27,17 +25,6 @@ function makeDownload(overrides: Partial<ApiDownload> = {}): ApiDownload {
         externalId: 'ext-1',
         title: 'Test Download',
         status: 'Downloading' as DownloadStatusValue,
-        createdAt: '2025-01-01T00:00:00Z',
-        ...overrides,
-    };
-}
-
-function makeJobExecution(overrides: Partial<ApiJobExecution> = {}): ApiJobExecution {
-    return {
-        id: 'job-1',
-        jobType: 'ContentMetadataRefreshItem',
-        scope: 'System',
-        status: 'Completed' as JobExecutionStatusValue,
         createdAt: '2025-01-01T00:00:00Z',
         ...overrides,
     };
@@ -325,81 +312,6 @@ describe('mapActiveDownloads', () => {
     });
 });
 
-describe('mapJobStatus', () => {
-    it('maps Completed to completed', () => {
-        expect(mapJobStatus('Completed')).toBe('completed');
-    });
-
-    it('maps Queued to running', () => {
-        expect(mapJobStatus('Queued')).toBe('running');
-    });
-
-    it('maps Running to running', () => {
-        expect(mapJobStatus('Running')).toBe('running');
-    });
-
-    it('maps CancellationRequested to running', () => {
-        expect(mapJobStatus('CancellationRequested')).toBe('running');
-    });
-
-    it('maps Failed to failed', () => {
-        expect(mapJobStatus('Failed')).toBe('failed');
-    });
-
-    it('maps Cancelled to cancelled', () => {
-        expect(mapJobStatus('Cancelled')).toBe('cancelled');
-    });
-});
-
-describe('mapRecentJobs', () => {
-    afterEach(() => {
-        vi.useRealTimers();
-    });
-
-    it('returns empty array for empty input', () => {
-        expect(mapRecentJobs([], 5)).toEqual([]);
-    });
-
-    it('maps job executions with humanized names', () => {
-        vi.useFakeTimers();
-        vi.setSystemTime(new Date('2025-01-01T00:05:00Z'));
-
-        const jobs = [
-            makeJobExecution({
-                id: 'j1',
-                jobType: 'ContentMetadataRefreshItem',
-                status: 'Completed',
-                startedAt: '2025-01-01T00:00:00Z',
-                completedAt: '2025-01-01T00:00:02Z',
-            }),
-        ];
-
-        const result = mapRecentJobs(jobs, 5);
-        expect(result).toHaveLength(1);
-        expect(result[0].name).toBe('Content Metadata Refresh Item');
-        expect(result[0].status).toBe('completed');
-        expect(result[0].duration).toBe('2s');
-    });
-
-    it('respects limit parameter', () => {
-        vi.useFakeTimers();
-        vi.setSystemTime(new Date('2025-01-01T01:00:00Z'));
-
-        const jobs = [makeJobExecution({ id: 'j1' }), makeJobExecution({ id: 'j2' }), makeJobExecution({ id: 'j3' })];
-
-        expect(mapRecentJobs(jobs, 2)).toHaveLength(2);
-    });
-
-    it('uses createdAt for timestamp when startedAt is missing', () => {
-        vi.useFakeTimers();
-        vi.setSystemTime(new Date('2025-01-01T00:05:00Z'));
-
-        const jobs = [makeJobExecution({ id: 'j1', startedAt: null, createdAt: '2025-01-01T00:00:00Z' })];
-        const result = mapRecentJobs(jobs, 5);
-        expect(result[0].timestamp).toBe('5m ago');
-    });
-});
-
 describe('calculateContentCounts', () => {
     it('passes through aggregate counts from the stats endpoint', () => {
         const stats: ApiContentStats = {
@@ -416,8 +328,6 @@ describe('calculateContentCounts', () => {
             missing: 25,
             upgradable: 10,
             fulfilled: 60,
-            fulfilledExternally: 5,
-            partial: 8,
         });
     });
 
@@ -436,8 +346,6 @@ describe('calculateContentCounts', () => {
             missing: 0,
             upgradable: 0,
             fulfilled: 0,
-            fulfilledExternally: 0,
-            partial: 0,
         });
     });
 });
@@ -471,7 +379,7 @@ describe('mapRecentContent', () => {
         expect(result[0].parentId).toBe('root-1');
         expect(result[0].title).toBe('My Show');
         expect(result[0].fulfillment).toBe('fulfilled');
-        expect(result[0].addedAt).toBe('1h ago');
+        expect(result[0].timestamp).toBe('1h ago');
     });
 
     it('uses metadata title when available', () => {
@@ -526,6 +434,175 @@ describe('mapRecentContent', () => {
 
         const items = [makeHierarchyItem({ id: '1' }), makeHierarchyItem({ id: '2' }), makeHierarchyItem({ id: '3' })];
         expect(mapRecentContent(items, 2)).toHaveLength(2);
+    });
+});
+
+describe('mapRecentlyFulfilled', () => {
+    beforeEach(() => {
+        vi.stubEnv('TZ', 'America/Los_Angeles');
+        vi.useFakeTimers();
+        vi.setSystemTime(new Date('2025-01-08T20:00:00Z'));
+    });
+
+    afterEach(() => {
+        vi.useRealTimers();
+        vi.unstubAllEnvs();
+    });
+
+    it('MapRecentlyFulfilled_CountsFromLocalMidnight_WhenItemsSpanLocalDayBoundaries', () => {
+        // Arrange
+        const items = [
+            makeHierarchyItem({
+                id: 'h1',
+                contentItem: {
+                    id: 'c1',
+                    contentHierarchyItemId: 'h1',
+                    fulfillment: 'Fulfilled',
+                    fulfilledAt: '2025-01-08T09:00:00',
+                    createdAt: '',
+                },
+            }),
+            makeHierarchyItem({
+                id: 'h2',
+                contentItem: {
+                    id: 'c2',
+                    contentHierarchyItemId: 'h2',
+                    fulfillment: 'Upgradable',
+                    fulfilledAt: '2025-01-08T07:00:00Z',
+                    createdAt: '',
+                },
+            }),
+            makeHierarchyItem({
+                id: 'h3',
+                contentItem: {
+                    id: 'c3',
+                    contentHierarchyItemId: 'h3',
+                    fulfillment: 'Fulfilled',
+                    fulfilledAt: '2025-01-02T09:00:00Z',
+                    createdAt: '',
+                },
+            }),
+            makeHierarchyItem({
+                id: 'h4',
+                contentItem: {
+                    id: 'c4',
+                    contentHierarchyItemId: 'h4',
+                    fulfillment: 'Fulfilled',
+                    fulfilledAt: '2025-01-02T07:00:00Z',
+                    createdAt: '',
+                },
+            }),
+            makeHierarchyItem({
+                id: 'h5',
+                contentItem: { id: 'c5', contentHierarchyItemId: 'h5', fulfillment: 'Fulfilled', createdAt: '' },
+            }),
+        ];
+
+        // Act
+        const result = mapRecentlyFulfilled(items, 5, Date.parse('2025-01-08T20:00:00Z'));
+
+        // Assert
+        expect(result.today).toBe(1);
+        expect(result.thisWeek).toBe(3);
+        expect(result.items.map((item) => item.id)).toEqual(['h1', 'h2', 'h3', 'h4', 'h5']);
+    });
+
+    it('MapRecentlyFulfilled_ShowsTheFulfilledTime_WhenMappingRecentItems', () => {
+        // Arrange
+        const items = [
+            makeHierarchyItem({
+                id: 'h1',
+                createdAt: '2024-06-01T00:00:00Z',
+                contentItem: {
+                    id: 'c1',
+                    contentHierarchyItemId: 'h1',
+                    fulfillment: 'Upgradable',
+                    fulfilledAt: '2025-01-08T19:00:00Z',
+                    createdAt: '',
+                },
+            }),
+            makeHierarchyItem({ id: 'h2' }),
+        ];
+
+        // Act
+        const result = mapRecentlyFulfilled(items, 1, Date.parse('2025-01-08T20:00:00Z'));
+
+        // Assert
+        expect(result.items).toHaveLength(1);
+        expect(result.items[0].timestamp).toBe('1h ago');
+        expect(result.items[0].fulfillment).toBe('upgradable');
+    });
+
+    it('MapRecentlyFulfilled_ShowsAnUnknownTime_WhenTheFulfilledDateIsMissing', () => {
+        // Arrange
+        const items = [
+            makeHierarchyItem({
+                id: 'h1',
+                contentItem: { id: 'c1', contentHierarchyItemId: 'h1', fulfillment: 'Fulfilled', createdAt: '' },
+            }),
+        ];
+
+        // Act
+        const result = mapRecentlyFulfilled(items, 7, Date.parse('2025-01-08T20:00:00Z'));
+
+        // Assert
+        expect(result.items[0].timestamp).toBe('Unknown');
+    });
+
+    it('MapRecentlyFulfilled_SkipsAnItem_WhenItsChildIsInTheList', () => {
+        // Arrange
+        const items = [
+            makeHierarchyItem({
+                id: 'series',
+                contentItem: {
+                    id: 'c1',
+                    contentHierarchyItemId: 'series',
+                    fulfillment: 'Fulfilled',
+                    fulfilledAt: '2025-01-08T19:00:00Z',
+                    createdAt: '',
+                },
+            }),
+            makeHierarchyItem({
+                id: 'season',
+                parentId: 'series',
+                contentItem: {
+                    id: 'c2',
+                    contentHierarchyItemId: 'season',
+                    fulfillment: 'Fulfilled',
+                    fulfilledAt: '2025-01-08T19:00:00Z',
+                    createdAt: '',
+                },
+            }),
+            makeHierarchyItem({
+                id: 'episode',
+                parentId: 'season',
+                contentItem: {
+                    id: 'c3',
+                    contentHierarchyItemId: 'episode',
+                    fulfillment: 'Fulfilled',
+                    fulfilledAt: '2025-01-08T19:00:00Z',
+                    createdAt: '',
+                },
+            }),
+            makeHierarchyItem({
+                id: 'movie',
+                contentItem: {
+                    id: 'c4',
+                    contentHierarchyItemId: 'movie',
+                    fulfillment: 'Upgradable',
+                    fulfilledAt: '2025-01-08T18:00:00Z',
+                    createdAt: '',
+                },
+            }),
+        ];
+
+        // Act
+        const result = mapRecentlyFulfilled(items, 7, Date.parse('2025-01-08T20:00:00Z'));
+
+        // Assert
+        expect(result.today).toBe(2);
+        expect(result.thisWeek).toBe(2);
+        expect(result.items.map((item) => item.id)).toEqual(['episode', 'movie']);
     });
 });
 

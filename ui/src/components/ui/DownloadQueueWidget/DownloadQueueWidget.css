@@ -174,8 +174,13 @@
     }
 
     .download-queue-widget__footer {
+        margin-top: auto;
         padding: var(--space-sm) var(--space-lg);
         border-top: 1px solid var(--border-default);
+    }
+
+    .download-queue-widget__summary:has(+ .download-queue-widget__footer) {
+        border-bottom: none;
     }
 
     .download-queue-widget__view-all {

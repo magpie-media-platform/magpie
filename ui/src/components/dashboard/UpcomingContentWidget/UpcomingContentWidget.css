@@ -1,5 +1,7 @@
 @layer components {
     .upcoming-content-widget {
+        display: flex;
+        flex-direction: column;
         background-color: var(--bg-secondary);
         border: 1px solid var(--border-default);
         border-radius: var(--radius-lg);
@@ -195,6 +197,7 @@
     }
 
     .upcoming-content-widget__footer {
+        margin-top: auto;
         padding: var(--space-sm) var(--space-lg);
         border-top: 1px solid var(--border-default);
     }

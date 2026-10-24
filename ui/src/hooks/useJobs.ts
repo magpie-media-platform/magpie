@@ -166,7 +166,7 @@ export const jobQueryKeys = {
     detail: (id: string) => ['jobs', 'detail', id] as const,
 };
 
-export const jobExecutionListEvents = [
+const jobExecutionListEvents = [
     'job.execution.created',
     'job.execution.queued',
     'job.execution.started',

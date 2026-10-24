@@ -1,8 +1,7 @@
 import { extractContentFields, type ApiContentItemWithMetadata } from '@/lib/contentMapping';
-import { formatElapsedDuration, formatRelativeTime } from '@/lib/formatTime';
-import { humanizeJobType } from '@/lib/jobExecution';
+import { formatRelativeTime } from '@/lib/formatTime';
 import { toLocalDateKey } from '@/lib/dateFormatting';
-import { parseCalendarDate } from '@/lib/dateParsing';
+import { parseCalendarDate, parseUtcInstant } from '@/lib/dateParsing';
 import { extractPublishDate, extractPublishDatePrecision, extractTitle } from '@/lib/metadata';
 import {
     mapFulfillmentStatus,
@@ -16,11 +15,9 @@ import type { TemporalPrecision } from '@/types/contentMetadata';
 import type { PagedList } from '@/types/paging';
 import type { ApiDownload, DownloadStatusValue } from './useDownloads';
 import type { IndexerStatusValue } from './useIndexers';
-import type { ApiJobExecution, JobExecutionStatusValue } from './useJobs';
 
 export type IntegrationStatus = IndexerStatusValue;
 export type DownloadStatus = DownloadStatusValue;
-export type JobExecutionStatus = JobExecutionStatusValue;
 
 export interface HealthCounts {
     healthy: number;
@@ -49,32 +46,28 @@ export interface ActiveDownload {
     eta?: string;
 }
 
-export interface RecentJob {
-    id: string;
-    name: string;
-    status: 'completed' | 'running' | 'failed' | 'cancelled';
-    duration?: string;
-    timestamp: string;
-}
-
 export interface ContentCounts {
     total: number;
     missing: number;
     upgradable: number;
     fulfilled: number;
-    fulfilledExternally: number;
-    partial: number;
 }
 
 export interface RecentContentItem {
     id: string;
     parentId?: string;
     title: string;
-    addedAt: string;
+    timestamp: string;
     fulfillment: FulfillmentStatus;
     publishDate?: string;
     publishDatePrecision?: TemporalPrecision;
     effectiveMonitoring: MonitoringMode;
+}
+
+export interface RecentlyFulfilled {
+    today: number;
+    thisWeek: number;
+    items: RecentContentItem[];
 }
 
 export type { ApiContentItemWithMetadata as ApiContentItemWithDate };
@@ -180,54 +173,53 @@ export function mapActiveDownloads(downloads: ApiDownload[], limit: number): Act
         }));
 }
 
-export function mapJobStatus(status: JobExecutionStatus): RecentJob['status'] {
-    switch (status) {
-        case 'Completed':
-            return 'completed';
-        case 'Running':
-        case 'Queued':
-        case 'CancellationRequested':
-            return 'running';
-        case 'Cancelled':
-            return 'cancelled';
-        case 'Failed':
-        default:
-            return 'failed';
-    }
-}
-
-export function mapRecentJobs(jobs: ApiJobExecution[], limit: number): RecentJob[] {
-    return jobs.slice(0, limit).map((j) => ({
-        id: j.id,
-        name: humanizeJobType(j.jobType),
-        status: mapJobStatus(j.status),
-        duration: formatElapsedDuration(j.startedAt, j.completedAt),
-        timestamp: formatRelativeTime(j.startedAt || j.createdAt),
-    }));
-}
-
 export function calculateContentCounts(stats: ApiContentStats): ContentCounts {
     return {
         total: stats.total,
         missing: stats.missing,
         upgradable: stats.upgradable,
         fulfilled: stats.fulfilled,
-        fulfilledExternally: stats.fulfilledExternally,
-        partial: stats.partial,
     };
 }
 
-export function mapRecentContent(items: ApiContentHierarchyItem[], limit: number): RecentContentItem[] {
-    return items.slice(0, limit).map((item) => ({
+function toRecentContentItem(item: ApiContentHierarchyItem, date: string | null | undefined): RecentContentItem {
+    return {
         id: item.id,
         ...(item.parentId ? { parentId: item.parentId } : {}),
         title: extractTitle(item.metadataContainer) ?? item.name,
-        addedAt: formatRelativeTime(item.createdAt),
+        timestamp: formatRelativeTime(date, 'Unknown'),
         fulfillment: item.contentItem ? mapFulfillmentStatus(item.contentItem.fulfillment) : 'missing',
         publishDate: extractPublishDate(item.metadataContainer),
         publishDatePrecision: extractPublishDatePrecision(item.metadataContainer),
         effectiveMonitoring: item.effectiveMonitoring,
-    }));
+    };
+}
+
+export function mapRecentContent(items: ApiContentHierarchyItem[], limit: number): RecentContentItem[] {
+    return items.slice(0, limit).map((item) => toRecentContentItem(item, item.createdAt));
+}
+
+function localDayStart(now: number, daysAgo: number): number {
+    const start = new Date(now);
+    start.setDate(start.getDate() - daysAgo);
+    return start.setHours(0, 0, 0, 0);
+}
+
+export function thisWeekStart(now: number): number {
+    return localDayStart(now, 6);
+}
+
+export function mapRecentlyFulfilled(items: ApiContentHierarchyItem[], limit: number, now: number): RecentlyFulfilled {
+    const todayStart = localDayStart(now, 0);
+    const weekStart = thisWeekStart(now);
+    const parentIds = new Set(items.map((item) => item.parentId));
+    const lowest = items.filter((item) => !parentIds.has(item.id));
+    const times = lowest.map((item) => parseUtcInstant(item.contentItem?.fulfilledAt ?? '').getTime());
+    return {
+        today: times.filter((time) => time >= todayStart).length,
+        thisWeek: times.filter((time) => time >= weekStart).length,
+        items: lowest.slice(0, limit).map((item) => toRecentContentItem(item, item.contentItem?.fulfilledAt)),
+    };
 }
 
 export function mapUpcomingContent(items: ApiContentItemWithMetadata[]): UpcomingContentItem[] {

@@ -21,8 +21,8 @@ import {
     useDownloadClientHealth,
     useMediaServerHealth,
     useActiveDownloads,
-    useRecentJobs,
     useContentCounts,
+    useRecentlyFulfilled,
 } from './useDashboard';
 
 const mockDownloadClients = [
@@ -111,40 +111,6 @@ const mockDownloadStatusTotals: Record<string, number> = {
     Stalled: 6,
 };
 
-const mockJobs = {
-    items: [
-        {
-            id: 'job-1',
-            jobType: 'ContentMetadataRefreshItem',
-            scope: 'Content',
-            status: 'Completed',
-            startedAt: '2024-01-01T10:00:00Z',
-            completedAt: '2024-01-01T10:02:15Z',
-            createdAt: '2024-01-01T10:00:00Z',
-        },
-        {
-            id: 'job-2',
-            jobType: 'SearchMissing',
-            scope: 'Content',
-            status: 'Running',
-            startedAt: '2024-01-01T10:05:00Z',
-            createdAt: '2024-01-01T10:05:00Z',
-        },
-        {
-            id: 'job-3',
-            jobType: 'DownloadImportItem',
-            scope: 'Content',
-            status: 'Failed',
-            startedAt: '2024-01-01T09:00:00Z',
-            completedAt: '2024-01-01T09:00:12Z',
-            createdAt: '2024-01-01T09:00:00Z',
-        },
-    ],
-    pageNumber: 1,
-    pageSize: 10,
-    totalItems: 3,
-};
-
 const mockContentStats = {
     total: 100,
     missing: 25,
@@ -192,9 +158,6 @@ describe('useDashboard hooks', () => {
                     });
                 }
                 return Promise.resolve(mockDownloads);
-            }
-            if (url.startsWith('/jobs')) {
-                return Promise.resolve(mockJobs);
             }
             if (url === '/content/stats') {
                 return Promise.resolve(mockContentStats);
@@ -307,19 +270,6 @@ describe('useDashboard hooks', () => {
         });
     });
 
-    describe('useRecentJobs', () => {
-        it('returns recent jobs with limit', async () => {
-            const { result } = renderHook(() => useRecentJobs(2), { wrapper: createWrapper() });
-
-            await waitFor(() => {
-                expect(result.current.isLoading).toBe(false);
-            });
-
-            expect(result.current.data).toHaveLength(2);
-            expect(result.current.data?.[0].name).toBe('Content Metadata Refresh Item');
-        });
-    });
-
     describe('useContentCounts', () => {
         it('reads aggregate counts from /content/stats', async () => {
             const { result } = renderHook(() => useContentCounts(), { wrapper: createWrapper() });
@@ -334,9 +284,228 @@ describe('useDashboard hooks', () => {
                 missing: 25,
                 upgradable: 10,
                 fulfilled: 60,
-                fulfilledExternally: 5,
-                partial: 8,
             });
+        });
+    });
+
+    describe('useRecentlyFulfilled', () => {
+        beforeEach(() => {
+            vi.stubEnv('TZ', 'UTC');
+            vi.useFakeTimers({ toFake: ['Date'] });
+            vi.setSystemTime(new Date('2025-01-08T12:00:00Z'));
+        });
+
+        afterEach(() => {
+            vi.useRealTimers();
+            vi.unstubAllEnvs();
+        });
+
+        it('UseRecentlyFulfilled_ReadsTheNextPage_WhenThePageEndsInsideTheWeek', async () => {
+            // Arrange
+            mockApiGet
+                .mockResolvedValueOnce({
+                    items: [
+                        {
+                            id: 'h1',
+                            name: 'Item One',
+                            createdAt: '2024-06-01T00:00:00Z',
+                            contentItem: { fulfillment: 'Fulfilled', fulfilledAt: '2025-01-08T11:00:00Z' },
+                        },
+                    ],
+                    pageNumber: 1,
+                    pageSize: 200,
+                    totalItems: 10,
+                })
+                .mockResolvedValueOnce({
+                    items: [
+                        {
+                            id: 'h2',
+                            name: 'Item Two',
+                            createdAt: '2024-06-01T00:00:00Z',
+                            contentItem: { fulfillment: 'Upgradable', fulfilledAt: '2025-01-03T00:00:00Z' },
+                        },
+                        {
+                            id: 'h3',
+                            name: 'Item Three',
+                            createdAt: '2024-06-01T00:00:00Z',
+                            contentItem: { fulfillment: 'Fulfilled', fulfilledAt: '2024-12-20T00:00:00Z' },
+                        },
+                    ],
+                    pageNumber: 2,
+                    pageSize: 200,
+                    totalItems: 10,
+                });
+
+            // Act
+            const { result } = renderHook(() => useRecentlyFulfilled(5), { wrapper: createWrapper() });
+
+            // Assert
+            await waitFor(() => {
+                expect(result.current.isSuccess).toBe(true);
+            });
+            expect(mockApiGet.mock.calls).toEqual([
+                [
+                    '/content?filter=fulfillment+in+%28Fulfilled%2C+Upgradable%29&pageNumber=1&pageSize=200&sortBy=FulfilledAt&sortDirection=Descending',
+                ],
+                [
+                    '/content?filter=fulfillment+in+%28Fulfilled%2C+Upgradable%29&pageNumber=2&pageSize=200&sortBy=FulfilledAt&sortDirection=Descending',
+                ],
+            ]);
+            expect(result.current.data?.today).toBe(1);
+            expect(result.current.data?.thisWeek).toBe(2);
+            expect(result.current.data?.items.map((item) => item.title)).toEqual([
+                'Item One',
+                'Item Two',
+                'Item Three',
+            ]);
+        });
+
+        it('UseRecentlyFulfilled_ReadsOnePage_WhenThePageHoldsEveryItem', async () => {
+            // Arrange
+            mockApiGet.mockResolvedValueOnce({
+                items: [
+                    {
+                        id: 'h1',
+                        name: 'Item One',
+                        createdAt: '2024-06-01T00:00:00Z',
+                        contentItem: { fulfillment: 'Fulfilled', fulfilledAt: '2025-01-08T11:00:00Z' },
+                    },
+                ],
+                pageNumber: 1,
+                pageSize: 200,
+                totalItems: 1,
+            });
+
+            // Act
+            const { result } = renderHook(() => useRecentlyFulfilled(5), { wrapper: createWrapper() });
+
+            // Assert
+            await waitFor(() => {
+                expect(result.current.isSuccess).toBe(true);
+            });
+            expect(mockApiGet).toHaveBeenCalledTimes(1);
+            expect(result.current.data?.thisWeek).toBe(1);
+        });
+
+        it('UseRecentlyFulfilled_CountsEachItemOnce_WhenTheNextPageRepeatsAnItem', async () => {
+            // Arrange
+            mockApiGet
+                .mockResolvedValueOnce({
+                    items: [
+                        {
+                            id: 'h1',
+                            name: 'Item One',
+                            createdAt: '2024-06-01T00:00:00Z',
+                            contentItem: { fulfillment: 'Fulfilled', fulfilledAt: '2025-01-08T11:00:00Z' },
+                        },
+                        {
+                            id: 'h2',
+                            name: 'Item Two',
+                            createdAt: '2024-06-01T00:00:00Z',
+                            contentItem: { fulfillment: 'Fulfilled', fulfilledAt: '2025-01-07T00:00:00Z' },
+                        },
+                    ],
+                    pageNumber: 1,
+                    pageSize: 200,
+                    totalItems: 10,
+                })
+                .mockResolvedValueOnce({
+                    items: [
+                        {
+                            id: 'h2',
+                            name: 'Item Two',
+                            createdAt: '2024-06-01T00:00:00Z',
+                            contentItem: { fulfillment: 'Fulfilled', fulfilledAt: '2025-01-07T00:00:00Z' },
+                        },
+                        {
+                            id: 'h3',
+                            name: 'Item Three',
+                            createdAt: '2024-06-01T00:00:00Z',
+                            contentItem: { fulfillment: 'Fulfilled', fulfilledAt: '2024-12-20T00:00:00Z' },
+                        },
+                    ],
+                    pageNumber: 2,
+                    pageSize: 200,
+                    totalItems: 10,
+                });
+
+            // Act
+            const { result } = renderHook(() => useRecentlyFulfilled(5), { wrapper: createWrapper() });
+
+            // Assert
+            await waitFor(() => {
+                expect(result.current.isSuccess).toBe(true);
+            });
+            expect(result.current.data?.thisWeek).toBe(2);
+            expect(result.current.data?.items.map((item) => item.title)).toEqual([
+                'Item One',
+                'Item Two',
+                'Item Three',
+            ]);
+        });
+
+        it('UseRecentlyFulfilled_RecountsToday_WhenTheLocalDayChanges', async () => {
+            // Arrange
+            mockApiGet.mockResolvedValue({
+                items: [
+                    {
+                        id: 'h1',
+                        name: 'Item One',
+                        createdAt: '2024-06-01T00:00:00Z',
+                        contentItem: { fulfillment: 'Fulfilled', fulfilledAt: '2025-01-08T11:00:00Z' },
+                    },
+                ],
+                pageNumber: 1,
+                pageSize: 200,
+                totalItems: 1,
+            });
+            const { result, rerender } = renderHook(() => useRecentlyFulfilled(5), { wrapper: createWrapper() });
+            await waitFor(() => {
+                expect(result.current.data?.today).toBe(1);
+            });
+
+            // Act
+            vi.setSystemTime(new Date('2025-01-09T01:00:00Z'));
+            rerender();
+
+            // Assert
+            await waitFor(() => {
+                expect(result.current.data?.today).toBe(0);
+            });
+            expect(result.current.data?.thisWeek).toBe(1);
+        });
+
+        it('UseRecentlyFulfilled_StopsReading_WhenThePageEndsWithoutAFulfilledDate', async () => {
+            // Arrange
+            mockApiGet.mockResolvedValueOnce({
+                items: [
+                    {
+                        id: 'h1',
+                        name: 'Item One',
+                        createdAt: '2024-06-01T00:00:00Z',
+                        contentItem: { fulfillment: 'Fulfilled', fulfilledAt: '2025-01-08T11:00:00Z' },
+                    },
+                    {
+                        id: 'h2',
+                        name: 'Item Two',
+                        createdAt: '2024-06-01T00:00:00Z',
+                        contentItem: { fulfillment: 'Fulfilled', fulfilledAt: null },
+                    },
+                ],
+                pageNumber: 1,
+                pageSize: 200,
+                totalItems: 10,
+            });
+
+            // Act
+            const { result } = renderHook(() => useRecentlyFulfilled(5), { wrapper: createWrapper() });
+
+            // Assert
+            await waitFor(() => {
+                expect(result.current.isSuccess).toBe(true);
+            });
+            expect(mockApiGet).toHaveBeenCalledTimes(1);
+            expect(result.current.data?.thisWeek).toBe(1);
         });
     });
 });
