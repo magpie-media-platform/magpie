@@ -6,6 +6,8 @@
 
 Magpie is a self-hosted media manager for any media type, including movies, TV shows, music, and books, with the ability to add more through [extensions](docs/administration/extensions.md). It tracks the titles you want and automates finding and downloading them to your media server. [Wishlists](docs/using/monitoring-and-wishlists.md) discover new titles that fit a description, like Christopher Nolan movies.
 
+[Showcase](docs/showcase.md)
+
 ## Quick start
 
 On Windows, run the installer from the [Releases page](https://github.com/magpie-media-platform/magpie/releases).
