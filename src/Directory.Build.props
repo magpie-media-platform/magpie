@@ -14,6 +14,7 @@
     <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <MeziantouAnalysisMode>None</MeziantouAnalysisMode>
+    <AnalysisLevel>latest</AnalysisLevel>
   </PropertyGroup>
 
   <ItemGroup Condition="$(MSBuildProjectName.StartsWith('Magpie.Test'))">

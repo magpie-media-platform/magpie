@@ -81,7 +81,7 @@ internal sealed class TmdbClient(
                 throw new HttpRequestException("TMDb response exceeds the configured body limit.");
             }
 
-            output.Write(buffer, 0, read);
+            await output.WriteAsync(buffer.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
         }
 
         return Encoding.UTF8.GetString(output.ToArray());

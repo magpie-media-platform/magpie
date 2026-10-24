@@ -172,7 +172,8 @@ internal sealed class QueryEngine(
         bool sourceHasMore,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
-        await using var enumerator = hits.GetAsyncEnumerator(cancellationToken);
+        var enumerator = hits.GetAsyncEnumerator(cancellationToken);
+        await using var _ = enumerator.ConfigureAwait(false);
         var surviving = 0;
         try
         {

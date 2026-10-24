@@ -1,7 +1,8 @@
 using System;
 
-using Magpie.Models.Data;
 using Magpie.Models.Filtering;
+
+namespace Magpie.Models.Data;
 
 /// <summary>
 /// The filter criteria for a <see cref="Relationship"/>.

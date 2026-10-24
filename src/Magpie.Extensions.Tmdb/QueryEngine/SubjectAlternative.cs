@@ -1,5 +1,7 @@
 using System.Collections.Generic;
 
+using Magpie.Models.Data;
+
 namespace Magpie.Extensions.Tmdb.QueryEngine;
 
 internal sealed record SubjectAlternative(

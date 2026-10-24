@@ -1,5 +1,7 @@
 using System.Collections.Generic;
 
+using Magpie.Models.Data;
+
 namespace Magpie.Extensions.Tvmaze.Pipeline;
 
 internal sealed record RelationshipCriteriaResidual(

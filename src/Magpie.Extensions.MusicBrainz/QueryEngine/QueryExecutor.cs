@@ -3844,8 +3844,9 @@ internal sealed class QueryExecutor(
             case UnionPlanNode union:
                 foreach (var child in union.Children)
                 {
-                    await using var enumerator = ContinueNodeAsync(plan, child, outcomes, warnings, cancellationToken)
+                    var enumerator = ContinueNodeAsync(plan, child, outcomes, warnings, cancellationToken)
                         .GetAsyncEnumerator(cancellationToken);
+                    await using var _ = enumerator.ConfigureAwait(false);
                     while (true)
                     {
                         bool hasNext;

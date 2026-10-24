@@ -1704,7 +1704,8 @@ internal sealed class QueryExecutor(
                     continue;
                 }
 
-                await using var enumerator = child.Hits.GetAsyncEnumerator(cancellationToken);
+                var enumerator = child.Hits.GetAsyncEnumerator(cancellationToken);
+                await using var _ = enumerator.ConfigureAwait(false);
                 while (true)
                 {
                     SearchHit hit;

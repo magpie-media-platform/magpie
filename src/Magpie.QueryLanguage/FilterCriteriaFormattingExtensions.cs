@@ -264,10 +264,10 @@ internal static class FilterCriteriaFormattingExtensions
     {
         if (ts.Days > 0)
         {
-            return ts.ToString(@"d\.hh\:mm\:ss");
+            return ts.ToString(@"d\.hh\:mm\:ss", CultureInfo.InvariantCulture);
         }
 
-        return ts.ToString(@"hh\:mm\:ss");
+        return ts.ToString(@"hh\:mm\:ss", CultureInfo.InvariantCulture);
     }
 
     private static IEnumerable<QueryPart> FormatCollectionCriteria<T>(
