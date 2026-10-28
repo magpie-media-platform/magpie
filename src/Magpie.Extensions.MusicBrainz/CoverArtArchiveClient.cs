@@ -21,7 +21,7 @@ internal sealed class CoverArtArchiveClient(
 
     public const string DefaultBaseUrl = "https://coverartarchive.org/";
 
-    private const string DefaultContact = "https://github.com/magpie-app/magpie";
+    private const string DefaultContact = "https://github.com/magpie-media-platform/magpie";
 
     private static readonly HttpStatusCode PermanentRedirect = (HttpStatusCode)308;
 

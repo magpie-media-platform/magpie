@@ -30,19 +30,19 @@ interface ExternalLink {
 const externalLinks: ExternalLink[] = [
     {
         label: 'GitHub',
-        url: 'https://github.com/magpie-media/magpie',
+        url: 'https://github.com/magpie-media-platform/magpie',
         icon: <GithubLogoIcon weight="duotone" />,
         description: 'Source code, issues, and releases',
     },
     {
         label: 'Documentation',
-        url: 'https://docs.magpie.media',
+        url: 'https://github.com/magpie-media-platform/magpie/blob/main/docs/README.md',
         icon: <NotebookIcon weight="duotone" />,
         description: 'Installation guides and API reference',
     },
     {
         label: 'Report a Bug',
-        url: 'https://github.com/magpie-media/magpie/issues/new',
+        url: 'https://github.com/magpie-media-platform/magpie/issues/new',
         icon: <BugIcon weight="duotone" />,
         description: 'Report issues or request features',
     },

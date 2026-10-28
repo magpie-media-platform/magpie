@@ -162,7 +162,7 @@ describe('AboutPage', () => {
 
             const githubLink = screen.getByRole('link', { name: /github/i });
             expect(githubLink).toBeInTheDocument();
-            expect(githubLink).toHaveAttribute('href', 'https://github.com/magpie-media/magpie');
+            expect(githubLink).toHaveAttribute('href', 'https://github.com/magpie-media-platform/magpie');
             expect(githubLink).toHaveAttribute('target', '_blank');
             expect(githubLink).toHaveAttribute('rel', 'noopener noreferrer');
         });
@@ -172,7 +172,10 @@ describe('AboutPage', () => {
 
             const docsLink = screen.getByRole('link', { name: /documentation/i });
             expect(docsLink).toBeInTheDocument();
-            expect(docsLink).toHaveAttribute('href', 'https://docs.magpie.media');
+            expect(docsLink).toHaveAttribute(
+                'href',
+                'https://github.com/magpie-media-platform/magpie/blob/main/docs/README.md',
+            );
         });
 
         it('renders Report a Bug link', () => {
@@ -180,7 +183,7 @@ describe('AboutPage', () => {
 
             const bugLink = screen.getByRole('link', { name: /report a bug/i });
             expect(bugLink).toBeInTheDocument();
-            expect(bugLink).toHaveAttribute('href', 'https://github.com/magpie-media/magpie/issues/new');
+            expect(bugLink).toHaveAttribute('href', 'https://github.com/magpie-media-platform/magpie/issues/new');
         });
 
         it('displays link descriptions', () => {

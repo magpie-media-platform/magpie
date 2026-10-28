@@ -25,7 +25,7 @@ internal sealed class MusicBrainzClient(
 
     public const string DefaultBaseUrl = "https://musicbrainz.org/ws/2/";
 
-    private const string DefaultContact = "https://github.com/magpie-app/magpie";
+    private const string DefaultContact = "https://github.com/magpie-media-platform/magpie";
     private const int MaximumIsrcResponseBytes = 8 * 1024 * 1024;
 
     public static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(20);
