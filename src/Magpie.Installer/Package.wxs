@@ -126,6 +126,7 @@
                   Impersonate="no" />
 
     <InstallExecuteSequence>
+      <RemoveRegistryValues Sequence="1950" />
       <Custom Action="ConfigureServiceRecovery"
               After="InstallServices"
               Condition="NOT REMOVE~=&quot;ALL&quot;" />
