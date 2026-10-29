@@ -14,6 +14,7 @@ using Magpie.Models.Filtering;
 using Magpie.Models.Paging;
 using Magpie.Models.Releases;
 using Magpie.Sdk.Content;
+using Magpie.Sdk.Releases;
 using Magpie.Sdk.Services;
 
 using Microsoft.Extensions.Logging.Abstractions;
@@ -273,6 +274,64 @@ public sealed class ReleaseEvaluationServiceTests
             TimeProvider.System,
             fileSystem.Object,
             NullLogger<ReleaseEvaluationService>.Instance);
+    }
+
+    [Test]
+    public async Task AssignFilesToLeavesAsync_ReturnsAllMatches_WhenOneFileFulfillsMultipleItems()
+    {
+        // Arrange
+        _matchingIds.UnionWith([_episode1.Id, _episode2.Id]);
+        var release = new Release
+        {
+            Protocol = "torrent",
+            Title = "Pack",
+            Scope =
+            {
+                new() { ContentHierarchyItemId = _episode1.Id, Status = ReleaseScopeStatus.Matched },
+                new() { ContentHierarchyItemId = _episode2.Id, Status = ReleaseScopeStatus.Matched }
+            }
+        };
+
+        // Act
+        var assignments = await _subject.AssignFilesToLeavesAsync(
+            release,
+            _season1,
+            [_episode1, _episode2, _episode3],
+            [new ReleaseFileRef("/download/shared.mkv", "shared.mkv")]).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(
+                from assignment in assignments
+                select assignment.LeafContentHierarchyItemId,
+                Is.EquivalentTo(new Guid?[] { _episode1.Id, _episode2.Id }));
+            Assert.That(
+                from assignment in assignments
+                select assignment.FileKey,
+                Is.EqualTo(["/download/shared.mkv", "/download/shared.mkv"]));
+        }
+    }
+
+    [Test]
+    public async Task AssignFilesToLeavesAsync_ReturnsNoOwner_WhenNoItemMatchesTheFile()
+    {
+        // Arrange
+        var release = new Release { Protocol = "torrent", Title = "Pack" };
+
+        // Act
+        var assignments = await _subject.AssignFilesToLeavesAsync(
+            release,
+            _season1,
+            [_episode1, _episode2],
+            [new ReleaseFileRef("/download/unmatched.mkv", "unmatched.mkv")]).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(assignments, Has.Count.EqualTo(1));
+            Assert.That(assignments[0].LeafContentHierarchyItemId, Is.Null);
+        }
     }
 
     [Test]

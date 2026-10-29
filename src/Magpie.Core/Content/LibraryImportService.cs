@@ -942,13 +942,13 @@ internal sealed class LibraryImportService(
         foreach (var candidateId in await CollectIdsAsync(selection, cancellationToken).ConfigureAwait(false))
         {
             if (await TransitionWithAuditAsync(
-                    candidateId,
-                    libraryImportCandidateRepository.TryRestoreAsync,
-                    "FileRestored",
-                    "Restored matching for",
-                    actingUserId,
-                    correlationId,
-                    cancellationToken).ConfigureAwait(false))
+                candidateId,
+                libraryImportCandidateRepository.TryRestoreAsync,
+                "FileRestored",
+                "Restored matching for",
+                actingUserId,
+                correlationId,
+                cancellationToken).ConfigureAwait(false))
             {
                 restored++;
             }
@@ -1807,11 +1807,20 @@ internal sealed class LibraryImportService(
         var assignments = await releaseEvaluationService
             .AssignFilesToLeavesAsync(release, parent, children, [fileRef], cancellationToken)
             .ConfigureAwait(false);
-        var leafId = assignments.FirstOrDefault()?.LeafContentHierarchyItemId;
-        var leaf = (leafId is { } id ? children.FirstOrDefault(child => child.Id == id) : null)
-            ?? ResolveByTitleSignal(
-                [.. children.Where(IsContainer)],
-                FirstNonEmptySignal(signals, ParsedFileSignalKeys.Title));
+        var matches = (
+            from c in children
+            where assignments.Any(a => a.LeafContentHierarchyItemId == c.Id)
+            orderby c.CreatedAt
+            select c).ToList();
+        if (matches.Count > 0)
+        {
+            return matches;
+        }
+
+        var leaf = ResolveByTitleSignal(
+            [.. children.Where(IsContainer)],
+            FirstNonEmptySignal(signals, ParsedFileSignalKeys.Title));
+
         return leaf is null ? [] : [leaf];
     }
 

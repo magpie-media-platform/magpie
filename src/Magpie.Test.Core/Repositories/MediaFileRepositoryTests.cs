@@ -31,6 +31,7 @@ public sealed class MediaFileRepositoryTests
     private List<MagpieEvent> _events = null!;
     private bool _publishedInTransaction;
     private IMediaFileRepository _subject = null!;
+    private Mock<IContentRepository> _content = null!;
     private Guid _movieItemId;
     private Guid _firstEpisodeItemId;
     private Guid _secondEpisodeItemId;
@@ -166,9 +167,10 @@ public sealed class MediaFileRepositoryTests
                 _publishedInTransaction |= _context.Database.CurrentTransaction is not null;
             })
             .Returns(Task.CompletedTask);
+        _content = new Mock<IContentRepository>();
         _subject = new MediaFileRepository(_context, NullLogger<MediaFileRepository>.Instance,
             new Magpie.Core.TransactionManager(_context, NullLogger<Magpie.Core.TransactionManager>.Instance),
-            Moq.Mock.Of<IContentRepository>(), hierarchy.Object, eventBus.Object);
+            _content.Object, hierarchy.Object, eventBus.Object);
     }
 
     [TearDown]
@@ -394,7 +396,7 @@ public sealed class MediaFileRepositoryTests
     }
 
     [Test]
-    public async Task CreateAsync_StoresTheLowestOrdinalItemAsTheOwner_WhenTheFileCoversSiblings()
+    public async Task CreateAsync_PreservesTheSelectedOwner_WhenTheFileCoversSiblings()
     {
         // Arrange
         var mediaFile = new MediaFile
@@ -417,15 +419,15 @@ public sealed class MediaFileRepositoryTests
             .ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(stored.ContentItemId, Is.EqualTo(_firstEpisodeItemId));
+            Assert.That(stored.ContentItemId, Is.EqualTo(_secondEpisodeItemId));
             Assert.That(
                 stored.Coverage.Select(coverage => coverage.ContentItemId),
-                Is.EquivalentTo([_secondEpisodeItemId, _thirdEpisodeItemId]));
+                Is.EquivalentTo([_firstEpisodeItemId, _thirdEpisodeItemId]));
         }
     }
 
     [Test]
-    public async Task CreateAsync_ThrowsAndStoresNothing_WhenACoveredItemHasAnotherParent()
+    public async Task CreateAsync_SharesTheFile_WhenACoveredItemHasAnotherParent()
     {
         // Arrange
         var otherSeason = new ContentHierarchyItem
@@ -462,19 +464,22 @@ public sealed class MediaFileRepositoryTests
         mediaFile.Coverage.Add(new() { ContentItemId = otherEpisode.ContentItem.Id });
 
         // Act
-        var exception = Assert.ThrowsAsync<InvalidOperationException>(() => _subject.CreateAsync(mediaFile, null));
+        await _subject.CreateAsync(mediaFile, null).ConfigureAwait(false);
 
         // Assert
-        var stored = await _context.MediaFiles.AsNoTracking().CountAsync().ConfigureAwait(false);
+        var stored = await _context.MediaFiles.AsNoTracking().Include(file => file.Coverage)
+            .SingleAsync(file => file.FilePath == "/tv/S01E01.mkv").ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(exception.Message, Is.EqualTo("The items that the media file covers are not siblings."));
-            Assert.That(stored, Is.EqualTo(1));
+            Assert.That(stored.ContentItemId, Is.EqualTo(_firstEpisodeItemId));
+            Assert.That(
+                from coverage in stored.Coverage select coverage.ContentItemId,
+                Is.EqualTo([otherEpisode.ContentItem.Id]));
         }
     }
 
     [Test]
-    public async Task CreateAsync_ThrowsAndStoresNothing_WhenACoveredItemHasNoParent()
+    public async Task CreateAsync_SharesTheFile_WhenACoveredItemHasNoParent()
     {
         // Arrange
         var mediaFile = new MediaFile
@@ -487,15 +492,39 @@ public sealed class MediaFileRepositoryTests
         mediaFile.Coverage.Add(new() { ContentItemId = _movieItemId });
 
         // Act
-        var exception = Assert.ThrowsAsync<InvalidOperationException>(() => _subject.CreateAsync(mediaFile, null));
+        await _subject.CreateAsync(mediaFile, null).ConfigureAwait(false);
 
         // Assert
-        var stored = await _context.MediaFiles.AsNoTracking().CountAsync().ConfigureAwait(false);
+        var stored = await _context.MediaFiles.AsNoTracking().Include(file => file.Coverage)
+            .SingleAsync(file => file.FilePath == "/tv/S01E01.mkv").ConfigureAwait(false);
         using (Assert.EnterMultipleScope())
         {
-            Assert.That(exception.Message, Is.EqualTo("The items that the media file covers are not siblings."));
-            Assert.That(stored, Is.EqualTo(1));
+            Assert.That(stored.ContentItemId, Is.EqualTo(_firstEpisodeItemId));
+            Assert.That(
+                from coverage in stored.Coverage select coverage.ContentItemId,
+                Is.EqualTo([_movieItemId]));
+            _content.Verify(repository => repository.ReconcileMediaStateAsync(
+                It.IsAny<Guid>(), null, It.IsAny<CancellationToken>()), Times.Exactly(2));
         }
+    }
+
+    [Test]
+    public void CreateAsync_RejectsMissingCoverage_WhenAContentItemDoesNotExist()
+    {
+        // Arrange
+        var file = new MediaFile
+        {
+            ContentItemId = _movieItemId,
+            FileKind = "Video",
+            FilePath = "/media/shared.mkv"
+        };
+        file.Coverage.Add(new() { ContentItemId = Guid.NewGuid() });
+
+        // Act
+        var exception = Assert.ThrowsAsync<InvalidOperationException>(() => _subject.CreateAsync(file, null));
+
+        // Assert
+        Assert.That(exception.Message, Is.EqualTo("An item that the media file covers does not exist."));
     }
 
     [Test]
@@ -528,8 +557,8 @@ public sealed class MediaFileRepositoryTests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(result, Is.True);
-            Assert.That(stored.ContentItemId, Is.EqualTo(_secondEpisodeItemId));
-            Assert.That(stored.Coverage.Select(coverage => coverage.ContentItemId), Is.EqualTo([_thirdEpisodeItemId]));
+            Assert.That(stored.ContentItemId, Is.EqualTo(_thirdEpisodeItemId));
+            Assert.That(stored.Coverage.Select(coverage => coverage.ContentItemId), Is.EqualTo([_secondEpisodeItemId]));
         }
     }
 
@@ -617,18 +646,25 @@ public sealed class MediaFileRepositoryTests
             },
             null).ConfigureAwait(false);
         var current = await _subject.GetByIdAsync(created.Id).ConfigureAwait(false);
-        current!.Coverage.Add(new() { ContentItemId = _secondEpisodeItemId });
+        current!.Coverage.Add(new() { ContentItemId = _movieItemId });
+        _content.Invocations.Clear();
 
         // Act
         await _subject.UpdateAsync(current, null).ConfigureAwait(false);
 
         // Assert
-        Assert.That(
-            await _context.MediaFileCoverages.AsNoTracking()
-                .Select(coverage => coverage.ContentItemId)
-                .ToListAsync()
-                .ConfigureAwait(false),
-            Is.EqualTo([_secondEpisodeItemId]));
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(
+                await _context.MediaFileCoverages.AsNoTracking()
+                    .Select(coverage => coverage.ContentItemId)
+                    .ToListAsync()
+                    .ConfigureAwait(false),
+                Is.EqualTo([_movieItemId]));
+            _content.Verify(
+                m => m.ReconcileMediaStateAsync(It.IsAny<Guid>(), null, It.IsAny<CancellationToken>()),
+                Times.Exactly(2));
+        }
     }
 
     [Test]
@@ -643,7 +679,7 @@ public sealed class MediaFileRepositoryTests
             PathKey = "/TV/S01E01-E02.MKV",
             CreatedAt = DateTime.UtcNow
         };
-        mediaFile.Coverage.Add(new() { ContentItemId = _secondEpisodeItemId });
+        mediaFile.Coverage.Add(new() { ContentItemId = _movieItemId });
         _context.MediaFiles.Add(mediaFile);
         await _context.SaveChangesAsync().ConfigureAwait(false);
 
@@ -651,6 +687,11 @@ public sealed class MediaFileRepositoryTests
         await _subject.DeleteAsync(mediaFile.Id, null).ConfigureAwait(false);
 
         // Assert
-        Assert.That(await _context.MediaFileCoverages.AsNoTracking().CountAsync().ConfigureAwait(false), Is.Zero);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(await _context.MediaFileCoverages.AsNoTracking().CountAsync().ConfigureAwait(false), Is.Zero);
+            _content.Verify(repository => repository.ReconcileMediaStateAsync(
+                It.IsAny<Guid>(), null, It.IsAny<CancellationToken>()), Times.Exactly(2));
+        }
     }
 }

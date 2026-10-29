@@ -163,8 +163,9 @@ public sealed class RootFolderRepositoryTests
         Assert.That(result, Is.Null);
     }
 
-    [Test]
-    public async Task GetContentSizesAsync_ReturnsTotalFileSizeOfEachRootFolder_WhenItemsHaveFiles()
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task GetContentSizesAsync_KeepsSharedFilesInTheirOriginalFolder_WhenOwnershipChanges(bool multiRoot)
     {
         // Arrange
         var firstRoot = new RootFolder
@@ -214,7 +215,13 @@ public sealed class RootFolderRepositoryTests
                         FilePath = "/media/first/film.mkv",
                         PathKey = "/MEDIA/FIRST/FILM.MKV",
                         FileSize = 100,
-                        CreatedAt = DateTime.UtcNow
+                        CreatedAt = DateTime.UtcNow,
+                        Coverage = {
+                            new()
+                            {
+                                ContentItemId = coveredItemId
+                            }
+                        }
                     },
                     new()
                     {
@@ -223,7 +230,13 @@ public sealed class RootFolderRepositoryTests
                         PathKey = "/MEDIA/FIRST/FILM.SRT",
                         FileSize = 50,
                         CreatedAt = DateTime.UtcNow,
-                        Coverage = { new() { ContentItemId = coveredItemId } }
+                        Coverage =
+                        {
+                            new()
+                            {
+                                ContentItemId = coveredItemId
+                            }
+                        }
                     }
                 }
             }
@@ -235,7 +248,7 @@ public sealed class RootFolderRepositoryTests
             Level = "movie",
             Slug = "covered-film",
             Name = "Covered film",
-            EffectiveRootFolderId = firstRoot.Id,
+            EffectiveRootFolderId = multiRoot ? secondRoot.Id : firstRoot.Id,
             CreatedAt = DateTime.UtcNow,
             ContentItem = new() { Id = coveredItemId, CreatedAt = DateTime.UtcNow }
         };
@@ -269,15 +282,102 @@ public sealed class RootFolderRepositoryTests
         await _context.SaveChangesAsync().ConfigureAwait(false);
 
         // Act
+        var before = await _subject.GetContentSizesAsync().ConfigureAwait(false);
+        await (
+            from coverage in _context.MediaFileCoverages
+            where coverage.ContentItemId == coveredItemId
+            select coverage)
+            .ExecuteDeleteAsync()
+            .ConfigureAwait(false);
+        await (
+            from file in _context.MediaFiles
+            where file.ContentItemId == firstItem.ContentItem.Id
+            select file).ExecuteUpdateAsync(
+                setters => setters.SetProperty(file => file.ContentItemId, coveredItemId)).ConfigureAwait(false);
         var result = await _subject.GetContentSizesAsync().ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
         {
+            Assert.That(before[firstRoot.Id], Is.EqualTo(150));
+            Assert.That(before[secondRoot.Id], Is.EqualTo(7));
             Assert.That(result, Has.Count.EqualTo(2));
             Assert.That(result[firstRoot.Id], Is.EqualTo(150));
             Assert.That(result[secondRoot.Id], Is.EqualTo(7));
+            Assert.That(result.Values.Sum(), Is.EqualTo(157));
             Assert.That(result.ContainsKey(emptyRoot.Id), Is.False);
+        }
+    }
+
+    [TestCase("/media", "/media/movies", "/media/movies/film.mkv", 0, 100)]
+    [TestCase("/media/", "/media/movies/", "/media/movies/film.mkv", 0, 100)]
+    [TestCase("/media/movies", "/media/movies-old", "/media/movies-old/film.mkv", 0, 100)]
+    [TestCase("/media/movies", "/media/shows", "/media/movies-old/film.mkv", 0, 0)]
+    [TestCase("/media", "/media/movies", "/media/movies/../shows/film.mkv", 100, 0)]
+    [TestCase("/", "/media", "/other/film.mkv", 100, 0)]
+    [TestCase("/media/movies_%", "/media/shows", "/media/movies_ab/film.mkv", 0, 0)]
+    [TestCase("/media/movies", "/media/shows", "/media/MOVIES/film.mkv", 100, 0, IncludePlatform = "Win")]
+    [TestCase("/media/movies", "/media/shows", "/media/MOVIES/film.mkv", 0, 0, ExcludePlatform = "Win")]
+    [TestCase(@"C:\media", @"C:\media\movies\", "C:/media/movies/film.mkv", 0, 100, IncludePlatform = "Win")]
+    [TestCase(@"\\host\media", @"\\host\media\tv", @"\\HOST\MEDIA\tv\file.mkv", 0, 100, IncludePlatform = "Win")]
+    public async Task GetContentSizesAsync_CountsFilesInTheClosestContainingRoot_WhenPathsDiffer(
+        string firstRootPath,
+        string secondRootPath,
+        string filePath,
+        long firstRootBytes,
+        long secondRootBytes)
+    {
+        // Arrange
+        var firstRoot = new RootFolder
+        {
+            Name = "First",
+            Path = firstRootPath,
+            ContentType = _contentType,
+            CreatedAt = DateTime.UtcNow
+        };
+        var secondRoot = new RootFolder
+        {
+            Name = "Second",
+            Path = secondRootPath,
+            ContentType = _contentType,
+            CreatedAt = DateTime.UtcNow
+        };
+        var item = new ContentHierarchyItem
+        {
+            MetadataContainer = new() { CreatedAt = DateTime.UtcNow },
+            ContentType = _contentType,
+            Level = "movie",
+            Slug = "film",
+            Name = "Film",
+            CreatedAt = DateTime.UtcNow,
+            ContentItem = new()
+            {
+                CreatedAt = DateTime.UtcNow,
+                MediaFiles =
+                {
+                    new()
+                    {
+                        FileKind = "Video",
+                        FilePath = filePath,
+                        PathKey = filePath,
+                        FileSize = 100,
+                        CreatedAt = DateTime.UtcNow
+                    }
+                }
+            }
+        };
+        _context.RootFolders.AddRange(firstRoot, secondRoot);
+        _context.ContentHierarchyItems.Add(item);
+        await _context.SaveChangesAsync().ConfigureAwait(false);
+
+        // Act
+        var result = await _subject.GetContentSizesAsync().ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result.GetValueOrDefault(firstRoot.Id), Is.EqualTo(firstRootBytes));
+            Assert.That(result.GetValueOrDefault(secondRoot.Id), Is.EqualTo(secondRootBytes));
         }
     }
 

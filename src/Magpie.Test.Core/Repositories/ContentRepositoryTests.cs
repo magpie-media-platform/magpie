@@ -306,8 +306,10 @@ public sealed class ContentRepositoryTests
         }
     }
 
-    [Test]
-    public async Task ReconcileMediaStateAsync_FulfillsCoveredEpisodesAndCountsTheFileOnce_WhenAFileCoversTwoEpisodes()
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task ReconcileMediaStateAsync_FulfillsCoveredItemsAndCountsTheFileOncePerTree_WhenAFileIsShared(
+        bool itemsHaveTheSameParent)
     {
         // Arrange
         var season = new ContentHierarchyItem
@@ -337,7 +339,7 @@ public sealed class ContentRepositoryTests
         var secondEpisode = new ContentHierarchyItem
         {
             MetadataContainer = new() { CreatedAt = DateTime.UtcNow },
-            ParentId = season.Id,
+            ParentId = itemsHaveTheSameParent ? season.Id : null,
             ContentType = "tv",
             Level = "episode",
             Slug = "episode-2",
@@ -375,6 +377,7 @@ public sealed class ContentRepositoryTests
 
         // Act
         await _subject.ReconcileMediaStateAsync(season.Id, null).ConfigureAwait(false);
+        await _subject.ReconcileMediaStateAsync(secondEpisode.Id, null).ConfigureAwait(false);
 
         // Assert
         var states = await _context.ContentItems.AsNoTracking()

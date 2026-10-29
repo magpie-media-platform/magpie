@@ -13,7 +13,7 @@ public sealed record ReleaseFileAssignment
     public required string FileKey { get; init; }
 
     /// <summary>
-    /// The assigned leaf id, or <see langword="null"/> when the file has no unique match.
+    /// The assigned leaf id, or <see langword="null"/> when no assignment can be confirmed.
     /// </summary>
     public Guid? LeafContentHierarchyItemId { get; init; }
 }

@@ -784,8 +784,33 @@ internal sealed class ReleaseEvaluationService(
         foreach (var file in files)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var leafId = ResolveLeaf(scopedRelease with { Title = file.FileName }, contexts, cancellationToken);
-            assignments.Add(new() { FileKey = file.Key, LeafContentHierarchyItemId = leafId });
+            var matches = new List<ReleaseFileAssignment>();
+            foreach (var context in contexts)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var result = AssessMatch(scopedRelease with { Title = file.FileName }, [], context);
+                if (result.MatchResult is ReleaseMatchResult.Identity or ReleaseMatchResult.Confident)
+                {
+                    matches.Add(new()
+                    {
+                        FileKey = file.Key,
+                        LeafContentHierarchyItemId = context.ContentHierarchyItemId
+                    });
+                }
+            }
+
+            if (matches.Count == 0 ||
+                matches.Count > 1 &&
+                matches.Any(m => !release.Scope.Any(s =>
+                    s.Status == ReleaseScopeStatus.Matched &&
+                    s.ContentHierarchyItemId == m.LeafContentHierarchyItemId)))
+            {
+                assignments.Add(new() { FileKey = file.Key });
+            }
+            else
+            {
+                assignments.AddRange(matches);
+            }
         }
 
         return assignments;
@@ -952,32 +977,6 @@ internal sealed class ReleaseEvaluationService(
         return imported.MatchedRankOrdinal is null
             ? (score, Path.GetFileNameWithoutExtension(mediaFile.FilePath))
             : (imported, importedProperties["Title"]);
-    }
-
-    private Guid? ResolveLeaf(
-        Release release,
-        IReadOnlyList<ReleaseEvaluationContext> contexts,
-        CancellationToken cancellationToken)
-    {
-        Guid? matched = null;
-        foreach (var context in contexts)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            var result = AssessMatch(release, [], context);
-            if (result.MatchResult is not (ReleaseMatchResult.Identity or ReleaseMatchResult.Confident))
-            {
-                continue;
-            }
-
-            if (matched is not null)
-            {
-                return null;
-            }
-
-            matched = context.ContentHierarchyItemId;
-        }
-
-        return matched;
     }
 
     private ReleaseMatchResult GenericMatch(

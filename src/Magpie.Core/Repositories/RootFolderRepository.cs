@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -233,15 +234,39 @@ internal sealed class RootFolderRepository(
     {
         try
         {
-            return await (
-                from file in context.MediaFiles.AsNoTracking()
-                join item in context.ContentItems.AsNoTracking() on file.ContentItemId equals item.Id
-                join node in context.ContentHierarchyItems.AsNoTracking()
-                    on item.ContentHierarchyItemId equals node.Id
-                group file.FileSize by node.EffectiveRootFolderId into sizes
-                select new { RootFolderId = sizes.Key, Bytes = sizes.Sum() })
-                .ToDictionaryAsync(row => row.RootFolderId, row => row.Bytes, cancellationToken)
+            var folders = await (
+                from folder in context.RootFolders.AsNoTracking()
+                select new { folder.Id, folder.Path })
+                .ToListAsync(cancellationToken)
                 .ConfigureAwait(false);
+            var roots = (
+                from folder in folders
+                let prefix = Path
+                    .GetFullPath(folder.Path)
+                    .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar
+                orderby prefix.Length descending
+                select new { folder.Id, Prefix = prefix }).ToList();
+            var comparison = OperatingSystem.IsWindows() ?
+                StringComparison.OrdinalIgnoreCase :
+                StringComparison.Ordinal;
+            var sizes = new Dictionary<Guid, long>();
+            var files =
+                from file in context.MediaFiles.AsNoTracking()
+                select new { file.FilePath, file.FileSize };
+
+            await foreach (var file in files.AsAsyncEnumerable()
+                .WithCancellation(cancellationToken)
+                .ConfigureAwait(false))
+            {
+                var path = Path.GetFullPath(file.FilePath);
+                var root = roots.FirstOrDefault(folder => path.StartsWith(folder.Prefix, comparison));
+                if (root is not null)
+                {
+                    sizes[root.Id] = sizes.GetValueOrDefault(root.Id) + file.FileSize;
+                }
+            }
+
+            return sizes;
         }
         catch (Exception ex)
         {

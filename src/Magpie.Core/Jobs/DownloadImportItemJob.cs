@@ -82,7 +82,8 @@ internal sealed class DownloadImportItemJob(
         FileKind FileKind,
         bool IsMainContent,
         Guid ContentHierarchyItemId,
-        MediaInfo? MediaInfo = null);
+        MediaInfo? MediaInfo = null,
+        IReadOnlyList<Guid>? CoveredHierarchyItemIds = null);
 
     private readonly record struct MediaFileProbe(
         string FilePath,
@@ -903,13 +904,13 @@ internal sealed class DownloadImportItemJob(
 
         ContentItem contentItem;
         IReadOnlyList<ContentHierarchyItem> ancestors;
+        IReadOnlyList<ContentHierarchyItem> importTargets;
         Release release;
         using (DownloadTelemetry.Source.StartActivity("ResolveChain"))
         {
-            (contentItem, ancestors, release) = await ResolveChainAsync(
+            (contentItem, ancestors, release, importTargets) = await ResolveChainAsync(
                 download,
                 userId,
-                correlationId,
                 cancellationToken)
                 .ConfigureAwait(false);
         }
@@ -936,8 +937,6 @@ internal sealed class DownloadImportItemJob(
                 $"{resolvedRootFolderId}.");
         }
 
-        var effectiveCollisionMode = collisionMode ?? rootFolder.DefaultImportCollisionMode;
-
         var acquisitionScopes = await downloadScopeRepository.QueryAllAsync(
             new DownloadScopeQuery { DownloadId = downloadId },
             cancellationToken: cancellationToken).ConfigureAwait(false);
@@ -948,11 +947,23 @@ internal sealed class DownloadImportItemJob(
             .ToList();
         var acquisitionLeaves = await ResolveScopedLeavesAsync(acquisitionScopeNodeIds, cancellationToken)
             .ConfigureAwait(false);
+        foreach (var nodeId in
+            from id in acquisitionScopeNodeIds
+            where !release.Scope.Any(s => s.ContentHierarchyItemId == id && s.Status == ReleaseScopeStatus.Matched)
+            select id)
+        {
+            release.Scope.Add(new()
+            {
+                ReleaseId = release.Id,
+                ContentHierarchyItemId = nodeId,
+                Status = ReleaseScopeStatus.Matched
+            });
+        }
 
         var operation = await BuildImportOperationAsync(
             download,
-            hierarchyItem,
-            effectiveCollisionMode,
+            importTargets,
+            collisionMode,
             transferMode,
             dryRun,
             userId,
@@ -961,7 +972,6 @@ internal sealed class DownloadImportItemJob(
             importActivity,
             release,
             acquisitionScopeNodeIds,
-            rootFolder.UpgradeFileHandling,
             cancellationToken)
             .ConfigureAwait(false);
 
@@ -1034,7 +1044,6 @@ internal sealed class DownloadImportItemJob(
             progress,
             cancellationToken).ConfigureAwait(false);
         var transferred = transferResult.Transferred;
-        var grabTargetNode = ancestors[0];
         var persisted = false;
         var committed = new CapacityRecovery
         {
@@ -1080,7 +1089,6 @@ internal sealed class DownloadImportItemJob(
                 groups,
                 reconciledDownloadScopeNodeIds,
                 replaceSnapshots,
-                rootFolder,
                 operation.SkippedFiles,
                 committed,
                 userId,
@@ -1233,8 +1241,16 @@ internal sealed class DownloadImportItemJob(
             .FirstOrDefault(reason => reason is not null);
     }
 
-    private async Task<(ContentItem ContentItem, IReadOnlyList<ContentHierarchyItem> Ancestors, Release Release)>
-        ResolveChainAsync(Download download, Guid? userId, Guid? correlationId, CancellationToken cancellationToken)
+    private sealed record ChainResult(
+        ContentItem ContentItem,
+        IReadOnlyList<ContentHierarchyItem> Ancestors,
+        Release Release,
+        IReadOnlyList<ContentHierarchyItem> Targets);
+
+    private async Task<ChainResult> ResolveChainAsync(
+        Download download,
+        Guid? userId,
+        CancellationToken cancellationToken)
     {
         if (download.ReleaseId is null)
         {
@@ -1251,16 +1267,16 @@ internal sealed class DownloadImportItemJob(
                 $"Download {download.Id} references missing release {download.ReleaseId}.");
         }
 
-        var targetHierarchyItemId = await ResolveImportTargetNodeAsync(download.Id, cancellationToken)
+        var targets = await ResolveImportTargetsAsync(download.Id, cancellationToken)
             .ConfigureAwait(false);
-        if (targetHierarchyItemId is null)
+        if (targets.Count == 0)
         {
             throw new ImportTargetMissingException(
                 $"Download {download.Id} has no release scope identifying an import target for release {release.Id}");
         }
 
         var contentItem = await contentService.GetOrCreateContentItemAsync(
-            targetHierarchyItemId.Value,
+            targets[0].Id,
             timeProvider.GetUtcNow().UtcDateTime,
             userId,
             cancellationToken: cancellationToken).ConfigureAwait(false);
@@ -1275,44 +1291,53 @@ internal sealed class DownloadImportItemJob(
                 $"{contentItem.ContentHierarchyItemId}.");
         }
 
-        return (contentItem, chain, release);
+        return new(contentItem, chain, release, targets);
     }
 
-    private async Task<Guid?> ResolveImportTargetNodeAsync(Guid downloadId, CancellationToken cancellationToken)
+    private async Task<IReadOnlyList<ContentHierarchyItem>> ResolveImportTargetsAsync(
+        Guid downloadId,
+        CancellationToken cancellationToken)
     {
         var downloadScopes = await downloadScopeRepository.QueryAllAsync(
             new DownloadScopeQuery { DownloadId = downloadId },
             cancellationToken: cancellationToken).ConfigureAwait(false);
 
         var nodeIds = downloadScopes.Select(scope => scope.ContentHierarchyItemId).Distinct().ToList();
-        var paths = new List<IReadOnlyList<Guid>>();
-        foreach (var nodeId in nodeIds.Distinct())
+        var paths = new List<IReadOnlyList<ContentHierarchyItem>>();
+        foreach (var nodeId in nodeIds)
         {
             var lineage = await contentHierarchyItemRepository.GetLineageAsync(nodeId, cancellationToken)
                 .ConfigureAwait(false);
             if (lineage.Count > 0)
             {
-                paths.Add([.. lineage.Reverse().Select(node => node.Id)]);
+                paths.Add([.. lineage.Reverse()]);
             }
         }
 
-        if (paths.Count == 0 || paths.Any(path => path[0] != paths[0][0]))
+        var targets = new List<ContentHierarchyItem>();
+        foreach (var tree in
+            from path in paths
+            group path by path[0].Id)
         {
-            return null;
-        }
-
-        var commonDepth = 0;
-        for (var depth = 1; depth < paths.Min(path => path.Count); depth++)
-        {
-            if (!paths.All(path => path[depth] == paths[0][depth]))
+            var first = tree.First();
+            var commonDepth = 0;
+            for (var depth = 1; depth < tree.Min(path => path.Count); depth++)
             {
-                break;
+                if (!tree.All(path => path[depth].Id == first[depth].Id))
+                {
+                    break;
+                }
+
+                commonDepth = depth;
             }
 
-            commonDepth = depth;
+            targets.Add(first[commonDepth]);
         }
 
-        return paths[0][commonDepth];
+        return (
+            from target in targets
+            orderby target.CreatedAt
+            select target).ToList();
     }
 
     private async Task<IReadOnlyList<ContentHierarchyItem>> ResolveScopedLeavesAsync(
@@ -1346,20 +1371,22 @@ internal sealed class DownloadImportItemJob(
         return [.. scopedNodes.Where(node => !ancestorIds.Contains(node.Id))];
     }
 
-    private async Task<(
-            Dictionary<string, Guid> Bound,
-            List<(string File, string? ItemName, SkipReason Reason)> Skipped,
-            HashSet<Guid> SkippedLeafIds)>
-        BindPrimaryFilesAsync(
+    private sealed record BindResult(
+        Dictionary<string, List<Guid>> Bound,
+        List<(string File, string? ItemName, SkipReason Reason)> Skipped,
+        HashSet<Guid> SkippedLeafIds);
+
+    private async Task<BindResult> BindPrimaryFilesAsync(
         Release release,
         ContentHierarchyItem importTargetNode,
+        IReadOnlyList<ContentHierarchyItem> importTargets,
         ContentTypeDefinition? definition,
         IReadOnlyCollection<Guid> acquisitionScopeNodeIds,
         string releasePath,
         IReadOnlyList<string> primaryFiles,
         CancellationToken cancellationToken)
     {
-        var bound = new Dictionary<string, Guid>(PathComparer);
+        var bound = new Dictionary<string, List<Guid>>(PathComparer);
         var skipped = new List<(string File, string? ItemName, SkipReason Reason)>();
         var skippedLeafIds = new HashSet<Guid>();
         if (definition?.LevelDefinitions.Any(level => level.ParentSlug == importTargetNode.Level) != true)
@@ -1385,44 +1412,53 @@ internal sealed class DownloadImportItemJob(
                 : await contentHierarchyItemRepository.QueryAllAsync(
                     new() { AncestorId = parent.Id },
                     cancellationToken: cancellationToken).ConfigureAwait(false);
+            var otherTargets =
+                from item in importTargets
+                where item.Id != importTargetNode.Id &&
+                    item.ContentType == importTargetNode.ContentType &&
+                    definition?.LevelDefinitions.Any(level => level.ParentSlug == item.Level) != true
+                select item;
             List<ContentHierarchyItem> candidateItems =
             [
                 importTargetNode,
                 .. descendants.Where(item =>
-                    item.Id != importTargetNode.Id && AcceptsPrimaryFiles(definition, item.Level))
+                    item.Id != importTargetNode.Id && AcceptsPrimaryFiles(definition, item.Level)),
+                .. otherTargets
             ];
+            candidateItems = [.. candidateItems.DistinctBy(item => item.Id)];
             var leafIdByFile = (await releaseEvaluationService.AssignFilesToLeavesAsync(
                     release,
                     parent ?? importTargetNode,
                     candidateItems,
                     [.. candidates.Select(file => new ReleaseFileRef(file, Path.GetFileName(file)))],
                     cancellationToken).ConfigureAwait(false))
-                .ToDictionary(
+                .ToLookup(
                     assignment => assignment.FileKey,
                     assignment => assignment.LeafContentHierarchyItemId,
                     PathComparer);
 
-            var filesNameItems = leafIdByFile.Values.Any(leafId => leafId is not null);
+            var filesNameItems = leafIdByFile.Any(file => file.Any(leafId => leafId is not null));
             foreach (var file in candidates)
             {
-                var leafId = leafIdByFile.GetValueOrDefault(file);
-                if (!filesNameItems || leafId == importTargetNode.Id)
+                var leafIds = leafIdByFile[file].ToList();
+                if (!filesNameItems || leafIds.Contains(importTargetNode.Id))
                 {
-                    bound[file] = importTargetNode.Id;
+                    bound[file] = [importTargetNode.Id];
                 }
                 else
                 {
                     skipped.Add((
                         Path.GetFileName(file),
-                        candidateItems.FirstOrDefault(item => item.Id == leafId)?.Name,
-                        leafId is null ? SkipReason.NoSingleItem : SkipReason.OutOfScope));
+                        candidateItems.FirstOrDefault(item => leafIds.Contains(item.Id))?.Name,
+                        leafIds.All(id => id is null) ? SkipReason.NoSingleItem : SkipReason.OutOfScope));
                 }
             }
 
-            return (bound, skipped, skippedLeafIds);
+            return new(bound, skipped, skippedLeafIds);
         }
 
-        var subtree = (await contentHierarchyItemRepository.QueryAllAsync(
+        var subtree = (await contentHierarchyItemRepository
+            .QueryAllAsync(
                 new() { AncestorId = importTargetNode.Id },
                 cancellationToken: cancellationToken).ConfigureAwait(false))
             .Where(item => item.Id != importTargetNode.Id)
@@ -1502,20 +1538,27 @@ internal sealed class DownloadImportItemJob(
                 }
                 else
                 {
-                    bound[assignment.FileKey] = leaf.Id;
+                    if (!bound.TryGetValue(assignment.FileKey, out var matches))
+                    {
+                        matches = [];
+                        bound[assignment.FileKey] = matches;
+                    }
+
+                    matches.Add(leaf.Id);
                 }
             }
         }
 
         var targetFileTypes = definition.LevelDefinitions
-            .FirstOrDefault(level => level.Slug == importTargetNode.Level)?.AcceptedFileTypes ?? [];
+            .FirstOrDefault(l => l.Slug == importTargetNode.Level)?.AcceptedFileTypes ?? [];
+
         foreach (var file in unbound)
         {
             if (targetFileTypes.Count > 0 &&
                 await fileSystem.MatchesAnyFileTypeAsync(file, targetFileTypes, cancellationToken)
                     .ConfigureAwait(false))
             {
-                bound[file] = importTargetNode.Id;
+                bound[file] = [importTargetNode.Id];
             }
             else
             {
@@ -1523,7 +1566,7 @@ internal sealed class DownloadImportItemJob(
             }
         }
 
-        return (bound, skipped, skippedLeafIds);
+        return new(bound, skipped, skippedLeafIds);
     }
 
     private async Task<bool> ScopeNeedsContentAsync(
@@ -1571,12 +1614,28 @@ internal sealed class DownloadImportItemJob(
 
     private async Task<ContentItem?> FindContentItemAsync(
         ContentHierarchyItem leaf,
-        CancellationToken cancellationToken) =>
-        leaf.ContentItem ?? (await contentRepository.QueryAsync(
-            new ContentItemQuery { ContentHierarchyItemId = leaf.Id },
-            new() { PageNumber = 1, PageSize = 2 },
+        CancellationToken cancellationToken)
+    {
+        if (leaf.ContentItem is not null)
+        {
+            return leaf.ContentItem;
+        }
+
+        var result = await contentRepository.QueryAsync(
+            new()
+            {
+                ContentHierarchyItemId = leaf.Id
+            },
+            new()
+            {
+                PageNumber = 1,
+                PageSize = 2
+            },
             null,
-            cancellationToken).ConfigureAwait(false)).Items.SingleOrDefault();
+            cancellationToken).ConfigureAwait(false);
+
+        return result.Items.SingleOrDefault();
+    }
 
     private async Task<SkipReason?> ResolveSkipReasonAsync(
         Release release,
@@ -1627,8 +1686,8 @@ internal sealed class DownloadImportItemJob(
 
     private async Task<ImportOperation> BuildImportOperationAsync(
         Download download,
-        ContentHierarchyItem contentHierarchyItem,
-        ImportCollisionMode effectiveCollisionMode,
+        IReadOnlyList<ContentHierarchyItem> importTargets,
+        ImportCollisionMode? collisionMode,
         ImportMode transferMode,
         bool dryRun,
         Guid? userId,
@@ -1637,7 +1696,6 @@ internal sealed class DownloadImportItemJob(
         Activity? importActivity,
         Release release,
         IReadOnlyCollection<Guid> acquisitionScopeNodeIds,
-        UpgradeFileHandling upgradeFileHandling,
         CancellationToken cancellationToken)
     {
         var downloadId = download.Id;
@@ -1669,9 +1727,11 @@ internal sealed class DownloadImportItemJob(
             ? fileSystem.EnumerateFiles(importSourcePath).ToArray()
             : [importSourcePath];
 
-        var contentTypeSlug = contentHierarchyItem.ContentType;
-        var contentTypeDefinition = ResolveContentTypeDefinition(contentTypeSlug);
-        var acceptedLevels = GetLevelsAtOrUnder(contentTypeDefinition, contentHierarchyItem.Level);
+        var contentTypeSlug = importTargets[0].ContentType;
+        var acceptedLevels =
+            from target in importTargets
+            from level in GetLevelsAtOrUnder(ResolveContentTypeDefinition(target.ContentType), target.Level)
+            select level;
         var acceptedFileTypes = acceptedLevels.SelectMany(level => level.AcceptedFileTypes).ToArray();
         var acceptedSidecarTypes = acceptedLevels.SelectMany(level => level.AcceptedSidecarTypes).ToArray();
 
@@ -1797,14 +1857,67 @@ internal sealed class DownloadImportItemJob(
                 "The download has been failed with reason NoUsableContent.");
         }
 
-        var (bindings, skipped, skippedLeafIds) = await BindPrimaryFilesAsync(
-            release,
-            contentHierarchyItem,
-            contentTypeDefinition,
-            acquisitionScopeNodeIds,
-            importSourcePath,
-            primaryCandidates,
-            cancellationToken).ConfigureAwait(false);
+        var bindings = new Dictionary<string, List<Guid>>(PathComparer);
+        var skipped = new List<(string File, string? ItemName, SkipReason Reason)>();
+        var skippedLeafIds = new HashSet<Guid>();
+        foreach (var target in importTargets)
+        {
+            var definition = ResolveContentTypeDefinition(target.ContentType);
+            var fileTypes = (
+                from level in GetLevelsAtOrUnder(definition, target.Level)
+                from fileType in level.AcceptedFileTypes
+                select fileType).ToArray();
+            var candidates = new List<string>();
+            foreach (var file in primaryCandidates)
+            {
+                if (await fileSystem.MatchesAnyFileTypeAsync(file, fileTypes, cancellationToken).ConfigureAwait(false))
+                {
+                    candidates.Add(file);
+                }
+            }
+
+            var result = await BindPrimaryFilesAsync(
+                release,
+                target,
+                importTargets,
+                definition,
+                acquisitionScopeNodeIds,
+                importSourcePath,
+                candidates,
+                cancellationToken).ConfigureAwait(false);
+            foreach (var (file, items) in result.Bound)
+            {
+                if (!bindings.TryGetValue(file, out var matches))
+                {
+                    matches = [];
+                    bindings[file] = matches;
+                }
+
+                matches.AddRange(items);
+            }
+
+            skipped.AddRange(result.Skipped);
+            skippedLeafIds.UnionWith(result.SkippedLeafIds);
+        }
+
+        var matchedItems = new Dictionary<Guid, ContentHierarchyItem>();
+        foreach (var itemId in (
+            from ids in bindings.Values
+            from id in ids
+            select id).Distinct())
+        {
+            var lineage = await contentHierarchyItemRepository.GetLineageAsync(itemId, cancellationToken)
+                .ConfigureAwait(false);
+            matchedItems[itemId] = lineage[0];
+        }
+
+        foreach (var matches in bindings.Values)
+        {
+            matches.Sort((left, right) => matchedItems[left].CreatedAt.CompareTo(matchedItems[right].CreatedAt));
+        }
+
+        skipped.RemoveAll(file => bindings.Keys.Any(path => PathComparer.Equals(Path.GetFileName(path), file.File)));
+        skippedLeafIds.ExceptWith(matchedItems.Keys);
         var skippedFiles = skipped.Select(FormatSkippedFile).ToList();
         if (skippedFiles.Count > 0)
         {
@@ -1880,7 +1993,7 @@ internal sealed class DownloadImportItemJob(
             var isPrimary = primaryPaths.Contains(source);
             var primary = isPrimary ? source : FindPrimary(source, primaryCandidates)!;
             var mediaInfo = probedMediaInfo.GetValueOrDefault(primary);
-            var boundItemId = bindings[primary];
+            var boundItemId = bindings[primary][0];
             string destination;
             if (isPrimary)
             {
@@ -1905,7 +2018,8 @@ internal sealed class DownloadImportItemJob(
                 await ResolveFileKindAsync(source, cancellationToken).ConfigureAwait(false),
                 isPrimary,
                 boundItemId,
-                isPrimary ? mediaInfo : null));
+                isPrimary ? mediaInfo : null,
+                [.. bindings[primary].Distinct().Skip(1)]));
         }
 
         plannedOps = RemoveDuplicatePlannedOperations(plannedOps, downloadId);
@@ -1946,7 +2060,12 @@ internal sealed class DownloadImportItemJob(
                     continue;
                 }
 
-                if (upgradeFileHandling == UpgradeFileHandling.Replace &&
+                var ownerRoot = await rootFolderRepository.GetByIdAsync(
+                    matchedItems[op.ContentHierarchyItemId].EffectiveRootFolderId,
+                    cancellationToken).ConfigureAwait(false)
+                    ?? throw new ImportTargetMissingException("The import owner has no configured root folder.");
+                var effectiveCollisionMode = collisionMode ?? ownerRoot.DefaultImportCollisionMode;
+                if (ownerRoot.UpgradeFileHandling == UpgradeFileHandling.Replace &&
                     await IsSameItemUpgradeAsync(release, op, cancellationToken).ConfigureAwait(false))
                 {
                     replaceTargets.Add(op.Destination);
@@ -2694,6 +2813,12 @@ internal sealed class DownloadImportItemJob(
             try
             {
                 using var paths = fileSystem.AcquireImportPaths([superseded.FilePath]);
+                if ((await mediaFileRepository.GetByIdAsync(superseded.MediaFileId, cancellationToken)
+                    .ConfigureAwait(false)) is { Coverage.Count: > 0 })
+                {
+                    continue;
+                }
+
                 if (fileSystem.FileExists(superseded.FilePath))
                 {
                     if (fileSystem.GetFileVersion(superseded.FilePath) != superseded.Version)
@@ -2850,7 +2975,10 @@ internal sealed class DownloadImportItemJob(
         CancellationToken cancellationToken)
     {
         var groups = new List<ItemImportGroup>();
-        foreach (var files in transferred.GroupBy(entry => entry.Operation.ContentHierarchyItemId))
+        foreach (var files in
+            from entry in transferred
+            from id in (entry.Operation.CoveredHierarchyItemIds ?? []).Prepend(entry.Operation.ContentHierarchyItemId)
+            group entry by id)
         {
             var contentItem = files.Key == importTargetContentItem.ContentHierarchyItemId
                 ? importTargetContentItem
@@ -2872,7 +3000,6 @@ internal sealed class DownloadImportItemJob(
         IReadOnlyList<ItemImportGroup> groups,
         IReadOnlyCollection<Guid> reconciledDownloadScopeNodeIds,
         IReadOnlyDictionary<string, ReplaceSnapshot> replaceSnapshots,
-        RootFolder rootFolder,
         IReadOnlyList<string> skippedFiles,
         CapacityRecovery committed,
         Guid? userId,
@@ -2881,7 +3008,11 @@ internal sealed class DownloadImportItemJob(
         CancellationToken cancellationToken)
     {
         var downloadId = download.Id;
-        var totalFiles = groups.Sum(g => g.Files.Count);
+        var totalFiles = (
+            from itemGroup in groups
+            from file in itemGroup.Files
+            select file)
+            .DistinctBy(file => file.Operation.Destination, PathComparer).Count();
 
         var resolvedGroups = new List<ResolvedItemImport>(groups.Count);
         foreach (var group in groups)
@@ -2905,7 +3036,6 @@ internal sealed class DownloadImportItemJob(
                 resolvedGroups,
                 reconciledDownloadScopeNodeIds,
                 replaceSnapshots,
-                rootFolder,
                 skippedFiles,
                 committed,
                 userId,
@@ -2993,14 +3123,14 @@ internal sealed class DownloadImportItemJob(
         IReadOnlyList<ResolvedItemImport> groups,
         IReadOnlyCollection<Guid> reconciledDownloadScopeNodeIds,
         IReadOnlyDictionary<string, ReplaceSnapshot> replaceSnapshots,
-        RootFolder rootFolder,
         IReadOnlyList<string> skippedFiles,
         CapacityRecovery committed,
         Guid? userId,
         Guid? correlationId,
         CancellationToken cancellationToken)
     {
-        var allFiles = groups.SelectMany(g => g.Files).ToList();
+        var allFiles = groups.SelectMany(g => g.Files)
+            .DistinctBy(file => file.Operation.Destination, PathComparer).ToList();
         var importedPaths = allFiles.Select(file => file.Operation.Destination).ToHashSet(PathComparer);
         var probes = await ProbeFilesAsync(
             [.. allFiles.Select(file => file.Operation.Destination)],
@@ -3028,20 +3158,32 @@ internal sealed class DownloadImportItemJob(
                 foreach (var group in groups)
                 {
                     var contentItem = group.ContentItem;
-                    var supersedePriorFiles = group.Prior == FulfillmentStatus.Upgradable &&
-                        rootFolder.UpgradeFileHandling == UpgradeFileHandling.Replace &&
-                        group.Files.Any(file => file.Operation.IsMainContent);
+                    RootFolder? groupRoot = null;
                     var priorMediaFiles = new List<MediaFile>();
-                    if (supersedePriorFiles)
+                    if (group.Prior == FulfillmentStatus.Upgradable &&
+                        group.Files.Any(file => file.Operation.IsMainContent))
                     {
-                        priorMediaFiles.AddRange(await mediaFileRepository.QueryAllAsync(
-                            new() { ContentItemIds = [contentItem.Id] },
-                            cancellationToken: ct).ConfigureAwait(false));
+                        var lineage = await contentHierarchyItemRepository.GetLineageAsync(
+                            contentItem.ContentHierarchyItemId,
+                            ct).ConfigureAwait(false);
+                        groupRoot = await rootFolderRepository.GetByIdAsync(lineage[0].EffectiveRootFolderId, ct)
+                            .ConfigureAwait(false);
+                        if (groupRoot?.UpgradeFileHandling == UpgradeFileHandling.Replace)
+                        {
+                            priorMediaFiles.AddRange(await mediaFileRepository.QueryAllAsync(
+                                new() { ContentItemIds = [contentItem.Id] },
+                                cancellationToken: ct).ConfigureAwait(false));
+                        }
                     }
 
                     foreach (var entry in group.Files)
                     {
                         var op = entry.Operation;
+                        if (op.ContentHierarchyItemId != contentItem.ContentHierarchyItemId)
+                        {
+                            continue;
+                        }
+
                         var hadReplaceSnapshot = replaceSnapshots.TryGetValue(op.Destination, out var snapshot);
                         var probe = probes[op.Destination];
 
@@ -3057,6 +3199,16 @@ internal sealed class DownloadImportItemJob(
 
                         if (prior is not null)
                         {
+                            foreach (var coveredId in op.CoveredHierarchyItemIds ?? [])
+                            {
+                                var coveredItemId = groups.First(candidate =>
+                                    candidate.ContentItem.ContentHierarchyItemId == coveredId).ContentItem.Id;
+                                if (prior.Coverage.All(coverage => coverage.ContentItemId != coveredItemId))
+                                {
+                                    prior.Coverage.Add(new() { MediaFileId = prior.Id, ContentItemId = coveredItemId });
+                                }
+                            }
+
                             await mediaFileRepository
                                 .UpdateAsync(
                                     prior with
@@ -3087,24 +3239,29 @@ internal sealed class DownloadImportItemJob(
                             continue;
                         }
 
-                        await mediaFileRepository
-                            .CreateAsync(
-                                new MediaFile
-                                {
-                                    ContentItemId = contentItem.Id,
-                                    FileKind = probe.FileKind.ToString(),
-                                    MimeType = probe.MimeType,
-                                    FilePath = probe.FilePath,
-                                    FileSize = probe.FileSize,
-                                    FileModifiedAt = probe.LastWriteTimeUtc,
-                                    MediaInfo = op.MediaInfo,
-                                    DownloadId = download.Id,
-                                    CreatedAt = now,
-                                    CreatedByUserId = userId,
-                                },
-                                userId,
-                                ct)
-                            .ConfigureAwait(false);
+                        var mediaFile = new MediaFile
+                        {
+                            ContentItemId = contentItem.Id,
+                            FileKind = probe.FileKind.ToString(),
+                            MimeType = probe.MimeType,
+                            FilePath = probe.FilePath,
+                            FileSize = probe.FileSize,
+                            FileModifiedAt = probe.LastWriteTimeUtc,
+                            MediaInfo = op.MediaInfo,
+                            DownloadId = download.Id,
+                            CreatedAt = now,
+                            CreatedByUserId = userId,
+                        };
+                        foreach (var coveredId in op.CoveredHierarchyItemIds ?? [])
+                        {
+                            mediaFile.Coverage.Add(new()
+                            {
+                                ContentItemId = groups.First(candidate =>
+                                    candidate.ContentItem.ContentHierarchyItemId == coveredId).ContentItem.Id
+                            });
+                        }
+
+                        await mediaFileRepository.CreateAsync(mediaFile, userId, ct).ConfigureAwait(false);
 
                         if (hadReplaceSnapshot)
                         {
@@ -3119,11 +3276,15 @@ internal sealed class DownloadImportItemJob(
                         .Select(m => new SupersededFile(
                             m.Id,
                             contentItem.ContentHierarchyItemId,
-                            rootFolder.Path,
+                            groupRoot!.Path,
                             m.FilePath,
                             m.FileSize,
                             fileSystem.GetFileVersion(m.FilePath))));
+                }
 
+                foreach (var group in groups)
+                {
+                    var contentItem = group.ContentItem;
                     contentItem.QualityStatus = group.QualityStatus;
                     contentItem.ModifiedAt = now;
                     await contentRepository.UpdateAsync(contentItem, userId, ct).ConfigureAwait(false);

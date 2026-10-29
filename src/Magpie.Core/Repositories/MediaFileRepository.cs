@@ -152,8 +152,8 @@ internal sealed class MediaFileRepository(
         {
             return await transactionManager.ExecuteWithTransactionAsync(async ct =>
             {
-                var owners = await LockOwnersAsync([mediaFile.ContentItemId], ct).ConfigureAwait(false);
-                var items = await RequireSiblingsInOrdinalOrderAsync(mediaFile, ct).ConfigureAwait(false);
+                var items = await RequireCoveredItemsAsync(mediaFile, ct).ConfigureAwait(false);
+                var owners = await LockOwnersAsync(items, ct).ConfigureAwait(false);
                 mediaFile.ContentItemId = items[0];
                 mediaFile.Coverage.Clear();
                 foreach (var contentItemId in items.Skip(1))
@@ -205,7 +205,12 @@ internal sealed class MediaFileRepository(
                     return false;
                 }
 
-                var owners = await LockOwnersAsync([current.ContentItemId], ct).ConfigureAwait(false);
+                var coveredItems =
+                    from coverage in current.Coverage
+                    select coverage.ContentItemId;
+                var owners = await LockOwnersAsync(
+                    [current.ContentItemId, .. coveredItems],
+                    ct).ConfigureAwait(false);
                 var removed = await context.MediaFiles.Where(file => file.Id == mediaFileId &&
                     file.ContentItemId == current.ContentItemId).ExecuteDeleteAsync(ct).ConfigureAwait(false) > 0;
                 foreach (var owner in owners)
@@ -255,9 +260,11 @@ internal sealed class MediaFileRepository(
                     JsonSerializer.Serialize(mediaFile.MediaInfo),
                     StringComparison.Ordinal);
 
-                var owners = await LockOwnersAsync([current.ContentItemId, mediaFile.ContentItemId], ct)
-                    .ConfigureAwait(false);
-                var items = await RequireSiblingsInOrdinalOrderAsync(mediaFile, ct).ConfigureAwait(false);
+                var items = await RequireCoveredItemsAsync(mediaFile, ct).ConfigureAwait(false);
+                var previousItems = (
+                    from coverage in current.Coverage
+                    select coverage.ContentItemId).Prepend(current.ContentItemId).ToList();
+                var owners = await LockOwnersAsync([.. items.Union(previousItems)], ct).ConfigureAwait(false);
                 var pathKey = ToMediaFilePathKey(mediaFile.FilePath);
                 var updated = await context.MediaFiles
                     .Where(item => item.Id == mediaFile.Id && item.ContentItemId == current.ContentItemId)
@@ -290,9 +297,6 @@ internal sealed class MediaFileRepository(
 
                 if (updated > 0)
                 {
-                    var previousItems = current.Coverage.Select(coverage => coverage.ContentItemId)
-                        .Prepend(current.ContentItemId)
-                        .ToList();
                     var filesChanged = current.ContentItemId != items[0] ||
                         !previousItems.ToHashSet().SetEquals(items) ||
                         !string.Equals(current.FilePath, mediaFile.FilePath, StringComparison.Ordinal) ||
@@ -352,7 +356,7 @@ internal sealed class MediaFileRepository(
         }
     }
 
-    private async Task<IReadOnlyList<Guid>> RequireSiblingsInOrdinalOrderAsync(
+    private async Task<IReadOnlyList<Guid>> RequireCoveredItemsAsync(
         MediaFile mediaFile,
         CancellationToken cancellationToken)
     {
@@ -365,23 +369,18 @@ internal sealed class MediaFileRepository(
             return ids;
         }
 
-        var items = await context.ContentItems.AsNoTracking()
-            .Where(item => ids.Contains(item.Id))
-            .Join(
-                context.ContentHierarchyItems.AsNoTracking(),
-                item => item.ContentHierarchyItemId,
-                node => node.Id,
-                (item, node) => new { item.Id, node.ParentId, node.Ordinal })
-            .ToListAsync(cancellationToken)
+        var count = await (
+            from item in context.ContentItems.AsNoTracking()
+            where ids.Contains(item.Id)
+            select item)
+            .CountAsync(cancellationToken)
             .ConfigureAwait(false);
-        if (items.Count != ids.Count || items.Any(item => item.ParentId is null || item.ParentId != items[0].ParentId))
+        if (count != ids.Count)
         {
-            throw new InvalidOperationException("The items that the media file covers are not siblings.");
+            throw new InvalidOperationException("An item that the media file covers does not exist.");
         }
 
-        return [.. items.OrderBy(item => item.Ordinal ?? int.MaxValue)
-            .ThenBy(item => item.Id)
-            .Select(item => item.Id)];
+        return ids;
     }
 
     private async Task WriteCoverageAsync(

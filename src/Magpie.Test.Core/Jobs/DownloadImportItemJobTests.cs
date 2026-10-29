@@ -42,6 +42,7 @@ namespace Magpie.Test.Core.Jobs;
 public sealed class DownloadImportItemJobTests
 {
     private Mock<IDownloadRepository> _downloadRepository = null!;
+    private Mock<IRootFolderRepository> _roots = null!;
     private Mock<IAuditRecordRepository> _auditRecords = null!;
     private Mock<IMediaFileRepository> _mediaFiles = null!;
     private Mock<IFileSystem> _fileSystem = null!;
@@ -212,7 +213,7 @@ public sealed class DownloadImportItemJobTests
             {
                 Items = [new DownloadScope { DownloadId = _download.Id, ContentHierarchyItemId = _node.Id }]
             });
-        var roots = new Mock<IRootFolderRepository> { CallBase = true };
+        _roots = new Mock<IRootFolderRepository> { CallBase = true };
         _rootFolder = new RootFolder
         {
             Name = "Library",
@@ -220,7 +221,7 @@ public sealed class DownloadImportItemJobTests
             ContentType = "type-a",
             UpgradeFileHandling = UpgradeFileHandling.Replace
         };
-        roots.Setup(repository => repository.GetByIdAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+        _roots.Setup(repository => repository.GetByIdAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(_rootFolder);
         _content = new Mock<IContentService>();
         _content.Setup(service => service.GetOrCreateContentItemAsync(
@@ -275,7 +276,7 @@ public sealed class DownloadImportItemJobTests
         _subject = new DownloadImportItemJob(
             _auditRecords.Object,
             _downloadRepository.Object,
-            roots.Object,
+            _roots.Object,
             _nodes.Object,
             _mediaFiles.Object,
             releases.Object,
@@ -318,6 +319,115 @@ public sealed class DownloadImportItemJobTests
     public void TearDown()
     {
         _dbContext.Dispose();
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task ExecuteAsync_SharesOneImportedFile_WhenUnrelatedItemsMatchTheRelease(bool reverseScopes)
+    {
+        // Arrange
+        _node.CreatedAt = new DateTime(2020, 1, 1);
+        var other = _node with
+        {
+            Id = Guid.NewGuid(),
+            Slug = "other",
+            CreatedAt = new DateTime(2021, 1, 1),
+            EffectiveRootFolderId = Guid.NewGuid()
+        };
+        var otherContent = new ContentItem
+        {
+            Id = Guid.NewGuid(),
+            ContentHierarchyItemId = other.Id,
+            Fulfillment = FulfillmentStatus.Missing
+        };
+        _nodes.Setup(repository => repository.GetLineageAsync(other.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync([other]);
+        _roots.Setup(repository => repository.GetByIdAsync(other.EffectiveRootFolderId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((RootFolder?)null);
+        _content.Setup(service => service.GetOrCreateContentItemAsync(
+                other.Id, It.IsAny<DateTime>(), It.IsAny<Guid?>(), null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(otherContent);
+        DownloadScope[] scopes =
+        [
+            new() { DownloadId = _download.Id, ContentHierarchyItemId = _node.Id },
+            new() { DownloadId = _download.Id, ContentHierarchyItemId = other.Id }
+        ];
+        _scopes.Setup(repository => repository.QueryAsync(
+                It.IsAny<DownloadScopeQuery>(), It.IsAny<PagingParameter>(), null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<DownloadScope> { Items = reverseScopes ? [.. scopes.Reverse()] : scopes });
+        var matcher = new Mock<IReleaseMatchContentTypeDefinitionProvider>();
+        matcher.Setup(provider => provider.IsMatch(
+                It.IsAny<ContentTarget>(), It.IsAny<IReadOnlyList<IReadOnlyList<ContentFact>>>(),
+                It.IsAny<Release>(), It.IsAny<IReadOnlyList<ContentFact>>()))
+            .Returns(ReleaseMatchResult.Confident);
+        _registry.Setup(registry => registry.FindProviderFor("type-a")).Returns(matcher.Object);
+        var metadata = new Mock<IMaterializedMetadataRepository>();
+        metadata.Setup(repository => repository.QueryAsync(
+                It.IsAny<MetadataCriteria>(), It.IsAny<PagingParameter>(), It.IsAny<SortParameter?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<MaterializedMetadata>());
+        var evaluation = new ReleaseEvaluationService(
+            _nodes.Object,
+            metadata.Object,
+            Mock.Of<IReleaseRepository>(),
+            _downloadRepository.Object,
+            Mock.Of<IQualityTierListRepository>(),
+            _registry.Object,
+            [],
+            TimeProvider.System,
+            _fileSystem.Object,
+            NullLogger<ReleaseEvaluationService>.Instance);
+        _evaluation.Setup(service => service.AssignFilesToLeavesAsync(
+                _release, It.IsAny<ContentHierarchyItem>(), It.IsAny<IReadOnlyList<ContentHierarchyItem>>(),
+                It.IsAny<IReadOnlyList<ReleaseFileRef>>(), It.IsAny<CancellationToken>()))
+            .Returns<Release, ContentHierarchyItem, IReadOnlyList<ContentHierarchyItem>,
+                IReadOnlyList<ReleaseFileRef>, CancellationToken>(evaluation.AssignFilesToLeavesAsync);
+
+        // Act
+        await _subject.ExecuteAsync(_jobContext).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            _fileSystem.Verify(files => files.TransferToOwnedPathAsync(
+                "/downloads/new.mkv", It.IsAny<string>(), ImportMode.Move,
+                It.IsAny<Func<string, Task>>(), It.IsAny<CancellationToken>()), Times.Once);
+            _contentFiles.Verify(service => service.PreviewRenameAsync(
+                other.Id, It.IsAny<FileInfo>(), It.IsAny<MediaInfo?>(), It.IsAny<CancellationToken>()), Times.Never);
+            _mediaFiles.Verify(repository => repository.CreateAsync(
+                It.Is<MediaFile>(file => file.ContentItemId == _priorFile.ContentItemId &&
+                    file.Coverage.Count == 1 && file.Coverage.Single().ContentItemId == otherContent.Id),
+                null, It.IsAny<CancellationToken>()), Times.Once);
+            _mediaFiles.Verify(repository => repository.CreateAsync(
+                It.IsAny<MediaFile>(), null, It.IsAny<CancellationToken>()), Times.Once);
+            _downloadRepository.Verify(repository => repository.MarkImportedAsync(
+                _download.Id, _node.Id, 1, It.IsAny<DateTime>(), It.IsAny<DateTime>(), null,
+                It.IsAny<CancellationToken>()), Times.Once);
+            _scopes.Verify(repository => repository.DeleteAsync(
+                It.IsAny<Guid>(), It.IsAny<Guid?>(), It.IsAny<CancellationToken>()), Times.Never);
+            _content.Verify(service => service.MaterializeFulfillmentStatusAsync(
+                other.Id, null, false, It.IsAny<CancellationToken>()), Times.Once);
+        }
+    }
+
+    [Test]
+    public async Task ExecuteAsync_KeepsSharedFile_WhenItsOwnerImportsAnUpgrade()
+    {
+        // Arrange
+        _priorFile.Coverage.Add(new() { ContentItemId = Guid.NewGuid() });
+        _mediaFiles.Setup(repository => repository.GetByIdAsync(_priorFile.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(_priorFile);
+
+        // Act
+        await _subject.ExecuteAsync(_jobContext).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            _fileSystem.Verify(files => files.DeleteFile("/library/old.mkv"), Times.Never);
+            _mediaFiles.Verify(repository => repository.DeleteAsync(
+                _priorFile.Id, null, It.IsAny<CancellationToken>()), Times.Never);
+        }
     }
 
     [TestCase("library")]
