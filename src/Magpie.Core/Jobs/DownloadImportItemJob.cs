@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -2603,12 +2604,35 @@ internal sealed class DownloadImportItemJob(
                     fileSystem.GetFileIdentity(file.Source) == file.SourceIdentity && file.SourceVersion is not null &&
                     fileSystem.GetFileVersion(file.Source) == file.SourceVersion;
                 var destinationSize = ReadRecoverySize(file.Destination);
+                var destinationVersion = fileSystem.GetFileVersion(file.Destination);
                 var destinationOwned = destinationSize is not null && file.Identity is not null &&
-                    fileSystem.GetFileIdentity(file.Destination) == file.Identity && file
-                        .PublishedVersion is not null &&
-                    fileSystem.GetFileVersion(file.Destination) == file.PublishedVersion;
+                    fileSystem.GetFileIdentity(file.Destination) == file.Identity &&
+                    file.PublishedVersion is not null &&
+                    destinationVersion == file.PublishedVersion;
+
+                if (!destinationOwned &&
+                    sourceSafe &&
+                    destinationSize == file.Size &&
+                    file.Identity is not null &&
+                    fileSystem.GetFileIdentity(file.Destination) == file.Identity &&
+                    destinationVersion is not null)
+                {
+                    using var source = fileSystem.OpenRead(file.Source);
+                    using var destination = fileSystem.OpenRead(file.Destination);
+
+                    var sourceHash = await SHA256.HashDataAsync(source, cancellationToken).ConfigureAwait(false);
+                    var targetHash = await SHA256.HashDataAsync(destination, cancellationToken).ConfigureAwait(false);
+
+                    destinationOwned = sourceHash.AsSpan().SequenceEqual(targetHash) &&
+                        fileSystem.GetFileIdentity(file.Source) == file.SourceIdentity &&
+                        fileSystem.GetFileVersion(file.Source) == file.SourceVersion &&
+                        fileSystem.GetFileIdentity(file.Destination) == file.Identity &&
+                        fileSystem.GetFileVersion(file.Destination) == destinationVersion;
+                }
+
                 var privateSize = file.PrivatePath is null ? null : ReadRecoverySize(file.PrivatePath);
-                var privateOwned = privateSize is not null && file.Identity is not null &&
+                var privateOwned = privateSize is not null &&
+                    file.Identity is not null &&
                     fileSystem.GetFileIdentity(file.PrivatePath!) == file.Identity;
                 var ownedPath = privateOwned ? file.PrivatePath : destinationOwned ? file.Destination : null;
                 var ownedSize = privateOwned ? privateSize : destinationOwned ? destinationSize : null;
@@ -2637,7 +2661,6 @@ internal sealed class DownloadImportItemJob(
 
                 if (destinationSize is not null && (!destinationOwned || ownedPath != file.Destination))
                 {
-                    recovery.Files[i] = file with { PublishedVersion = null };
                     recovery.Reason = "File recovery is waiting because another file occupies the destination.";
                     await StoreCapacityRecoveryAsync(downloadId, recovery, userId, cancellationToken)
                         .ConfigureAwait(false);

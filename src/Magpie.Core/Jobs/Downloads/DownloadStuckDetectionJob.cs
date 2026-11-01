@@ -60,12 +60,12 @@ internal sealed class DownloadStuckDetectionJob(
                 "Minutes before a stalled download is considered stuck.",
                 DataType.Number,
                 false,
-                "90") { ValidateScheduleValue = ValidateMinutes }
+                "360") { ValidateScheduleValue = ValidateMinutes }
         ],
     };
 
     private const int DefaultFetchingMinutes = 20;
-    private const int DefaultStalledMinutes = 90;
+    private const int DefaultStalledMinutes = 360;
 
     private static string? ValidateMinutes(
         string? value,

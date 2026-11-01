@@ -568,6 +568,11 @@ internal sealed partial class FileSystem(
         try
         {
             var file = new FileInfo(path);
+            if (!file.Exists || file.Attributes.HasFlag(FileAttributes.ReparsePoint))
+            {
+                return null;
+            }
+
             return $"{file.Length:X}:{file.LastWriteTimeUtc.Ticks:X}";
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException)
