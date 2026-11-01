@@ -3,6 +3,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using System.Text;
 using System.Text.RegularExpressions;
 
 namespace Magpie.Extensions.Cardigann.Engine.Templating;
@@ -53,6 +54,45 @@ internal static class CardigannTemplateExtensions
         IReadOnlyDictionary<string, object?> variables,
         Func<string, string>? escapeValue = null)
     {
+        return template.RenderCardigannTemplate(
+            variables,
+            escapeValue is null ? null : (_, value) => escapeValue(value));
+    }
+
+    public static string RenderCardigannTemplate(
+        this string template,
+        IReadOnlyDictionary<string, object?> variables,
+        Func<string, string, string, string> escapeValue)
+    {
+        var substitutions = new Dictionary<string, (string Variable, string Value)>();
+        var tokenPrefix = Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture);
+        var rendered = template.RenderCardigannTemplate(
+            variables,
+            (variable, value) =>
+            {
+                var token = tokenPrefix + substitutions.Count.ToString(CultureInfo.InvariantCulture) + "_";
+                substitutions.Add(token, (variable, value));
+                return token;
+            });
+        var result = new StringBuilder();
+        var offset = 0;
+        foreach (Match match in Regex.Matches(rendered, tokenPrefix + @"\d+_", RegexOptions.None, RegexTimeout))
+        {
+            result.Append(rendered, offset, match.Index - offset);
+            var (variable, value) = substitutions[match.Value];
+            result.Append(escapeValue(variable, value, result.ToString()));
+            offset = match.Index + match.Length;
+        }
+
+        result.Append(rendered, offset, rendered.Length - offset);
+        return result.ToString();
+    }
+
+    public static string RenderCardigannTemplate(
+        this string template,
+        IReadOnlyDictionary<string, object?> variables,
+        Func<string, string, string>? escapeValue)
+    {
         if (string.IsNullOrEmpty(template) || !template.Contains("{{", StringComparison.Ordinal))
         {
             return template;
@@ -72,17 +112,18 @@ internal static class CardigannTemplateExtensions
         return template;
     }
 
-    private static string Escape(string value, Func<string, string>? escapeValue)
+    private static string Escape(string variable, string value, Func<string, string, string>? escapeValue)
     {
-        return escapeValue is null ? value : escapeValue(value);
+        return escapeValue is null ? value : escapeValue(variable, value);
     }
 
     private static string ApplyReReplace(
         string template,
         IDictionary<string, object?> vars,
-        Func<string, string>? escapeValue)
+        Func<string, string, string>? escapeValue)
     {
         Func<Match, string> evaluate = m => ReReplace(
+            m.Groups[1].Value,
             GetString(vars, m.Groups[1].Value),
             m.Groups[2].Value,
             m.Groups[3].Value,
@@ -93,15 +134,17 @@ internal static class CardigannTemplateExtensions
     }
 
     private static string ReReplace(
+        string variable,
         string input,
         string pattern,
         string replacement,
         string original,
-        Func<string, string>? escapeValue)
+        Func<string, string, string>? escapeValue)
     {
         try
         {
             return Escape(
+                variable,
                 Regex.Replace(input ?? string.Empty, pattern, replacement, RegexOptions.None, RegexTimeout),
                 escapeValue);
         }
@@ -118,11 +161,11 @@ internal static class CardigannTemplateExtensions
     private static string ApplyJoin(
         string template,
         IDictionary<string, object?> vars,
-        Func<string, string>? escapeValue)
+        Func<string, string, string>? escapeValue)
     {
         Func<Match, string> evaluate = m => string.Join(
             m.Groups[2].Value,
-            GetList(vars, m.Groups[1].Value).Select(value => Escape(value, escapeValue)));
+            GetList(vars, m.Groups[1].Value).Select(value => Escape(m.Groups[1].Value, value, escapeValue)));
 
         return ReplaceAll(ReplaceAll(template, JoinPipeRegex, evaluate), JoinRegex, evaluate);
     }
@@ -249,7 +292,7 @@ internal static class CardigannTemplateExtensions
     private static string ApplyRange(
         string template,
         IDictionary<string, object?> vars,
-        Func<string, string>? escapeValue)
+        Func<string, string, string>? escapeValue)
     {
         return ReplaceAll(
             template,
@@ -273,12 +316,12 @@ internal static class CardigannTemplateExtensions
                     {
                         var indexText = indexValue.ToString(CultureInfo.InvariantCulture);
                         expanded += prefix.Replace(indexReplace, indexText, StringComparison.Ordinal) +
-                            Escape(value, escapeValue) +
+                            Escape(variable, value, escapeValue) +
                             postfix.Replace(indexReplace, indexText, StringComparison.Ordinal);
                     }
                     else
                     {
-                        expanded += prefix + Escape(value, escapeValue) + postfix;
+                        expanded += prefix + Escape(variable, value, escapeValue) + postfix;
                     }
                 }
 
@@ -289,7 +332,7 @@ internal static class CardigannTemplateExtensions
     private static string ApplySimpleVariables(
         string template,
         IDictionary<string, object?> vars,
-        Func<string, string>? escapeValue)
+        Func<string, string, string>? escapeValue)
     {
         return ReplaceAll(
             template,
@@ -297,7 +340,7 @@ internal static class CardigannTemplateExtensions
             m =>
             {
                 var variable = m.Groups[1].Value;
-                return Escape(GetString(vars, variable), escapeValue);
+                return Escape(variable, GetString(vars, variable), escapeValue);
             });
     }
 

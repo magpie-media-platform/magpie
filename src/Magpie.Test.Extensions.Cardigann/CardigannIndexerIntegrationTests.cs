@@ -1124,63 +1124,686 @@ public sealed class CardigannIndexerIntegrationTests
         }
     }
 
-    [TestCase("get")]
-    [TestCase("post")]
-    public async Task SearchAsync_SkipsTarget_WhenDefinitionLeavesConfiguredAuthority(string method)
+    [TestCase("get", "https://{{ .Keywords }}/search", "attacker.test")]
+    [TestCase("post", "https://{{ .Query.Keywords }}/search", "attacker.test")]
+    [TestCase("get", "https://{{ .Keywords }}/search", "The Matrix")]
+    [TestCase("post", "https://{{ .Keywords }}/search", "The Matrix")]
+    [TestCase("get", "https://{{ re_replace .Keywords \"^\" \"\" }}/search", "attacker.test")]
+    [TestCase("get", "https://{{ join .Keywords \"\" }}/search", "attacker.test")]
+    [TestCase("get", "https://{{ range .Keywords }}{{.}}{{ end }}/search", "attacker.test")]
+    [TestCase(
+        "get",
+        "https://{{ if .Keywords }}{{ .Keywords }}{{ else }}tracker.test{{ end }}/search",
+        "attacker.test")]
+    [TestCase("get", "https://tracker.test:{{ .Keywords }}/search", "8443")]
+    [TestCase("post", "{{ .Keywords }}://tracker.test/search", "http")]
+    [TestCase("get", "https://[fe80::1%{{ .Keywords }}]/search", "12")]
+    [TestCase("post", "https://[fe80::1%{{ .Keywords }}]/search", "\0")]
+    [TestCase("get", "https://[fe80::1%{{ .Keywords }}]/search", "]")]
+    [TestCase("get", "https://[fe80::1%{{ .Keywords }}]/search", "]:")]
+    public void SearchAsync_ReportsFailure_WhenSearchTextChangesTheAuthority(
+        string method,
+        string path,
+        string query)
     {
         // Arrange
-        _definition.Search.Paths[0] = new SearchPath { Path = "//attacker.test/search", Method = method };
-        var integration = new CardigannIndexerIntegration(Guid.Empty, _definition, _parser.Object,
-            _sessions.Object, NullLogger<CardigannIndexerIntegration>.Instance);
+        _definition.Search.Paths[0] = new SearchPath { Path = path, Method = method };
+        var integration = new CardigannIndexerIntegration(
+            Guid.Empty,
+            _definition,
+            _parser.Object,
+            _sessions.Object,
+            NullLogger<CardigannIndexerIntegration>.Instance);
 
         // Act
-        var rows = await integration.SearchAsync(new ReleaseSearchRequest(),
-            new Dictionary<string, string>(), default).ConfigureAwait(false);
+        var action = async () => await integration.SearchAsync(
+            new ReleaseSearchRequest { Title = query },
+            new Dictionary<string, string>(),
+            default).ConfigureAwait(false);
 
         // Assert
-        Assert.That(rows, Is.Empty);
-        _sessions.Verify(session => session.SendAsync(It.IsAny<string>(), It.IsAny<Uri>(), It.IsAny<HttpMethod>(),
-            It.IsAny<Uri>(), It.IsAny<string?>(), It.IsAny<string>(), It.IsAny<bool>(),
-            It.IsAny<CancellationToken>()), Times.Never);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(action, Throws.TypeOf<InvalidOperationException>()
+                .With.Message.EqualTo("Cardigann definition priv has no usable search path."));
+            _sessions.Verify(
+                session => session.SendAsync(
+                    It.IsAny<string>(),
+                    It.IsAny<Uri>(),
+                    It.IsAny<HttpMethod>(),
+                    It.IsAny<Uri>(),
+                    It.IsAny<string?>(),
+                    It.IsAny<string>(),
+                    It.IsAny<bool>(),
+                    It.IsAny<CancellationToken>()),
+                Times.Never);
+        }
     }
 
-    [TestCase("get", "//api.tracker.test/search")]
-    [TestCase("post", "//api.tracker.test/search")]
-    [TestCase("get", "http://tracker.test/search")]
-    [TestCase("post", "https://tracker.test:8443/search")]
+    [TestCase("get", "https://{{ .Keywords }}/search")]
+    [TestCase("post", "https://{{ .Keywords }}/search")]
+    [TestCase("get", "ftp://tracker.test/search")]
+    [TestCase("post", "file:///search")]
     [TestCase("get", "https://user:password@tracker.test/search")]
-    public async Task SearchAsync_RetainsValidResults_WhenOnePathLeavesConfiguredAuthority(string method, string path)
+    [TestCase("get", "https://[invalid/search")]
+    [TestCase("post", "https://[invalid/search")]
+    [TestCase("get", "https://\uFFFD.test/search")]
+    [TestCase("post", "https://\u200D.test/search")]
+    public async Task SearchAsync_RetainsValidResults_WhenOnePathHasAnInvalidTarget(string method, string path)
     {
         // Arrange
         _definition.Search.Paths.Add(new SearchPath { Path = path, Method = method });
         _definition.Search.Paths.Add(new SearchPath { Path = "/third" });
-        _parser.SetupSequence(parser => parser.Parse(It.IsAny<string>(), _definition, It.IsAny<Uri>(),
+        _parser
+            .SetupSequence(parser => parser.Parse(
+                It.IsAny<string>(),
+                _definition,
+                It.IsAny<Uri>(),
                 It.IsAny<IReadOnlyDictionary<string, object?>>()))
             .Returns([new Release { Protocol = "torrent", Title = "First" }])
             .Returns([new Release { Protocol = "torrent", Title = "Third" }]);
-        var integration = new CardigannIndexerIntegration(Guid.Empty, _definition, _parser.Object,
-            _sessions.Object, NullLogger<CardigannIndexerIntegration>.Instance);
+        var integration = new CardigannIndexerIntegration(
+            Guid.Empty,
+            _definition,
+            _parser.Object,
+            _sessions.Object,
+            NullLogger<CardigannIndexerIntegration>.Instance);
         using var activity = new Activity("magpie.release-query.request").Start();
 
         // Act
-        var rows = await integration.SearchAsync(new ReleaseSearchRequest { MaximumResults = 5 },
-            new Dictionary<string, string>(), default).ConfigureAwait(false);
+        var rows = await integration.SearchAsync(
+            new ReleaseSearchRequest { Title = "The Matrix", MaximumResults = 5 },
+            new Dictionary<string, string>(),
+            default).ConfigureAwait(false);
 
         // Assert
         using (Assert.EnterMultipleScope())
         {
             Assert.That(rows.Select(row => row.Title), Is.EqualTo(["First", "Third"]));
             Assert.That(activity.GetTagItem("magpie.request.target"), Is.EqualTo("/search /third"));
+            _sessions.Verify(
+                session => session.SendAsync(
+                    It.IsAny<string>(),
+                    It.IsAny<Uri>(),
+                    It.IsAny<HttpMethod>(),
+                    It.Is<Uri>(uri => uri.AbsoluteUri != "https://tracker.test/search" &&
+                        uri.AbsoluteUri != "https://tracker.test/third"),
+                    It.IsAny<string?>(),
+                    It.IsAny<string>(),
+                    It.IsAny<bool>(),
+                    It.IsAny<CancellationToken>()),
+                Times.Never);
+            _sessions.Verify(
+                session => session.SendAsync(
+                    It.IsAny<string>(),
+                    It.IsAny<Uri>(),
+                    It.IsAny<HttpMethod>(),
+                    It.IsAny<Uri>(),
+                    It.IsAny<string?>(),
+                    It.IsAny<string>(),
+                    It.IsAny<bool>(),
+                    It.IsAny<CancellationToken>()),
+                Times.Exactly(2));
         }
+    }
 
-        _sessions.Verify(session => session.SendAsync(It.IsAny<string>(), It.IsAny<Uri>(), It.IsAny<HttpMethod>(),
-            It.Is<Uri>(uri => uri.AbsoluteUri != "https://tracker.test/search" &&
-                uri.AbsoluteUri != "https://tracker.test/third"),
-            It.IsAny<string?>(), It.IsAny<string>(), It.IsAny<bool>(),
-            It.IsAny<CancellationToken>()), Times.Never);
-        _sessions.Verify(session => session.SendAsync(It.IsAny<string>(), It.IsAny<Uri>(), It.IsAny<HttpMethod>(),
-            It.IsAny<Uri>(), It.IsAny<string?>(), It.IsAny<string>(), It.IsAny<bool>(),
-            It.IsAny<CancellationToken>()), Times.Exactly(2));
+    [TestCase("https://api.tracker.test/search", "https://api.tracker.test/search")]
+    [TestCase("//api.tracker.test/search", "https://api.tracker.test/search")]
+    [TestCase("http://tracker.test/search", "http://tracker.test/search")]
+    [TestCase("https://tracker.test:8443/search", "https://tracker.test:8443/search")]
+    public async Task SearchAsync_UsesDeclaredAuthority_WhenDefinitionTargetsAnotherServer(
+        string path,
+        string expectedUri)
+    {
+        // Arrange
+        _definition.Search.Paths[0].Path = path;
+        var integration = new CardigannIndexerIntegration(
+            Guid.Empty,
+            _definition,
+            _parser.Object,
+            _sessions.Object,
+            NullLogger<CardigannIndexerIntegration>.Instance);
+
+        // Act
+        var rows = await integration.SearchAsync(
+            new ReleaseSearchRequest(),
+            new Dictionary<string, string>(),
+            default).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(rows, Is.Empty);
+            _sessions.Verify(
+                session => session.SendAsync(
+                    It.IsAny<string>(),
+                    It.Is<Uri>(uri => uri.AbsoluteUri == "https://tracker.test/"),
+                    HttpMethod.Get,
+                    It.Is<Uri>(uri => uri.AbsoluteUri == expectedUri),
+                    null,
+                    It.IsAny<string>(),
+                    It.IsAny<bool>(),
+                    It.IsAny<CancellationToken>()),
+                Times.Once);
+        }
+    }
+
+    [TestCase(
+        "get",
+        "https://{{ .Config.apiurl }}",
+        "",
+        "GET",
+        "https://api.tracker.test/q.php?q=some%20title%26admin%3D1")]
+    [TestCase(
+        "get",
+        "https://{{ .Config.apiurl }}",
+        "alternate.test:8443",
+        "GET",
+        "https://alternate.test:8443/q.php?q=some%20title%26admin%3D1")]
+    [TestCase(
+        "post",
+        "https://{{ .Config.apiurl }}",
+        "",
+        "POST",
+        "https://api.tracker.test/q.php?q=some%20title%26admin%3D1")]
+    [TestCase(
+        "get",
+        "{{ .Config.apiurl }}",
+        "https://api.tracker.test:8443/api/v1",
+        "GET",
+        "https://api.tracker.test:8443/api/v1/q.php?q=some%20title%26admin%3D1")]
+    [TestCase(
+        "post",
+        "{{ .Config.apiurl }}",
+        "https://api.tracker.test/api/v1",
+        "POST",
+        "https://api.tracker.test/api/v1/q.php?q=some%20title%26admin%3D1")]
+    [TestCase(
+        "get",
+        "{{ .Config.apiurl }}",
+        "/api/v1",
+        "GET",
+        "https://tracker.test/api/v1/q.php?q=some%20title%26admin%3D1")]
+    [TestCase(
+        "get",
+        "{{ if .Keywords }}https://{{ .Config.apiurl }}{{ else }}/top{{ end }}",
+        "alternate.test:8443",
+        "GET",
+        "https://alternate.test:8443/q.php?q=some%20title%26admin%3D1")]
+    public async Task SearchAsync_UsesConfiguredApiHost_WhenSearchPathHasConfigAndQueryVariables(
+        string method,
+        string pathPrefix,
+        string configuredHost,
+        string expectedMethod,
+        string expectedUri)
+    {
+        // Arrange
+        _definition.Settings.Add(new CardigannSettingDefinition
+        {
+            Name = "apiurl",
+            Type = "text",
+            Default = "api.tracker.test",
+        });
+        _definition.Search.Paths[0] = new SearchPath
+        {
+            Path = pathPrefix + "/{{ if .Keywords }}q.php?q={{ .Keywords }}" +
+                "{{ else }}top.json{{ end }}",
+            Method = method,
+        };
+        _parser
+            .Setup(parser => parser.Parse(
+                It.IsAny<string>(),
+                _definition,
+                It.IsAny<Uri>(),
+                It.IsAny<IReadOnlyDictionary<string, object?>>()))
+            .Returns([new Release { Protocol = "torrent", Title = "Match" }]);
+        var integration = new CardigannIndexerIntegration(
+            Guid.Empty,
+            _definition,
+            _parser.Object,
+            _sessions.Object,
+            NullLogger<CardigannIndexerIntegration>.Instance);
+
+        // Act
+        var rows = await integration.SearchAsync(
+            new ReleaseSearchRequest { Title = "some title&admin=1" },
+            new Dictionary<string, string> { ["apiurl"] = configuredHost },
+            default).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(rows.Select(row => row.Title), Is.EqualTo(["Match"]));
+            _sessions.Verify(
+                session => session.SendAsync(
+                    It.IsAny<string>(),
+                    It.Is<Uri>(uri => uri.AbsoluteUri == "https://tracker.test/"),
+                    It.Is<HttpMethod>(value => value.Method == expectedMethod),
+                    It.Is<Uri>(uri => uri.AbsoluteUri == expectedUri),
+                    It.IsAny<string?>(),
+                    It.IsAny<string>(),
+                    It.IsAny<bool>(),
+                    It.IsAny<CancellationToken>()),
+                Times.Once);
+        }
+    }
+
+    [TestCase("https://", "https://[::1]:8443/%3A%3A1?host=%3A%3A1")]
+    [TestCase("http://", "http://[::1]:8443/%3A%3A1?host=%3A%3A1")]
+    [TestCase("//", "https://[::1]:8443/%3A%3A1?host=%3A%3A1")]
+    public async Task SearchAsync_UsesConfiguredIpv6Authority_WhenHostAndPortAreSeparateValues(
+        string prefix,
+        string expectedUri)
+    {
+        // Arrange
+        _definition.Settings.Add(new CardigannSettingDefinition { Name = "host", Type = "text" });
+        _definition.Settings.Add(new CardigannSettingDefinition { Name = "port", Type = "text" });
+        _definition.Search.Paths[0].Path = prefix +
+            "[{{ .Config.host }}]:{{ .Config.port }}/{{ .Config.host }}?host={{ .Config.host }}";
+        var integration = new CardigannIndexerIntegration(
+            Guid.Empty,
+            _definition,
+            _parser.Object,
+            _sessions.Object,
+            NullLogger<CardigannIndexerIntegration>.Instance);
+
+        // Act
+        await integration.SearchAsync(
+            new ReleaseSearchRequest(),
+            new Dictionary<string, string> { ["host"] = "::1", ["port"] = "8443" },
+            default).ConfigureAwait(false);
+
+        // Assert
+        _sessions.Verify(
+            session => session.SendAsync(
+                It.IsAny<string>(),
+                It.Is<Uri>(uri => uri.AbsoluteUri == "https://tracker.test/"),
+                HttpMethod.Get,
+                It.Is<Uri>(uri => uri.AbsoluteUri == expectedUri),
+                It.IsAny<string?>(),
+                It.IsAny<string>(),
+                It.IsAny<bool>(),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [TestCase("https://[fe80::1%12]/search")]
+    [TestCase("https://[fe80::1%{{ .Config.scope }}]/search")]
+    public async Task SearchAsync_UsesDeclaredIpv6Scope_WhenDefinitionOrConfigSetsScope(string path)
+    {
+        // Arrange
+        _definition.Settings.Add(new CardigannSettingDefinition { Name = "scope", Type = "text" });
+        _definition.Search.Paths[0].Path = path;
+        var integration = new CardigannIndexerIntegration(
+            Guid.Empty,
+            _definition,
+            _parser.Object,
+            _sessions.Object,
+            NullLogger<CardigannIndexerIntegration>.Instance);
+
+        // Act
+        await integration.SearchAsync(
+            new ReleaseSearchRequest(),
+            new Dictionary<string, string> { ["scope"] = "12" },
+            default).ConfigureAwait(false);
+
+        // Assert
+        _sessions.Verify(
+            session => session.SendAsync(
+                It.IsAny<string>(),
+                It.Is<Uri>(uri => uri.AbsoluteUri == "https://tracker.test/"),
+                HttpMethod.Get,
+                It.Is<Uri>(uri => uri.IdnHost == "fe80::1%12" && uri.AbsolutePath == "/search"),
+                It.IsAny<string?>(),
+                It.IsAny<string>(),
+                It.IsAny<bool>(),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [TestCase(
+        "get",
+        "https://tracker.test/path\\{{ .Config.username }}",
+        "username",
+        "user/name+part#suffix?key=value",
+        "GET",
+        "https://tracker.test/path/user%2Fname%2Bpart%23suffix%3Fkey%3Dvalue")]
+    [TestCase(
+        "get",
+        "https://tracker.test?apikey={{ .Config.apikey }}",
+        "apikey",
+        "token+part#suffix",
+        "GET",
+        "https://tracker.test/?apikey=token%2Bpart%23suffix")]
+    [TestCase(
+        "get",
+        "https://tracker.test#{{ .Config.apikey }}",
+        "apikey",
+        "token+part#suffix",
+        "GET",
+        "https://tracker.test/#token%2Bpart%23suffix")]
+    [TestCase(
+        "get",
+        "/search?apikey={{ .Config.apikey }}",
+        "apikey",
+        "token+part#suffix&other=value",
+        "GET",
+        "https://tracker.test/search?apikey=token%2Bpart%23suffix%26other%3Dvalue")]
+    [TestCase(
+        "post",
+        "/search?apikey={{ .Config.apikey }}",
+        "apikey",
+        "token+part#suffix",
+        "POST",
+        "https://tracker.test/search?apikey=token%2Bpart%23suffix")]
+    [TestCase(
+        "get",
+        "/path/{{ .Config.username }}",
+        "username",
+        "user/name+part#suffix?key=value",
+        "GET",
+        "https://tracker.test/path/user%2Fname%2Bpart%23suffix%3Fkey%3Dvalue")]
+    [TestCase(
+        "post",
+        "/{{ .Config.username }}/search",
+        "username",
+        "/another.test",
+        "POST",
+        "https://tracker.test/%2Fanother.test/search")]
+    [TestCase(
+        "get",
+        "{{ .Config.apiurl }}/search",
+        "apiurl",
+        "//another.test",
+        "GET",
+        "https://tracker.test/%2F%2Fanother.test/search")]
+    [TestCase(
+        "get",
+        "{{ .Config.apiurl }}/search",
+        "apiurl",
+        "/\\another.test",
+        "GET",
+        "https://tracker.test/%2F%5Canother.test/search")]
+    [TestCase(
+        "get",
+        "https://{{ .Config.apiurl }}/search?host={{ .Config.apiurl }}",
+        "apiurl",
+        "api.tracker.test:8443",
+        "GET",
+        "https://api.tracker.test:8443/search?host=api.tracker.test%3A8443")]
+    [TestCase(
+        "get",
+        "{{ .Config.apiurl }}/search?host={{ .Config.apiurl }}",
+        "apiurl",
+        "https://api.tracker.test/api/v1",
+        "GET",
+        "https://api.tracker.test/api/v1/search?host=https%3A%2F%2Fapi.tracker.test%2Fapi%2Fv1")]
+    [TestCase(
+        "get",
+        "https://tracker.test:{{ .Config.port }}/search?port={{ .Config.port }}",
+        "port",
+        "8443",
+        "GET",
+        "https://tracker.test:8443/search?port=8443")]
+    [TestCase(
+        "get",
+        "/search?apikey={{ re_replace .Config.apikey \"^\" \"\" }}",
+        "apikey",
+        "token+part#suffix",
+        "GET",
+        "https://tracker.test/search?apikey=token%2Bpart%23suffix")]
+    [TestCase(
+        "get",
+        "/search?apikey={{ join .Config.apikey \"\" }}",
+        "apikey",
+        "token+part#suffix",
+        "GET",
+        "https://tracker.test/search?apikey=token%2Bpart%23suffix")]
+    [TestCase(
+        "get",
+        "/search?apikey={{ range .Config.apikey }}{{.}}{{ end }}",
+        "apikey",
+        "token+part#suffix",
+        "GET",
+        "https://tracker.test/search?apikey=token%2Bpart%23suffix")]
+    public async Task SearchAsync_EscapesConfigValues_WhenUsedInPathOrQueryData(
+        string method,
+        string path,
+        string setting,
+        string value,
+        string expectedMethod,
+        string expectedUri)
+    {
+        // Arrange
+        _definition.Settings.Add(new CardigannSettingDefinition { Name = setting, Type = "text" });
+        _definition.Search.Paths[0] = new SearchPath { Path = path, Method = method };
+        var integration = new CardigannIndexerIntegration(
+            Guid.Empty,
+            _definition,
+            _parser.Object,
+            _sessions.Object,
+            NullLogger<CardigannIndexerIntegration>.Instance);
+
+        // Act
+        await integration.SearchAsync(
+            new ReleaseSearchRequest(),
+            new Dictionary<string, string> { [setting] = value },
+            default).ConfigureAwait(false);
+
+        // Assert
+        _sessions.Verify(
+            session => session.SendAsync(
+                It.IsAny<string>(),
+                It.Is<Uri>(uri => uri.AbsoluteUri == "https://tracker.test/"),
+                It.Is<HttpMethod>(requestMethod => requestMethod.Method == expectedMethod),
+                It.Is<Uri>(uri => uri.AbsoluteUri == expectedUri),
+                It.IsAny<string?>(),
+                It.IsAny<string>(),
+                It.IsAny<bool>(),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [TestCase("api.tracker.test/extra#frag")]
+    [TestCase("user@api.tracker.test")]
+    public void SearchAsync_ReportsFailure_WhenConfiguredAuthorityContainsBreakoutDelimiters(string apiurl)
+    {
+        // Arrange
+        _definition.Settings.Add(new CardigannSettingDefinition { Name = "apiurl", Type = "text" });
+        _definition.Search.Paths[0] = new SearchPath { Path = "https://{{ .Config.apiurl }}/search" };
+        var integration = new CardigannIndexerIntegration(
+            Guid.Empty,
+            _definition,
+            _parser.Object,
+            _sessions.Object,
+            NullLogger<CardigannIndexerIntegration>.Instance);
+
+        // Act
+        var action = async () => await integration.SearchAsync(
+            new ReleaseSearchRequest(),
+            new Dictionary<string, string> { ["apiurl"] = apiurl },
+            default).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(action, Throws.TypeOf<InvalidOperationException>()
+                .With.Message.EqualTo("Cardigann definition priv has no usable search path."));
+            _sessions.Verify(
+                session => session.SendAsync(
+                    It.IsAny<string>(),
+                    It.IsAny<Uri>(),
+                    It.IsAny<HttpMethod>(),
+                    It.IsAny<Uri>(),
+                    It.IsAny<string?>(),
+                    It.IsAny<string>(),
+                    It.IsAny<bool>(),
+                    It.IsAny<CancellationToken>()),
+                Times.Never);
+        }
+    }
+
+    [TestCase("/search#{{ .Config.section }}", "https://tracker.test/search?q=matrix#torrents")]
+    [TestCase("/search?cat=1#{{ .Config.section }}", "https://tracker.test/search?cat=1&q=matrix#torrents")]
+    public async Task SearchAsync_InsertsQueryParametersBeforeFragment_WhenSearchPathContainsFragment(
+        string path,
+        string expectedUri)
+    {
+        // Arrange
+        _definition.Settings.Add(new CardigannSettingDefinition { Name = "section", Type = "text" });
+        _definition.Search.Paths[0] = new SearchPath { Path = path };
+        _definition.Search.Inputs["q"] = "{{ .Keywords }}";
+        var integration = new CardigannIndexerIntegration(
+            Guid.Empty,
+            _definition,
+            _parser.Object,
+            _sessions.Object,
+            NullLogger<CardigannIndexerIntegration>.Instance);
+
+        // Act
+        await integration.SearchAsync(
+            new ReleaseSearchRequest { Title = "matrix" },
+            new Dictionary<string, string> { ["section"] = "torrents" },
+            default).ConfigureAwait(false);
+
+        // Assert
+        _sessions.Verify(
+            session => session.SendAsync(
+                It.IsAny<string>(),
+                It.Is<Uri>(uri => uri.AbsoluteUri == "https://tracker.test/"),
+                HttpMethod.Get,
+                It.Is<Uri>(uri => uri.AbsoluteUri == expectedUri),
+                null,
+                It.IsAny<string>(),
+                It.IsAny<bool>(),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Test]
+    public void SearchAsync_PreservesBaseLoginSession_WhenAlternateAuthorityReturnsUnauthorized()
+    {
+        // Arrange
+        _definition.Login = new LoginBlock { Method = "cookie" };
+        _definition.Search.Paths[0] = new SearchPath { Path = "https://api.tracker.test/search" };
+        _sessions
+            .Setup(session => session.IsLoggedOut(
+                _definition.Login,
+                HttpStatusCode.Unauthorized,
+                It.IsAny<string>()))
+            .Returns(true);
+        _sessions
+            .Setup(session => session.SendAsync(
+                It.IsAny<string>(),
+                It.IsAny<Uri>(),
+                HttpMethod.Get,
+                It.Is<Uri>(uri => uri.AbsoluteUri == "https://api.tracker.test/search"),
+                null,
+                It.IsAny<string>(),
+                It.IsAny<bool>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() => new HttpResponseMessage(HttpStatusCode.Unauthorized)
+            {
+                Content = new StringContent("unauthorized"),
+            });
+        var integration = new CardigannIndexerIntegration(
+            Guid.Empty,
+            _definition,
+            _parser.Object,
+            _sessions.Object,
+            NullLogger<CardigannIndexerIntegration>.Instance);
+
+        // Act
+        var action = async () => await integration.SearchAsync(
+            new ReleaseSearchRequest(),
+            new Dictionary<string, string>(),
+            default).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(action, Throws.TypeOf<HttpRequestException>());
+            _sessions.Verify(
+                session => session.InvalidateSession(It.IsAny<string>(), It.IsAny<int>()),
+                Times.Never);
+            _sessions.Verify(
+                session => session.SendAsync(
+                    It.IsAny<string>(),
+                    It.IsAny<Uri>(),
+                    HttpMethod.Get,
+                    It.Is<Uri>(uri => uri.AbsoluteUri == "https://api.tracker.test/search"),
+                    null,
+                    It.IsAny<string>(),
+                    It.IsAny<bool>(),
+                    It.IsAny<CancellationToken>()),
+                Times.Once);
+        }
+    }
+
+    [TestCase(
+        "get",
+        "{{ if .Keywords }}/search{{ else }}https://api.tracker.test/top{{ end }}",
+        "The Matrix",
+        "GET",
+        "https://tracker.test/search")]
+    [TestCase(
+        "get",
+        "{{ if .Keywords }}/search{{ else }}https://api.tracker.test/top{{ end }}",
+        null,
+        "GET",
+        "https://api.tracker.test/top")]
+    [TestCase(
+        "post",
+        "{{ if .Query.Keywords }}https://api.tracker.test/search{{ else }}/top{{ end }}",
+        "The Matrix",
+        "POST",
+        "https://api.tracker.test/search")]
+    [TestCase(
+        "post",
+        "{{ if .Query.Keywords }}https://api.tracker.test/search{{ else }}/top{{ end }}",
+        null,
+        "POST",
+        "https://tracker.test/top")]
+    [TestCase(
+        "get",
+        "{{ if eq .Keywords \"The Matrix\" }}https://api.tracker.test/search{{ else }}/top{{ end }}",
+        "The Matrix",
+        "GET",
+        "https://api.tracker.test/search")]
+    public async Task SearchAsync_UsesSelectedAuthority_WhenQuerySelectsADeclaredBranch(
+        string method,
+        string path,
+        string? query,
+        string expectedMethod,
+        string expectedUri)
+    {
+        // Arrange
+        _definition.Search.Paths[0] = new SearchPath { Path = path, Method = method };
+        var integration = new CardigannIndexerIntegration(
+            Guid.Empty,
+            _definition,
+            _parser.Object,
+            _sessions.Object,
+            NullLogger<CardigannIndexerIntegration>.Instance);
+
+        // Act
+        await integration.SearchAsync(
+            new ReleaseSearchRequest { Title = query },
+            new Dictionary<string, string>(),
+            default).ConfigureAwait(false);
+
+        // Assert
+        _sessions.Verify(
+            session => session.SendAsync(
+                It.IsAny<string>(),
+                It.Is<Uri>(uri => uri.AbsoluteUri == "https://tracker.test/"),
+                It.Is<HttpMethod>(value => value.Method == expectedMethod),
+                It.Is<Uri>(uri => uri.AbsoluteUri == expectedUri),
+                It.IsAny<string?>(),
+                It.IsAny<string>(),
+                It.IsAny<bool>(),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
     }
 
     [Test]

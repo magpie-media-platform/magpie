@@ -140,6 +140,62 @@ internal sealed class CardigannIndexerIntegration(
         }
     }
 
+    private static string RenderSearchPath(
+        string template,
+        IReadOnlyDictionary<string, object?> variables,
+        bool includeQueryValues = true)
+    {
+        return template.RenderCardigannTemplate(
+            variables,
+            (variable, value, prefix) =>
+            {
+                if (!variable.StartsWith(".Config.", StringComparison.Ordinal))
+                {
+                    return includeQueryValues ? Uri.EscapeDataString(value) : "]:";
+                }
+
+                if (prefix.Length == 0 &&
+                    ((value.StartsWith("/", StringComparison.Ordinal) &&
+                        (value.Length == 1 || value[1] is not ('/' or '\\'))) ||
+                        Uri.TryCreate(value, UriKind.Absolute, out var basePrefix) &&
+                        basePrefix.Scheme is "http" or "https"))
+                {
+                    return value;
+                }
+
+                var authorityStart = prefix.StartsWith("https://", StringComparison.OrdinalIgnoreCase) ? 8
+                    : prefix.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ? 7
+                    : prefix.StartsWith("//", StringComparison.Ordinal) ? 2
+                    : -1;
+                if (authorityStart >= 0 &&
+                    prefix.AsSpan(authorityStart).IndexOfAny("/\\?#") < 0 &&
+                    value.AsSpan().IndexOfAny("/\\?#@") < 0)
+                {
+                    return value;
+                }
+
+                return Uri.EscapeDataString(value);
+            });
+    }
+
+    private static bool HasSameAuthority(Uri configuredUri, Uri requestUri)
+    {
+        try
+        {
+            return string.Equals(configuredUri.IdnHost, requestUri.IdnHost, StringComparison.Ordinal) &&
+                Uri.Compare(
+                    configuredUri,
+                    requestUri,
+                    UriComponents.SchemeAndServer,
+                    UriFormat.Unescaped,
+                    StringComparison.OrdinalIgnoreCase) == 0;
+        }
+        catch (UriFormatException)
+        {
+            return false;
+        }
+    }
+
     private static Uri EnsureTrailingSlash(Uri uri)
     {
         if (uri.AbsoluteUri.EndsWith("/", StringComparison.Ordinal))
@@ -184,6 +240,7 @@ internal sealed class CardigannIndexerIntegration(
         var variables = BuildVariables(request, settings);
 
         var results = new List<Release>();
+        var searchedPaths = 0;
         var tracedActivity = Activity.Current?.OperationName == "magpie.release-query.request"
             ? Activity.Current
             : null;
@@ -203,14 +260,17 @@ internal sealed class CardigannIndexerIntegration(
             var requestUri = method == HttpMethod.Post
                 ? BuildRequestUri(baseUri, path, variables, includeParameters: false)
                 : BuildRequestUri(baseUri, path, variables);
-            if (Uri.Compare(baseUri, requestUri, UriComponents.SchemeAndServer, UriFormat.Unescaped,
-                    StringComparison.OrdinalIgnoreCase) != 0 || requestUri.UserInfo.Length > 0)
+
+            var configuredPath = RenderSearchPath(path.Path, variables, includeQueryValues: false);
+            if (requestUri is null || requestUri.Scheme is not ("http" or "https") || requestUri.UserInfo.Length > 0 ||
+                !Uri.TryCreate(baseUri, configuredPath, out var configuredUri) ||
+                !HasSameAuthority(configuredUri, requestUri))
             {
                 logger.LogWarning(
                     "Cardigann {Tracker} skipped search path {PathIndex} with disallowed target authority {Target}",
                     definition.Id,
                     pathIndex,
-                    requestUri.GetComponents(UriComponents.SchemeAndServer, UriFormat.UriEscaped));
+                    requestUri?.GetComponents(UriComponents.SchemeAndServer, UriFormat.UriEscaped));
                 continue;
             }
 
@@ -227,6 +287,7 @@ internal sealed class CardigannIndexerIntegration(
 
             var body = await FetchBodyAsync(method, requestUri, requestBody, settings, baseUri, cancellationToken)
                 .ConfigureAwait(false);
+            searchedPaths++;
 
             var isJson = string.Equals(path.Response?.Type, "json", StringComparison.OrdinalIgnoreCase);
             var releases = isJson
@@ -245,6 +306,11 @@ internal sealed class CardigannIndexerIntegration(
                     .ConfigureAwait(false);
 
             results.AddRange(resolved);
+        }
+
+        if (searchedPaths == 0 && request.MaximumResults > 0)
+        {
+            throw new InvalidOperationException($"Cardigann definition {definition.Id} has no usable search path.");
         }
 
         if (tracedActivity is not null && tracedTargets.Count > 0)
@@ -613,7 +679,8 @@ internal sealed class CardigannIndexerIntegration(
                 captureCookies: login is not null,
                 cancellationToken)
                 .ConfigureAwait(false);
-            if (login is null || attempt > 0 || response.DetectCloudflareChallenge() is not null)
+            if (login is null || !HasSameAuthority(baseUri, requestUri) || attempt > 0 ||
+                response.DetectCloudflareChallenge() is not null)
             {
                 return response;
             }
@@ -891,16 +958,24 @@ internal sealed class CardigannIndexerIntegration(
         return supported;
     }
 
-    private Uri BuildRequestUri(
+    private Uri? BuildRequestUri(
         Uri baseUri,
         SearchPath path,
         IReadOnlyDictionary<string, object?> variables,
         bool includeParameters = true)
     {
-        var renderedPath = path.Path.RenderCardigannTemplate(variables, Uri.EscapeDataString);
+        var renderedPath = RenderSearchPath(path.Path, variables);
         var parameters = includeParameters ? BuildRequestParameters(path, variables) : string.Empty;
-        var separator = renderedPath.Contains('?', StringComparison.Ordinal) ? "&" : "?";
-        return new Uri(baseUri, parameters.Length == 0 ? renderedPath : renderedPath + separator + parameters);
+        if (parameters.Length > 0)
+        {
+            var fragmentIndex = renderedPath.IndexOf('#', StringComparison.Ordinal);
+            var pathAndQuery = fragmentIndex >= 0 ? renderedPath[..fragmentIndex] : renderedPath;
+            var fragment = fragmentIndex >= 0 ? renderedPath[fragmentIndex..] : string.Empty;
+            var separator = pathAndQuery.Contains('?', StringComparison.Ordinal) ? "&" : "?";
+            renderedPath = string.Concat(pathAndQuery, separator, parameters, fragment);
+        }
+
+        return Uri.TryCreate(baseUri, renderedPath, out var requestUri) ? requestUri : null;
     }
 
     private string BuildRequestParameters(
