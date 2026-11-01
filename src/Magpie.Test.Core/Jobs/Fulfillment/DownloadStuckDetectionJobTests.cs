@@ -102,7 +102,7 @@ public sealed class DownloadStuckDetectionJobTests
         {
             _downloadRepository.Verify(
                 r => r.ListStuckCandidatesAsync(
-                    _now - TimeSpan.FromMinutes(20), _now - TimeSpan.FromMinutes(90), It.IsAny<CancellationToken>()),
+                    _now - TimeSpan.FromMinutes(20), _now - TimeSpan.FromMinutes(360), It.IsAny<CancellationToken>()),
                 Times.Once);
             _progress.Verify(
                 value => value.Report(0, "The detection will get the limits for stuck downloads."),
@@ -165,7 +165,7 @@ public sealed class DownloadStuckDetectionJobTests
         }
     }
 
-    [TestCase("fetchingMinutes", "5", 5, 90)]
+    [TestCase("fetchingMinutes", "5", 5, 360)]
     [TestCase("stalledMinutes", "30", 20, 30)]
     public async Task ExecuteAsync_UsesThreshold_WhenParameterIsSpecified(
         string key,
@@ -265,7 +265,7 @@ public sealed class DownloadStuckDetectionJobTests
         // Assert
         _downloadService.Verify(
             s => s.MarkStuckAsync(
-                candidate, TimeSpan.FromMinutes(90), _now, null, null, It.IsAny<CancellationToken>()),
+                candidate, TimeSpan.FromMinutes(360), _now, null, null, It.IsAny<CancellationToken>()),
             Times.Once);
     }
 
@@ -351,7 +351,7 @@ public sealed class DownloadStuckDetectionJobTests
                 s => s.TryApplyVerifiedClientStateAsync(
                     candidate,
                     info,
-                    _now - TimeSpan.FromMinutes(90),
+                    _now - TimeSpan.FromMinutes(360),
                     _now,
                     null,
                     It.IsAny<CancellationToken>()),

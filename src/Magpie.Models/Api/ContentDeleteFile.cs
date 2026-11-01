@@ -14,4 +14,9 @@ public sealed record ContentDeleteFile
     /// The size of the file in bytes.
     /// </summary>
     public long Size { get; init; }
+
+    /// <summary>
+    /// Indicates whether the file is shared by multiple content items.
+    /// </summary>
+    public bool IsShared { get; set; }
 }

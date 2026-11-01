@@ -1640,7 +1640,11 @@ export function ContentDetailPage() {
                 {filesPendingDelete.length > 1 && (
                     <ContentDeleteFiles
                         preview={{
-                            data: filesPendingDelete.map((file) => ({ path: file.relativePath, size: file.size })),
+                            data: filesPendingDelete.map((file) => ({
+                                path: file.relativePath,
+                                size: file.size,
+                                isShared: false,
+                            })),
                             error: null,
                             isLoading: false,
                         }}

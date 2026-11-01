@@ -335,6 +335,7 @@ public sealed class ContentServiceTests
             Assert.That(result, Has.Count.EqualTo(1));
             Assert.That(result[0].Path, Is.EqualTo("/media/movie.mkv"));
             Assert.That(result[0].Size, Is.EqualTo(3_000_000_000));
+            Assert.That(result[0].IsShared, Is.False);
         }
     }
 
@@ -426,7 +427,7 @@ public sealed class ContentServiceTests
     }
 
     [Test]
-    public async Task PreviewBulkDeleteAsync_OmitsTheFile_WhenItCoversAnItemThatStaysInTheLibrary()
+    public async Task PreviewBulkDeleteAsync_MarksRetainedFilesShared_WhenTheyCoverItemsOutsideTheSubtree()
     {
         // Arrange
         var rootId = Guid.NewGuid();
@@ -475,6 +476,7 @@ public sealed class ContentServiceTests
             CreatedAt = DateTime.UtcNow,
             ContentItem = new() { Id = childContentId, ContentHierarchyItemId = childId, CreatedAt = DateTime.UtcNow }
         };
+        child.ContentItem.CoveringMediaFiles.Add(removedCoverFile with { });
         var hierarchyItems = new Mock<IContentHierarchyItemRepository> { CallBase = true };
         hierarchyItems.Setup(repository => repository.GetByIdAsync(rootId, It.IsAny<CancellationToken>()))
             .ReturnsAsync(root);
@@ -505,7 +507,99 @@ public sealed class ContentServiceTests
         var result = await subject.PreviewBulkDeleteAsync(new() { Ids = [rootId] }, true).ConfigureAwait(false);
 
         // Assert
-        Assert.That(result.Select(file => file.Path), Is.EqualTo(["/media/S01E03-E04.mkv"]));
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result, Has.Count.EqualTo(2));
+            Assert.That(result[0].Path, Is.EqualTo("/media/S01E01-E02.mkv"));
+            Assert.That(result[0].Size, Is.EqualTo(100));
+            Assert.That(result[0].IsShared, Is.True);
+            Assert.That(result[1].Path, Is.EqualTo("/media/S01E03-E04.mkv"));
+            Assert.That(result[1].Size, Is.EqualTo(200));
+            Assert.That(result[1].IsShared, Is.False);
+        }
+    }
+
+    [TestCase(false, true)]
+    [TestCase(true, false)]
+    public async Task PreviewBulkDeleteAsync_ReturnsTheFileOnceWithItsSharedState_WhenTheSelectionIncludesACoveredItem(
+        bool includeOwner,
+        bool expectedIsShared)
+    {
+        // Arrange
+        var ownerId = Guid.NewGuid();
+        var coveredId = Guid.NewGuid();
+        var ownerContentId = Guid.NewGuid();
+        var coveredContentId = Guid.NewGuid();
+        var owner = new ContentHierarchyItem
+        {
+            Id = ownerId,
+            ContentType = "tv",
+            Level = "episode",
+            Slug = "owner",
+            Name = "Owner",
+            ContentItem = new() { Id = ownerContentId, ContentHierarchyItemId = ownerId }
+        };
+        var covered = new ContentHierarchyItem
+        {
+            Id = coveredId,
+            ContentType = "tv",
+            Level = "episode",
+            Slug = "covered",
+            Name = "Covered",
+            ContentItem = new() { Id = coveredContentId, ContentHierarchyItemId = coveredId }
+        };
+        var file = new MediaFile
+        {
+            Id = Guid.NewGuid(),
+            ContentItemId = ownerContentId,
+            FileKind = "Video",
+            FilePath = "/media/S01E01-E02.mkv",
+            FileSize = 300
+        };
+        file.Coverage.Add(new() { MediaFileId = file.Id, ContentItemId = coveredContentId });
+        owner.ContentItem.MediaFiles.Add(file);
+        covered.ContentItem.CoveringMediaFiles.Add(file with { });
+        var hierarchyItems = new Mock<IContentHierarchyItemRepository>();
+        hierarchyItems.Setup(repository => repository.GetByIdAsync(ownerId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(owner);
+        hierarchyItems.Setup(repository => repository.GetByIdAsync(coveredId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(covered);
+        hierarchyItems.Setup(repository => repository.QueryAsync(
+                It.IsAny<ContentHierarchyItemCriteria>(),
+                It.IsAny<PagingParameter>(),
+                null,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedList<ContentHierarchyItem>());
+        var subject = new ContentService(
+            hierarchyItems.Object,
+            Mock.Of<IContentRepository>(),
+            Mock.Of<IAuditRecordRepository>(),
+            Mock.Of<IRootFolderRepository>(),
+            Mock.Of<IQualityTierListRepository>(),
+            Mock.Of<IMetadataContainerRepository>(),
+            [],
+            Mock.Of<IDownloadRepository>(),
+            Mock.Of<IDownloadClientRepository>(),
+            [],
+            Mock.Of<ITransactionManager>(),
+            Mock.Of<IContentTypeRegistry>(),
+            Mock.Of<IContentFileService>(),
+            TimeProvider.System,
+            NullLogger<ContentService>.Instance);
+
+        // Act
+        var result = await subject.PreviewBulkDeleteAsync(
+            new() { Ids = includeOwner ? [ownerId, coveredId] : [coveredId] },
+            true).ConfigureAwait(false);
+
+        // Assert
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(result, Has.Count.EqualTo(1));
+            Assert.That(result[0].Path, Is.EqualTo("/media/S01E01-E02.mkv"));
+            Assert.That(result[0].Size, Is.EqualTo(300));
+            Assert.That(result[0].IsShared, Is.EqualTo(expectedIsShared));
+        }
     }
 
     [Test]

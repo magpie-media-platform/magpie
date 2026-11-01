@@ -524,4 +524,5 @@ export interface BulkContentDeleteRequest {
 export interface ContentDeleteFile {
     path: string;
     size: number;
+    isShared: boolean;
 }

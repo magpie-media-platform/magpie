@@ -1,5 +1,6 @@
 import type { UseQueryResult } from '@tanstack/react-query';
 
+import { DisabledTooltip } from '@/auth';
 import { Alert } from '@/components/ui/Alert';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { getErrorMessage } from '@/lib/errors';
@@ -29,10 +30,20 @@ export function ContentDeleteFiles({ preview }: ContentDeleteFilesProps) {
                 files && (
                     <div className="content-delete-files__box">
                         {files.length > 0 && (
-                            <ul className="content-delete-files__list" aria-label="Files to delete" role="list">
+                            <ul className="content-delete-files__list" aria-label="File deletion preview" role="list">
                                 {files.map((file) => (
-                                    <li key={file.path} className="content-delete-files__file">
-                                        <span className="content-delete-files__path">{file.path}</span>
+                                    <li
+                                        key={file.path}
+                                        className={`content-delete-files__file${file.isShared ? ' content-delete-files__file--shared' : ''}`}
+                                    >
+                                        <span className="content-delete-files__path">
+                                            <DisabledTooltip
+                                                disabled={file.isShared}
+                                                message="This file is linked to other content. Skipping delete."
+                                            >
+                                                <span className="content-delete-files__path-text">{file.path}</span>
+                                            </DisabledTooltip>
+                                        </span>
                                         <span className="content-delete-files__size">{formatFileSize(file.size)}</span>
                                     </li>
                                 ))}
@@ -40,7 +51,9 @@ export function ContentDeleteFiles({ preview }: ContentDeleteFilesProps) {
                         )}
                         <div className="content-delete-files__total">
                             <span>Total</span>
-                            <span>{formatFileSize(files.reduce((sum, file) => sum + file.size, 0))}</span>
+                            <span>
+                                {formatFileSize(files.reduce((sum, file) => sum + (file.isShared ? 0 : file.size), 0))}
+                            </span>
                         </div>
                     </div>
                 )

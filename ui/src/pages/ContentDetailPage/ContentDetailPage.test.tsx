@@ -1176,8 +1176,8 @@ describe('ContentDetailPage', () => {
             mockUseBulkDeletePreview.mockImplementation((request: unknown) => ({
                 data: request
                     ? [
-                          { path: '/media/library/The Matrix/the-matrix.mkv', size: 3124000000 },
-                          { path: '/media/library/The Matrix/the-matrix.srt', size: 1024 },
+                          { path: '/media/library/The Matrix/the-matrix.mkv', size: 3124000000, isShared: false },
+                          { path: '/media/library/The Matrix/the-matrix.srt', size: 1024, isShared: false },
                       ]
                     : undefined,
                 error: null,
@@ -1187,11 +1187,11 @@ describe('ContentDetailPage', () => {
             await openPage();
             await user.click(await screen.findByRole('button', { name: /^remove$/i }));
             const dialog = await screen.findByRole('dialog');
-            expect(within(dialog).queryByRole('list', { name: 'Files to delete' })).not.toBeInTheDocument();
+            expect(within(dialog).queryByRole('list', { name: 'File deletion preview' })).not.toBeInTheDocument();
 
             await user.click(within(dialog).getByRole('switch', { name: /also delete files from disk/i }));
 
-            const files = within(within(dialog).getByRole('list', { name: 'Files to delete' })).getAllByRole(
+            const files = within(within(dialog).getByRole('list', { name: 'File deletion preview' })).getAllByRole(
                 'listitem',
             );
             expect(files.map((file) => file.textContent)).toEqual([
@@ -2580,7 +2580,7 @@ describe('ContentDetailPage', () => {
                 expect(dialog).toHaveTextContent(
                     'Delete 2 files from disk? This removes the files from disk and the library. This cannot be undone. 1 of these files also covers other items.',
                 );
-                const list = within(dialog).getByRole('list', { name: 'Files to delete' });
+                const list = within(dialog).getByRole('list', { name: 'File deletion preview' });
                 expect(
                     within(list)
                         .getAllByRole('listitem')

@@ -466,13 +466,26 @@ internal sealed class ContentService(
             Filter = TranslateFilter(action.Filter),
         };
         var items = await ListSelectedSubtreesAsync(translated, cancellationToken).ConfigureAwait(false);
+        var contents =
+            from i in items
+            where i.ContentItem is not null
+            select i.ContentItem!;
+        var removedIds = contents.Select(c => c.Id).ToHashSet();
+        var files =
+            from content in contents
+            from file in content.MediaFiles.Concat(content.CoveringMediaFiles)
+            group file by file.Id into fileGroup
+            select fileGroup.First() into file
+            select new ContentDeleteFile
+            {
+                Path = file.FilePath,
+                Size = file.FileSize,
+                IsShared =
+                    !removedIds.Contains(file.ContentItemId) ||
+                    file.Coverage.Any(c2 => !removedIds.Contains(c2.ContentItemId))
+            };
 
-        return
-        [
-            .. ListFilesRemovedWith(items)
-                .OrderBy(file => file.FilePath, StringComparer.OrdinalIgnoreCase)
-                .Select(file => new ContentDeleteFile { Path = file.FilePath, Size = file.FileSize })
-        ];
+        return [.. files.OrderBy(file => file.Path, StringComparer.OrdinalIgnoreCase)];
     }
 
     public Task<ContentStats> GetStatsAsync(CancellationToken cancellationToken = default)
@@ -594,18 +607,6 @@ internal sealed class ContentService(
         false => MonitoringMode.Unmonitored,
         null => null
     };
-
-    private static IEnumerable<MediaFile> ListFilesRemovedWith(IReadOnlyCollection<ContentHierarchyItem> items)
-    {
-        var removedContentItemIds = items
-            .Select(item => item.ContentItem?.Id)
-            .OfType<Guid>()
-            .ToHashSet();
-
-        return items
-            .SelectMany(item => item.ContentItem?.MediaFiles ?? [])
-            .Where(file => file.Coverage.All(coverage => removedContentItemIds.Contains(coverage.ContentItemId)));
-    }
 
     private ContentHierarchyItemCriteria BuildCriteria(ContentQuery query)
     {

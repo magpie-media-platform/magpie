@@ -274,7 +274,7 @@ describe('useLibraryBulkActions', () => {
         });
 
         it('previews the files of the selected ids once the dialog is open with the file choice on', async () => {
-            vi.mocked(api.apiPost).mockResolvedValue([{ path: '/media/film.mkv', size: 3124000000 }]);
+            vi.mocked(api.apiPost).mockResolvedValue([{ path: '/media/film.mkv', size: 3124000000, isShared: false }]);
             const { result } = renderBulkActions();
 
             act(() => result.current.selection.toggleRow('content-1', true));
@@ -284,7 +284,7 @@ describe('useLibraryBulkActions', () => {
 
             await waitFor(() => {
                 expect(result.current.actions.bulkDeletePreview.data).toEqual([
-                    { path: '/media/film.mkv', size: 3124000000 },
+                    { path: '/media/film.mkv', size: 3124000000, isShared: false },
                 ]);
             });
             expect(api.apiPost).toHaveBeenCalledWith('/content/bulk/delete-preview', {

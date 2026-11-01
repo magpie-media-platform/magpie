@@ -1337,8 +1337,8 @@ describe('LibraryPage', () => {
             mockUseBulkDeletePreview.mockImplementation((request: unknown) => ({
                 data: request
                     ? [
-                          { path: '/media/movies/Breaking Bad/s01e01.mkv', size: 3124000000 },
-                          { path: '/media/movies/Breaking Bad/s01e02.mkv', size: 1073741824 },
+                          { path: '/media/movies/Breaking Bad/s01e01.mkv', size: 3124000000, isShared: false },
+                          { path: '/media/movies/Breaking Bad/s01e02.mkv', size: 1073741824, isShared: false },
                       ]
                     : undefined,
                 error: null,
@@ -1350,11 +1350,11 @@ describe('LibraryPage', () => {
             await user.click(screen.getByLabelText('Select Breaking Bad'));
             await user.click(await waitFor(() => document.querySelector('[data-action="bulk-delete"]') as HTMLElement));
             const dialog = await screen.findByRole('dialog');
-            expect(within(dialog).queryByRole('list', { name: 'Files to delete' })).not.toBeInTheDocument();
+            expect(within(dialog).queryByRole('list', { name: 'File deletion preview' })).not.toBeInTheDocument();
 
             await user.click(within(dialog).getByRole('switch', { name: 'Also delete files from disk' }));
 
-            const files = within(within(dialog).getByRole('list', { name: 'Files to delete' })).getAllByRole(
+            const files = within(within(dialog).getByRole('list', { name: 'File deletion preview' })).getAllByRole(
                 'listitem',
             );
             expect(files.map((file) => file.textContent)).toEqual([

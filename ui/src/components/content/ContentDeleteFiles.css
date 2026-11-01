@@ -35,6 +35,15 @@
         border-top: 1px solid var(--border-subtle);
     }
 
+    .content-delete-files__file--shared {
+        opacity: var(--opacity-muted);
+
+        & .content-delete-files__path-text,
+        & .content-delete-files__size {
+            text-decoration: line-through;
+        }
+    }
+
     .content-delete-files__path {
         min-width: 0;
         overflow-wrap: anywhere;
