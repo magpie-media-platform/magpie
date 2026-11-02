@@ -1,7 +1,7 @@
 import { act, render, screen, within, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
-import { MemoryRouter, useSearchParams } from 'react-router-dom';
+import { MemoryRouter, useNavigationType, useSearchParams } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
 
@@ -1646,8 +1646,32 @@ describe('UsersPage delete confirmations', () => {
 describe('UsersPage search params persistence', () => {
     function UrlObserver() {
         const [params] = useSearchParams();
-        return <span data-testid="url-params">{params.toString()}</span>;
+        const navigationType = useNavigationType();
+        return (
+            <span data-testid="url-params" data-navigation-type={navigationType}>
+                {params.toString()}
+            </span>
+        );
     }
+
+    it('Pagination_ReplacesTheInvalidEntry_WhenThePageExceedsTheResult', async () => {
+        // Arrange
+        vi.mocked(apiGet).mockImplementation((url: string) =>
+            Promise.resolve(url.startsWith('/api-keys') ? [] : { ...mockPagedResponse, totalItems: 26 }),
+        );
+
+        // Act
+        render(
+            <TestWrapper initialEntries={['/?usersPage=99&source=library']}>
+                <UsersPage />
+                <UrlObserver />
+            </TestWrapper>,
+        );
+
+        // Assert
+        await waitFor(() => expect(screen.getByTestId('url-params')).toHaveTextContent('usersPage=2&source=library'));
+        expect(screen.getByTestId('url-params')).toHaveAttribute('data-navigation-type', 'REPLACE');
+    });
 
     it('restores api-keys tab from URL search params', async () => {
         render(
@@ -1657,6 +1681,48 @@ describe('UsersPage search params persistence', () => {
         );
 
         expect(screen.getByRole('list', { name: /api keys/i })).toBeInTheDocument();
+    });
+
+    it('Users_RestoresTheRequestedPage_WhenOpeningASharedUrl', async () => {
+        // Arrange
+        vi.mocked(apiGet).mockImplementation((url: string) =>
+            Promise.resolve(url.startsWith('/api-keys') ? [] : { ...mockPagedResponse, pageNumber: 2, totalItems: 26 }),
+        );
+
+        // Act
+        render(
+            <TestWrapper initialEntries={['/?usersPage=2']}>
+                <UsersPage />
+            </TestWrapper>,
+        );
+
+        // Assert
+        expect(await screen.findByText('Page 2 of 2')).toBeInTheDocument();
+        expect(apiGet).toHaveBeenCalledWith('/users?pageNumber=2&pageSize=25');
+        expect(apiGet).not.toHaveBeenCalledWith('/users?pageNumber=1&pageSize=25');
+    });
+
+    it('ApiKeys_RestoresAndUpdatesTheScope_WhenBrowsingASharedUrl', async () => {
+        // Arrange
+        const user = userEvent.setup();
+        render(
+            <TestWrapper initialEntries={['/?tab=api-keys&keyScope=all']}>
+                <UsersPage />
+                <UrlObserver />
+            </TestWrapper>,
+        );
+
+        // Assert
+        expect(screen.getByRole('radio', { name: 'All' })).toHaveAttribute('aria-checked', 'true');
+        await waitFor(() => expect(apiGet).toHaveBeenCalledWith('/api-keys'));
+
+        // Act
+        await user.click(screen.getByRole('radio', { name: 'Mine' }));
+
+        // Assert
+        expect(screen.getByTestId('url-params')).toHaveTextContent('tab=api-keys');
+        expect(screen.getByTestId('url-params')).not.toHaveTextContent('keyScope=');
+        expect(screen.getByRole('radio', { name: 'Mine' })).toHaveAttribute('aria-checked', 'true');
     });
 
     it('defaults to users tab when no tab param is set', () => {

@@ -14,6 +14,7 @@ import {
     useRejectLibraryImportCandidates,
 } from '@/hooks/usePendingFileAssociations';
 import { MatchCell } from '@/components/content/MatchCell';
+import { useUrlTableState } from '@/hooks/useUrlTableState';
 
 import './PendingFileAssociations.css';
 
@@ -56,6 +57,14 @@ interface PendingFileAssociationsProps {
 
 export function PendingFileAssociations({ contentHierarchyItemId, canManage }: PendingFileAssociationsProps) {
     const { toast } = useToast();
+    const { page, setPage } = useUrlTableState({
+        defaultSort: [],
+        defaultFilters: {},
+        sortKeys: [],
+        pageParam: 'pendingFilesPage',
+        sortParam: 'pendingFilesSort',
+    });
+    const pagination = { pageIndex: page - 1, pageSize: 10 };
     const { data, isSuccess, error, refetch } = usePendingFileAssociations(contentHierarchyItemId);
     const items = useMemo(() => data ?? [], [data]);
     const [actingIds, setActingIds] = useState<Set<string>>(() => new Set());
@@ -251,6 +260,11 @@ export function PendingFileAssociations({ contentHierarchyItemId, canManage }: P
                         data={items}
                         size="sm"
                         enableSorting={false}
+                        pagination={pagination}
+                        onPaginationChange={(updater) => {
+                            const next = typeof updater === 'function' ? updater(pagination) : updater;
+                            setPage(next.pageIndex + 1);
+                        }}
                         getRowId={getRowId}
                         data-table="pending-file-associations"
                         aria-label="Pending files"

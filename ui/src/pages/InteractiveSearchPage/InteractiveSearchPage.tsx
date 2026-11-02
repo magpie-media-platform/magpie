@@ -32,6 +32,7 @@ import {
     type InteractiveSearchCandidate,
 } from '@/hooks/useInteractiveSearch';
 import { useInstanceName } from '@/hooks/useInstanceName';
+import { useUrlTableState } from '@/hooks/useUrlTableState';
 import type { ApiError } from '@/lib/api';
 import { formatDate } from '@/lib/dateFormatting';
 import { getErrorMessage, isConflictError } from '@/lib/errors';
@@ -62,6 +63,11 @@ export function InteractiveSearchPage() {
     const configuredIndexerCount = useConfiguredIndexerCount();
     const { toast } = useToast();
     const canGrab = hasPermission('content.request');
+    const { sorting, page, setSorting, setPage } = useUrlTableState({
+        defaultSort: [],
+        defaultFilters: {},
+        sortKeys: ['title', 'indexer', 'size', 'match', 'status', 'publishDate'],
+    });
 
     const detailQuery = useContentDetail(contentHierarchyItemId);
     const { candidates, partial, warning, isLoading, isFetching, error, refetch } =
@@ -272,6 +278,7 @@ export function InteractiveSearchPage() {
     );
 
     const getRowId = useCallback((row: InteractiveSearchCandidate) => row.release.id, []);
+    const pagination = { pageIndex: page - 1, pageSize: 25 };
 
     return (
         <div
@@ -379,8 +386,17 @@ export function InteractiveSearchPage() {
                         data={candidates}
                         size="sm"
                         enableSorting={true}
+                        sorting={sorting}
+                        onSortingChange={(updater) =>
+                            setSorting(typeof updater === 'function' ? updater(sorting) : updater)
+                        }
                         enablePagination={candidates.length > 25}
                         pageSize={25}
+                        pagination={pagination}
+                        onPaginationChange={(updater) => {
+                            const next = typeof updater === 'function' ? updater(pagination) : updater;
+                            setPage(next.pageIndex + 1);
+                        }}
                         getRowId={getRowId}
                     />
                 )}

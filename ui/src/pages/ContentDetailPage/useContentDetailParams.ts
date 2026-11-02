@@ -1,10 +1,11 @@
 import { useMemo, useCallback } from 'react';
-import { useParams, useNavigate, useLocation, useSearchParams } from 'react-router-dom';
+import { useParams, useNavigate, useLocation } from 'react-router-dom';
+import { useSyncedSearchParams } from '@/hooks/useSyncedSearchParams';
 
 interface ContentDetailParams {
     activeTab: string;
     rawTab: string | null;
-    setActiveTab: (tab: string) => void;
+    setActiveTab: (tab: string, options?: { replace?: boolean }) => void;
     navigate: ReturnType<typeof useNavigate>;
     childrenBasePath: string;
 }
@@ -17,13 +18,13 @@ export function useContentDetailParams(defaultTab: string): ContentDetailParams 
     }>();
     const navigate = useNavigate();
     const location = useLocation();
-    const [searchParams, setSearchParams] = useSearchParams();
+    const [searchParams, setSearchParams] = useSyncedSearchParams();
 
     const explicitTab = searchParams.get('tab');
     const activeTab = explicitTab || defaultTab;
     const setActiveTab = useCallback(
-        (tab: string) => {
-            setSearchParams(
+        (tab: string, options?: { replace?: boolean }) => {
+            void setSearchParams(
                 (prev) => {
                     const next = new URLSearchParams(prev);
                     if (tab === defaultTab) {
@@ -33,10 +34,10 @@ export function useContentDetailParams(defaultTab: string): ContentDetailParams 
                     }
                     return next;
                 },
-                { replace: true, state: location.state },
+                { replace: options?.replace ?? false },
             );
         },
-        [setSearchParams, defaultTab, location.state],
+        [setSearchParams, defaultTab],
     );
 
     const childrenBasePath = useMemo(() => {

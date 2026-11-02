@@ -1,16 +1,18 @@
-import { forwardRef, type ComponentPropsWithoutRef, useMemo, useCallback, useState } from 'react';
+import { forwardRef, type ComponentPropsWithoutRef, useMemo, useCallback } from 'react';
 import { CircleNotchIcon, DownloadSimpleIcon, MagnifyingGlassIcon } from '@phosphor-icons/react';
-import { type ColumnDef, type SortingState } from '@tanstack/react-table';
+import { type ColumnDef, type OnChangeFn, type SortingState } from '@tanstack/react-table';
 
 import { ReleaseStatusBadge } from '@/components/releases/ReleaseStatusBadge';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { DataTable } from '@/components/ui/DataTable';
 import { MobileListToolbar } from '@/components/ui/MobileListToolbar';
+import { Pager } from '@/components/ui/Pager';
 import { sortTableRows } from '@/lib/sortTableRows';
 
 import { useCardLayout } from '@/hooks/ui/useCardLayout';
 import { canRegrab } from '@/hooks/useDownloads';
+import { useUrlTableState } from '@/hooks/useUrlTableState';
 import { formatDate } from '@/lib/dateFormatting';
 import { formatFileSize } from '@/lib/formatSize';
 
@@ -271,7 +273,17 @@ export const ReleasesTab = forwardRef<HTMLDivElement, ReleasesTabProps>(
         },
         ref,
     ) => {
-        const [sorting, setSorting] = useState<SortingState>([]);
+        const { sorting, page, setSorting, setPage } = useUrlTableState({
+            defaultSort: [],
+            defaultFilters: {},
+            sortKeys: RELEASE_SORT_OPTIONS.map((option) => option.id),
+            pageParam: 'releasesPage',
+            sortParam: 'releasesSort',
+        });
+        const handleSortingChange: OnChangeFn<SortingState> = useCallback(
+            (updater) => setSorting(typeof updater === 'function' ? updater(sorting) : updater),
+            [sorting, setSorting],
+        );
         const usesCardLayout = useCardLayout();
         const handleGrab = useCallback(
             (release: ReleaseRow) => {
@@ -343,6 +355,9 @@ export const ReleasesTab = forwardRef<HTMLDivElement, ReleasesTabProps>(
             () => (usesCardLayout ? sortTableRows(releases, columns, sorting) : releases),
             [usesCardLayout, releases, columns, sorting],
         );
+        const pageCount = Math.max(1, Math.ceil(releases.length / 25));
+        const currentPage = Math.min(page, pageCount);
+        const pagination = { pageIndex: currentPage - 1, pageSize: 25 };
         const classes = ['releases-tab', className].filter(Boolean).join(' ');
 
         if (!loading && releases.length === 0) {
@@ -376,13 +391,13 @@ export const ReleasesTab = forwardRef<HTMLDivElement, ReleasesTabProps>(
                         data-testid="releases-tab__sort-controls"
                         sorting={sorting}
                         sortOptions={RELEASE_SORT_OPTIONS}
-                        onSortingChange={setSorting}
+                        onSortingChange={handleSortingChange}
                         allowUnsorted
                     />
                 )}
                 {usesCardLayout ? (
                     <div className="releases-tab__mobile-list">
-                        {sortedReleases.map((release) => {
+                        {sortedReleases.slice((currentPage - 1) * 25, currentPage * 25).map((release) => {
                             const isGrabbing = grabbingReleaseIds.has(release.id);
                             return (
                                 <div
@@ -414,6 +429,17 @@ export const ReleasesTab = forwardRef<HTMLDivElement, ReleasesTabProps>(
                                 </div>
                             );
                         })}
+                        {pageCount > 1 && (
+                            <Pager
+                                page={currentPage}
+                                pageCount={pageCount}
+                                totalItems={releases.length}
+                                onFirst={() => setPage(1)}
+                                onPrevious={() => setPage(currentPage - 1)}
+                                onNext={() => setPage(currentPage + 1)}
+                                onLast={() => setPage(pageCount)}
+                            />
+                        )}
                     </div>
                 ) : (
                     <div className="releases-tab__table">
@@ -425,9 +451,14 @@ export const ReleasesTab = forwardRef<HTMLDivElement, ReleasesTabProps>(
                             loading={loading}
                             enableSorting={true}
                             sorting={sorting}
-                            onSortingChange={setSorting}
+                            onSortingChange={handleSortingChange}
                             enablePagination={releases.length > 25}
                             pageSize={25}
+                            pagination={pagination}
+                            onPaginationChange={(updater) => {
+                                const next = typeof updater === 'function' ? updater(pagination) : updater;
+                                setPage(next.pageIndex + 1);
+                            }}
                             getRowId={getRowId}
                         />
                     </div>

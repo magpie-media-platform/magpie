@@ -47,6 +47,7 @@ export interface ListFilterToolbarProps {
     onSortingChange: (sorting: SortingState) => void;
     selection?: MobileListSelectionControl;
     className?: string;
+    showControls?: boolean;
     dialogClearAll?: boolean;
     pillMultiSelect?: boolean;
 }
@@ -73,6 +74,7 @@ export function ListFilterToolbar({
     onSortingChange,
     selection,
     className,
+    showControls = false,
     dialogClearAll = false,
     pillMultiSelect = false,
 }: ListFilterToolbarProps) {
@@ -426,7 +428,7 @@ export function ListFilterToolbar({
             className={['list-filter-toolbar', className].filter(Boolean).join(' ')}
             data-component="list-filter-toolbar"
         >
-            {usesCardLayout && (
+            {(usesCardLayout || showControls) && (
                 <MobileListToolbar
                     sorting={sorting}
                     sortOptions={sortOptions}

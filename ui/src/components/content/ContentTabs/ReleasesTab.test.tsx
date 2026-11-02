@@ -1,4 +1,5 @@
 import { render, screen, within } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -72,7 +73,7 @@ describe('ReleasesTab', () => {
         };
 
         // Act
-        const { rerender } = render(<ReleasesTab releases={[faulted]} onGrab={vi.fn()} />);
+        const { rerender } = render(<ReleasesTab releases={[faulted]} onGrab={vi.fn()} />, { wrapper: MemoryRouter });
 
         // Assert
         expect(screen.getByText('Faulted')).toHaveAttribute('title', 'Insufficient Destination Space');
@@ -92,12 +93,12 @@ describe('ReleasesTab', () => {
     });
 
     it('renders the empty state exactly once when no releases are available', () => {
-        render(<ReleasesTab releases={[]} onGrab={vi.fn()} />);
+        render(<ReleasesTab releases={[]} onGrab={vi.fn()} />, { wrapper: MemoryRouter });
         expect(screen.getAllByText(/no releases found/i)).toHaveLength(1);
     });
 
     it('renders exactly the trimmed column set', () => {
-        render(<ReleasesTab releases={[releaseRow()]} onGrab={vi.fn()} />);
+        render(<ReleasesTab releases={[releaseRow()]} onGrab={vi.fn()} />, { wrapper: MemoryRouter });
 
         expect(screen.getByRole('columnheader', { name: /Title/i })).toBeInTheDocument();
         expect(screen.getByRole('columnheader', { name: /Size/i })).toBeInTheDocument();
@@ -113,7 +114,7 @@ describe('ReleasesTab', () => {
     });
 
     it('renders a row without provider-specific properties in columns', () => {
-        render(<ReleasesTab releases={[releaseRow()]} onGrab={vi.fn()} />);
+        render(<ReleasesTab releases={[releaseRow()]} onGrab={vi.fn()} />, { wrapper: MemoryRouter });
 
         expect(screen.getAllByText('Movie.2024.1080p.BluRay.x264').length).toBeGreaterThan(0);
         expect(screen.getAllByText('5 GB').length).toBeGreaterThan(0);
@@ -142,7 +143,7 @@ describe('ReleasesTab', () => {
             }),
         );
         const user = userEvent.setup();
-        render(<ReleasesTab releases={[releaseRow()]} onGrab={vi.fn()} />);
+        render(<ReleasesTab releases={[releaseRow()]} onGrab={vi.fn()} />, { wrapper: MemoryRouter });
 
         const controls = screen.getByTestId('releases-tab__sort-controls');
         const field = within(controls).getByRole('combobox', { name: 'Sort by field' });
@@ -211,7 +212,7 @@ describe('ReleasesTab', () => {
                 publishDate: '2024-01-01T00:00:00Z',
             }),
         ];
-        render(<ReleasesTab releases={releases} onGrab={vi.fn()} />);
+        render(<ReleasesTab releases={releases} onGrab={vi.fn()} />, { wrapper: MemoryRouter });
 
         expect(document.querySelector('.releases-tab__data-table')).not.toBeInTheDocument();
         expect(screen.queryByRole('columnheader', { name: 'Title' })).not.toBeInTheDocument();
@@ -267,7 +268,7 @@ describe('ReleasesTab', () => {
                 };
             }),
         );
-        render(<ReleasesTab releases={[releaseRow()]} onGrab={vi.fn()} />);
+        render(<ReleasesTab releases={[releaseRow()]} onGrab={vi.fn()} />, { wrapper: MemoryRouter });
 
         expect(document.querySelector('.releases-tab__data-table')).not.toBeInTheDocument();
         expect(screen.queryByRole('columnheader', { name: 'Title' })).not.toBeInTheDocument();
@@ -285,13 +286,16 @@ describe('ReleasesTab', () => {
                 ]}
                 onGrab={vi.fn()}
             />,
+            { wrapper: MemoryRouter },
         );
 
         expect(screen.getAllByText('-').length).toBeGreaterThan(0);
     });
 
     it('shows the download status in the Status column for a grabbed release', () => {
-        render(<ReleasesTab releases={[releaseRow({ acquisitionStatus: 'Downloading' })]} onGrab={vi.fn()} />);
+        render(<ReleasesTab releases={[releaseRow({ acquisitionStatus: 'Downloading' })]} onGrab={vi.fn()} />, {
+            wrapper: MemoryRouter,
+        });
 
         const badge = screen.getByText('Downloading');
         expect(badge.closest('[data-acquisition-status="Downloading"]')).not.toBeNull();
@@ -300,6 +304,7 @@ describe('ReleasesTab', () => {
     it('renders the longest status label in full without truncating the badge text', () => {
         const { container } = render(
             <ReleasesTab releases={[releaseRow({ acquisitionStatus: 'Downloading' })]} onGrab={vi.fn()} />,
+            { wrapper: MemoryRouter },
         );
 
         const badge = container.querySelector('[data-acquisition-status="Downloading"]');
@@ -311,6 +316,7 @@ describe('ReleasesTab', () => {
     it('renders a dash in the Status column for a never-grabbed release', () => {
         const { container } = render(
             <ReleasesTab releases={[releaseRow({ acquisitionStatus: null })]} onGrab={vi.fn()} />,
+            { wrapper: MemoryRouter },
         );
 
         expect(container.querySelector('[data-acquisition-status]')).toBeNull();
@@ -345,6 +351,7 @@ describe('ReleasesTab', () => {
                 releases={[releaseRow({ acquisitionStatus: null, decisionReason: 'No quality tier matched.' })]}
                 onGrab={vi.fn()}
             />,
+            { wrapper: MemoryRouter },
         );
 
         // Assert
@@ -358,6 +365,7 @@ describe('ReleasesTab', () => {
                 releases={[releaseRow({ acquisitionStatus: 'Failed', decisionReason: 'Grabbed' })]}
                 onGrab={vi.fn()}
             />,
+            { wrapper: MemoryRouter },
         );
 
         // Assert
@@ -372,6 +380,7 @@ describe('ReleasesTab', () => {
                 releases={[releaseRow({ status: 'Unmatched', decisionReason: 'Eligible but not yet grabbed' })]}
                 onGrab={vi.fn()}
             />,
+            { wrapper: MemoryRouter },
         );
 
         // Assert
@@ -384,7 +393,9 @@ describe('ReleasesTab', () => {
         const release = releaseRow({ acquisitionStatus: 'Downloading' });
         const user = userEvent.setup();
 
-        render(<ReleasesTab releases={[release]} onGrab={vi.fn()} onTitleClick={onTitleClick} />);
+        render(<ReleasesTab releases={[release]} onGrab={vi.fn()} onTitleClick={onTitleClick} />, {
+            wrapper: MemoryRouter,
+        });
 
         const titleButtons = screen.getAllByRole('button', { name: /Movie\.2024/i });
         expect(titleButtons.length).toBeGreaterThan(0);
@@ -402,6 +413,7 @@ describe('ReleasesTab', () => {
                 onGrab={vi.fn()}
                 onTitleClick={vi.fn()}
             />,
+            { wrapper: MemoryRouter },
         );
 
         expect(screen.getAllByRole('button', { name: /Movie\.2024/i }).length).toBeGreaterThan(0);
@@ -412,7 +424,7 @@ describe('ReleasesTab', () => {
         const release = releaseRow();
         const user = userEvent.setup();
 
-        render(<ReleasesTab releases={[release]} onGrab={onGrab} />);
+        render(<ReleasesTab releases={[release]} onGrab={onGrab} />, { wrapper: MemoryRouter });
 
         const grabButtons = screen.getAllByRole('button', { name: /grab/i });
         expect(grabButtons.length).toBeGreaterThan(0);
@@ -425,7 +437,9 @@ describe('ReleasesTab', () => {
 
     it('shows the loading state on the grab button while the release is being grabbed', () => {
         const release = releaseRow();
-        render(<ReleasesTab releases={[release]} grabbingReleaseIds={new Set([release.id])} onGrab={vi.fn()} />);
+        render(<ReleasesTab releases={[release]} grabbingReleaseIds={new Set([release.id])} onGrab={vi.fn()} />, {
+            wrapper: MemoryRouter,
+        });
 
         const grabButton = screen.getByRole('button', { name: /grab/i });
         expect(grabButton).toBeDisabled();
@@ -442,6 +456,7 @@ describe('ReleasesTab', () => {
                 grabbingReleaseIds={new Set([release1.id])}
                 onGrab={vi.fn()}
             />,
+            { wrapper: MemoryRouter },
         );
 
         const buttons = screen.getAllByRole('button', { name: /grab/i });
@@ -474,7 +489,9 @@ describe('ReleasesTab', () => {
         );
         const release = releaseRow();
 
-        render(<ReleasesTab releases={[release]} grabbingReleaseIds={new Set([release.id])} onGrab={vi.fn()} />);
+        render(<ReleasesTab releases={[release]} grabbingReleaseIds={new Set([release.id])} onGrab={vi.fn()} />, {
+            wrapper: MemoryRouter,
+        });
 
         const mobileCard = document.querySelector('.releases-tab__mobile-card');
         expect(mobileCard).toBeInTheDocument();
@@ -484,13 +501,17 @@ describe('ReleasesTab', () => {
     });
 
     it('offers no Grab button for an in-flight download', () => {
-        render(<ReleasesTab releases={[releaseRow({ acquisitionStatus: 'Downloading' })]} onGrab={vi.fn()} />);
+        render(<ReleasesTab releases={[releaseRow({ acquisitionStatus: 'Downloading' })]} onGrab={vi.fn()} />, {
+            wrapper: MemoryRouter,
+        });
 
         expect(screen.queryByRole('button', { name: /grab/i })).not.toBeInTheDocument();
     });
 
     it('shows an Imported status and no Grab button once the release is imported', () => {
-        render(<ReleasesTab releases={[releaseRow({ acquisitionStatus: 'Imported' })]} onGrab={vi.fn()} />);
+        render(<ReleasesTab releases={[releaseRow({ acquisitionStatus: 'Imported' })]} onGrab={vi.fn()} />, {
+            wrapper: MemoryRouter,
+        });
 
         expect(screen.getAllByText('Imported').length).toBeGreaterThan(0);
         expect(screen.queryByRole('button', { name: /grab/i })).not.toBeInTheDocument();
@@ -502,6 +523,7 @@ describe('ReleasesTab', () => {
                 releases={[releaseRow({ acquisitionStatus: 'Failed', failureReason: 'DownloadStuck' })]}
                 onGrab={vi.fn()}
             />,
+            { wrapper: MemoryRouter },
         );
 
         expect(screen.getByText('Failed')).toHaveAttribute('title', 'Download Stuck');
@@ -514,6 +536,7 @@ describe('ReleasesTab', () => {
                 releases={[releaseRow({ acquisitionStatus: 'Faulted', failureReason: 'DownloadStuck' })]}
                 onGrab={vi.fn()}
             />,
+            { wrapper: MemoryRouter },
         );
 
         const faulted = screen.getByText('Faulted');
@@ -523,14 +546,18 @@ describe('ReleasesTab', () => {
     });
 
     it('keeps Grab enabled and shows a Cancelled status for a cancelled download', () => {
-        render(<ReleasesTab releases={[releaseRow({ acquisitionStatus: 'Cancelled' })]} onGrab={vi.fn()} />);
+        render(<ReleasesTab releases={[releaseRow({ acquisitionStatus: 'Cancelled' })]} onGrab={vi.fn()} />, {
+            wrapper: MemoryRouter,
+        });
 
         expect(screen.getAllByText('Cancelled').length).toBeGreaterThan(0);
         expect(screen.getAllByRole('button', { name: /grab/i }).length).toBeGreaterThan(0);
     });
 
     it('offers a normal Grab for a never-grabbed release', () => {
-        render(<ReleasesTab releases={[releaseRow({ acquisitionStatus: null })]} onGrab={vi.fn()} />);
+        render(<ReleasesTab releases={[releaseRow({ acquisitionStatus: null })]} onGrab={vi.fn()} />, {
+            wrapper: MemoryRouter,
+        });
 
         expect(screen.getAllByRole('button', { name: /grab/i }).length).toBeGreaterThan(0);
     });
@@ -543,7 +570,9 @@ describe('ReleasesTab', () => {
         const user = userEvent.setup();
         const onUnmatchChange = vi.fn();
         const release = releaseRow({ status });
-        render(<ReleasesTab releases={[release]} onGrab={vi.fn()} onUnmatchChange={onUnmatchChange} />);
+        render(<ReleasesTab releases={[release]} onGrab={vi.fn()} onUnmatchChange={onUnmatchChange} />, {
+            wrapper: MemoryRouter,
+        });
 
         // Act
         await user.click(screen.getByRole('button', { name: label }));
@@ -553,7 +582,9 @@ describe('ReleasesTab', () => {
     });
 
     it('shows an Unmatched status for an unmatched release that has no download', () => {
-        render(<ReleasesTab releases={[releaseRow({ status: 'Unmatched' })]} onGrab={vi.fn()} />);
+        render(<ReleasesTab releases={[releaseRow({ status: 'Unmatched' })]} onGrab={vi.fn()} />, {
+            wrapper: MemoryRouter,
+        });
 
         expect(screen.getByText('Unmatched')).toBeInTheDocument();
     });
@@ -565,6 +596,7 @@ describe('ReleasesTab', () => {
                 onGrab={vi.fn()}
                 onUnmatchChange={vi.fn()}
             />,
+            { wrapper: MemoryRouter },
         );
 
         expect(screen.getByText('Faulted')).toBeInTheDocument();
@@ -574,7 +606,7 @@ describe('ReleasesTab', () => {
     });
 
     it('offers no Unmatch button when the user cannot change the match', () => {
-        render(<ReleasesTab releases={[releaseRow()]} onGrab={vi.fn()} />);
+        render(<ReleasesTab releases={[releaseRow()]} onGrab={vi.fn()} />, { wrapper: MemoryRouter });
 
         expect(screen.queryByRole('button', { name: /unmatch/i })).not.toBeInTheDocument();
     });

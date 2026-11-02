@@ -1,4 +1,10 @@
 @layer components {
+    .subject-content-tab {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-md);
+    }
+
     .subject-content-tab__mobile-monitoring {
         display: inline-flex;
         align-items: center;

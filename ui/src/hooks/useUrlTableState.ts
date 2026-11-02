@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useRef } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useSyncedSearchParams } from '@/hooks/useSyncedSearchParams';
 import { useUrlFilterState } from '@/hooks/useUrlFilterState';
 import type { SortingState } from '@tanstack/react-table';
 
@@ -24,26 +24,39 @@ interface UrlTableState<TFilters extends Record<string, string>> {
 
     setFilters: (updates: Partial<TFilters>) => void;
 
-    setPage: (page: number) => void;
+    setPage: (page: number, options?: { replace?: boolean }) => void;
 }
 
-function encodeSort(sorting: SortingState): string | null {
-    const [first] = sorting;
-    if (!first) {
-        return null;
+function encodeSort(sorting: SortingState): string {
+    return sorting.map(({ id, desc }) => `${id}:${desc ? 'desc' : 'asc'}`).join(',') || 'none';
+}
+
+function parseEncodedSort(encoded: string): SortingState {
+    if (!encoded || encoded === 'none') {
+        return [];
     }
-    return `${first.id}:${first.desc ? 'desc' : 'asc'}`;
+    return encoded.split(',').map((entry) => {
+        const [id, dir] = entry.split(':');
+        return { id, desc: dir === 'desc' };
+    });
 }
 
 function decodeSort(raw: string | null, sortKeys: readonly string[]): SortingState | null {
     if (!raw) {
         return null;
     }
-    const [id, dir] = raw.split(':');
-    if (!sortKeys.includes(id)) {
-        return null;
+    if (raw === 'none') {
+        return [];
     }
-    return [{ id, desc: dir === 'desc' }];
+    const sorting: SortingState = [];
+    for (const entry of raw.split(',')) {
+        const [id, dir] = entry.split(':');
+        if (!sortKeys.includes(id)) {
+            return null;
+        }
+        sorting.push({ id, desc: dir === 'desc' });
+    }
+    return sorting;
 }
 
 function sameSort(a: SortingState, b: SortingState): boolean {
@@ -55,14 +68,17 @@ export function useUrlTableState<TFilters extends Record<string, string>>(
 ): UrlTableState<TFilters> {
     const { pageParam = 'page', sortParam = 'sort' } = config;
 
-    const [searchParams, setSearchParams] = useSearchParams();
+    const [searchParams, setSearchParams] = useSyncedSearchParams();
 
     const configRef = useRef(config);
     configRef.current = config;
 
+    const defaultSortKey = encodeSort(config.defaultSort);
+    const defaultSort = useMemo<SortingState>(() => parseEncodedSort(defaultSortKey), [defaultSortKey]);
+
     const sorting = useMemo<SortingState>(
-        () => decodeSort(searchParams.get(sortParam), configRef.current.sortKeys) ?? configRef.current.defaultSort,
-        [searchParams, sortParam],
+        () => decodeSort(searchParams.get(sortParam), configRef.current.sortKeys) ?? defaultSort,
+        [searchParams, sortParam, defaultSort],
     );
 
     const [filters, setFilter] = useUrlFilterState(config.defaultFilters);
@@ -74,12 +90,12 @@ export function useUrlTableState<TFilters extends Record<string, string>>(
 
     const setSorting = useCallback(
         (next: SortingState) => {
-            const { defaultSort } = configRef.current;
-            setSearchParams(
+            const { defaultSort: currentDefaultSort } = configRef.current;
+            void setSearchParams(
                 (prev) => {
                     const params = new URLSearchParams(prev);
                     const encoded = encodeSort(next);
-                    if (!encoded || sameSort(next, defaultSort)) {
+                    if (sameSort(next, currentDefaultSort)) {
                         params.delete(sortParam);
                     } else {
                         params.set(sortParam, encoded);
@@ -99,8 +115,8 @@ export function useUrlTableState<TFilters extends Record<string, string>>(
     );
 
     const setPage = useCallback(
-        (next: number) => {
-            setSearchParams(
+        (next: number, options?: { replace?: boolean }) => {
+            void setSearchParams(
                 (prev) => {
                     const params = new URLSearchParams(prev);
                     if (next <= 1) {
@@ -110,7 +126,7 @@ export function useUrlTableState<TFilters extends Record<string, string>>(
                     }
                     return params;
                 },
-                { replace: true },
+                { replace: options?.replace ?? false },
             );
         },
         [setSearchParams, pageParam],

@@ -1,5 +1,5 @@
 import { useMemo, useCallback, useRef } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useSyncedSearchParams } from './useSyncedSearchParams';
 
 export interface SetFilterOptions {
     replace?: boolean;
@@ -10,7 +10,7 @@ export interface SetFilterOptions {
 export function useUrlFilterState<T extends Record<string, string>>(
     defaults: T,
 ): [T, (updates: Partial<T>, options?: SetFilterOptions) => void] {
-    const [searchParams, setSearchParams] = useSearchParams();
+    const [searchParams, setSearchParams] = useSyncedSearchParams();
 
     const defaultsRef = useRef(defaults);
     defaultsRef.current = defaults;
@@ -30,7 +30,7 @@ export function useUrlFilterState<T extends Record<string, string>>(
     const setFilter = useCallback(
         (updates: Partial<T>, options?: SetFilterOptions) => {
             const current = defaultsRef.current;
-            setSearchParams(
+            void setSearchParams(
                 (prev) => {
                     const next = new URLSearchParams(prev);
                     for (const [key, val] of Object.entries(updates) as [string, string | undefined][]) {
@@ -45,7 +45,10 @@ export function useUrlFilterState<T extends Record<string, string>>(
                     }
                     return next;
                 },
-                { replace: options?.replace ?? false, state: options?.state },
+                {
+                    replace: options?.replace ?? false,
+                    state: options?.state,
+                },
             );
         },
         [setSearchParams],

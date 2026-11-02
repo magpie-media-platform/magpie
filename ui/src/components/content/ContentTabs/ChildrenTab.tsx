@@ -1,7 +1,8 @@
-import { forwardRef, type ComponentPropsWithoutRef, useMemo, useCallback, useState } from 'react';
+import { useUrlTableState } from '@/hooks/useUrlTableState';
+import { forwardRef, type ComponentPropsWithoutRef, useMemo, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import { CaretRightIcon } from '@phosphor-icons/react';
-import { type ColumnDef, type SortingState } from '@tanstack/react-table';
+import { type ColumnDef, type OnChangeFn, type SortingState } from '@tanstack/react-table';
 
 import { DataTable } from '@/components/ui/DataTable';
 import { AcquisitionBadge } from '@/components/ui/AcquisitionBadge';
@@ -117,7 +118,7 @@ export const ChildrenTab = forwardRef<HTMLDivElement, ChildrenTabProps>(
     (
         {
             items: childItems,
-            parentId,
+            parentId: _parentId,
             basePath = '/library',
             dateColumnHeader = 'Date',
             onChildClick,
@@ -128,8 +129,25 @@ export const ChildrenTab = forwardRef<HTMLDivElement, ChildrenTabProps>(
         },
         ref,
     ) => {
-        const [sorting, setSorting] = useState<SortingState>(DEFAULT_CHILD_SORTING);
-        const [mobilePaging, setMobilePaging] = useState({ scope: '', page: 1 });
+        const { sorting, page, setSorting, setPage } = useUrlTableState({
+            defaultSort: DEFAULT_CHILD_SORTING,
+            defaultFilters: {},
+            sortKeys: [
+                'number',
+                'title',
+                'date',
+                'fulfillment',
+                'fulfilledAt',
+                'primaryMediaSize',
+                'primaryMediaFileCount',
+            ],
+            pageParam: 'childrenPage',
+            sortParam: 'childrenSort',
+        });
+        const handleSortingChange: OnChangeFn<SortingState> = useCallback(
+            (updater) => setSorting(typeof updater === 'function' ? updater(sorting) : updater),
+            [sorting, setSorting],
+        );
         const usesCardLayout = useCardLayout();
         const sortOptions = useMemo(
             () => [
@@ -250,7 +268,6 @@ export const ChildrenTab = forwardRef<HTMLDivElement, ChildrenTabProps>(
         const activeSort = sorting[0];
         const isNumberSort = activeSort?.id === 'number';
         const numberSortDesc = isNumberSort && activeSort.desc;
-        const mobilePageScope = `${parentId}:${activeSort?.id ?? ''}:${activeSort?.desc ? 'desc' : 'asc'}`;
 
         const orderedItems = useMemo(() => {
             if (!isNumberSort) {
@@ -277,10 +294,9 @@ export const ChildrenTab = forwardRef<HTMLDivElement, ChildrenTabProps>(
             [usesCardLayout, orderedItems, columns, tableSorting],
         );
         const mobilePageCount = Math.max(1, Math.ceil(sortedChildren.length / CHILD_PAGE_SIZE));
-        const requestedMobilePage = mobilePaging.scope === mobilePageScope ? mobilePaging.page : 1;
-        const mobilePage = Math.min(requestedMobilePage, mobilePageCount);
+        const mobilePage = Math.min(page, mobilePageCount);
         const pagedChildren = sortedChildren.slice((mobilePage - 1) * CHILD_PAGE_SIZE, mobilePage * CHILD_PAGE_SIZE);
-        const goToMobilePage = (page: number) => setMobilePaging({ scope: mobilePageScope, page });
+        const goToMobilePage = setPage;
         const classes = ['children-tab', className].filter(Boolean).join(' ');
 
         const renderMobileList = () => (
@@ -361,7 +377,7 @@ export const ChildrenTab = forwardRef<HTMLDivElement, ChildrenTabProps>(
                         data-testid="children-tab__sort-controls"
                         sorting={sorting}
                         sortOptions={sortOptions}
-                        onSortingChange={setSorting}
+                        onSortingChange={handleSortingChange}
                         allowUnsorted
                     />
                 )}
@@ -376,8 +392,16 @@ export const ChildrenTab = forwardRef<HTMLDivElement, ChildrenTabProps>(
                         loading={loading}
                         enableSorting={true}
                         sorting={tableSorting}
-                        onSortingChange={setSorting}
+                        onSortingChange={handleSortingChange}
                         enablePagination={orderedItems.length > CHILD_PAGE_SIZE}
+                        pagination={{ pageIndex: mobilePage - 1, pageSize: CHILD_PAGE_SIZE }}
+                        onPaginationChange={(updater) => {
+                            const next =
+                                typeof updater === 'function'
+                                    ? updater({ pageIndex: mobilePage - 1, pageSize: CHILD_PAGE_SIZE })
+                                    : updater;
+                            goToMobilePage(next.pageIndex + 1);
+                        }}
                         pageSize={CHILD_PAGE_SIZE}
                         getRowId={getRowId}
                         emptyState={

@@ -426,6 +426,40 @@ describe('DataTable', () => {
             expect(screen.getByText('Page 2 of 3')).toBeInTheDocument();
         });
 
+        it('DataTable_PreservesControlledPagination_WhenSortChanges', () => {
+            // Arrange
+            const handlePaginationChange = vi.fn();
+            const { rerender } = render(
+                <DataTable
+                    columns={testColumns}
+                    data={testData}
+                    enablePagination
+                    pagination={{ pageIndex: 0, pageSize: 2 }}
+                    onPaginationChange={handlePaginationChange}
+                    sorting={[{ id: 'name', desc: true }]}
+                />,
+            );
+
+            // Act
+            rerender(
+                <DataTable
+                    columns={testColumns}
+                    data={testData}
+                    enablePagination
+                    pagination={{ pageIndex: 1, pageSize: 2 }}
+                    onPaginationChange={handlePaginationChange}
+                    sorting={[{ id: 'name', desc: false }]}
+                />,
+            );
+
+            // Assert
+            expect(screen.getByText('Page 2 of 3')).toBeInTheDocument();
+            expect(screen.getByText('Item One')).toBeInTheDocument();
+            expect(screen.getByText('Item Three')).toBeInTheDocument();
+            expect(screen.getByRole('columnheader', { name: /name/i })).toHaveAttribute('aria-sort', 'ascending');
+            expect(handlePaginationChange).not.toHaveBeenCalled();
+        });
+
         it('supports controlled pagination', () => {
             const handlePaginationChange = vi.fn();
             render(

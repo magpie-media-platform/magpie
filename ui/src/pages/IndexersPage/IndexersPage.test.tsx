@@ -1,7 +1,7 @@
 import { render, screen, within, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi, beforeEach } from 'vitest';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, useNavigate } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
 
@@ -140,11 +140,11 @@ vi.mock('@/lib/api', async (importOriginal) => {
     };
 });
 
-function TestWrapper({ children }: { children: ReactNode }) {
+function TestWrapper({ children, url = '/' }: { children: ReactNode; url?: string }) {
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
     return (
         <QueryClientProvider client={queryClient}>
-            <MemoryRouter>
+            <MemoryRouter initialEntries={[url]}>
                 <TooltipProvider>
                     <ToastProvider>
                         <ToastStateProvider>
@@ -157,6 +157,11 @@ function TestWrapper({ children }: { children: ReactNode }) {
             </MemoryRouter>
         </QueryClientProvider>
     );
+}
+
+function HistoryControls() {
+    const navigate = useNavigate();
+    return <button onClick={() => navigate(-1)}>Back</button>;
 }
 
 function dataRows() {
@@ -175,6 +180,60 @@ afterEach(() => {
 });
 
 describe('IndexersPage structure', () => {
+    it('Tabs_ShowsConfigured_WhenUrlTabIsUnknown', () => {
+        // Act
+        render(
+            <TestWrapper url="/?tab=bogus">
+                <IndexersPage />
+            </TestWrapper>,
+        );
+
+        // Assert
+        expect(screen.getByRole('tab', { name: /Configured/ })).toHaveAttribute('aria-selected', 'true');
+        expect(screen.getByRole('switch', { name: /disable nzbgeek eu/i })).toBeInTheDocument();
+    });
+
+    it('Catalog_DoesNotInheritConfiguredProvider_WhenSwitchingTabs', async () => {
+        // Arrange
+        const user = userEvent.setup();
+        render(
+            <TestWrapper url="/?configuredProvider=newznab">
+                <IndexersPage />
+            </TestWrapper>,
+        );
+        expect(screen.queryByText('IPTorrents')).not.toBeInTheDocument();
+
+        // Act
+        await user.click(screen.getByRole('tab', { name: /Available/ }));
+
+        // Assert
+        expect(await screen.findByText('IPTorrents')).toBeInTheDocument();
+    });
+
+    it('Tabs_RestoresPreviousTab_WhenNavigatingBack', async () => {
+        // Arrange
+        const user = userEvent.setup();
+        render(
+            <TestWrapper>
+                <IndexersPage />
+                <HistoryControls />
+            </TestWrapper>,
+        );
+
+        // Act
+        await user.click(screen.getByRole('tab', { name: /Available/ }));
+
+        // Assert
+        expect(screen.getByRole('tab', { name: /Available/ })).toHaveAttribute('aria-selected', 'true');
+
+        // Act
+        await user.click(screen.getByRole('button', { name: 'Back' }));
+
+        // Assert
+        expect(screen.getByRole('tab', { name: /Configured/ })).toHaveAttribute('aria-selected', 'true');
+        expect(screen.getByRole('tab', { name: /Available/ })).toHaveAttribute('aria-selected', 'false');
+    });
+
     it('renders the three subtabs: Configured, Available, Feeds', () => {
         render(
             <TestWrapper>

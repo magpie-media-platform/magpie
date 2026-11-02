@@ -56,7 +56,7 @@ const SORT_OPTIONS = [
     { id: 'lastChecked', label: 'Last checked' },
 ];
 
-const DEFAULT_FILTERS = { provider: '', status: '', enabled: '' };
+const DEFAULT_FILTERS = { configuredProvider: '', status: '', enabled: '' };
 
 const enabledOptions: FacetOption[] = [
     { value: 'true', label: 'Enabled' },
@@ -80,7 +80,7 @@ export function ConfiguredManagement({ onGoToCatalog }: ConfiguredManagementProp
         sortParam: 'csort',
     });
 
-    const provider = useMemo(() => decodeMultiValue(filters.provider), [filters.provider]);
+    const provider = useMemo(() => decodeMultiValue(filters.configuredProvider), [filters.configuredProvider]);
     const status = useMemo(
         () => decodeMultiValue(filters.status).map(mapStatusParam).filter(Boolean),
         [filters.status],
@@ -119,13 +119,13 @@ export function ConfiguredManagement({ onGoToCatalog }: ConfiguredManagementProp
 
     const setMulti = useCallback(
         (key: 'provider' | 'status', next: string[]) => {
-            setFilters({ [key]: encodeMultiValue(next) });
+            setFilters({ [key === 'provider' ? 'configuredProvider' : key]: encodeMultiValue(next) });
         },
         [setFilters],
     );
 
     const handleClearFilters = useCallback(() => {
-        setFilters({ provider: '', status: '', enabled: '' });
+        setFilters({ configuredProvider: '', status: '', enabled: '' });
     }, [setFilters]);
 
     const handleTest = useCallback(
@@ -167,8 +167,8 @@ export function ConfiguredManagement({ onGoToCatalog }: ConfiguredManagementProp
     );
 
     const selectionResetKey = useMemo(
-        () => [filters.provider, filters.status, filters.enabled].join('|'),
-        [filters.provider, filters.status, filters.enabled],
+        () => [filters.configuredProvider, filters.status, filters.enabled].join('|'),
+        [filters.configuredProvider, filters.status, filters.enabled],
     );
     const selection = useBulkSelection({
         pageRowIds,
@@ -490,7 +490,7 @@ export function ConfiguredManagement({ onGoToCatalog }: ConfiguredManagementProp
                 fields={filterFields}
                 onCommit={(values) =>
                     setFilters({
-                        provider: encodeMultiValue(values.provider as string[]),
+                        configuredProvider: encodeMultiValue(values.provider as string[]),
                         status: encodeMultiValue(values.status as string[]),
                         enabled: values.enabled as string,
                     })

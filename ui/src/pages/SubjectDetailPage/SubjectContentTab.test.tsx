@@ -1,4 +1,5 @@
 import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -86,6 +87,7 @@ const baseController: SubjectContentController = {
         onTitleChange: noop,
         onPublishDateChange: noop,
     },
+    onFilterCommit: noop,
     pageCount: 1,
     currentPage: 1,
     goToPage: noop,
@@ -184,6 +186,67 @@ describe('SubjectContentTab desktop', () => {
 describe('SubjectContentTab mobile', () => {
     beforeEach(() => {
         vi.stubGlobal('matchMedia', createMatchMedia(390));
+    });
+
+    it('Filters_CommitsAllDialogValuesTogether_WhenApplyingChanges', async () => {
+        // Arrange
+        const user = userEvent.setup();
+        const onFilterCommit = vi.fn();
+        const onTitleChange = vi.fn();
+        const onContentTypeChange = vi.fn();
+        const onFulfillmentChange = vi.fn();
+        renderTab({
+            onFilterCommit,
+            headerFilters: {
+                ...baseController.headerFilters,
+                contentTypeOptions: [{ value: '["tv","tv-season"]', label: 'Season' }],
+            },
+            headerFilterHandlers: {
+                ...baseController.headerFilterHandlers,
+                onTitleChange,
+                onContentTypeChange,
+                onFulfillmentChange,
+            },
+        });
+
+        // Act
+        await user.click(screen.getByRole('button', { name: 'Filters, 0 active' }));
+        await user.type(screen.getByRole('textbox', { name: 'Title' }), 'Breaking');
+        await user.selectOptions(screen.getByRole('combobox', { name: 'Type' }), '["tv","tv-season"]');
+        await user.selectOptions(screen.getByRole('combobox', { name: 'Status' }), 'Fulfilled');
+        await user.click(screen.getByRole('button', { name: 'Apply' }));
+
+        // Assert
+        expect(onFilterCommit).toHaveBeenCalledExactlyOnceWith({
+            title: 'Breaking',
+            contentType: '["tv","tv-season"]',
+            fulfillment: 'Fulfilled',
+        });
+        expect(onTitleChange).not.toHaveBeenCalled();
+        expect(onContentTypeChange).not.toHaveBeenCalled();
+        expect(onFulfillmentChange).not.toHaveBeenCalled();
+    });
+
+    it('Filters_ClearsAllFieldsTogether_WhenClearingTheActiveFilters', async () => {
+        // Arrange
+        const user = userEvent.setup();
+        const onFilterCommit = vi.fn();
+        renderTab({
+            onFilterCommit,
+            hasActiveFilters: true,
+            headerFilters: {
+                ...baseController.headerFilters,
+                title: 'Breaking',
+                contentType: '["tv","tv-season"]',
+                fulfillment: 'Fulfilled',
+            },
+        });
+
+        // Act
+        await user.click(screen.getByRole('button', { name: 'Clear all' }));
+
+        // Assert
+        expect(onFilterCommit).toHaveBeenCalledExactlyOnceWith({ title: '', contentType: '', fulfillment: '' });
     });
 
     it('renders the responsive sort toolbar and cards instead of the table', () => {

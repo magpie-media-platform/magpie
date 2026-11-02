@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import {
     ArrowLeftIcon,
@@ -7,7 +7,7 @@ import {
     MagnifyingGlassIcon,
     WarningCircleIcon,
 } from '@phosphor-icons/react';
-import { type ColumnDef, type SortingState } from '@tanstack/react-table';
+import { type ColumnDef } from '@tanstack/react-table';
 
 import { Alert } from '@/components/ui/Alert';
 import { Badge } from '@/components/ui/Badge';
@@ -35,6 +35,7 @@ import {
 import { useAllIndexerConnections, useIndexers } from '@/hooks/useIndexers';
 import { useReleaseGrabGuard } from '@/hooks/useReleaseGrabGuard';
 import { useInstanceName } from '@/hooks/useInstanceName';
+import { useUrlTableState } from '@/hooks/useUrlTableState';
 import { getErrorMessage } from '@/lib/errors';
 import { formatFileSize } from '@/lib/formatSize';
 import { formatRelativeTime } from '@/lib/formatTime';
@@ -47,6 +48,7 @@ import './IndexerSearchPage.css';
 
 const VALUE_PARAM_PREFIX = 'v_';
 const GIBIBYTE = 1024 ** 3;
+const PAGE_SIZE = 25;
 
 function buildQuery(params: URLSearchParams): IndexerSearchQuery | null {
     const mode = params.get('mode');
@@ -101,6 +103,12 @@ function describeSkippedConnections(data: IndexerSearchResult): string {
     return `${count} selected indexer connection${count === 1 ? ' was' : 's were'} not searched. Review their status and query support.`;
 }
 
+function parseSizeBound(value: string): number | undefined {
+    if (!value.trim()) return undefined;
+    const bytes = Number(value) * GIBIBYTE;
+    return Number.isFinite(bytes) && bytes >= 0 ? bytes : undefined;
+}
+
 export function IndexerSearchPage() {
     const instanceName = useInstanceName();
     useDocumentTitle('Interactive Search');
@@ -124,6 +132,16 @@ export function IndexerSearchPage() {
     );
     const modes = useMemo(() => availableQueryModes(selectedIndexers), [selectedIndexers]);
 
+    const submittedSearch = useMemo(() => {
+        const params = new URLSearchParams(
+            [...searchParams].filter(
+                ([key]) => key === 'connections' || key === 'mode' || key.startsWith(VALUE_PARAM_PREFIX),
+            ),
+        );
+        params.sort();
+        return params.toString();
+    }, [searchParams]);
+
     const [modeKey, setModeKey] = useState(() => searchParams.get('mode') ?? '');
     const [values, setValues] = useState<Record<string, string>>(() => {
         const initial: Record<string, string> = {};
@@ -134,6 +152,17 @@ export function IndexerSearchPage() {
         }
         return initial;
     });
+    useEffect(() => {
+        const params = new URLSearchParams(submittedSearch);
+        setModeKey(params.get('mode') ?? '');
+        setValues(
+            Object.fromEntries(
+                [...params]
+                    .filter(([key]) => key.startsWith(VALUE_PARAM_PREFIX))
+                    .map(([key, value]) => [key.slice(VALUE_PARAM_PREFIX.length), value]),
+            ),
+        );
+    }, [submittedSearch]);
 
     const activeMode = modes.find((mode) => mode.key === modeKey) ?? modes[0] ?? null;
     const executedQuery = useMemo(() => buildQuery(searchParams), [searchParams]);
@@ -150,9 +179,27 @@ export function IndexerSearchPage() {
         candidateKey: string;
         content: ContentListItem;
     } | null>(null);
-    const [indexerFilter, setIndexerFilter] = useState<string[]>([]);
-    const [sizeRange, setSizeRange] = useState({ min: '', max: '' });
-    const [sorting, setSorting] = useState<SortingState>([{ id: 'age', desc: true }]);
+    const { sorting, filters, page, setSorting, setFilters, setPage } = useUrlTableState({
+        defaultSort: [{ id: 'age', desc: true }],
+        defaultFilters: { resultIndexers: '', resultMinSize: '', resultMaxSize: '' },
+        sortKeys: ['title', 'age'],
+        pageParam: 'resultPage',
+        sortParam: 'resultSort',
+    });
+    const indexerFilter = useMemo(() => filters.resultIndexers.split(',').filter(Boolean), [filters.resultIndexers]);
+    const sizeRange = useMemo(
+        () => ({ min: filters.resultMinSize, max: filters.resultMaxSize }),
+        [filters.resultMinSize, filters.resultMaxSize],
+    );
+    const setIndexerFilter = useCallback(
+        (ids: string[]) => setFilters({ resultIndexers: ids.join(',') }),
+        [setFilters],
+    );
+    const setSizeRange = useCallback(
+        (range: { min: string; max: string }) => setFilters({ resultMinSize: range.min, resultMaxSize: range.max }),
+        [setFilters],
+    );
+    const pagination = useMemo(() => ({ pageIndex: page - 1, pageSize: PAGE_SIZE }), [page]);
 
     const matchMutation = useMatchIndexerRelease();
     const grabMutation = useGrabInteractiveCandidate();
@@ -174,13 +221,13 @@ export function IndexerSearchPage() {
 
     const candidates = useMemo(() => {
         const all = data?.candidates ?? [];
-        const min = Number(sizeRange.min) * GIBIBYTE;
-        const max = Number(sizeRange.max) * GIBIBYTE;
+        const min = parseSizeBound(sizeRange.min);
+        const max = parseSizeBound(sizeRange.max);
         return all.filter(
             (candidate) =>
                 (indexerFilter.length === 0 || candidate.connectionIds.some((id) => indexerFilter.includes(id))) &&
-                (!sizeRange.min || (candidate.release.size ?? 0) >= min) &&
-                (!sizeRange.max || (candidate.release.size ?? 0) <= max),
+                (min === undefined || (candidate.release.size ?? 0) >= min) &&
+                (max === undefined || (candidate.release.size ?? 0) <= max),
         );
     }, [data?.candidates, indexerFilter, sizeRange]);
 
@@ -198,15 +245,23 @@ export function IndexerSearchPage() {
                 next.set(`${VALUE_PARAM_PREFIX}${field}`, value);
             }
         }
-        const current = new URLSearchParams(searchParams);
-        current.sort();
         next.sort();
-        if (next.toString() === current.toString()) {
+        if (next.toString() === submittedSearch) {
             void refetch();
         } else {
+            for (const [key, value] of searchParams) {
+                if (
+                    key !== 'connections' &&
+                    key !== 'mode' &&
+                    key !== 'resultPage' &&
+                    !key.startsWith(VALUE_PARAM_PREFIX)
+                ) {
+                    next.append(key, value);
+                }
+            }
             setSearchParams(next);
         }
-    }, [activeMode, connectionIds, refetch, searchParams, setSearchParams, values]);
+    }, [activeMode, connectionIds, refetch, searchParams, setSearchParams, submittedSearch, values]);
 
     const performGrab = useCallback(
         (candidate: IndexerSearchCandidate, content: ContentListItem, key: string) => {
@@ -397,7 +452,16 @@ export function IndexerSearchPage() {
                 },
             },
         ],
-        [connectionNames, indexerFilter, pendingReleaseIds, selectedRows, sizeRange, succeededReleaseIds],
+        [
+            connectionNames,
+            indexerFilter,
+            pendingReleaseIds,
+            selectedRows,
+            setIndexerFilter,
+            setSizeRange,
+            sizeRange,
+            succeededReleaseIds,
+        ],
     );
 
     const isLoadingSelection = isLoadingIndexers || isLoadingConnections;
@@ -559,8 +623,12 @@ export function IndexerSearchPage() {
                         <ListFilterToolbar
                             fields={resultFilterFields}
                             onCommit={(values) => {
-                                setIndexerFilter(values.indexers as string[]);
-                                setSizeRange(values.size as { min: string; max: string });
+                                const range = values.size as { min: string; max: string };
+                                setFilters({
+                                    resultIndexers: (values.indexers as string[]).join(','),
+                                    resultMinSize: range.min,
+                                    resultMaxSize: range.max,
+                                });
                             }}
                             sorting={sorting}
                             sortOptions={[
@@ -617,8 +685,14 @@ export function IndexerSearchPage() {
                                 onSortingChange={(updater) =>
                                     setSorting(typeof updater === 'function' ? updater(sorting) : updater)
                                 }
-                                enablePagination={candidates.length > 25}
-                                pageSize={25}
+                                enablePagination={candidates.length > PAGE_SIZE}
+                                pageSize={PAGE_SIZE}
+                                pagination={pagination}
+                                onPaginationChange={(updater) =>
+                                    setPage(
+                                        (typeof updater === 'function' ? updater(pagination) : updater).pageIndex + 1,
+                                    )
+                                }
                                 getRowId={(candidate) => candidate.key}
                                 aria-label="Indexer search results"
                             />

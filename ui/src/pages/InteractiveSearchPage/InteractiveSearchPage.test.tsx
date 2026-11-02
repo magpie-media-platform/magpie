@@ -1,7 +1,7 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { createMemoryRouter, MemoryRouter, Route, RouterProvider, Routes } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
 
@@ -123,6 +123,64 @@ function TestWrapper({ children }: { children: ReactNode }) {
 }
 
 describe('InteractiveSearchPage', () => {
+    it('UrlState_RestoresSortingAndPaging_WhenOpeningAndNavigatingCandidateResults', async () => {
+        // Arrange
+        const user = userEvent.setup();
+        vi.mocked(apiPost).mockResolvedValue({
+            candidates: Array.from({ length: 26 }, (_, index) => ({
+                ...candidate(),
+                release: {
+                    ...candidate().release,
+                    id: `release-${index + 1}`,
+                    title: `Release ${String(index + 1).padStart(2, '0')}`,
+                },
+            })),
+            partial: false,
+        });
+        const router = createMemoryRouter(
+            [{ path: '/interactive-search/:contentHierarchyItemId', element: <InteractiveSearchPage /> }],
+            { initialEntries: ['/interactive-search/content-1?sort=title:desc&page=2'] },
+        );
+        render(
+            <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } })}>
+                <ToastStateProvider>
+                    <TooltipProvider>
+                        <ToastProvider>
+                            <RouterProvider router={router} />
+                        </ToastProvider>
+                    </TooltipProvider>
+                </ToastStateProvider>
+            </QueryClientProvider>,
+        );
+
+        // Assert
+        expect(await screen.findByText('Release 01')).toBeInTheDocument();
+        expect(screen.getByText('Page 2 of 2')).toBeInTheDocument();
+        expect(screen.queryByText('Release 26')).not.toBeInTheDocument();
+
+        // Act
+        await act(() => router.navigate('/interactive-search/content-1?sort=title:asc&page=2'));
+
+        // Assert
+        expect(screen.getByText('Release 26')).toBeInTheDocument();
+        expect(screen.getByText('Page 2 of 2')).toBeInTheDocument();
+
+        // Act
+        await user.click(screen.getByRole('button', { name: 'Sort by Title' }));
+
+        // Assert
+        expect(new URLSearchParams(router.state.location.search).get('sort')).toBe('title:desc');
+        expect(new URLSearchParams(router.state.location.search).has('page')).toBe(false);
+        expect(screen.getByText('Page 1 of 2')).toBeInTheDocument();
+
+        // Act
+        await act(() => router.navigate(-1));
+
+        // Assert
+        expect(screen.getByText('Release 26')).toBeInTheDocument();
+        expect(screen.getByText('Page 2 of 2')).toBeInTheDocument();
+    });
+
     it('Search_RetainsAvailableCandidates_WhenResultIsIncomplete (healthy: true)', async () => {
         // Arrange
         vi.mocked(apiPost).mockResolvedValue({

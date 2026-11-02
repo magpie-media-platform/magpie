@@ -1,7 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { MemoryRouter } from 'react-router-dom';
+import { Link, MemoryRouter } from 'react-router-dom';
 import type { SortingState } from '@tanstack/react-table';
 
 import { TooltipProvider } from '@/components/ui/Tooltip';
@@ -11,11 +11,11 @@ import { ChildrenTab, type ChildItem } from './ChildrenTab';
 const sortingProps: SortingState[] = [];
 
 vi.mock('@/components/ui/DataTable', () => ({
-    DataTable: ({ sorting }: { sorting?: SortingState }) => {
+    DataTable: ({ sorting, loading }: { sorting?: SortingState; loading?: boolean }) => {
         if (sorting !== undefined) {
             sortingProps.push(sorting);
         }
-        return <div data-testid="mock-data-table" />;
+        return <div data-testid="mock-data-table" aria-busy={loading} />;
     },
 }));
 
@@ -50,8 +50,41 @@ describe('ChildrenTab controlled sorting stability', () => {
     ];
 
     beforeEach(() => {
+        localStorage.clear();
         sortingProps.length = 0;
         vi.stubGlobal('matchMedia', createMatchMedia(1024));
+    });
+
+    it('ChildrenTab_ShowsLoadingTable_WhenGalleryPreferenceIsStored', () => {
+        // Arrange
+        localStorage.setItem('children-view', '"gallery"');
+
+        // Act
+        render(<ChildrenTab items={[]} parentId="content-1" loading />, { wrapper: MemoryRouter });
+
+        // Assert
+        expect(screen.getByTestId('mock-data-table')).toHaveAttribute('aria-busy', 'true');
+        expect(screen.queryByRole('tab', { name: 'Gallery' })).not.toBeInTheDocument();
+    });
+
+    it('ChildrenTab_PreservesChildDestinations_WhenUrlRequestsGalleryInCardLayout', () => {
+        // Arrange
+        vi.stubGlobal('matchMedia', createMatchMedia(390));
+
+        // Act
+        render(
+            <TooltipProvider>
+                <MemoryRouter initialEntries={['/?view=gallery']}>
+                    <ChildrenTab items={items} parentId="content-1" />
+                </MemoryRouter>
+            </TooltipProvider>,
+        );
+
+        // Assert
+        expect(screen.getByRole('link', { name: /Season 1/ })).toHaveAttribute('href', '/library/child-1');
+        expect(screen.queryByRole('tab', { name: 'Gallery' })).not.toBeInTheDocument();
+        expect(screen.queryByRole('list', { name: 'Content gallery' })).not.toBeInTheDocument();
+        expect(screen.queryByTestId('mock-data-table')).not.toBeInTheDocument();
     });
 
     it('replaces failed child artwork in the card layout', () => {
@@ -147,6 +180,7 @@ describe('ChildrenTab controlled sorting stability', () => {
         const firstSorting = sortingProps[sortingProps.length - 1];
         expect(firstSorting).toEqual([]);
 
+        localStorage.clear();
         sortingProps.length = 0;
         view.rerender(
             <TooltipProvider>
@@ -215,27 +249,23 @@ describe('ChildrenTab card-layout pagination', () => {
         expect(screen.getByText('Page 2 of 2')).toBeInTheDocument();
     });
 
-    it('returns to the first page when the parent changes', async () => {
+    it('ChildrenTab_ReturnsToFirstPage_WhenNavigatingToAnotherParent', async () => {
+        // Arrange
         const user = userEvent.setup();
-        const view = render(
+        render(
             <TooltipProvider>
-                <MemoryRouter>
+                <MemoryRouter initialEntries={['/library/content-1?childrenPage=2']}>
+                    <Link to="/library/content-2">Other parent</Link>
                     <ChildrenTab items={manyItems} parentId="content-1" />
                 </MemoryRouter>
             </TooltipProvider>,
         );
-
-        await user.click(screen.getByRole('button', { name: 'Go to next page' }));
         expect(screen.getByText('Page 2 of 2')).toBeInTheDocument();
 
-        view.rerender(
-            <TooltipProvider>
-                <MemoryRouter>
-                    <ChildrenTab items={manyItems} parentId="content-2" />
-                </MemoryRouter>
-            </TooltipProvider>,
-        );
+        // Act
+        await user.click(screen.getByRole('link', { name: 'Other parent' }));
 
+        // Assert
         expect(screen.getByText('Page 1 of 2')).toBeInTheDocument();
         expect(screen.getByText('Episode 1')).toBeInTheDocument();
     });

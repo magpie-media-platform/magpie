@@ -280,5 +280,18 @@ describe('contentColumnFilters', () => {
             expect(predicates.map((p) => p.field)).toEqual(['title', 'monitoring']);
             expect(predicates[0].value).toBe('spy and the city');
         });
+
+        it('SplitClauses_LeavesClauseUngrouped_WhenQueryContainsUnterminatedQuote', () => {
+            // Arrange
+            const query = 'title contains "unterminated';
+
+            // Act
+            const predicates = splitClauses(query);
+            const updated = setContentFilterSelection(query, { contentType: 'movies' });
+
+            // Assert
+            expect(predicates).toEqual([{ field: null, raw: 'title contains "unterminated' }]);
+            expect(updated).toBe('title contains "unterminated and contentType = "movies"');
+        });
     });
 });

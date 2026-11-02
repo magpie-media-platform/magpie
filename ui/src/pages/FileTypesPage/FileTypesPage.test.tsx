@@ -106,6 +106,39 @@ describe('FileTypesPage', () => {
         });
     });
 
+    it('Tabs_RestoresMimeRegistry_WhenOpeningASharedUrl', async () => {
+        // Act
+        render(<FileTypesPage />, { wrapper: createTestWrapper('/?tab=mime-registry') });
+
+        // Assert
+        expect(await screen.findByRole('tab', { name: /MIME registry/ })).toHaveAttribute('aria-selected', 'true');
+        expect(screen.getByRole('tab', { name: /Deny list/ })).toHaveAttribute('aria-selected', 'false');
+    });
+
+    it('DenyList_RestoresItsPageWithoutUsingTheMimePage_WhenOpeningASharedUrl', async () => {
+        // Arrange
+        vi.mocked(apiGet).mockImplementation((url: string) =>
+            Promise.resolve(
+                url === '/system/file-types/exclusions'
+                    ? Array.from({ length: 25 }, (_, index) => ({
+                          ...mockDenyList[0],
+                          id: `deny-${index}`,
+                          pattern: `.blocked${index}`,
+                      }))
+                    : mockMimeMappings,
+            ),
+        );
+
+        // Act
+        render(<FileTypesPage />, { wrapper: createTestWrapper('/?dpage=2&mpage=3') });
+
+        // Assert
+        expect(await screen.findByText('.blocked10')).toBeInTheDocument();
+        expect(screen.queryByText('.blocked0')).not.toBeInTheDocument();
+        expect(screen.queryByText('.blocked20')).not.toBeInTheDocument();
+        expect(screen.getByText('Page 2 of 3')).toBeInTheDocument();
+    });
+
     it.each([
         ['Deny list', 'Add Entry', 'Add deny-list entry'],
         ['MIME registry', 'Add Mapping', 'Add MIME mapping'],

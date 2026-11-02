@@ -225,10 +225,10 @@ function DataTableInner<TData>(
             return;
         }
         sortingKeyRef.current = sortingKey;
-        if (!manualPagination) {
+        if (!manualPagination && controlledPagination === undefined) {
             handlePaginationChange((old) => ({ ...old, pageIndex: 0 }));
         }
-    }, [sortingKey, manualPagination, handlePaginationChange]);
+    }, [sortingKey, manualPagination, controlledPagination, handlePaginationChange]);
 
     const handleRowSelectionChange: OnChangeFn<RowSelectionState> = useCallback(
         (updater) => {

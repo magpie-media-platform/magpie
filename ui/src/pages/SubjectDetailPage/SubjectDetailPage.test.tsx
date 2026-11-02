@@ -1,7 +1,7 @@
-import { fireEvent, render, screen, within, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, within, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
-import { MemoryRouter, Routes, Route, useLocation } from 'react-router-dom';
+import { createMemoryRouter, MemoryRouter, RouterProvider, Routes, Route, useLocation } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { BinocularsIcon, FunnelIcon } from '@phosphor-icons/react';
 
@@ -927,6 +927,82 @@ describe('SubjectDetailPage', () => {
     });
 
     describe('tabs', () => {
+        it('Tabs_RestoreThePreviousTab_WhenNavigatingBackAfterUserChanges', async () => {
+            // Arrange
+            const user = userEvent.setup();
+            mockApiGet.mockImplementation((url: string) => {
+                if (url === '/subjects/subject-1') {
+                    return Promise.resolve(mockApiSubject);
+                }
+                if (url.startsWith('/content')) {
+                    return Promise.resolve({ items: [], pageNumber: 3, pageSize: 25, totalItems: 75 });
+                }
+                return Promise.reject({ status: 404, message: 'Not found' });
+            });
+            const router = createMemoryRouter([{ path: '/subjects/:subjectId', element: <SubjectDetailPage /> }], {
+                initialEntries: ['/subjects/subject-1?contentPage=3&source=library'],
+            });
+            render(
+                <QueryClientProvider client={createTestQueryClient()}>
+                    <TooltipProvider>
+                        <ToastStateProvider>
+                            <LiveAnnouncerProvider>
+                                <RouterProvider router={router} />
+                            </LiveAnnouncerProvider>
+                        </ToastStateProvider>
+                    </TooltipProvider>
+                </QueryClientProvider>,
+            );
+
+            // Act
+            await user.click(await screen.findByRole('tab', { name: 'Details' }));
+            await user.click(screen.getByRole('tab', { name: /images/i }));
+
+            // Assert
+            expect(screen.getByRole('tab', { name: /images/i })).toHaveAttribute('data-state', 'active');
+            expect(new URLSearchParams(router.state.location.search).get('contentPage')).toBe('3');
+            expect(new URLSearchParams(router.state.location.search).get('source')).toBe('library');
+
+            // Act
+            await act(() => router.navigate(-1));
+
+            // Assert
+            expect(screen.getByRole('tab', { name: 'Details' })).toHaveAttribute('data-state', 'active');
+
+            // Act
+            await act(() => router.navigate(-1));
+
+            // Assert
+            expect(screen.getByRole('tab', { name: 'Content (75)' })).toHaveAttribute('data-state', 'active');
+            expect(router.state.location.search).toBe('?contentPage=3&source=library');
+        });
+
+        it('Tabs_ReplaceAnInvalidTab_WhenCanonicalizingTheUrl', async () => {
+            // Arrange
+            const router = createMemoryRouter([{ path: '/subjects/:subjectId', element: <SubjectDetailPage /> }], {
+                initialEntries: ['/subjects/subject-1?tab=details', '/subjects/subject-1?tab=invalid&source=library'],
+            });
+            render(
+                <QueryClientProvider client={createTestQueryClient()}>
+                    <TooltipProvider>
+                        <ToastStateProvider>
+                            <LiveAnnouncerProvider>
+                                <RouterProvider router={router} />
+                            </LiveAnnouncerProvider>
+                        </ToastStateProvider>
+                    </TooltipProvider>
+                </QueryClientProvider>,
+            );
+            await waitFor(() => expect(router.state.location.search).toBe('?source=library'));
+
+            // Act
+            await act(() => router.navigate(-1));
+
+            // Assert
+            expect(screen.getByRole('tab', { name: 'Details' })).toHaveAttribute('data-state', 'active');
+            expect(router.state.location.search).toBe('?tab=details');
+        });
+
         it('renders the Related tab as the default (first) tab', async () => {
             renderWithRouter('subject-1');
             await waitFor(() => {
@@ -1489,6 +1565,24 @@ describe('SubjectDetailPage', () => {
     });
 
     describe('back link from content', () => {
+        it('BackLink_PreservesContentOrigin_WhenChangingTabs', async () => {
+            // Arrange
+            const user = userEvent.setup();
+            renderWithRouter('subject-1', {
+                fromContent: { id: 'content-1', title: 'Breaking Bad S01E01' },
+            });
+            await screen.findByRole('link', { name: /back to breaking bad s01e01/i });
+
+            // Act
+            await user.click(screen.getByRole('tab', { name: /relationships/i }));
+
+            // Assert
+            expect(screen.getByRole('link', { name: /back to breaking bad s01e01/i })).toHaveAttribute(
+                'href',
+                '/library/content-1',
+            );
+        });
+
         it('renders back link when navigated from content page', async () => {
             renderWithRouter('subject-1', {
                 fromContent: { id: 'content-1', title: 'Breaking Bad S01E01' },

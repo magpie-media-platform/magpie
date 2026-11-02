@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Link, useSearchParams } from 'react-router-dom';
+import { Link, useLocation, useSearchParams } from 'react-router-dom';
 import {
     ArrowSquareOutIcon,
     CheckIcon,
@@ -323,6 +323,7 @@ export function LibraryImportPage({ monitoringMode, onMonitoringModeChange }: Li
     useDocumentTitle('Library import');
     const { toast } = useToast();
     const [searchParams, setSearchParams] = useSearchParams();
+    const location = useLocation();
 
     const rootFolderFilter = searchParams.get('rootFolderId') ?? '';
     const page = useMemo(() => {
@@ -389,7 +390,7 @@ export function LibraryImportPage({ monitoringMode, onMonitoringModeChange }: Li
     useEffect(() => clearSelection(), [clearSelection, rootFolderFilter]);
 
     const setPage = useCallback(
-        (next: number) => {
+        (next: number, options?: { replace?: boolean }) => {
             setSearchParams(
                 (prev) => {
                     const params = new URLSearchParams(prev);
@@ -400,11 +401,18 @@ export function LibraryImportPage({ monitoringMode, onMonitoringModeChange }: Li
                     }
                     return params;
                 },
-                { replace: true },
+                { replace: options?.replace ?? false, state: location.state },
             );
         },
-        [setSearchParams],
+        [setSearchParams, location.state],
     );
+
+    const pageCount = Math.max(1, Math.ceil(totalItems / PAGE_SIZE));
+    useEffect(() => {
+        if (serverPagination && !isLoading && !isError && page > pageCount) {
+            setPage(pageCount, { replace: true });
+        }
+    }, [serverPagination, isLoading, isError, page, pageCount, setPage]);
 
     const handlePaginationChange = useCallback(
         (updater: Updater<PaginationState>) => {
@@ -416,18 +424,21 @@ export function LibraryImportPage({ monitoringMode, onMonitoringModeChange }: Li
 
     const updateRootFolder = useCallback(
         (value: string) => {
-            setSearchParams((prev) => {
-                const next = new URLSearchParams(prev);
-                if (value) {
-                    next.set('rootFolderId', value);
-                } else {
-                    next.delete('rootFolderId');
-                }
-                next.delete('page');
-                return next;
-            });
+            setSearchParams(
+                (prev) => {
+                    const next = new URLSearchParams(prev);
+                    if (value) {
+                        next.set('rootFolderId', value);
+                    } else {
+                        next.delete('rootFolderId');
+                    }
+                    next.delete('page');
+                    return next;
+                },
+                { state: location.state },
+            );
         },
-        [setSearchParams],
+        [setSearchParams, location.state],
     );
 
     const handleScan = useCallback(async () => {

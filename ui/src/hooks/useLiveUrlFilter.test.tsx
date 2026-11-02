@@ -9,12 +9,12 @@ import { useLiveUrlFilter } from './useLiveUrlFilter';
 import { useUrlFilterState } from './useUrlFilterState';
 
 function FilterPage({ advanced = false, replace = false }: { advanced?: boolean; replace?: boolean }) {
-    const [state, setState] = useUrlFilterState({ filter: '', sort: '', savedFilter: '' });
+    const [state, setState] = useUrlFilterState({ filter: '', sort: '', savedFilter: '', page: '' });
     const location = useLocation();
     const liveFilter = useLiveUrlFilter({
         value: state.filter,
         onCommit: (value, replace, state) => {
-            setState({ filter: value, savedFilter: '' }, { replace, state });
+            setState({ filter: value, savedFilter: '', page: '' }, { replace, state });
         },
         externalKey: state.savedFilter,
         replace,
@@ -34,7 +34,7 @@ function FilterPage({ advanced = false, replace = false }: { advanced?: boolean;
             )}
             <output data-testid="route">{location.pathname + location.search}</output>
             <output data-testid="request">{requestedFilter}</output>
-            <button type="button" onClick={() => liveFilter.change('', true)}>
+            <button type="button" onClick={() => liveFilter.change('', true, true)}>
                 Clear
             </button>
             <button type="button" onClick={() => setState({ sort: 'title' }, { replace: true })}>
@@ -339,5 +339,89 @@ describe('useLiveUrlFilter', () => {
         expect(input).toHaveValue('A');
         expect(router.state.location.search).toBe('?filter=A');
         expect(screen.getByTestId('request')).toHaveTextContent(/^A$/);
+    });
+
+    it('change_ClearsPendingDraft_WhenAnImmediateCommitLeavesTheSourceFilterUnchanged', async () => {
+        // Arrange
+        vi.useFakeTimers();
+        const router = createMemoryRouter([{ path: '/library/:kind', element: <FilterPage /> }], {
+            initialEntries: ['/library/all?page=2'],
+        });
+        render(<RouterProvider router={router} />);
+        const input = screen.getByRole('textbox', { name: 'Title' });
+
+        // Act
+        fireEvent.change(input, { target: { value: 'title startswith "B"' } });
+        fireEvent.click(screen.getByRole('button', { name: 'Clear' }));
+        await act(async () => {
+            vi.advanceTimersByTime(350);
+        });
+
+        // Assert
+        expect(input).toHaveValue('');
+        expect(router.state.location.search).toBe('');
+        expect(screen.getByTestId('request')).toBeEmptyDOMElement();
+
+        // Act
+        await act(() => router.navigate(-1));
+
+        // Assert
+        expect(router.state.location.search).toBe('?page=2');
+        expect(input).toHaveValue('');
+    });
+
+    it('change_PreservesInProgressTyping_WhenSiblingUrlUpdateRunsInSameTurn', async () => {
+        // Arrange
+        vi.useFakeTimers();
+        let finishNavigation!: (value: null) => void;
+        function ConcurrentFilterPage() {
+            const [state, setState] = useUrlFilterState({ filter: '', sort: '' });
+            const liveFilter = useLiveUrlFilter({
+                value: state.filter,
+                onCommit: (value, replace, commitState) => {
+                    setState({ filter: value }, { replace, state: commitState });
+                    setState({ sort: 'title' }, { replace: true });
+                },
+            });
+            return (
+                <input
+                    aria-label="Title"
+                    value={liveFilter.value}
+                    onChange={(event) => liveFilter.change(event.target.value)}
+                />
+            );
+        }
+        const router = createMemoryRouter(
+            [
+                {
+                    path: '/library/all',
+                    element: <ConcurrentFilterPage />,
+                    loader: () =>
+                        new Promise((resolve) => {
+                            finishNavigation = resolve;
+                        }),
+                },
+            ],
+            {
+                initialEntries: ['/library/all'],
+                hydrationData: { loaderData: { '0': null } },
+            },
+        );
+        render(<RouterProvider router={router} />);
+        const input = screen.getByRole('textbox', { name: 'Title' });
+
+        // Act
+        fireEvent.change(input, { target: { value: 'A' } });
+        await act(async () => {
+            vi.advanceTimersByTime(350);
+        });
+        fireEvent.change(input, { target: { value: 'AB' } });
+        await act(async () => {
+            finishNavigation(null);
+        });
+
+        // Assert
+        expect(input).toHaveValue('AB');
+        expect(router.state.location.search).toBe('?filter=A&sort=title');
     });
 });

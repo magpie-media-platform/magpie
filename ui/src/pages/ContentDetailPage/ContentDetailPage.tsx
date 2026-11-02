@@ -676,7 +676,7 @@ export function ContentDetailPage() {
             return;
         }
 
-        setActiveTab(effectiveTab);
+        setActiveTab(effectiveTab, { replace: true });
     }, [
         activeTab,
         areExtensionTabsReady,

@@ -1,11 +1,11 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo } from 'react';
 import { type OnChangeFn, type PaginationState, type SortingState } from '@tanstack/react-table';
 
 import { type ContentHeaderFilterHandlers, type ContentHeaderFilters } from '@/components/ui/ContentList';
-import { useCardLayout } from '@/hooks/ui/useCardLayout';
 import { useContentList } from '@/hooks/useContent';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { useLibraryTypes } from '@/hooks/useLibraryTypes';
+import { useUrlTableState } from '@/hooks/useUrlTableState';
 import {
     readContentFilter,
     readContentFilterSelection,
@@ -40,6 +40,7 @@ export interface SubjectContentController {
     onPaginationChange: OnChangeFn<PaginationState>;
     headerFilters: ContentHeaderFilters;
     headerFilterHandlers: ContentHeaderFilterHandlers;
+    onFilterCommit: (values: Pick<ContentHeaderFilters, 'title' | 'contentType' | 'fulfillment'>) => void;
     pageCount: number;
     currentPage: number;
     goToPage: (page: number) => void;
@@ -48,42 +49,41 @@ export interface SubjectContentController {
 
 export function useSubjectContent(metadataContainerId: string | undefined): SubjectContentController {
     const { contentTypes } = useLibraryTypes();
-    const usesCardLayout = useCardLayout();
 
-    const [filterQuery, setFilterQuery] = useState('');
-    const [sorting, setSorting] = useState<SortingState>(DEFAULT_SORTING);
-    const [pageIndex, setPageIndex] = useState(0);
+    const { filters, sorting, page, setFilters, setSorting, setPage } = useUrlTableState({
+        defaultFilters: { contentFilter: '' },
+        defaultSort: DEFAULT_SORTING,
+        sortKeys: Object.keys(SUBJECT_CONTENT_SORT_FIELD),
+        pageParam: 'contentPage',
+        sortParam: 'contentSort',
+    });
+    const filterQuery = filters.contentFilter;
+    const pageIndex = page - 1;
 
-    const hasActiveFilters = !usesCardLayout && filterQuery.trim().length > 0;
-    const [pagedWithFilters, setPagedWithFilters] = useState(hasActiveFilters);
-    if (pagedWithFilters !== hasActiveFilters) {
-        setPagedWithFilters(hasActiveFilters);
-        setPageIndex(0);
-    }
+    const hasActiveFilters = filterQuery.trim().length > 0;
 
     const debouncedFilterQuery = useDebouncedValue(filterQuery, 300);
-    const setFilterField = useCallback((mutate: (query: string) => string) => {
-        setFilterQuery((current) => mutate(current));
-        setPageIndex(0);
-    }, []);
+    const setFilterField = useCallback(
+        (mutate: (query: string) => string) => setFilters({ contentFilter: mutate(filterQuery) }),
+        [filterQuery, setFilters],
+    );
 
-    const onSortingChange: OnChangeFn<SortingState> = useCallback((updater) => {
-        setSorting((current) => {
-            const next = typeof updater === 'function' ? updater(current) : updater;
-            return next.length > 0 ? next : DEFAULT_SORTING;
-        });
-        setPageIndex(0);
-    }, []);
+    const onSortingChange: OnChangeFn<SortingState> = useCallback(
+        (updater) => {
+            const next = typeof updater === 'function' ? updater(sorting) : updater;
+            setSorting(next.length > 0 ? next : DEFAULT_SORTING);
+        },
+        [sorting, setSorting],
+    );
 
-    const onPaginationChange: OnChangeFn<PaginationState> = useCallback((updater) => {
-        setPageIndex((current) => {
+    const onPaginationChange: OnChangeFn<PaginationState> = useCallback(
+        (updater) => {
             const next =
-                typeof updater === 'function'
-                    ? updater({ pageIndex: current, pageSize: SUBJECT_CONTENT_PAGE_SIZE })
-                    : updater;
-            return next.pageIndex;
-        });
-    }, []);
+                typeof updater === 'function' ? updater({ pageIndex, pageSize: SUBJECT_CONTENT_PAGE_SIZE }) : updater;
+            setPage(next.pageIndex + 1);
+        },
+        [pageIndex, setPage],
+    );
 
     const queryParams = useMemo((): ContentQueryParams => {
         const params: ContentQueryParams = {
@@ -95,7 +95,7 @@ export function useSubjectContent(metadataContainerId: string | undefined): Subj
         const scope = metadataContainerId
             ? `Relationships has (RelatedMetadataContainerId = "${escapeQueryString(metadataContainerId)}")`
             : '';
-        const trimmed = usesCardLayout ? '' : debouncedFilterQuery.trim();
+        const trimmed = debouncedFilterQuery.trim();
         const filter = [scope, trimmed ? `(${trimmed})` : ''].filter(Boolean).join(' and ');
         if (filter) {
             params.filter = filter;
@@ -109,13 +109,19 @@ export function useSubjectContent(metadataContainerId: string | undefined): Subj
         }
 
         return params;
-    }, [metadataContainerId, pageIndex, usesCardLayout, debouncedFilterQuery, sorting]);
+    }, [metadataContainerId, pageIndex, debouncedFilterQuery, sorting]);
 
     const { data, isLoading, error } = useContentList(queryParams, { enabled: Boolean(metadataContainerId) });
 
     const contentItems = data?.items ?? [];
     const totalItems = data?.totalItems ?? 0;
     const pageCount = Math.max(1, Math.ceil(totalItems / SUBJECT_CONTENT_PAGE_SIZE));
+
+    useEffect(() => {
+        if (data && !isLoading && !error && filterQuery === debouncedFilterQuery && page > pageCount) {
+            setPage(pageCount, { replace: true });
+        }
+    }, [data, isLoading, error, filterQuery, debouncedFilterQuery, page, pageCount, setPage]);
 
     const headerFilters: ContentHeaderFilters = useMemo(() => {
         const selection = readContentFilterSelection(filterQuery);
@@ -145,9 +151,18 @@ export function useSubjectContent(metadataContainerId: string | undefined): Subj
         [setFilterField],
     );
 
-    const goToPage = useCallback((page: number) => {
-        setPageIndex(Math.max(0, page - 1));
-    }, []);
+    const onFilterCommit = useCallback<SubjectContentController['onFilterCommit']>(
+        ({ title, contentType, fulfillment }) => {
+            setFilterField((query) => {
+                const withTitle = setContentFilter(query, 'title', title);
+                const withType = setContentFilterSelection(withTitle, parseContentFilterSelectionValue(contentType));
+                return setContentFilter(withType, 'fulfillment', fulfillment);
+            });
+        },
+        [setFilterField],
+    );
+
+    const goToPage = useCallback((nextPage: number) => setPage(Math.max(1, nextPage)), [setPage]);
 
     return {
         contentItems,
@@ -160,6 +175,7 @@ export function useSubjectContent(metadataContainerId: string | undefined): Subj
         onPaginationChange,
         headerFilters,
         headerFilterHandlers,
+        onFilterCommit,
         pageCount,
         currentPage: pageIndex + 1,
         goToPage,

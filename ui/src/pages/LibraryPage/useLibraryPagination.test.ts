@@ -33,7 +33,7 @@ describe('useLibraryPagination', () => {
 
         act(() => result.current.handlePaginationChange({ pageIndex: 4, pageSize: PAGE_SIZE }));
 
-        expect(updateParams).toHaveBeenCalledWith({ page: '5' }, { replace: true });
+        expect(updateParams).toHaveBeenCalledWith({ page: '5' });
     });
 
     it('supports a functional updater against the current pagination state', () => {
@@ -42,7 +42,7 @@ describe('useLibraryPagination', () => {
 
         act(() => result.current.handlePaginationChange((prev) => ({ ...prev, pageIndex: prev.pageIndex + 1 })));
 
-        expect(updateParams).toHaveBeenCalledWith({ page: '3' }, { replace: true });
+        expect(updateParams).toHaveBeenCalledWith({ page: '3' });
     });
 
     it('navigates to a one-based page through goToPage', () => {
@@ -51,6 +51,18 @@ describe('useLibraryPagination', () => {
 
         act(() => result.current.goToPage(7));
 
-        expect(updateParams).toHaveBeenCalledWith({ page: '7' }, { replace: true });
+        expect(updateParams).toHaveBeenCalledWith({ page: '7' }, undefined);
+    });
+
+    it('GoToPage_ReplacesHistory_WhenCorrectingThePage', () => {
+        // Arrange
+        const updateParams = vi.fn();
+        const { result } = renderHook(() => useLibraryPagination({ params: paramsWith({ page: '99' }), updateParams }));
+
+        // Act
+        act(() => result.current.goToPage(2, { replace: true }));
+
+        // Assert
+        expect(updateParams).toHaveBeenCalledWith({ page: '2' }, { replace: true });
     });
 });

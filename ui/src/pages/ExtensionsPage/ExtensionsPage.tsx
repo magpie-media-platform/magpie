@@ -30,6 +30,7 @@ import {
     type SortableMoveDirection,
 } from '@/components/ui/SortableList';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
+import { useUrlTabState } from '@/hooks/useUrlTabState';
 import {
     useExtensionActions,
     useExtensionManagement,
@@ -43,6 +44,8 @@ import { getStatusVariant, getStatusLabel } from './extensionStatus';
 
 import './ExtensionsPage.css';
 import '@/styles/list-toolbar.css';
+
+const EXTENSION_TABS = ['installed', 'feeds'] as const;
 
 function comparePackageIdDescending(a: string | null | undefined, b: string | null | undefined): number {
     const left = a?.toUpperCase() ?? '';
@@ -154,7 +157,7 @@ export function ExtensionsPage() {
         [actions, toast, instanceName],
     );
 
-    const [activeTab, setActiveTab] = useState('installed');
+    const [activeTab, setActiveTab] = useUrlTabState({ defaultTab: 'installed', allowedTabs: EXTENSION_TABS });
     const feedsRef = useRef<NuGetFeedsSectionHandle>(null);
 
     const handleCheckUpdates = useCallback(async () => {

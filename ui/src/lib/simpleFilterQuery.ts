@@ -1,3 +1,5 @@
+import { splitTopLevelAndClauses } from './queryClauses';
+
 export type YearOp = 'before' | 'in' | 'after';
 
 export const YEAR_OPS: YearOp[] = ['before', 'in', 'after'];
@@ -68,20 +70,11 @@ export function relationshipClause(kind: string, name: string): string {
     return `Relationships has (${parts.join(' and ')})`;
 }
 
-const RELATIONSHIP_CLAUSE_PATTERN =
-    /Relationships\s+has\s+\(\s*((?:Name|Subject)\s+contains\s+"(?:\\.|[^"\\])*"|Type\s*=\s*"(?:\\.|[^"\\])*")(?:\s+and\s+((?:Name|Subject)\s+contains\s+"(?:\\.|[^"\\])*"|Type\s*=\s*"(?:\\.|[^"\\])*"))?\s*\)/i;
-
 function parseRelationshipClause(clause: string): Pick<FieldState, 'relationshipKind' | 'relationshipName'> | null {
     const state = { relationshipKind: '', relationshipName: '' };
     const fields = new Set<string>();
-    const parts = clause
-        .trim()
-        .split(/\s+and\s+/i)
-        .map((part) => part.trim())
-        .filter(Boolean);
-    if (parts.length === 0) {
-        return null;
-    }
+    const parts = splitTopLevelAndClauses(clause);
+    if (!parts?.length) return null;
     for (const part of parts) {
         const nameMatch = part.match(/^(?:Name|Subject)\s+contains\s+"((?:\\.|[^"\\])*)"$/i);
         if (nameMatch) {
@@ -156,16 +149,6 @@ function releaseYearClause(year: string, ops: YearOp[]): string | null {
     return `publishDate ${operator} "${trimmed}"`;
 }
 
-const RELEASE_YEAR_CLAUSE_PATTERN = new RegExp(
-    [
-        'publishDate\\s*(?:!=|<=|>=|=|<|>)\\s*"\\d{1,4}"',
-        '\\(\\s*publishDate\\s*>=\\s*"\\d{1,4}-01-01"\\s+and\\s+publishDate\\s*<=\\s*"\\d{1,4}-12-31"\\s*\\)',
-        '\\(\\s*publishDate\\s*<\\s*"\\d{1,4}-01-01"\\s+or\\s+publishDate\\s*>\\s*"\\d{1,4}-12-31"\\s*\\)',
-        'publishDate\\s*(?:>=|<=|<|>)\\s*"\\d{1,4}-(?:01-01|12-31)"',
-    ].join('|'),
-    'i',
-);
-
 function parseReleaseYearClause(clause: string): { operator: string; year: string } | null {
     const trimmed = clause.trim();
 
@@ -236,7 +219,7 @@ export function buildQuery(fields: FieldState, context: 'content' | 'subject'): 
     if (fields.title) {
         clauses.push(`title contains "${escapeQueryString(fields.title)}"`);
     }
-    if (fields.titlePrefix && context === 'content') {
+    if (fields.titlePrefix) {
         clauses.push(`title startswith "${escapeQueryString(fields.titlePrefix)}"`);
     }
     if (fields.genre && context === 'content') {
@@ -265,51 +248,27 @@ export function parseQuery(query: string, context: 'content' | 'subject'): Field
         return state;
     }
 
-    let scalarQuery = query;
-    const relationshipMatch = query.match(RELATIONSHIP_CLAUSE_PATTERN);
-    if (relationshipMatch) {
-        const relationship = parseRelationshipClause(
-            relationshipMatch[0].replace(/^Relationships\s+has\s+\(\s*/i, '').replace(/\s*\)\s*$/i, ''),
-        );
-        if (!relationship) {
-            return null;
+    const parts = splitTopLevelAndClauses(query);
+    if (!parts) return null;
+
+    for (const trimmed of parts) {
+        const relationshipMatch = trimmed.match(/^Relationships\s+has\s+\(([\s\S]*)\)$/i);
+        if (relationshipMatch) {
+            if (state.relationshipName || state.relationshipKind) return null;
+            const relationship = parseRelationshipClause(relationshipMatch[1]);
+            if (!relationship) return null;
+            state.relationshipName = relationship.relationshipName;
+            state.relationshipKind = relationship.relationshipKind;
+            continue;
         }
-        state.relationshipName = relationship.relationshipName;
-        state.relationshipKind = relationship.relationshipKind;
-        scalarQuery = scalarQuery
-            .replace(RELATIONSHIP_CLAUSE_PATTERN, '')
-            .replace(/\s+and\s+and\s+/i, ' and ')
-            .replace(/^\s*and\s+|\s+and\s+$/i, '');
-    }
 
-    if (context === 'content') {
-        const yearMatch = scalarQuery.match(RELEASE_YEAR_CLAUSE_PATTERN);
-        if (yearMatch) {
-            const parsed = parseReleaseYearClause(yearMatch[0]);
-            if (!parsed) {
-                return null;
-            }
-            const ops = OPERATOR_TO_YEAR_OPS[parsed.operator];
-            if (!ops) {
-                return null;
-            }
-            state.releaseYear = parsed.year;
-            state.yearOps = [...ops];
-            scalarQuery = scalarQuery
-                .replace(RELEASE_YEAR_CLAUSE_PATTERN, '')
-                .replace(/\s+and\s+and\s+/i, ' and ')
-                .replace(/^\s*and\s+|\s+and\s+$/i, '');
+        const year = context === 'content' ? parseReleaseYearClause(trimmed) : null;
+        if (year) {
+            if (state.releaseYear) return null;
+            state.releaseYear = year.year;
+            state.yearOps = [...OPERATOR_TO_YEAR_OPS[year.operator]];
+            continue;
         }
-    }
-
-    if (!scalarQuery.trim()) {
-        return state;
-    }
-
-    const parts = scalarQuery.split(/\s+and\s+/i);
-
-    for (const part of parts) {
-        const trimmed = part.trim();
 
         const contentTypeMatch = trimmed.match(/^contentType\s*=\s*"((?:\\.|[^"\\])*)"$/i);
         if (contentTypeMatch && context === 'content') {
@@ -356,7 +315,7 @@ export function parseQuery(query: string, context: 'content' | 'subject'): Field
         }
 
         const titlePrefixMatch = trimmed.match(/^title\s+startswith\s+"((?:\\.|[^"\\])*)"$/i);
-        if (titlePrefixMatch && context === 'content') {
+        if (titlePrefixMatch) {
             if (state.titlePrefix || !titlePrefixMatch[1]) return null;
             state.titlePrefix = unescapeQueryString(titlePrefixMatch[1]);
             continue;

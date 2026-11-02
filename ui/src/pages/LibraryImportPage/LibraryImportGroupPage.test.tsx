@@ -277,6 +277,35 @@ describe('LibraryImportGroupPage', () => {
         vi.unstubAllGlobals();
     });
 
+    it('Buckets_RestoresItsPageAndKeepsSelection_WhenOpeningASharedUrlAndPaging', async () => {
+        // Arrange
+        const user = userEvent.setup();
+        useLibraryImportGroupCandidatesMock.mockReturnValue({
+            items: Array.from({ length: 26 }, (_, index) => episode(`file-${index}`, String(index + 1))),
+            isLoading: false,
+            isError: false,
+            isTruncated: false,
+        });
+
+        // Act
+        render(<LibraryImportGroupPage monitoringMode="" onMonitoringModeChange={() => {}} />, {
+            wrapper: createTestWrapper('/library/import?key=group&bucketPage=2&filesPage=3'),
+        });
+
+        // Assert
+        expect(bucketRows()).toHaveLength(1);
+        expect(bucketRows()[0]).toHaveTextContent('26');
+        expect(screen.getByText('Page 2 of 2')).toBeInTheDocument();
+
+        // Act
+        await user.click(within(bucketRows()[0]).getByRole('checkbox'));
+        await user.click(screen.getByRole('button', { name: 'Go to previous page' }));
+
+        // Assert
+        expect(bucketRows()).toHaveLength(25);
+        expect(screen.getByText('1 selected')).toBeInTheDocument();
+    });
+
     it('explains that group actions apply only to loaded files when the response is truncated', () => {
         // Arrange
         useLibraryImportGroupCandidatesMock.mockReturnValue({

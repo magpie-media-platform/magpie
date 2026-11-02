@@ -1,7 +1,7 @@
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, useNavigate, useLocation, useNavigationType } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { useEffect, type ReactNode } from 'react';
 
@@ -236,6 +236,11 @@ function createTestWrapper(initialEntry = '/library/import') {
     };
 }
 
+function HistoryControls() {
+    const navigate = useNavigate();
+    return <button onClick={() => navigate(-1)}>Back</button>;
+}
+
 describe('LibraryImportPage', () => {
     beforeEach(() => {
         useLibraryImportGroupCandidatesMock.mockImplementation((params: { groupKey?: string } | null) => ({
@@ -269,6 +274,35 @@ describe('LibraryImportPage', () => {
     afterEach(() => {
         vi.unstubAllGlobals();
         vi.restoreAllMocks();
+    });
+
+    it('Pagination_ReplacesTheInvalidEntry_WhenThePageExceedsTheResult', async () => {
+        // Arrange
+        setGroups([buildGroup()], 30);
+        function RouteState() {
+            const location = useLocation();
+            const navigationType = useNavigationType();
+            return (
+                <output data-testid="route-state" data-navigation-type={navigationType}>
+                    {location.search}
+                </output>
+            );
+        }
+
+        // Act
+        render(
+            <>
+                <LibraryImportPage monitoringMode="" onMonitoringModeChange={() => {}} />
+                <RouteState />
+            </>,
+            { wrapper: createTestWrapper('/library/import?page=99&rootFolderId=folder-1') },
+        );
+
+        // Assert
+        await waitFor(() =>
+            expect(screen.getByTestId('route-state')).toHaveTextContent('?page=2&rootFolderId=folder-1'),
+        );
+        expect(screen.getByTestId('route-state')).toHaveAttribute('data-navigation-type', 'REPLACE');
     });
 
     it('shows the scan summary as unavailable when the count request fails', () => {
@@ -852,6 +886,36 @@ describe('LibraryImportPage', () => {
             expect(useLibraryImportCandidateGroupsMock).toHaveBeenCalledWith(
                 expect.objectContaining({ pageNumber: 2, pageSize: 25 }),
             );
+        });
+    });
+
+    it('Pagination_RestoresPreviousPage_WhenNavigatingBack', async () => {
+        // Arrange
+        const user = userEvent.setup();
+        setGroups([buildGroup()], 30);
+        render(
+            <>
+                <LibraryImportPage monitoringMode="" onMonitoringModeChange={() => {}} />
+                <HistoryControls />
+            </>,
+            { wrapper: createTestWrapper('/library/import?rootFolderId=folder-1') },
+        );
+
+        // Act
+        await user.click(screen.getByRole('button', { name: 'Go to next page' }));
+
+        // Assert
+        expect(screen.getByText('Page 2 of 2')).toBeInTheDocument();
+
+        // Act
+        await user.click(screen.getByRole('button', { name: 'Back' }));
+
+        // Assert
+        expect(screen.getByText('Page 1 of 2')).toBeInTheDocument();
+        expect(useLibraryImportCandidateGroupsMock).toHaveBeenLastCalledWith({
+            rootFolderId: 'folder-1',
+            pageNumber: 1,
+            pageSize: 25,
         });
     });
 

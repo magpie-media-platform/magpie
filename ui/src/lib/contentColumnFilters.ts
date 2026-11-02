@@ -1,3 +1,4 @@
+import { splitTopLevelClauses } from './queryClauses';
 import type { ContentFilterSelection } from './contentFilterOptions';
 import { escapeQueryString, monitoringClause, parseMonitoringClause, unescapeQueryString } from './simpleFilterQuery';
 
@@ -70,81 +71,9 @@ function classify(clause: string): Predicate {
     return { field: null, raw: trimmed };
 }
 
-const AND_OR_DELIMITER = /^\s+(and|or)\s+/i;
-
 export function splitClauses(query: string): Predicate[] {
-    const trimmed = query.trim();
-    if (!trimmed) {
-        return [];
-    }
-
-    const clauses: string[] = [];
-    let current = '';
-    let depth = 0;
-    let inString = false;
-    let i = 0;
-
-    while (i < trimmed.length) {
-        const ch = trimmed[i];
-
-        if (inString) {
-            current += ch;
-            if (ch === '\\' && i + 1 < trimmed.length) {
-                current += trimmed[i + 1];
-                i += 2;
-                continue;
-            }
-            if (ch === '"') {
-                inString = false;
-            }
-            i += 1;
-            continue;
-        }
-
-        if (ch === '"') {
-            inString = true;
-            current += ch;
-            i += 1;
-            continue;
-        }
-
-        if (ch === '(') {
-            depth += 1;
-            current += ch;
-            i += 1;
-            continue;
-        }
-
-        if (ch === ')') {
-            depth = Math.max(0, depth - 1);
-            current += ch;
-            i += 1;
-            continue;
-        }
-
-        if (depth === 0 && /\s/.test(ch)) {
-            const delimiter = trimmed.slice(i).match(AND_OR_DELIMITER);
-            if (delimiter) {
-                if (delimiter[1].toLowerCase() === 'or') {
-                    return [{ field: null, raw: trimmed, grouped: true }];
-                }
-                clauses.push(current);
-                current = '';
-                i += delimiter[0].length;
-                continue;
-            }
-        }
-
-        current += ch;
-        i += 1;
-    }
-
-    clauses.push(current);
-
-    return clauses
-        .map((c) => c.trim())
-        .filter(Boolean)
-        .map(classify);
+    const { clauses, hasTopLevelOr } = splitTopLevelClauses(query);
+    return hasTopLevelOr ? [{ field: null, raw: query.trim(), grouped: true }] : clauses.filter(Boolean).map(classify);
 }
 
 function serializeClause(field: ClassifiedContentFilterField, value: string): string {

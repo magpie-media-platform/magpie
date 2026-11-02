@@ -100,6 +100,42 @@ describe('simpleFilterQuery', () => {
     });
 
     describe('parseQuery', () => {
+        it.each([
+            ['title', 'Pride and Prejudice'],
+            ['title', 'Fast and '],
+            ['genre', 'Rock and Roll'],
+            ['tag', 'A and B'],
+            ['relationshipName', 'A and B'],
+            ['relationshipKind', 'A and B'],
+            ['title', 'A "quote" and (a group) \\ path'],
+            ['title', 'publishDate = "1999" and Relationships has (Type = "studio")'],
+        ] as const)('ParseQuery_PreservesQuotedText_WhenFieldIs%sAndValueIs%s', (field, value) => {
+            // Arrange
+            const query = buildQuery({ ...EMPTY_FIELDS, [field]: value }, 'content');
+
+            // Act
+            const parsed = parseQuery(query, 'content');
+
+            // Assert
+            expect(parsed?.[field]).toBe(value);
+            expect(isSimpleQuery(query, 'content')).toBe(true);
+        });
+
+        it.each([
+            'title contains "A" or tag has "B"',
+            'title contains "A" and ',
+            'title contains "A" and (tag has "B"',
+            'title contains "A" and tag has "B")',
+            'publishDate = "1999" and publishDate = "2000"',
+            'Relationships has (Type = "studio") and Relationships has (Type = "person")',
+        ])('ParseQuery_RequiresAdvancedMode_WhenQueryCannotBeRepresented: %s', (query) => {
+            // Act
+            const parsed = parseQuery(query, 'content');
+
+            // Assert
+            expect(parsed).toBeNull();
+        });
+
         it('round-trips a built content query', () => {
             const fields = {
                 ...EMPTY_FIELDS,
@@ -188,7 +224,7 @@ describe('simpleFilterQuery', () => {
         });
 
         it.each(['title startswith ""', 'title startswith "B" and title startswith "C"'])(
-            'keeps an unusable title prefix condition in advanced mode: %s',
+            'ParseQuery_ReturnsNull_WhenTitlePrefixIsUnusableFor%s',
             (query) => {
                 // Act
                 const parsed = parseQuery(query, 'content');
@@ -198,7 +234,7 @@ describe('simpleFilterQuery', () => {
             },
         );
 
-        it('keeps a title prefix condition in advanced mode for a subject query', () => {
+        it('BuildQuery_PreservesSubjectTitlePrefix_WhenEditingSimpleFields', () => {
             // Arrange
             const query = 'title startswith "B"';
 
@@ -206,7 +242,10 @@ describe('simpleFilterQuery', () => {
             const parsed = parseQuery(query, 'subject');
 
             // Assert
-            expect(parsed).toBeNull();
+            expect(parsed).toMatchObject({ titlePrefix: 'B' });
+            expect(buildQuery({ ...parsed!, tag: 'favorite' }, 'subject')).toBe(
+                'title startswith "B" and tag has "favorite"',
+            );
         });
     });
 
@@ -243,7 +282,7 @@ describe('simpleFilterQuery', () => {
             expect(isSimpleQuery('contentType = "movie" or contentType = "show"', 'content')).toBe(false);
         });
 
-        it('keeps a title prefix condition in advanced mode unless the host allows it', () => {
+        it('IsSimpleQuery_RequiresAllowTitlePrefix_WhenContentQueryHasTitlePrefix', () => {
             // Arrange
             const query = 'tag has "Action" and title startswith "B"';
 

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo } from 'react';
 import { UsersIcon, KeyIcon } from '@phosphor-icons/react';
 
 import { useAuth, Role } from '@/auth';
@@ -7,29 +7,39 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/Tabs';
 import { PullToRefresh } from '@/components/ui/PullToRefresh';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { useUrlTabState } from '@/hooks/useUrlTabState';
+import { useUrlTableState } from '@/hooks/useUrlTableState';
 import { useUsers } from '@/hooks/useUsers';
 import { useApiKeys, useAllApiKeys } from '@/hooks/useApiKeys';
 
 import { UserManagement } from './UserManagement';
-import { ApiKeyManagement, type ApiKeyScope } from './ApiKeyManagement';
+import { ApiKeyManagement } from './ApiKeyManagement';
 
 import './UsersPage.css';
 import '@/styles/card-actions.css';
 import '@/styles/list-toolbar.css';
 
 const USER_TABS = ['users', 'api-keys'] as const;
+const API_KEY_SCOPES = ['mine', 'all'] as const;
 const USERS_PAGE_SIZE = 25;
 
 export function UsersPage() {
     useDocumentTitle('Users');
-    const [activeTab, setUrlActiveTab] = useUrlTabState({ defaultTab: 'users', allowedTabs: USER_TABS });
-    const setActiveTab = useCallback((tab: string) => setUrlActiveTab(tab, { replace: true }), [setUrlActiveTab]);
-    const [apiKeyScope, setApiKeyScope] = useState<ApiKeyScope>('mine');
+    const [activeTab, setActiveTab] = useUrlTabState({ defaultTab: 'users', allowedTabs: USER_TABS });
+    const [apiKeyScope, setApiKeyScope] = useUrlTabState({
+        defaultTab: 'mine',
+        allowedTabs: API_KEY_SCOPES,
+        paramName: 'keyScope',
+    });
 
     const { hasRole } = useAuth();
     const canViewAllApiKeys = hasRole(Role.Admin);
     const isViewingAllApiKeys = canViewAllApiKeys && apiKeyScope === 'all';
-    const [usersPage, setUsersPage] = useState(1);
+    const { page: usersPage, setPage: setUsersPage } = useUrlTableState({
+        defaultSort: [],
+        defaultFilters: {},
+        sortKeys: [],
+        pageParam: 'usersPage',
+    });
     const userQueryParams = useMemo(() => ({ pageNumber: usersPage, pageSize: USERS_PAGE_SIZE }), [usersPage]);
     const usersQuery = useUsers(userQueryParams);
     const { totalItems: totalUsers, isLoading: areUsersLoading, refetch: refetchUsers } = usersQuery;
@@ -39,10 +49,10 @@ export function UsersPage() {
     const apiKeyTabCount = isViewingAllApiKeys ? allApiKeys.length : myApiKeys.length;
 
     useEffect(() => {
-        if (!areUsersLoading && usersPage > usersPageCount) {
-            setUsersPage(usersPageCount);
+        if (!areUsersLoading && !usersQuery.error && usersPage > usersPageCount) {
+            setUsersPage(usersPageCount, { replace: true });
         }
-    }, [areUsersLoading, usersPage, usersPageCount]);
+    }, [areUsersLoading, usersQuery.error, usersPage, usersPageCount, setUsersPage]);
 
     const handleRefresh = useCallback(async () => {
         await refetchUsers();

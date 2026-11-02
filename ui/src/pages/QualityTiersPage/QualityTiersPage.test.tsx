@@ -108,7 +108,15 @@ function LocationDisplay() {
     return <div data-testid="location">{location.pathname + location.search}</div>;
 }
 
-function TestWrapper({ children, role = Role.Admin }: { children: ReactNode; role?: Role }) {
+function TestWrapper({
+    children,
+    role = Role.Admin,
+    initialEntry = '/admin/quality-tiers',
+}: {
+    children: ReactNode;
+    role?: Role;
+    initialEntry?: string;
+}) {
     const queryClient = new QueryClient({
         defaultOptions: {
             queries: { retry: false, gcTime: 0 },
@@ -118,7 +126,7 @@ function TestWrapper({ children, role = Role.Admin }: { children: ReactNode; rol
 
     return (
         <QueryClientProvider client={queryClient}>
-            <MemoryRouter initialEntries={['/admin/quality-tiers']}>
+            <MemoryRouter initialEntries={[initialEntry]}>
                 <AuthProvider
                     initialUser={{ id: 'user-1', username: 'test', role }}
                     initialPermissions={testEffectivePermissions()}
@@ -168,6 +176,40 @@ describe('QualityTiersPage', () => {
     afterEach(() => {
         vi.restoreAllMocks();
         vi.unstubAllGlobals();
+    });
+
+    it('TierLists_RestoresAndUpdatesThePage_WhenOpeningASharedUrl', async () => {
+        // Arrange
+        const user = userEvent.setup();
+        vi.mocked(apiGet).mockImplementation((url: string) =>
+            Promise.resolve(
+                url.startsWith('/quality-tier-lists')
+                    ? Array.from({ length: 25 }, (_, index) => ({
+                          ...tierLists[2],
+                          id: `list-${index}`,
+                          name: `List ${String(index).padStart(2, '0')}`,
+                      }))
+                    : [],
+            ),
+        );
+
+        // Act
+        render(
+            <TestWrapper initialEntry="/admin/quality-tiers?page=2">
+                <QualityTiersPage />
+            </TestWrapper>,
+        );
+
+        // Assert
+        expect(await screen.findByRole('link', { name: 'List 10' })).toBeInTheDocument();
+        expect(screen.queryByRole('link', { name: 'List 00' })).not.toBeInTheDocument();
+
+        // Act
+        await user.click(screen.getByRole('button', { name: 'Go to next page' }));
+
+        // Assert
+        expect(await screen.findByRole('link', { name: 'List 20' })).toBeInTheDocument();
+        expect(screen.getByTestId('location')).toHaveTextContent('page=3');
     });
 
     it('renders the quality tiers registry with its summary fields', async () => {

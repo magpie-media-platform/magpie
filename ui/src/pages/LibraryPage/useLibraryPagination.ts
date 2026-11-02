@@ -22,14 +22,14 @@ export function useLibraryPagination({ params, updateParams }: UseLibraryPaginat
     const handlePaginationChange = useCallback(
         (updater: Updater<PaginationState>) => {
             const next = typeof updater === 'function' ? updater(pagination) : updater;
-            updateParams({ page: String(next.pageIndex + 1) }, { replace: true });
+            updateParams({ page: String(next.pageIndex + 1) });
         },
         [pagination, updateParams],
     );
 
     const goToPage = useCallback(
-        (page: number) => handlePaginationChange({ pageIndex: page - 1, pageSize: PAGE_SIZE }),
-        [handlePaginationChange],
+        (page: number, options?: { replace?: boolean }) => updateParams({ page: String(page) }, options),
+        [updateParams],
     );
 
     return {

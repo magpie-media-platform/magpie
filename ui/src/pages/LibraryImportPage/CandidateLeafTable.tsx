@@ -42,6 +42,7 @@ import { useToast, type ToastOptions } from '@/components/ui/Toast';
 
 import { useMenuAction } from '@/hooks/ui/useMenuAction';
 import { useBulkSelection } from '@/hooks/useBulkSelection';
+import { useUrlTableState } from '@/hooks/useUrlTableState';
 import { useBulkAcceptLibraryImportCandidates } from '@/hooks/useBulkAcceptLibraryImportCandidates';
 import type { LibraryImportCandidate } from '@/hooks/useLibraryImportCandidates';
 import {
@@ -397,6 +398,13 @@ export function CandidateLeafTable({
 }: CandidateLeafTableProps) {
     const instanceName = useInstanceName();
     const { toast } = useToast();
+    const { page, setPage } = useUrlTableState({
+        defaultSort: [],
+        defaultFilters: {},
+        sortKeys: [],
+        pageParam: 'filesPage',
+    });
+    const pagination = useMemo(() => ({ pageIndex: page - 1, pageSize: PAGE_SIZE }), [page]);
 
     const [actingIds, setActingIds] = useState<Set<string>>(() => new Set());
     const [isBulkImporting, setIsBulkImporting] = useState(false);
@@ -744,6 +752,7 @@ export function CandidateLeafTable({
             </div>
 
             <BulkActionsToolbar
+                visible={hasSelection}
                 className="candidate-leaf-table__desktop-bulk-toolbar"
                 selection={selection}
                 label="File selection actions"
@@ -764,6 +773,10 @@ export function CandidateLeafTable({
                     onPageRowIdsChange={setPageRowIds}
                     enablePagination
                     pageSize={PAGE_SIZE}
+                    pagination={pagination}
+                    onPaginationChange={(updater) =>
+                        setPage((typeof updater === 'function' ? updater(pagination) : updater).pageIndex + 1)
+                    }
                     emptyState={emptyState}
                     mobileVariant="compact"
                     mobileSelectionActive={selection.selectionMode}

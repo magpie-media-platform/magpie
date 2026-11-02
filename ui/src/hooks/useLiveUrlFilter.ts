@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { NavigationType, useLocation, useNavigationType } from 'react-router-dom';
+import { getSyncedLocationState } from './useSyncedSearchParams';
 
 interface UseLiveUrlFilterOptions {
     value: string;
@@ -32,10 +33,12 @@ export function useLiveUrlFilter({
     const currentScopeRef = useRef(scope);
     const onCommitRef = useRef(onCommit);
     const sourceValueRef = useRef(value);
+    const locationRef = useRef(location);
     const observedRef = useRef({ key: location.key, pathname: scope, search: location.search, value, externalKey });
     onCommitRef.current = onCommit;
     sourceValueRef.current = value;
     currentScopeRef.current = scope;
+    locationRef.current = location;
 
     const cancelPending = useCallback(() => {
         if (timerRef.current !== null) {
@@ -47,7 +50,10 @@ export function useLiveUrlFilter({
     const createCommitState = useCallback(() => {
         const commit = `${id}:${++commitSequenceRef.current}`;
         pendingCommitsRef.current.add(commit);
-        return { liveFilterCommit: commit };
+        const currentState = getSyncedLocationState(locationRef.current);
+        const baseState =
+            currentState && typeof currentState === 'object' ? (currentState as Record<string, unknown>) : {};
+        return { ...baseState, liveFilterCommit: commit };
     }, [id]);
 
     const commitValue = useCallback(
@@ -129,7 +135,9 @@ export function useLiveUrlFilter({
             editedRef.current = true;
             setDraft({ scope, value: nextValue });
             if (immediate) {
+                sessionRef.current = false;
                 commitValue(nextValue, force);
+                sessionRef.current = false;
                 return;
             }
             timerRef.current = setTimeout(() => {

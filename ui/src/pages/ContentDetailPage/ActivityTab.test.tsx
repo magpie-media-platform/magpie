@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { MemoryRouter, useLocation } from 'react-router-dom';
+import { MemoryRouter, useLocation, useNavigationType } from 'react-router-dom';
 import type { ReactNode } from 'react';
 import { flushSync } from 'react-dom';
 
@@ -103,7 +103,12 @@ afterEach(() => {
 
 function LocationProbe() {
     const { search } = useLocation();
-    return <output data-testid="activity-tab__location-search">{search}</output>;
+    const navigationType = useNavigationType();
+    return (
+        <output data-testid="activity-tab__location-search" data-navigation-type={navigationType}>
+            {search}
+        </output>
+    );
 }
 
 function TestWrapper({ children, initialEntry = '/' }: { children: ReactNode; initialEntry?: string }) {
@@ -405,19 +410,20 @@ describe('ActivityTab', () => {
         // Arrange
         vi.mocked(apiGet).mockResolvedValue({ ...mockActivity, totalItems: 40 });
         // Act
-        renderTab('/?page=99');
+        renderTab('/?activityPage=99');
         // Assert
         await waitFor(() =>
             expect(apiGet).toHaveBeenCalledWith('/audit-history?contentId=content-1&pageNumber=2&pageSize=25'),
         );
         expect(await screen.findByText('Page 2 of 2')).toBeInTheDocument();
+        expect(screen.getByTestId('activity-tab__location-search')).toHaveAttribute('data-navigation-type', 'REPLACE');
     });
 
     it.each(['0', '-1', '1.5', 'invalid'])('loads page one for invalid page %s', async (page) => {
         // Arrange
         vi.mocked(apiGet).mockResolvedValue(mockActivity);
         // Act
-        renderTab(`/?page=${page}`);
+        renderTab(`/?activityPage=${page}`);
         // Assert
         await waitFor(() =>
             expect(apiGet).toHaveBeenCalledWith('/audit-history?contentId=content-1&pageNumber=1&pageSize=25'),
@@ -634,7 +640,7 @@ describe('ActivityTab', () => {
             expect(activityCalls.some((u) => u.includes('pageNumber=2'))).toBe(true);
         });
         expect(screen.getByTestId('activity-tab__location-search')).toHaveTextContent(
-            '?tab=activity&sort=timestamp%3Aasc&page=2',
+            '?tab=activity&sort=timestamp%3Aasc&activityPage=2',
         );
 
         await user.click(screen.getByRole('button', { name: /go to first page/i }));

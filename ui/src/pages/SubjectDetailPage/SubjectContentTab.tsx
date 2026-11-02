@@ -1,10 +1,11 @@
+import { ListFilterToolbar } from '@/components/ui/ListFilterToolbar';
 import { useCallback } from 'react';
 import { useOpenLocalContentPreview } from '@/components/content/LocalContentPreview';
 import { FilmSlateIcon, MagnifyingGlassIcon, WarningCircleIcon } from '@phosphor-icons/react';
 
 import { ContentList, type ContentItem } from '@/components/ui/ContentList';
 import { EmptyState } from '@/components/ui/EmptyState';
-import { MobileListToolbar, type MobileListSortOption } from '@/components/ui/MobileListToolbar';
+import { type MobileListSortOption } from '@/components/ui/MobileListToolbar';
 import { MobileMediaCard } from '@/components/ui/MobileMediaCard';
 import { Pager } from '@/components/ui/Pager';
 import { Skeleton } from '@/components/ui/Skeleton';
@@ -74,6 +75,7 @@ export function SubjectContentTab({
     onPaginationChange,
     headerFilters,
     headerFilterHandlers,
+    onFilterCommit,
     pageCount,
     currentPage,
     goToPage,
@@ -129,12 +131,6 @@ export function SubjectContentTab({
 
         return usesCardLayout ? (
             <div className="subject-content-tab__mobile">
-                <MobileListToolbar
-                    className="subject-content-tab__mobile-toolbar"
-                    sorting={sorting}
-                    sortOptions={CONTENT_SORT_OPTIONS}
-                    onSortingChange={onSortingChange}
-                />
                 {contentItems.length === 0 ? (
                     emptyState
                 ) : (
@@ -187,6 +183,42 @@ export function SubjectContentTab({
             data-component="subject-content-tab"
             data-layout={usesCardLayout ? 'card' : 'table'}
         >
+            <ListFilterToolbar
+                showControls={false}
+                fields={[
+                    { id: 'title', label: 'Title', kind: 'text', value: headerFilters.title },
+                    {
+                        id: 'contentType',
+                        label: 'Type',
+                        kind: 'facet',
+                        value: headerFilters.contentType,
+                        options: headerFilters.contentTypeOptions,
+                    },
+                    {
+                        id: 'fulfillment',
+                        label: 'Status',
+                        kind: 'facet',
+                        value: headerFilters.fulfillment,
+                        options: [
+                            { value: 'Missing', label: 'Missing' },
+                            { value: 'Partial', label: 'Partial' },
+                            { value: 'Upgradable', label: 'Upgradable' },
+                            { value: 'Fulfilled', label: 'Fulfilled' },
+                            { value: 'FulfilledExternally', label: 'Fulfilled Externally' },
+                        ],
+                    },
+                ]}
+                onCommit={(values) => {
+                    onFilterCommit({
+                        title: values.title as string,
+                        contentType: values.contentType as string,
+                        fulfillment: values.fulfillment as string,
+                    });
+                }}
+                sorting={sorting}
+                sortOptions={CONTENT_SORT_OPTIONS}
+                onSortingChange={onSortingChange}
+            />
             {renderBody()}
         </div>
     );

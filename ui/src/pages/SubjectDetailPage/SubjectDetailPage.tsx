@@ -119,7 +119,7 @@ export function SubjectDetailPage() {
     const rawTab = searchParams.get('tab');
     const activeTab = rawTab || DEFAULT_TAB;
     const setActiveTab = useCallback(
-        (tab: string) => {
+        (tab: string, options?: { replace?: boolean }) => {
             setSearchParams(
                 (prev) => {
                     const next = new URLSearchParams(prev);
@@ -130,10 +130,10 @@ export function SubjectDetailPage() {
                     }
                     return next;
                 },
-                { replace: true },
+                { replace: options?.replace ?? false, state: location.state },
             );
         },
-        [setSearchParams],
+        [setSearchParams, location.state],
     );
 
     const locationState = location.state as SubjectDetailLocationState | null;
@@ -420,7 +420,7 @@ export function SubjectDetailPage() {
             return;
         }
 
-        setActiveTab(effectiveTab);
+        setActiveTab(effectiveTab, { replace: true });
     }, [
         activeTab,
         apiSubject,

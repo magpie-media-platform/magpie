@@ -1,7 +1,7 @@
 import { act, render, screen, within, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { MemoryRouter, Routes, Route, useLocation } from 'react-router-dom';
+import { MemoryRouter, Routes, Route, useLocation, createMemoryRouter, RouterProvider } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 import { useLibraryTypes } from '@/hooks/useLibraryTypes';
@@ -4030,5 +4030,35 @@ describe('ContentDetailPage', () => {
                 expect(parentLink?.textContent).toContain('Breaking Bad');
             });
         });
+    });
+    it('Tabs_ReplaceInvalidUrl_WhenNormalizingBeforeBackNavigation', async () => {
+        // Arrange
+        const router = createMemoryRouter(
+            [
+                { path: '/origin', element: <div>Previous page</div> },
+                { path: '/library/:contentId', element: <ContentDetailPage /> },
+            ],
+            { initialEntries: ['/origin', '/library/content-3?tab=invalid&keep=1'] },
+        );
+        const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+        render(
+            <QueryClientProvider client={queryClient}>
+                <TooltipProvider>
+                    <ToastProvider>
+                        <ToastStateProvider>
+                            <RouterProvider router={router} />
+                        </ToastStateProvider>
+                    </ToastProvider>
+                </TooltipProvider>
+            </QueryClientProvider>,
+        );
+        await waitFor(() => expect(router.state.location.search).toBe('?keep=1'));
+
+        // Act
+        await act(() => router.navigate(-1));
+
+        // Assert
+        expect(await screen.findByText('Previous page')).toBeInTheDocument();
+        expect(router.state.location.pathname).toBe('/origin');
     });
 });

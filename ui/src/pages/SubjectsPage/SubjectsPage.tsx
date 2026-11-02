@@ -23,6 +23,7 @@ import { useLibraryTypes, useTypeIconName, type LibraryTypeDefinition } from '@/
 import { TABLE_LAYOUT_QUERY, useCardLayout } from '@/hooks/ui/useCardLayout';
 import { extractImageUrl, extractTitle } from '@/lib/metadata';
 import { getErrorMessage } from '@/lib/errors';
+import { splitTopLevelClauses } from '@/lib/queryClauses';
 import { useSubjects, type ApiSubject } from '@/hooks/useSubjects';
 import { resolveSubjectKindLabel } from '@/types';
 
@@ -44,87 +45,15 @@ const SUBJECT_SORT_OPTIONS: MobileListSortOption[] = [
     { id: 'kind', label: 'Type' },
 ];
 
-function splitTopLevelAndClauses(query: string): string[] {
-    const trimmed = query.trim();
-    if (!trimmed) {
-        return [];
-    }
-
-    const clauses: string[] = [];
-    let current = '';
-    let depth = 0;
-    let inString = false;
-    let i = 0;
-
-    while (i < trimmed.length) {
-        const ch = trimmed[i];
-
-        if (inString) {
-            current += ch;
-            if (ch === '\\' && i + 1 < trimmed.length) {
-                current += trimmed[i + 1];
-                i += 2;
-                continue;
-            }
-            if (ch === '"') {
-                inString = false;
-            }
-            i += 1;
-            continue;
-        }
-
-        if (ch === '"') {
-            inString = true;
-            current += ch;
-            i += 1;
-            continue;
-        }
-
-        if (ch === '(') {
-            depth += 1;
-            current += ch;
-            i += 1;
-            continue;
-        }
-
-        if (ch === ')') {
-            depth = Math.max(0, depth - 1);
-            current += ch;
-            i += 1;
-            continue;
-        }
-
-        if (depth === 0 && /\s/.test(ch)) {
-            const delimiter = trimmed.slice(i).match(/^\s+(and|or)\s+/i);
-            if (delimiter) {
-                if (delimiter[1].toLowerCase() === 'or') {
-                    return [trimmed];
-                }
-                clauses.push(current);
-                current = '';
-                i += delimiter[0].length;
-                continue;
-            }
-        }
-
-        current += ch;
-        i += 1;
-    }
-
-    clauses.push(current);
-    return clauses.map((clause) => clause.trim()).filter(Boolean);
-}
-
 function removeSubjectKindClauses(query: string): string {
     const trimmed = query.trim();
-    const clauses = splitTopLevelAndClauses(trimmed);
-    if (clauses.length === 1 && clauses[0] === trimmed && /\s+or\s+/i.test(trimmed)) {
+    const { clauses, hasTopLevelOr } = splitTopLevelClauses(trimmed);
+    if (hasTopLevelOr) {
         return trimmed;
     }
 
-    return clauses.filter((clause) => !SUBJECT_KIND_CLAUSE_PATTERN.test(clause.trim())).join(' and ');
+    return clauses.filter((clause) => Boolean(clause) && !SUBJECT_KIND_CLAUSE_PATTERN.test(clause)).join(' and ');
 }
-
 function transformSubject(subject: ApiSubject, subjectTypes: LibraryTypeDefinition[]): SubjectItem {
     const subjectType = subjectTypes.find((type) => type.slug === subject.kind);
     const kindLabel = resolveSubjectKindLabel(subject.kind, subjectType?.name);
@@ -173,7 +102,7 @@ export function SubjectsPage() {
         },
         [setUrlState],
     );
-    const liveFilter = useLiveUrlFilter({ value: urlVisibleFilterQuery, onCommit: commitFilter, replace: true });
+    const liveFilter = useLiveUrlFilter({ value: urlVisibleFilterQuery, onCommit: commitFilter });
     const visibleFilterQuery = liveFilter.value;
     const debouncedFilter = useDebouncedValue(visibleFilterQuery, 300);
 
@@ -217,8 +146,20 @@ export function SubjectsPage() {
         [serverFilter, sortField, sortDirection, pageNumber],
     );
 
-    const { subjects, totalItems, isLoading, error, refetch } = useSubjects(queryParams);
+    const { subjects, totalItems, isLoading, isPlaceholderData, error, refetch } = useSubjects(queryParams);
     const pageCount = Math.max(1, Math.ceil(totalItems / PAGE_SIZE));
+
+    useEffect(() => {
+        if (
+            !isLoading &&
+            !isPlaceholderData &&
+            !error &&
+            visibleFilterQuery === debouncedFilter &&
+            pageNumber > pageCount
+        ) {
+            setUrlState({ page: pageCount > 1 ? String(pageCount) : '' }, { replace: true });
+        }
+    }, [isLoading, isPlaceholderData, error, visibleFilterQuery, debouncedFilter, pageNumber, pageCount, setUrlState]);
 
     const typeIconName = useTypeIconName();
 
@@ -255,7 +196,7 @@ export function SubjectsPage() {
     const handlePaginationChange = useCallback(
         (updater: Updater<PaginationState>) => {
             const next = typeof updater === 'function' ? updater(pagination) : updater;
-            setUrlState({ page: next.pageIndex > 0 ? String(next.pageIndex + 1) : '' }, { replace: true });
+            setUrlState({ page: next.pageIndex > 0 ? String(next.pageIndex + 1) : '' });
         },
         [pagination, setUrlState],
     );
@@ -265,9 +206,9 @@ export function SubjectsPage() {
             const next = typeof updater === 'function' ? updater(sorting) : updater;
             const first = next[0];
             if (!first || !VALID_SORT_FIELDS.includes(first.id as SortField)) {
-                setUrlState({ sort: '', sortDir: '', page: '' }, { replace: true });
+                setUrlState({ sort: '', sortDir: '', page: '' });
             } else {
-                setUrlState({ sort: first.id, sortDir: first.desc ? 'desc' : 'asc', page: '' }, { replace: true });
+                setUrlState({ sort: first.id, sortDir: first.desc ? 'desc' : 'asc', page: '' });
             }
         },
         [sorting, setUrlState],
@@ -330,6 +271,7 @@ export function SubjectsPage() {
                                 value={visibleFilterQuery}
                                 onChange={handleFilterChange}
                                 context="subject"
+                                allowTitlePrefix
                                 defaultExpanded={visibleFilterQuery.length > 0 ? true : undefined}
                                 tableLayoutQuery={TABLE_LAYOUT_QUERY}
                                 defaultSubjectKind={scopedSubjectKind ?? undefined}

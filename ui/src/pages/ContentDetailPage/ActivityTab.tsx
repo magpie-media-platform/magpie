@@ -53,11 +53,11 @@ interface ActivityTabProps {
 }
 
 export function ActivityTab({ contentHierarchyItemId }: ActivityTabProps): ReactNode {
-    const [urlState, setUrlState] = useUrlFilterState({ page: '1' });
-    const rawPage = Number(urlState.page);
+    const [urlState, setUrlState] = useUrlFilterState({ activityPage: '1' });
+    const rawPage = Number(urlState.activityPage);
     const page = Number.isInteger(rawPage) && rawPage >= 1 ? rawPage : 1;
     const setPage = useCallback(
-        (next: number) => setUrlState({ page: String(Math.max(1, next)) }, { replace: true }),
+        (next: number) => setUrlState({ activityPage: String(Math.max(1, next)) }),
         [setUrlState],
     );
 
@@ -77,9 +77,9 @@ export function ActivityTab({ contentHierarchyItemId }: ActivityTabProps): React
     const safePage = Math.min(page, totalPages);
     useEffect(() => {
         if (activity && !error && page > totalPages) {
-            setPage(totalPages);
+            setUrlState({ activityPage: String(totalPages) }, { replace: true });
         }
-    }, [activity, error, page, totalPages, setPage]);
+    }, [activity, error, page, totalPages, setUrlState]);
 
     const [selectedEntry, setSelectedEntry] = useState<MagpieActivityEntry | null>(null);
     const [detailOpen, setDetailOpen] = useState(false);

@@ -1462,7 +1462,7 @@ describe('LibraryPage', () => {
             const checkbox = screen.getByLabelText('Select Breaking Bad');
             await user.click(checkbox);
 
-            expect(mockNavigate).not.toHaveBeenCalled();
+            expect(mockNavigate.mock.calls.filter(([target]) => typeof target === 'string')).toEqual([]);
         });
     });
 
@@ -1613,7 +1613,7 @@ describe('LibraryPage', () => {
                 'aria-pressed',
                 'false',
             );
-            expect(mockNavigate).not.toHaveBeenCalled();
+            expect(mockNavigate.mock.calls.filter(([target]) => typeof target === 'string')).toEqual([]);
         });
 
         it('keeps the Select control in place and uses it to exit selection mode', async () => {

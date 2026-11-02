@@ -136,6 +136,9 @@ function RouteSearch() {
     return (
         <>
             <output data-testid="route-search">{location.search}</output>
+            <button type="button" onClick={() => navigate(-1)}>
+                Back
+            </button>
             <button
                 type="button"
                 onClick={() => navigate('/admin/indexers/search?connections=conn-a,conn-b&mode=q&v_q=salt')}
@@ -387,6 +390,9 @@ describe('IndexerSearchPage', () => {
         expect(screen.queryByText('One GB')).not.toBeInTheDocument();
         expect(screen.queryByText('Ten GB')).not.toBeInTheDocument();
         expect(screen.getByRole('button', { name: 'Size filtered, edit filter' })).toBeInTheDocument();
+        expect(screen.getByTestId('route-search')).toHaveTextContent('resultIndexers=conn-a');
+        expect(screen.getByTestId('route-search')).toHaveTextContent('resultMinSize=4');
+        expect(screen.getByTestId('route-search')).toHaveTextContent('resultMaxSize=9');
 
         await user.click(screen.getByRole('button', { name: 'Size filtered, edit filter' }));
         await user.clear(screen.getByLabelText('Size minimum (GB)'));
@@ -402,7 +408,7 @@ describe('IndexerSearchPage', () => {
         const user = userEvent.setup();
         render(<IndexerSearchPage />, {
             wrapper: ({ children }) => (
-                <TestWrapper url="/admin/indexers/search?v_q=salt&mode=q&connections=conn-a,conn-b">
+                <TestWrapper url="/admin/indexers/search?v_q=salt&mode=q&connections=conn-a,conn-b&resultIndexers=conn-a&resultMinSize=4">
                     {children}
                 </TestWrapper>
             ),
@@ -443,9 +449,145 @@ describe('IndexerSearchPage', () => {
 
         await user.click(screen.getByRole('button', { name: 'Set narrow route' }));
         await waitFor(() => expect(screen.getByTestId('route-search')).toHaveTextContent('mode=q'));
+        await user.click(screen.getByRole('combobox', { name: 'Query mode' }));
+        await user.click(screen.getByRole('option', { name: 'IMDb + Keyword' }));
         await user.click(screen.getByRole('button', { name: 'Search' }));
 
         await waitFor(() => expect(screen.getByTestId('route-search')).toHaveTextContent('mode=imdb%2Cq'));
+    });
+
+    it('SearchForm_RestoresSubmittedFieldsAndMode_WhenNavigatingBack', async () => {
+        // Arrange
+        const user = userEvent.setup();
+        render(<IndexerSearchPage />, {
+            wrapper: ({ children }) => (
+                <TestWrapper url="/admin/indexers/search?connections=conn-a,conn-b&mode=imdb,q&v_imdb=tt123&v_q=original">
+                    {children}
+                </TestWrapper>
+            ),
+        });
+        expect(await screen.findByLabelText('IMDb')).toHaveValue('tt123');
+
+        // Act
+        await user.click(screen.getByRole('button', { name: 'Set narrow route' }));
+
+        // Assert
+        expect(screen.getByRole('combobox', { name: 'Query mode' })).toHaveTextContent('Keyword');
+        expect(screen.queryByLabelText('IMDb')).not.toBeInTheDocument();
+        expect(screen.getByLabelText('Search')).toHaveValue('salt');
+
+        // Act
+        await user.click(screen.getByRole('button', { name: 'Back' }));
+
+        // Assert
+        expect(await screen.findByLabelText('IMDb')).toHaveValue('tt123');
+        expect(screen.getByRole('combobox', { name: 'Query mode' })).toHaveTextContent('IMDb + Keyword');
+        expect(screen.getByLabelText('Search')).toHaveValue('original');
+    });
+
+    it('SearchForm_PreservesAnUnsubmittedDraft_WhenResultSortingChanges', async () => {
+        // Arrange
+        const user = userEvent.setup();
+        render(<IndexerSearchPage />, {
+            wrapper: ({ children }) => (
+                <TestWrapper url="/admin/indexers/search?connections=conn-a&mode=q&v_q=salt">{children}</TestWrapper>
+            ),
+        });
+        await screen.findByText('The.Salt.Roads.2019.1080p.BluRay');
+
+        // Act
+        await user.clear(screen.getByLabelText('Search'));
+        await user.type(screen.getByLabelText('Search'), 'new draft');
+        await user.click(screen.getByRole('button', { name: /sort by title/i }));
+
+        // Assert
+        expect(screen.getByLabelText('Search')).toHaveValue('new draft');
+        expect(screen.getByTestId('route-search')).toHaveTextContent('v_q=salt');
+        expect(screen.getByTestId('route-search')).toHaveTextContent('resultSort=title%3Aasc');
+        expect(apiPost).toHaveBeenCalledTimes(1);
+
+        // Act
+        await user.click(screen.getByRole('button', { name: 'Search' }));
+
+        // Assert
+        await waitFor(() => expect(apiPost).toHaveBeenCalledTimes(2));
+        expect(screen.getByTestId('route-search')).toHaveTextContent('v_q=new+draft');
+        expect(screen.getByTestId('route-search')).toHaveTextContent('resultSort=title%3Aasc');
+    });
+
+    it.each(['not-a-number', '-1', 'Infinity', '1e999', ' '])(
+        'Results_IgnoresInvalidSizeBound_WhenUrlContains%s',
+        async (bound) => {
+            // Act
+            render(<IndexerSearchPage />, {
+                wrapper: ({ children }) => (
+                    <TestWrapper
+                        url={`/admin/indexers/search?connections=conn-a&mode=q&v_q=salt&resultMinSize=${encodeURIComponent(bound)}&resultMaxSize=${encodeURIComponent(bound)}`}
+                    >
+                        {children}
+                    </TestWrapper>
+                ),
+            });
+
+            // Assert
+            await waitFor(() => expect(screen.getByText('The.Salt.Roads.2019.1080p.BluRay')).toBeInTheDocument());
+        },
+    );
+
+    it('Results_RestoresFiltersSortAndPage_WhenOpeningASharedUrl', async () => {
+        // Arrange
+        const user = userEvent.setup();
+        vi.mocked(apiPost).mockResolvedValue({
+            ...searchResult,
+            candidates: [
+                ...Array.from({ length: 26 }, (_, index) => ({
+                    ...searchResult.candidates[0],
+                    key: `candidate-${index}`,
+                    connectionIds: ['conn-a'],
+                    release: {
+                        ...searchResult.candidates[0].release,
+                        title: `Release ${String(index + 1).padStart(2, '0')}`,
+                        size: 5 * 1024 ** 3,
+                    },
+                })),
+                {
+                    ...searchResult.candidates[0],
+                    key: 'excluded-indexer',
+                    connectionIds: ['conn-b'],
+                    release: { ...searchResult.candidates[0].release, title: 'Other indexer', size: 5 * 1024 ** 3 },
+                },
+                {
+                    ...searchResult.candidates[0],
+                    key: 'excluded-size',
+                    connectionIds: ['conn-a'],
+                    release: { ...searchResult.candidates[0].release, title: 'Small release', size: 1024 ** 3 },
+                },
+            ],
+        } as never);
+
+        // Act
+        render(<IndexerSearchPage />, {
+            wrapper: ({ children }) => (
+                <TestWrapper url="/admin/indexers/search?connections=conn-a,conn-b&mode=q&v_q=salt&resultIndexers=conn-a&resultMinSize=4&resultMaxSize=9&resultSort=title:asc&resultPage=2">
+                    {children}
+                </TestWrapper>
+            ),
+        });
+
+        // Assert
+        await waitFor(() => expect(screen.getByText('Release 26')).toBeInTheDocument());
+        expect(screen.queryByText('Release 01')).not.toBeInTheDocument();
+        expect(screen.queryByText('Other indexer')).not.toBeInTheDocument();
+        expect(screen.queryByText('Small release')).not.toBeInTheDocument();
+
+        // Act
+        await user.click(screen.getByRole('button', { name: 'Go to previous page' }));
+
+        // Assert
+        expect(await screen.findByText('Release 01')).toBeInTheDocument();
+        expect(screen.queryByText('Release 26')).not.toBeInTheDocument();
+        expect(screen.getByTestId('route-search')).not.toHaveTextContent('resultPage=');
+        expect(screen.getByTestId('route-search')).toHaveTextContent('resultIndexers=conn-a');
     });
 
     it('keeps a grabbed release queued when a filter changes its row position', async () => {

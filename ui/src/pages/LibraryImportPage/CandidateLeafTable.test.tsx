@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
+import { MemoryRouter } from 'react-router-dom';
 
 import { ToastList, ToastProvider, ToastStateProvider, ToastViewport } from '@/components/ui/Toast';
 import { TooltipProvider } from '@/components/ui/Tooltip';
@@ -90,7 +91,7 @@ function rowFor(id: string): HTMLElement {
     return row as HTMLElement;
 }
 
-function createTestWrapper() {
+function createTestWrapper(initialEntry = '/') {
     const queryClient = new QueryClient({
         defaultOptions: {
             queries: { retry: false, gcTime: 0 },
@@ -100,15 +101,17 @@ function createTestWrapper() {
     return function TestWrapper({ children }: { children: ReactNode }) {
         return (
             <QueryClientProvider client={queryClient}>
-                <TooltipProvider>
-                    <ToastStateProvider>
-                        <ToastProvider>
-                            {children}
-                            <ToastList />
-                            <ToastViewport />
-                        </ToastProvider>
-                    </ToastStateProvider>
-                </TooltipProvider>
+                <MemoryRouter initialEntries={[initialEntry]}>
+                    <TooltipProvider>
+                        <ToastStateProvider>
+                            <ToastProvider>
+                                {children}
+                                <ToastList />
+                                <ToastViewport />
+                            </ToastProvider>
+                        </ToastStateProvider>
+                    </TooltipProvider>
+                </MemoryRouter>
             </QueryClientProvider>
         );
     };
@@ -126,6 +129,23 @@ describe('CandidateLeafTable', () => {
 
     afterEach(() => {
         vi.restoreAllMocks();
+    });
+
+    it('Files_RestoresItsPageWithoutUsingTheBucketPage_WhenOpeningASharedUrl', () => {
+        // Arrange
+        const items = Array.from({ length: 26 }, (_, index) =>
+            buildMatched({ id: `candidate-${index}`, filePath: `/media/file-${index}.mkv` }),
+        );
+
+        // Act
+        render(<CandidateLeafTable items={items} emptyState={<div />} requestAccept={vi.fn()} />, {
+            wrapper: createTestWrapper('/?filesPage=2&bucketPage=3'),
+        });
+
+        // Assert
+        expect(screen.getByText('file-25.mkv')).toBeInTheDocument();
+        expect(screen.queryByText('file-0.mkv')).not.toBeInTheDocument();
+        expect(screen.getByText('Page 2 of 2')).toBeInTheDocument();
     });
 
     it('RowMenu_ListsDetailsPreviewImportAndReject_WhenTheFileIsMatchedAndPending', async () => {
@@ -801,6 +821,30 @@ describe('CandidateLeafTable', () => {
         await waitFor(() => {
             expect(bulkAcceptMutateAsync).toHaveBeenCalledWith({ ids: ['match-2'], monitoringMode: 'Inherit' });
         });
+    });
+
+    it('Selection_HidesBulkActions_WhenSelectedFilesAreNoLongerSubmittable', async () => {
+        // Arrange
+        const user = userEvent.setup();
+        const { rerender } = render(
+            <CandidateLeafTable items={[buildMatched()]} emptyState={<div />} requestAccept={vi.fn()} />,
+            { wrapper: createTestWrapper() },
+        );
+        await user.click(within(rowFor('match-1')).getByRole('checkbox', { name: /select s01e01/i }));
+        expect(screen.getByRole('button', { name: 'Import selected' })).toBeInTheDocument();
+
+        // Act
+        rerender(
+            <CandidateLeafTable
+                items={[buildMatched({ status: 'Queued' })]}
+                emptyState={<div />}
+                requestAccept={vi.fn()}
+            />,
+        );
+
+        // Assert
+        expect(screen.queryByRole('button', { name: 'Import selected' })).not.toBeInTheDocument();
+        expect(screen.queryByText('0 selected')).not.toBeInTheDocument();
     });
 
     it('clears the whole selection from the desktop toolbar Clear button', async () => {

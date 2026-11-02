@@ -303,6 +303,7 @@ export function useSubjects(params?: SubjectQueryParams) {
         pageNumber,
         pageSize,
         isLoading: subjectsQuery.isLoading,
+        isPlaceholderData: subjectsQuery.isPlaceholderData,
         error: queryErrorOrNull(subjectsQuery),
 
         updateSubjectTags,

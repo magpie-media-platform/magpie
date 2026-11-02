@@ -199,6 +199,7 @@ describe('SubjectsPage', () => {
             totalItems: 0,
             pageNumber: 1,
             pageSize: 50,
+            isPlaceholderData: false,
             updateSubjectTags: vi.fn(),
             isUpdating: false,
             deleteSubject: vi.fn(),
@@ -263,6 +264,7 @@ describe('SubjectsPage', () => {
                 totalItems: 1,
                 pageNumber: 1,
                 pageSize: 50,
+                isPlaceholderData: false,
                 updateSubjectTags: vi.fn(),
                 isUpdating: false,
                 deleteSubject: vi.fn(),
@@ -306,6 +308,7 @@ describe('SubjectsPage', () => {
                 totalItems: 0,
                 pageNumber: 1,
                 pageSize: 50,
+                isPlaceholderData: false,
                 updateSubjectTags: vi.fn(),
                 isUpdating: false,
                 deleteSubject: vi.fn(),
@@ -447,6 +450,7 @@ describe('SubjectsPage', () => {
                     totalItems: 0,
                     pageNumber: 1,
                     pageSize: 50,
+                    isPlaceholderData: false,
                     updateSubjectTags: vi.fn(),
                     isUpdating: false,
                     deleteSubject: vi.fn(),
@@ -473,6 +477,7 @@ describe('SubjectsPage', () => {
                     totalItems: 0,
                     pageNumber: 1,
                     pageSize: 50,
+                    isPlaceholderData: false,
                     updateSubjectTags: vi.fn(),
                     isUpdating: false,
                     deleteSubject: vi.fn(),
@@ -507,6 +512,7 @@ describe('SubjectsPage', () => {
                     totalItems: 0,
                     pageNumber: 1,
                     pageSize: 50,
+                    isPlaceholderData: false,
                     updateSubjectTags: vi.fn(),
                     isUpdating: false,
                     deleteSubject: vi.fn(),
@@ -533,6 +539,7 @@ describe('SubjectsPage', () => {
                     totalItems: 0,
                     pageNumber: 1,
                     pageSize: 50,
+                    isPlaceholderData: false,
                     updateSubjectTags: vi.fn(),
                     isUpdating: false,
                     deleteSubject: vi.fn(),
@@ -563,6 +570,7 @@ describe('SubjectsPage', () => {
                     totalItems: 0,
                     pageNumber: 1,
                     pageSize: 50,
+                    isPlaceholderData: false,
                     updateSubjectTags: vi.fn(),
                     isUpdating: false,
                     deleteSubject: vi.fn(),
@@ -628,6 +636,7 @@ describe('SubjectsPage', () => {
                     totalItems: 0,
                     pageNumber: 1,
                     pageSize: 50,
+                    isPlaceholderData: false,
                     updateSubjectTags: vi.fn(),
                     isUpdating: false,
                     deleteSubject: vi.fn(),
@@ -662,6 +671,7 @@ describe('SubjectsPage', () => {
                     totalItems: 0,
                     pageNumber: 1,
                     pageSize: 50,
+                    isPlaceholderData: false,
                     updateSubjectTags: vi.fn(),
                     isUpdating: false,
                     deleteSubject: vi.fn(),
@@ -719,6 +729,7 @@ describe('SubjectsPage', () => {
                 totalItems: 0,
                 pageNumber: 1,
                 pageSize: 50,
+                isPlaceholderData: false,
                 updateSubjectTags: vi.fn(),
                 isUpdating: false,
                 deleteSubject: vi.fn(),
@@ -753,6 +764,7 @@ describe('SubjectsPage', () => {
                 totalItems: 0,
                 pageNumber: 1,
                 pageSize: 50,
+                isPlaceholderData: false,
                 updateSubjectTags: vi.fn(),
                 isUpdating: false,
                 deleteSubject: vi.fn(),
@@ -778,6 +790,7 @@ describe('SubjectsPage', () => {
                 totalItems: 0,
                 pageNumber: 1,
                 pageSize: 50,
+                isPlaceholderData: false,
                 updateSubjectTags: vi.fn(),
                 isUpdating: false,
                 deleteSubject: vi.fn(),
@@ -809,5 +822,19 @@ describe('SubjectsPage', () => {
             expect(filterBar).toBeInTheDocument();
             expect(within(filterBar).getByText('Active')).toBeInTheDocument();
         });
+    });
+
+    it('ScopedFilter_StripsKindClause_WhenQueryContainsUnterminatedQuote', async () => {
+        // Arrange & Act
+        renderScopedSubjectsPage('person', 'filter=kind+%3D+%22studio%22+and+title+contains+%22unterminated');
+
+        // Assert
+        await waitFor(() =>
+            expect(useSubjects).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    filter: 'kind = "person" and (title contains "unterminated)',
+                }),
+            ),
+        );
     });
 });

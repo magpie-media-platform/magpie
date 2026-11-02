@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { ArrowClockwiseIcon, CheckIcon, FolderSimplePlusIcon, WarningCircleIcon } from '@phosphor-icons/react';
 import { type ColumnDef } from '@tanstack/react-table';
@@ -17,6 +17,7 @@ import { useToast } from '@/components/ui/Toast';
 import { useMediaQuery } from '@/hooks/ui/useMediaQuery';
 import { useBulkSelection } from '@/hooks/useBulkSelection';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
+import { useUrlTableState } from '@/hooks/useUrlTableState';
 import {
     useBulkAcceptLibraryImportCandidates,
     type LibraryImportMonitoringMode,
@@ -219,6 +220,13 @@ interface LibraryImportGroupPageProps {
 export function LibraryImportGroupPage({ monitoringMode, onMonitoringModeChange }: LibraryImportGroupPageProps) {
     const { toast } = useToast();
     const [searchParams] = useSearchParams();
+    const { page, setPage } = useUrlTableState({
+        defaultSort: [],
+        defaultFilters: {},
+        sortKeys: [],
+        pageParam: 'bucketPage',
+    });
+    const pagination = useMemo(() => ({ pageIndex: page - 1, pageSize: PAGE_SIZE }), [page]);
     const phone = useMediaQuery('(max-width: 639px)');
 
     const groupKey = searchParams.get('key') ?? '';
@@ -289,14 +297,15 @@ export function LibraryImportGroupPage({ monitoringMode, onMonitoringModeChange 
     );
 
     const [pageRowIds, setPageRowIds] = useState<string[]>([]);
-    const selection = useBulkSelection({ pageRowIds, totalCount: buckets.length });
+    const selection = useBulkSelection({
+        pageRowIds,
+        totalCount: buckets.length,
+        resetKey: JSON.stringify([groupKey, rootFolderId, urlPath]),
+    });
     const selectedBuckets = useMemo(
         () => buckets.filter((bucket) => selection.isRowChecked(bucket.key)),
         [buckets, selection],
     );
-
-    const clearSelection = selection.clear;
-    useEffect(() => clearSelection(), [clearSelection, urlPath]);
 
     const submitImport = useCallback(
         async (ids: string[], monitoringMode: LibraryImportMonitoringMode) => {
@@ -644,6 +653,7 @@ export function LibraryImportGroupPage({ monitoringMode, onMonitoringModeChange 
     } else if (atLeaf) {
         body = (
             <CandidateLeafTable
+                key={JSON.stringify([groupKey, rootFolderId, ...path])}
                 items={scope}
                 scopeCounts={scopeCounts}
                 scopeAction={scopeAction}
@@ -701,6 +711,10 @@ export function LibraryImportGroupPage({ monitoringMode, onMonitoringModeChange 
                     onPageRowIdsChange={setPageRowIds}
                     enablePagination
                     pageSize={PAGE_SIZE}
+                    pagination={pagination}
+                    onPaginationChange={(updater) =>
+                        setPage((typeof updater === 'function' ? updater(pagination) : updater).pageIndex + 1)
+                    }
                     mobileSelectionActive={selection.selectionMode}
                     mobileSelectionOverlay={{
                         isSelected: (bucket) => selection.isRowChecked(bucket.key),

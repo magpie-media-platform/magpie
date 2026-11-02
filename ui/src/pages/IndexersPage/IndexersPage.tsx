@@ -1,5 +1,4 @@
 import { useCallback } from 'react';
-import { useSearchParams } from 'react-router-dom';
 import { DatabaseIcon, ListPlusIcon, RssIcon } from '@phosphor-icons/react';
 
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/Tabs';
@@ -8,6 +7,7 @@ import { PullToRefresh } from '@/components/ui/PullToRefresh';
 
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { useIndexers } from '@/hooks/useIndexers';
+import { useUrlTabState } from '@/hooks/useUrlTabState';
 
 import { ConfiguredManagement } from './ConfiguredManagement';
 import { AvailableCatalog } from '@/components/configuration/AvailableCatalog';
@@ -18,26 +18,10 @@ import '@/styles/card-actions.css';
 
 export function IndexersPage() {
     useDocumentTitle('Indexers');
-    const [searchParams, setSearchParams] = useSearchParams();
-
-    const activeTab = searchParams.get('tab') || 'configured';
-    const setActiveTab = useCallback(
-        (tab: string) => {
-            setSearchParams(
-                (prev) => {
-                    const next = new URLSearchParams(prev);
-                    if (tab === 'configured') {
-                        next.delete('tab');
-                    } else {
-                        next.set('tab', tab);
-                    }
-                    return next;
-                },
-                { replace: true },
-            );
-        },
-        [setSearchParams],
-    );
+    const [activeTab, setActiveTab] = useUrlTabState({
+        defaultTab: 'configured',
+        allowedTabs: ['configured', 'available', 'feeds'],
+    });
 
     const { indexers, feeds, refetch } = useIndexers();
 

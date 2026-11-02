@@ -86,10 +86,27 @@ export function useLibraryPage() {
     const pageCount = Math.max(1, Math.ceil(content.totalItems / PAGE_SIZE));
     const { pageNumber, goToPage } = pagination;
     useEffect(() => {
-        if (!content.isLoading && !content.isPlaceholderData && !filters.isRestoringFilter && pageNumber > pageCount) {
-            goToPage(pageCount);
+        if (
+            !content.isLoading &&
+            !content.isPlaceholderData &&
+            !content.error &&
+            !filters.isRestoringFilter &&
+            filters.filterQuery === filters.debouncedFilterQuery &&
+            pageNumber > pageCount
+        ) {
+            goToPage(pageCount, { replace: true });
         }
-    }, [content.isLoading, content.isPlaceholderData, filters.isRestoringFilter, pageNumber, pageCount, goToPage]);
+    }, [
+        content.isLoading,
+        content.isPlaceholderData,
+        content.error,
+        filters.isRestoringFilter,
+        filters.filterQuery,
+        filters.debouncedFilterQuery,
+        pageNumber,
+        pageCount,
+        goToPage,
+    ]);
 
     return {
         route,

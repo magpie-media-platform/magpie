@@ -33,18 +33,22 @@ import { useCardLayout } from '@/hooks/ui/useCardLayout';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { useToggle } from '@/hooks/useToggle';
 import { useUrlTableState } from '@/hooks/useUrlTableState';
+import { useUrlTabState } from '@/hooks/useUrlTabState';
 import { useDenyList, useMimeMappings, type BlockedFileType, type MimeMapping } from '@/hooks/useFileTypes';
 import { getErrorMessage } from '@/lib/errors';
 
 import '@/styles/bulk-actions-toolbar.css';
 import './FileTypesPage.css';
 
+const FILE_TYPE_TABS = ['deny-list', 'mime-registry'] as const;
+const DENY_LIST_PAGE_SIZE = 10;
+
 export function FileTypesPage() {
     useDocumentTitle('File Types');
 
     const denyList = useDenyList();
     const mimeRegistry = useMimeMappings();
-    const [activeTab, setActiveTab] = useState('deny-list');
+    const [activeTab, setActiveTab] = useUrlTabState({ defaultTab: 'deny-list', allowedTabs: FILE_TYPE_TABS });
     const [denyAddOpen, , openDenyAdd, closeDenyAdd] = useToggle();
     const [mimeAddOpen, , openMimeAdd, closeMimeAdd] = useToggle();
     const tabActions: QuickAction[] = [
@@ -121,6 +125,13 @@ interface DenyListSectionProps extends AddDialogState {
 
 function DenyListSection({ denyList, addOpen, openAdd, closeAdd }: DenyListSectionProps) {
     const { toast } = useToast();
+    const { page, setPage } = useUrlTableState({
+        defaultSort: [],
+        defaultFilters: {},
+        sortKeys: [],
+        pageParam: 'dpage',
+    });
+    const pagination = useMemo(() => ({ pageIndex: page - 1, pageSize: DENY_LIST_PAGE_SIZE }), [page]);
     const runBulk = useBulkRun();
     const [deletingEntry, setDeletingEntry] = useState<BlockedFileType | null>(null);
     const [pageRowIds, setPageRowIds] = useState<string[]>([]);
@@ -276,6 +287,11 @@ function DenyListSection({ denyList, addOpen, openAdd, closeAdd }: DenyListSecti
                             columns={columns}
                             data={denyList.entries}
                             enableSorting={false}
+                            enablePagination
+                            pagination={pagination}
+                            onPaginationChange={(updater) =>
+                                setPage((typeof updater === 'function' ? updater(pagination) : updater).pageIndex + 1)
+                            }
                             getRowId={getRowId}
                             onPageRowIdsChange={setPageRowIds}
                             mobileSelectionActive={selection.selectionMode}

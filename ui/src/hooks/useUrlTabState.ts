@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useSyncedSearchParams } from './useSyncedSearchParams';
 
 interface UrlTabStateConfig<TTab extends string> {
     defaultTab: TTab;
@@ -17,7 +17,7 @@ export function useUrlTabState<TTab extends string>({
     allowedTabs,
     paramName = 'tab',
 }: UrlTabStateConfig<TTab>): [TTab, (tab: string, options?: SetUrlTabStateOptions<TTab>) => void] {
-    const [searchParams, setSearchParams] = useSearchParams();
+    const [searchParams, setSearchParams] = useSyncedSearchParams();
 
     const allowed = useMemo(() => new Set<string>(allowedTabs), [allowedTabs]);
     const requestedTab = searchParams.get(paramName);
@@ -28,7 +28,7 @@ export function useUrlTabState<TTab extends string>({
             return;
         }
 
-        setSearchParams(
+        void setSearchParams(
             (prev) => {
                 const next = new URLSearchParams(prev);
                 if (activeTab === defaultTab) {
@@ -45,7 +45,7 @@ export function useUrlTabState<TTab extends string>({
     const setActiveTab = useCallback(
         (tab: string, options?: SetUrlTabStateOptions<TTab>) => {
             const nextTab = allowed.has(tab) ? (tab as TTab) : defaultTab;
-            setSearchParams(
+            void setSearchParams(
                 (prev) => {
                     const next = new URLSearchParams(prev);
                     options?.update?.(next, nextTab);

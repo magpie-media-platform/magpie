@@ -1,4 +1,5 @@
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
+import { createMemoryRouter, MemoryRouter, RouterProvider } from 'react-router-dom';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
@@ -28,6 +29,65 @@ describe('PendingFileAssociations', () => {
 
     afterEach(() => {
         vi.clearAllMocks();
+    });
+
+    it('UrlState_RestoresAndUpdatesThePage_WhenBrowsingPendingFiles', async () => {
+        // Arrange
+        const user = userEvent.setup();
+        apiGet.mockResolvedValue(
+            Array.from({ length: 51 }, (_, index) => ({
+                id: `candidate-${index + 1}`,
+                filePath: `/media/file-${index + 1}.mkv`,
+                status: 'Pending',
+                matches: [],
+            })),
+        );
+        const router = createMemoryRouter(
+            [{ path: '/', element: <PendingFileAssociations contentHierarchyItemId="item-1" canManage={false} /> }],
+            { initialEntries: ['/?pendingFilesPage=6&releasesPage=3'] },
+        );
+        render(
+            <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+                <TooltipProvider>
+                    <ToastStateProvider>
+                        <ToastProvider>
+                            <RouterProvider router={router} />
+                        </ToastProvider>
+                    </ToastStateProvider>
+                </TooltipProvider>
+            </QueryClientProvider>,
+        );
+
+        // Assert
+        expect(await screen.findByText('/media/file-51.mkv')).toBeInTheDocument();
+        expect(screen.getByText('Page 6 of 6')).toBeInTheDocument();
+        expect(screen.queryByText('/media/file-1.mkv')).not.toBeInTheDocument();
+
+        // Act
+        await act(() => router.navigate('/?pendingFilesPage=2&releasesPage=3'));
+
+        // Assert
+        expect(screen.getByText('/media/file-11.mkv')).toBeInTheDocument();
+
+        // Act
+        await user.click(screen.getByRole('button', { name: 'Go to next page' }));
+
+        // Assert
+        expect(screen.getByText('/media/file-21.mkv')).toBeInTheDocument();
+        expect(new URLSearchParams(router.state.location.search).get('pendingFilesPage')).toBe('3');
+        expect(new URLSearchParams(router.state.location.search).get('releasesPage')).toBe('3');
+
+        // Act
+        await act(() => router.navigate(-1));
+
+        // Assert
+        expect(screen.getByText('/media/file-11.mkv')).toBeInTheDocument();
+
+        // Act
+        await act(() => router.navigate(-1));
+
+        // Assert
+        expect(screen.getByText('/media/file-51.mkv')).toBeInTheDocument();
     });
 
     it('shows the pending file count and opens the files on click', async () => {
@@ -102,9 +162,11 @@ describe('PendingFileAssociations', () => {
             >
                 <TooltipProvider>
                     <ToastStateProvider>
-                        <ToastProvider>
-                            <PendingFilesIndicator contentHierarchyItemId="item-1" onOpen={onOpen} />
-                        </ToastProvider>
+                        <MemoryRouter>
+                            <ToastProvider>
+                                <PendingFilesIndicator contentHierarchyItemId="item-1" onOpen={onOpen} />
+                            </ToastProvider>
+                        </MemoryRouter>
                     </ToastStateProvider>
                 </TooltipProvider>
             </QueryClientProvider>,
@@ -124,9 +186,11 @@ describe('PendingFileAssociations', () => {
             >
                 <TooltipProvider>
                     <ToastStateProvider>
-                        <ToastProvider>
-                            <PendingFilesIndicator contentHierarchyItemId="item-1" onOpen={vi.fn()} />
-                        </ToastProvider>
+                        <MemoryRouter>
+                            <ToastProvider>
+                                <PendingFilesIndicator contentHierarchyItemId="item-1" onOpen={vi.fn()} />
+                            </ToastProvider>
+                        </MemoryRouter>
                     </ToastStateProvider>
                 </TooltipProvider>
             </QueryClientProvider>,
@@ -207,9 +271,11 @@ describe('PendingFileAssociations', () => {
             >
                 <TooltipProvider>
                     <ToastStateProvider>
-                        <ToastProvider>
-                            <PendingFileAssociations contentHierarchyItemId="item-1" canManage />
-                        </ToastProvider>
+                        <MemoryRouter>
+                            <ToastProvider>
+                                <PendingFileAssociations contentHierarchyItemId="item-1" canManage />
+                            </ToastProvider>
+                        </MemoryRouter>
                     </ToastStateProvider>
                 </TooltipProvider>
             </QueryClientProvider>,
@@ -267,7 +333,9 @@ describe('PendingFileAssociations', () => {
                 <QueryClientProvider client={queryClient}>
                     <TooltipProvider>
                         <ToastStateProvider>
-                            <ToastProvider>{children}</ToastProvider>
+                            <MemoryRouter>
+                                <ToastProvider>{children}</ToastProvider>
+                            </MemoryRouter>
                         </ToastStateProvider>
                     </TooltipProvider>
                 </QueryClientProvider>
@@ -295,9 +363,11 @@ describe('PendingFileAssociations', () => {
             >
                 <TooltipProvider>
                     <ToastStateProvider>
-                        <ToastProvider>
-                            <PendingFileAssociations contentHierarchyItemId="item-1" canManage />
-                        </ToastProvider>
+                        <MemoryRouter>
+                            <ToastProvider>
+                                <PendingFileAssociations contentHierarchyItemId="item-1" canManage />
+                            </ToastProvider>
+                        </MemoryRouter>
                     </ToastStateProvider>
                 </TooltipProvider>
             </QueryClientProvider>,
@@ -319,9 +389,11 @@ describe('PendingFileAssociations', () => {
             >
                 <TooltipProvider>
                     <ToastStateProvider>
-                        <ToastProvider>
-                            <PendingFileAssociations contentHierarchyItemId="item-1" canManage />
-                        </ToastProvider>
+                        <MemoryRouter>
+                            <ToastProvider>
+                                <PendingFileAssociations contentHierarchyItemId="item-1" canManage />
+                            </ToastProvider>
+                        </MemoryRouter>
                     </ToastStateProvider>
                 </TooltipProvider>
             </QueryClientProvider>,
@@ -343,9 +415,11 @@ describe('PendingFileAssociations', () => {
             >
                 <TooltipProvider>
                     <ToastStateProvider>
-                        <ToastProvider>
-                            <PendingFileAssociations contentHierarchyItemId="item-1" canManage />
-                        </ToastProvider>
+                        <MemoryRouter>
+                            <ToastProvider>
+                                <PendingFileAssociations contentHierarchyItemId="item-1" canManage />
+                            </ToastProvider>
+                        </MemoryRouter>
                     </ToastStateProvider>
                 </TooltipProvider>
             </QueryClientProvider>,
@@ -390,9 +464,11 @@ describe('PendingFileAssociations', () => {
             >
                 <TooltipProvider>
                     <ToastStateProvider>
-                        <ToastProvider>
-                            <PendingFileAssociations contentHierarchyItemId="item-1" canManage />
-                        </ToastProvider>
+                        <MemoryRouter>
+                            <ToastProvider>
+                                <PendingFileAssociations contentHierarchyItemId="item-1" canManage />
+                            </ToastProvider>
+                        </MemoryRouter>
                     </ToastStateProvider>
                 </TooltipProvider>
             </QueryClientProvider>,
@@ -433,9 +509,11 @@ describe('PendingFileAssociations', () => {
             >
                 <TooltipProvider>
                     <ToastStateProvider>
-                        <ToastProvider>
-                            <PendingFileAssociations contentHierarchyItemId="item-1" canManage={false} />
-                        </ToastProvider>
+                        <MemoryRouter>
+                            <ToastProvider>
+                                <PendingFileAssociations contentHierarchyItemId="item-1" canManage={false} />
+                            </ToastProvider>
+                        </MemoryRouter>
                     </ToastStateProvider>
                 </TooltipProvider>
             </QueryClientProvider>,

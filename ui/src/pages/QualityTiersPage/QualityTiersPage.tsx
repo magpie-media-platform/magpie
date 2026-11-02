@@ -102,11 +102,12 @@ export function QualityTiersPage() {
         editingTierListId ? { entityId: editingTierListId } : undefined,
     );
     const editingTagsLoaded = !editingTierListId || !isLoadingEditingTierListTags;
-    const { sorting, filters, setSorting, setFilters } = useUrlTableState({
+    const { sorting, filters, page, setSorting, setFilters, setPage } = useUrlTableState({
         defaultSort: DEFAULT_SORTING,
         defaultFilters: DEFAULT_FILTERS,
         sortKeys: SORT_KEYS,
     });
+    const pagination = useMemo(() => ({ pageIndex: page - 1, pageSize: 10 }), [page]);
 
     const tierLists = useMemo(() => apiTierLists.map(mapTierListToDisplay), [apiTierLists]);
     const mimeOptions = useMemo<FacetOption[]>(() => {
@@ -487,12 +488,17 @@ export function QualityTiersPage() {
                             columns={columns}
                             data={filteredTierLists}
                             sorting={sorting}
+                            pagination={pagination}
+                            onPaginationChange={(updater) =>
+                                setPage((typeof updater === 'function' ? updater(pagination) : updater).pageIndex + 1)
+                            }
                             onSortingChange={(updater) =>
                                 setSorting(typeof updater === 'function' ? updater(sorting) : updater)
                             }
                             getRowId={(tierList) => tierList.id}
                             onPageRowIdsChange={setPageRowIds}
                             aria-label="Quality tiers"
+                            enablePagination
                             emptyState={<EmptyState title="No tier lists match the filters" size="sm" />}
                             keepHeaderWhenEmpty={filters.name !== '' || filters.mime !== ''}
                             mobileSelectionActive={canManage ? selection.selectionMode : undefined}

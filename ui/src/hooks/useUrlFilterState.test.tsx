@@ -4,6 +4,7 @@ import { MemoryRouter, useLocation, useNavigate } from 'react-router-dom';
 import { type ReactNode } from 'react';
 
 import { useUrlFilterState } from './useUrlFilterState';
+import { useLiveUrlFilter } from './useLiveUrlFilter';
 
 function makeWrapper(initialUrl = '/') {
     return function Wrapper({ children }: { children: ReactNode }) {
@@ -12,6 +13,68 @@ function makeWrapper(initialUrl = '/') {
 }
 
 describe('useUrlFilterState', () => {
+    it('SetFilter_PreservesRouteState_WhenAddingALiveFilterCommit', () => {
+        // Arrange
+        const { result } = renderHook(
+            () => {
+                const [filter, setFilter] = useUrlFilterState({ status: '' });
+                const live = useLiveUrlFilter({
+                    value: filter.status,
+                    onCommit: (status, replace, state) => setFilter({ status }, { replace, state }),
+                });
+                return { filter, setFilter, live, location: useLocation() };
+            },
+            {
+                wrapper: ({ children }) => (
+                    <MemoryRouter initialEntries={[{ pathname: '/', state: { fromContent: { id: 'content-1' } } }]}>
+                        {children}
+                    </MemoryRouter>
+                ),
+            },
+        );
+
+        // Act
+        act(() => result.current.live.change('active', true));
+
+        // Assert
+        expect(result.current.location.state).toEqual({
+            fromContent: { id: 'content-1' },
+            liveFilterCommit: expect.any(String),
+        });
+
+        // Act
+        act(() => result.current.setFilter({ status: '' }));
+
+        // Assert
+        expect(result.current.location.state).toEqual({
+            fromContent: { id: 'content-1' },
+            liveFilterCommit: expect.any(String),
+        });
+    });
+
+    it('SetFilter_ReplacesRouteState_WhenExplicitStateIsSupplied', () => {
+        // Arrange
+        const { result } = renderHook(() => ({ filter: useUrlFilterState({ status: '' }), location: useLocation() }), {
+            wrapper: ({ children }) => (
+                <MemoryRouter initialEntries={[{ pathname: '/', state: { preload: 'consumed' } }]}>
+                    {children}
+                </MemoryRouter>
+            ),
+        });
+
+        // Act
+        act(() => result.current.filter[1]({ status: 'active' }, { state: { source: 'updated' } }));
+
+        // Assert
+        expect(result.current.location.state).toEqual({ source: 'updated' });
+
+        // Act
+        act(() => result.current.filter[1]({ status: '' }, { state: null }));
+
+        // Assert
+        expect(result.current.location.state).toBeNull();
+    });
+
     it('returns default values when no URL params are set', () => {
         const { result } = renderHook(() => useUrlFilterState({ status: '', sort: 'title' }), {
             wrapper: makeWrapper(),

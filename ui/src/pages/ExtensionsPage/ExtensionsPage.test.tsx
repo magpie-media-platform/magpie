@@ -364,6 +364,20 @@ describe('ExtensionsPage', () => {
         expect(document.querySelector('[data-page="extensions"]')).toBeInTheDocument();
     });
 
+    it('Tabs_RestoresNuGetFeeds_WhenOpeningASharedUrl', async () => {
+        // Arrange
+        vi.mocked(apiGet).mockImplementation((url: string) =>
+            Promise.resolve(url === '/extensions' ? listedExtensionItems : []),
+        );
+
+        // Act
+        render(<ExtensionsPage />, { wrapper: createWrapper(['/?tab=feeds']) });
+
+        // Assert
+        expect(await screen.findByRole('tab', { name: 'NuGet Feeds' })).toHaveAttribute('aria-selected', 'true');
+        expect(screen.getByRole('tab', { name: 'Installed' })).toHaveAttribute('aria-selected', 'false');
+    });
+
     it.each([
         ['Installed', ['Add extension', 'Check for updates']],
         ['NuGet Feeds', ['Add extension', 'Add feed']],
