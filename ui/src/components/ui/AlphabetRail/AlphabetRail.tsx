@@ -1,8 +1,9 @@
+import './AlphabetRail.css';
 import { useRef, useState, type PointerEvent } from 'react';
 
 const LETTERS = Array.from('ABCDEFGHIJKLMNOPQRSTUVWXYZ');
 
-interface LibraryAlphabetRailProps {
+interface AlphabetRailProps {
     titlePrefix: string;
     onTitlePrefixChange: (prefix: string) => void;
 }
@@ -24,7 +25,7 @@ function letterAtHeight(rail: HTMLElement, clientY: number): string {
     return nearest.dataset.letter!;
 }
 
-export function LibraryAlphabetRail({ titlePrefix, onTitlePrefixChange }: LibraryAlphabetRailProps) {
+export function AlphabetRail({ titlePrefix, onTitlePrefixChange }: AlphabetRailProps) {
     const activeLetter = titlePrefix.toUpperCase();
     const press = useRef<Press | null>(null);
     const [previewLetter, setPreviewLetter] = useState<string | null>(null);
@@ -68,10 +69,10 @@ export function LibraryAlphabetRail({ titlePrefix, onTitlePrefixChange }: Librar
 
     return (
         <div
-            className="library-alphabet-rail"
+            className="alphabet-rail"
             role="group"
             aria-label="Filter by first letter"
-            data-component="library-alphabet-rail"
+            data-component="alphabet-rail"
             onPointerDown={handlePointerDown}
             onPointerMove={handlePointerMove}
             onPointerUp={handlePointerUp}
@@ -81,7 +82,7 @@ export function LibraryAlphabetRail({ titlePrefix, onTitlePrefixChange }: Librar
                 <button
                     key={letter}
                     type="button"
-                    className="library-alphabet-rail__letter"
+                    className="alphabet-rail__letter"
                     data-letter={letter}
                     data-preview={letter === previewLetter || undefined}
                     aria-pressed={letter === activeLetter}
@@ -98,6 +99,6 @@ export function LibraryAlphabetRail({ titlePrefix, onTitlePrefixChange }: Librar
     );
 }
 
-LibraryAlphabetRail.displayName = 'LibraryAlphabetRail';
+AlphabetRail.displayName = 'AlphabetRail';
 
-export default LibraryAlphabetRail;
+export default AlphabetRail;

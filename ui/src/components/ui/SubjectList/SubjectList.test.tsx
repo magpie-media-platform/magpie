@@ -1,6 +1,3 @@
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
-
 import { fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
@@ -135,7 +132,7 @@ describe('SubjectList', () => {
             expect(document.querySelector('.subject-list__image--placeholder')).toBeInTheDocument();
         });
 
-        it('marks a logo as uncropped so that the stylesheet shows it whole', () => {
+        it('Poster_ShowsTheSharedBackdrop_WhenSubjectArtworkLoads', () => {
             // Arrange
             const item: SubjectItem[] = [
                 {
@@ -147,24 +144,16 @@ describe('SubjectList', () => {
             ];
             render(<SubjectList items={item} />);
             const img = screen.getByAltText('1.21 Entertainment image');
-            Object.defineProperty(img, 'naturalWidth', { value: 400 });
-            Object.defineProperty(img, 'naturalHeight', { value: 100 });
 
             // Act
             fireEvent.load(img);
 
             // Assert
-            expect(img).toHaveClass('subject-list__image');
-            expect(img).toHaveAttribute('data-artwork', 'uncropped');
-        });
-
-        it('shows uncropped artwork whole and still crops poster artwork to the image box', () => {
-            // Arrange
-            const css = readFileSync(resolve(process.cwd(), 'src/components/ui/SubjectList/SubjectList.css'), 'utf8');
-
-            // Assert
-            expect(css).toMatch(/\.subject-list__image \{[^}]*object-fit: cover;/);
-            expect(css).toMatch(/\.subject-list__image\[data-artwork='uncropped'\] \{\s*object-fit: contain;\s*\}/);
+            expect(img.parentElement).toHaveClass('subject-list__image');
+            expect(img.parentElement?.querySelector('.content-poster__backdrop')).toHaveAttribute(
+                'aria-hidden',
+                'true',
+            );
         });
     });
 

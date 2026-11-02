@@ -1,12 +1,13 @@
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
-import { MemoryRouter, Routes, Route, useNavigate } from 'react-router-dom';
+import { MemoryRouter, Routes, Route, useNavigate, useLocation, useNavigationType } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
 
 import { ToastProvider, ToastStateProvider, ToastViewport, ToastList } from '@/components/ui/Toast';
 import { TooltipProvider } from '@/components/ui/Tooltip';
+import { LocalContentPreviewProvider } from '@/components/content/LocalContentPreview';
 
 vi.mock('@/lib/api', async (importOriginal) => {
     const actual = await importOriginal<typeof import('@/lib/api')>();
@@ -131,12 +132,98 @@ describe('WishlistDiscoveredList', () => {
 
     beforeEach(() => {
         vi.clearAllMocks();
+        localStorage.clear();
         installMatchMedia(1024);
         mockApiGet.mockResolvedValue(response());
     });
 
     afterEach(() => {
         vi.restoreAllMocks();
+    });
+
+    it('Pagination_ReplacesTheInvalidEntry_WhenThePageExceedsTheResult', async () => {
+        // Arrange
+        mockApiGet.mockResolvedValue(response({ totalItems: 30 }));
+        function RouteState() {
+            const location = useLocation();
+            const navigationType = useNavigationType();
+            return (
+                <output data-testid="route-state" data-navigation-type={navigationType}>
+                    {location.search}
+                </output>
+            );
+        }
+
+        // Act
+        render(
+            <TestWrapper initialPath={`/wishlists/${WISHLIST_ID}?page=99&view=list`}>
+                <WishlistDiscoveredList wishlistId={WISHLIST_ID} />
+                <RouteState />
+            </TestWrapper>,
+        );
+
+        // Assert
+        await waitFor(() => expect(screen.getByTestId('route-state')).toHaveTextContent('?page=2&view=list'));
+        expect(screen.getByTestId('route-state')).toHaveAttribute('data-navigation-type', 'REPLACE');
+    });
+
+    it('Gallery_OpensLocalPreview_WhenInLibraryItemIsClicked', async () => {
+        // Arrange
+        const user = userEvent.setup();
+        render(
+            <TestWrapper>
+                <LocalContentPreviewProvider>
+                    <WishlistDiscoveredList wishlistId={WISHLIST_ID} />
+                </LocalContentPreviewProvider>
+            </TestWrapper>,
+        );
+
+        // Act
+        await user.click(screen.getByRole('tab', { name: 'Gallery' }));
+        const gallery = await screen.findByRole('list', { name: 'Content gallery' });
+        await user.click(within(gallery).getByRole('link', { name: 'Open Die Hard' }));
+
+        // Assert
+        expect(await screen.findByTestId('preview-drawer')).toBeInTheDocument();
+        expect(screen.queryByText('Library Detail')).not.toBeInTheDocument();
+    });
+
+    it('Gallery_ShowsPosterPlaceholders_WhenDiscoveredContentIsLoading', () => {
+        // Arrange
+        localStorage.setItem('wishlist-discovered-view', '"gallery"');
+        mockApiGet.mockReturnValue(new Promise(() => {}));
+
+        // Act
+        render(
+            <TestWrapper>
+                <WishlistDiscoveredList wishlistId={WISHLIST_ID} />
+            </TestWrapper>,
+        );
+
+        // Assert
+        expect(screen.getByRole('status', { name: 'Loading content' })).toBeInTheDocument();
+        expect(document.querySelector('.wishlist-discovered__skeleton')).not.toBeInTheDocument();
+    });
+
+    it.each([390, 1440])('Gallery_LinksOnlyLibraryItems_AtWidth%i', async (width) => {
+        // Arrange
+        installMatchMedia(width);
+        const user = userEvent.setup();
+        render(
+            <TestWrapper>
+                <WishlistDiscoveredList wishlistId={WISHLIST_ID} />
+            </TestWrapper>,
+        );
+
+        // Act
+        await user.click(screen.getByRole('tab', { name: 'Gallery' }));
+        const gallery = await screen.findByRole('list', { name: 'Content gallery' });
+
+        // Assert
+        expect(within(gallery).getByRole('link', { name: 'Open Die Hard' })).toHaveAttribute('href', '/library/ci-1');
+        expect(within(gallery).queryByRole('link', { name: /Removed Item/ })).not.toBeInTheDocument();
+        expect(gallery.querySelectorAll('[data-slot="content.gallery.poster"]')).toHaveLength(2);
+        expect(screen.queryByTestId('wishlist-discovered-table')).not.toBeInTheDocument();
     });
 
     it('renders the counts header', async () => {
@@ -167,6 +254,50 @@ describe('WishlistDiscoveredList', () => {
         const row = titleLink.closest('[data-row-id="discovered-1"]') as HTMLElement;
         expect(within(row).queryByText('(not in library)')).not.toBeInTheDocument();
         expect(within(row).getByText('Fulfilled')).toBeInTheDocument();
+    });
+
+    it('Poster_UsesTheSharedBackdropAndFailurePlaceholder_WhenArtworkLoadsThenFails', async () => {
+        // Arrange
+        mockApiGet.mockResolvedValue(
+            response({
+                items: [
+                    {
+                        discoveredId: 'discovered-artwork',
+                        source: 'provider-h',
+                        externalId: '1234',
+                        title: 'Wide artwork',
+                        discoveredAt: '2024-01-01T00:00:00Z',
+                        linkId: 'ci-1',
+                        posterUrl: 'https://example.com/wide.jpg',
+                        publishDate: null,
+                        addedAt: null,
+                        status: 'Found',
+                    },
+                ],
+                totalItems: 1,
+            }),
+        );
+        render(
+            <TestWrapper>
+                <WishlistDiscoveredList wishlistId={WISHLIST_ID} />
+            </TestWrapper>,
+        );
+        const table = await findTable();
+        const image = table.querySelector('img')!;
+
+        // Act
+        fireEvent.load(image);
+
+        // Assert
+        expect(image.parentElement).toHaveClass('content-poster', 'wishlist-discovered__row-poster');
+        expect(image.parentElement?.querySelector('.content-poster__backdrop')).toHaveAttribute('aria-hidden', 'true');
+
+        // Act
+        fireEvent.error(image);
+
+        // Assert
+        expect(table.querySelector('img')).not.toBeInTheDocument();
+        expect(within(table).getByTestId('discovered-poster-placeholder')).toBeInTheDocument();
     });
 
     it.each([
@@ -464,6 +595,7 @@ describe('WishlistDiscoveredList', () => {
     });
 
     it('composes filters, resets pagination, and clears them through the standard control', async () => {
+        mockApiGet.mockResolvedValue(response({ totalItems: 75 }));
         const user = userEvent.setup();
         render(
             <TestWrapper initialPath={`/wishlists/${WISHLIST_ID}?page=3`}>

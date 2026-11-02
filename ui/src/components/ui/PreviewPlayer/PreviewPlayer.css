@@ -27,8 +27,7 @@
         background-color: #000;
     }
 
-    .preview-player__video--cover {
-        object-fit: cover;
+    .preview-player--poster .preview-player__video {
         background-color: transparent;
     }
 
@@ -54,12 +53,14 @@
         inset: 0;
         width: 100%;
         height: 100%;
-        object-fit: cover;
-        transition: transform var(--duration-normal) var(--easing-default);
     }
 
-    .preview-player__facade:hover .preview-player__thumbnail {
-        transform: scale(1.03);
+    .preview-player__thumbnail--placeholder {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: var(--text-muted);
+        font-size: var(--text-3xl);
     }
 
     .preview-player__play {
@@ -104,25 +105,16 @@
         transform: translate(-50%, -50%) scale(1.05);
     }
 
-    .preview-player__poster-stage:has(> .preview-player__facade:hover) > .preview-player__thumbnail {
-        transform: scale(1.03);
-    }
-
-    .preview-player__facade[aria-pressed='true'] .preview-player__play--hero {
-        opacity: 0;
-    }
-
-    .preview-player__facade[aria-pressed='true']:hover .preview-player__play--hero,
-    .preview-player__facade[aria-pressed='true']:focus-visible .preview-player__play--hero {
-        opacity: 1;
-    }
-
     .preview-player__poster-stage,
     .preview-player__stop-target {
         position: absolute;
         inset: 0;
         width: 100%;
         height: 100%;
+    }
+
+    .preview-player__poster-stage:has(video, iframe) .content-poster__image {
+        visibility: hidden;
     }
 
     .preview-player__fullscreen.preview-player__youtube-stop {
@@ -147,17 +139,6 @@
         height: 100%;
         border: 0;
         display: block;
-    }
-
-    .preview-player--poster .preview-player__yt-mount > div,
-    .preview-player--poster .preview-player__yt-mount iframe {
-        inset: auto;
-        top: 0;
-        left: 50%;
-        width: auto;
-        height: 100%;
-        aspect-ratio: 16 / 9;
-        transform: translateX(-50%);
     }
 
     .preview-player__controls {

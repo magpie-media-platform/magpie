@@ -2717,6 +2717,20 @@ describe('LibraryPage', () => {
             localStorage.clear();
         });
 
+        it('Gallery_ShowsPosterPlaceholders_WhenContentIsLoading', () => {
+            // Arrange
+            localStorage.setItem('library-view', '"gallery"');
+            mockUseContentList.mockReturnValue({ data: undefined, isLoading: true, error: null });
+
+            // Act
+            renderLibraryPage();
+
+            // Assert
+            expect(screen.getByRole('status', { name: 'Loading content' })).toBeInTheDocument();
+            expect(screen.getByTestId('library-page__loading')).toHaveClass('content-gallery-skeleton');
+            expect(document.querySelector('.library-page__skeleton')).not.toBeInTheDocument();
+        });
+
         it('defaults to list when nothing is stored', () => {
             renderLibraryPage();
 
@@ -2833,7 +2847,7 @@ describe('LibraryPage', () => {
             const grid = screen.getByRole('list', { name: 'Content gallery' });
 
             expect(grid.querySelector('img')).not.toBeInTheDocument();
-            expect(grid.querySelector('.library-gallery-tile__poster--placeholder')).toBeInTheDocument();
+            expect(grid.querySelector('.content-gallery-tile__poster--placeholder')).toBeInTheDocument();
         });
 
         it('swaps tiles to selection targets without dropping the toolbar', async () => {
@@ -2857,6 +2871,49 @@ describe('LibraryPage', () => {
             expect(within(gallery).getByRole('button', { name: 'Select', pressed: true })).toBeInTheDocument();
         });
 
+        it('Gallery_SelectsPageAndOffersAllPages_WhenSelectionStartsEmpty', async () => {
+            // Arrange
+            localStorage.setItem('library-view', JSON.stringify('gallery'));
+            mockUseContentList.mockReturnValue({
+                data: { items: mockContentItems, pageNumber: 1, pageSize: 10, totalItems: 250 },
+                isLoading: false,
+                error: null,
+            });
+            const user = userEvent.setup();
+            renderLibraryPage();
+
+            // Act
+            await user.click(
+                within(screen.getByTestId('library-page__gallery')).getByRole('button', { name: 'Select' }),
+            );
+
+            // Assert
+            const toolbar = screen.getByRole('region', { name: 'Library selection actions' });
+            expect(within(toolbar).getByText('0 selected')).toBeInTheDocument();
+            expect(within(toolbar).queryByRole('button', { name: 'Assign Tags' })).not.toBeInTheDocument();
+
+            // Act
+            await user.click(within(toolbar).getByRole('button', { name: 'Select all' }));
+
+            // Assert
+            expect(within(toolbar).getByRole('button', { name: 'Select all', pressed: true })).toBeEnabled();
+            expect(within(toolbar).getByRole('button', { name: 'Assign Tags' })).toBeEnabled();
+            expect(
+                within(screen.getByRole('list', { name: 'Content gallery' })).getAllByRole('button', {
+                    name: /^Select /,
+                    pressed: true,
+                }),
+            ).toHaveLength(10);
+            expect(within(toolbar).getByRole('button', { name: /select all 250 across all pages/i })).toBeEnabled();
+
+            // Act
+            await user.click(within(toolbar).getByRole('button', { name: 'Clear selection' }));
+
+            // Assert
+            expect(within(toolbar).getByText('0 selected')).toBeInTheDocument();
+            expect(within(toolbar).getByRole('button', { name: 'Select all', pressed: false })).toBeEnabled();
+        });
+
         it('toggles selection when a tile is activated in selection mode', async () => {
             const user = userEvent.setup();
             localStorage.setItem('library-view', JSON.stringify('gallery'));
@@ -2867,7 +2924,7 @@ describe('LibraryPage', () => {
             await user.click(within(gallery).getByRole('button', { name: /^select$/i }));
 
             const grid = screen.getByRole('list', { name: 'Content gallery' });
-            const poster = grid.querySelector('.library-gallery-tile__poster-target') as HTMLElement;
+            const poster = grid.querySelector('.content-gallery-tile__poster-target') as HTMLElement;
 
             await user.click(poster);
 

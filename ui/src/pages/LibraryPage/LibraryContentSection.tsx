@@ -17,9 +17,9 @@ import type { BulkSelection } from '@/hooks/useBulkSelection';
 import { isValidationError, getErrorMessage } from '@/lib/errors';
 import type { ContentListItem } from '@/types';
 
-import { LibraryAlphabetRail } from './LibraryAlphabetRail';
-import { LibraryGalleryTile } from './LibraryGalleryTile';
-import { LibraryGalleryToolbar } from './LibraryGalleryToolbar';
+import { AlphabetRail } from '@/components/ui/AlphabetRail';
+import { ContentGalleryGrid, ContentGallerySkeleton, ContentGalleryTile } from '@/components/content/ContentGallery';
+import { ContentGalleryToolbar } from '@/components/content/ContentGallery';
 import { LibraryMobileCard } from './LibraryMobileCard';
 import { PAGE_SIZE } from './libraryPageConstants';
 
@@ -133,11 +133,15 @@ export function LibraryContentSection({
     return (
         <section className="library-page__content" aria-label="Content list" aria-busy={isPlaceholderData || undefined}>
             {isLoading || contentTypeValidationPending ? (
-                <div className="library-page__loading" data-testid="library-page__loading">
-                    <Skeleton className="library-page__skeleton" />
-                    <Skeleton className="library-page__skeleton" />
-                    <Skeleton className="library-page__skeleton" />
-                </div>
+                view === 'gallery' ? (
+                    <ContentGallerySkeleton data-testid="library-page__loading" />
+                ) : (
+                    <div className="library-page__loading" data-testid="library-page__loading">
+                        <Skeleton className="library-page__skeleton" />
+                        <Skeleton className="library-page__skeleton" />
+                        <Skeleton className="library-page__skeleton" />
+                    </div>
+                )
             ) : error ? (
                 isValidationError(error) ? (
                     <EmptyState
@@ -162,11 +166,13 @@ export function LibraryContentSection({
                 )
             ) : view === 'gallery' ? (
                 <div className="library-page__gallery" data-testid="library-page__gallery">
-                    <LibraryGalleryToolbar
+                    <ContentGalleryToolbar
+                        allowUnsorted={false}
                         sorting={sorting}
                         sortOptions={LIBRARY_SORT_OPTIONS}
                         onSortingChange={onSortingChange}
                         selectedCount={selection.selectedCount}
+                        showSelectionCount={!hasBulkActions}
                         selection={
                             hasBulkActions
                                 ? {
@@ -180,28 +186,23 @@ export function LibraryContentSection({
                         {contentItems.length === 0 ? (
                             <div className="library-page__gallery-empty">{emptyState}</div>
                         ) : (
-                            <ul className="library-page__gallery-grid" role="list" aria-label="Content gallery">
-                                {contentItems.map((item) => (
-                                    <li key={item.id} className="library-page__gallery-cell">
-                                        <LibraryGalleryTile
-                                            item={item}
-                                            selectionMode={hasBulkActions && selectionMode}
-                                            selected={hasBulkActions ? selection.isRowChecked(item.id) : undefined}
-                                            onToggle={
-                                                hasBulkActions
-                                                    ? () =>
-                                                          selection.toggleRow(item.id, !selection.isRowChecked(item.id))
-                                                    : undefined
-                                            }
-                                            onLongPress={
-                                                hasBulkActions ? () => onBeginCardSelection(item.id) : undefined
-                                            }
-                                        />
-                                    </li>
-                                ))}
-                            </ul>
+                            <ContentGalleryGrid items={contentItems} getId={(item) => item.id}>
+                                {(item) => (
+                                    <ContentGalleryTile
+                                        item={item}
+                                        selectionMode={hasBulkActions && selectionMode}
+                                        selected={hasBulkActions ? selection.isRowChecked(item.id) : undefined}
+                                        onToggle={
+                                            hasBulkActions
+                                                ? () => selection.toggleRow(item.id, !selection.isRowChecked(item.id))
+                                                : undefined
+                                        }
+                                        onLongPress={hasBulkActions ? () => onBeginCardSelection(item.id) : undefined}
+                                    />
+                                )}
+                            </ContentGalleryGrid>
                         )}
-                        <LibraryAlphabetRail titlePrefix={titlePrefix} onTitlePrefixChange={onTitlePrefixChange} />
+                        <AlphabetRail titlePrefix={titlePrefix} onTitlePrefixChange={onTitlePrefixChange} />
                     </div>
                     {pageCount > 1 && (
                         <Pager

@@ -156,14 +156,18 @@ export function useProviderMetadataCandidateSearch() {
                 activeRequest.current?.abort();
                 const page = request.page ?? 1;
                 const identity = JSON.stringify([request.query, request.contentType ?? null]);
-                if (page === 1 && !request.resume) {
-                    execution.current = { identity, pages: new Map() };
-                }
-                const current = execution.current;
-                if (!current || current.identity !== identity) {
+                const currentExecution = execution.current;
+                const shouldStartNewExecution =
+                    !currentExecution ||
+                    (Boolean(request.continuation) && currentExecution.identity !== identity) ||
+                    (page === 1 && !request.resume);
+                const candidateExecution: SearchExecution = shouldStartNewExecution
+                    ? { identity, pages: new Map() }
+                    : { identity: currentExecution.identity, pages: new Map(currentExecution.pages) };
+                if (candidateExecution.identity !== identity) {
                     throw new Error('This page belongs to another search. Start a new search.');
                 }
-                const continuation = current.pages.get(page);
+                const continuation = request.continuation ?? candidateExecution.pages.get(page);
                 if (page > 1 && !continuation) {
                     throw new Error('This search page is unavailable. Start a new search.');
                 }
@@ -182,13 +186,24 @@ export function useProviderMetadataCandidateSearch() {
                     ) {
                         throw new DOMException('The search was cancelled.', 'AbortError');
                     }
-                    if (response.continuation) current.pages.set(page, response.continuation);
-                    if (response.nextContinuation) current.pages.set(page + 1, response.nextContinuation);
-                    const nextCompleted = { query: request.query, page, execution: current, data: response };
+                    const pageContinuation = response.continuation ?? continuation;
+                    const resolvedResponse =
+                        pageContinuation && !response.continuation
+                            ? { ...response, continuation: pageContinuation }
+                            : response;
+                    if (pageContinuation) candidateExecution.pages.set(page, pageContinuation);
+                    if (response.nextContinuation) candidateExecution.pages.set(page + 1, response.nextContinuation);
+                    execution.current = candidateExecution;
+                    const nextCompleted = {
+                        query: request.query,
+                        page,
+                        execution: candidateExecution,
+                        data: resolvedResponse,
+                    };
                     completedRef.current = nextCompleted;
                     setCompleted(nextCompleted);
                     setStatus('success');
-                    return response;
+                    return resolvedResponse;
                 } finally {
                     if (activeRequest.current === controller) activeRequest.current = null;
                 }
@@ -238,6 +253,7 @@ export function useProviderMetadataCandidateSearch() {
         setStatus('idle');
         mutationRef.current.reset();
     }, []);
+    const getContinuation = useCallback((page: number) => execution.current?.pages.get(page), []);
     useEffect(() => {
         mounted.current = true;
         const epoch = ++mountEpoch.current;
@@ -267,5 +283,6 @@ export function useProviderMetadataCandidateSearch() {
         data: completed?.data ?? mutation.data,
         cancel,
         reset,
+        getContinuation,
     };
 }

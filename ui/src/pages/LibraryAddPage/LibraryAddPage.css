@@ -10,12 +10,6 @@
         gap: var(--space-lg);
     }
 
-    .library-add-page__header {
-        display: flex;
-        flex-direction: column;
-        gap: var(--space-sm);
-    }
-
     .library-add-page__icon {
         font-size: var(--text-2xl);
         color: var(--accent-primary);
@@ -31,10 +25,6 @@
         display: flex;
         flex-direction: column;
         gap: var(--space-md);
-        padding: var(--space-md);
-        background-color: var(--bg-secondary);
-        border: 1px solid var(--border-default);
-        border-radius: var(--radius-lg);
     }
 
     .library-add-page__saved-picker {
@@ -46,23 +36,23 @@
 
     .library-add-page__field--saved-filter {
         flex: 1 1 12rem;
-        max-width: 320px;
+        min-width: 0;
     }
 
-    .library-add-page__saved-query-preview {
+    .library-add-page__saved-actions {
         display: flex;
-        align-items: flex-start;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: flex-end;
         gap: var(--space-sm);
-        padding: var(--space-sm);
-        background-color: var(--bg-tertiary);
-        border-radius: var(--radius-sm);
-        font-size: var(--text-xs);
+        margin-left: auto;
     }
 
     .library-add-page__saved-query {
         min-width: 0;
         font-family: var(--font-mono);
-        color: var(--accent-secondary);
+        font-size: var(--text-xs);
+        color: var(--text-muted);
         overflow-wrap: anywhere;
     }
 
@@ -125,7 +115,6 @@
     .library-add-page__poster {
         width: 44px;
         height: 66px;
-        object-fit: cover;
         border-radius: var(--radius-sm);
         background-color: var(--bg-tertiary);
     }
@@ -235,6 +224,23 @@
         gap: var(--space-sm);
     }
 
+    .library-add-page__poster-add {
+        width: 36px;
+        height: 36px;
+        padding: 0;
+        border-radius: var(--radius-full);
+        box-shadow: var(--shadow-sm);
+
+        @media (pointer: coarse) {
+            width: var(--touch-target-min);
+            height: var(--touch-target-min);
+        }
+    }
+
+    .library-add-page__poster-add--added {
+        opacity: var(--opacity-reduced);
+    }
+
     .library-add-page__table {
         display: block;
     }
@@ -289,6 +295,10 @@
         .library-add-page {
             padding: var(--space-md);
             gap: var(--space-md);
+        }
+
+        .library-add-page__field--saved-filter {
+            flex-basis: 100%;
         }
     }
 }

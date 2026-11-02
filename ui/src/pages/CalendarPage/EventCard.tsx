@@ -1,7 +1,10 @@
-import { useState } from 'react';
 import { ImageBrokenIcon } from '@phosphor-icons/react';
 
-import { ContentFulfillmentBadge, ContentMonitoringIndicator } from '@/components/content/ContentCardPrimitives';
+import {
+    ContentFulfillmentBadge,
+    ContentMonitoringIndicator,
+    ContentPoster,
+} from '@/components/content/ContentCardPrimitives';
 import { ContentLineageTitle } from '@/components/content/ContentLineageTitle';
 import { CdnPhosphorIcon } from '@/components/ui/CdnPhosphorIcon';
 import { useTypeIconName } from '@/hooks/useLibraryTypes';
@@ -18,7 +21,7 @@ interface EventCardProps {
 
 export function EventCard({ event, onClick, compact = false, showDate = false }: EventCardProps) {
     const typeIconName = useTypeIconName();
-    const [imageError, setImageError] = useState(false);
+    const posterPlaceholder = <ImageBrokenIcon weight="duotone" aria-hidden="true" />;
     const eventDate = parseCalendarDate(event.date);
     const hasTimeOfDay = parseCalendarDateParts(event.date) === null;
 
@@ -36,15 +39,14 @@ export function EventCard({ event, onClick, compact = false, showDate = false }:
             data-fulfillment={event.fulfillment}
         >
             {!compact && (
-                <div className="calendar-page__event-poster">
-                    {event.posterUrl && !imageError ? (
-                        <img src={event.posterUrl} alt="" loading="lazy" onError={() => setImageError(true)} />
-                    ) : (
-                        <div className="calendar-page__event-poster-placeholder">
-                            <ImageBrokenIcon weight="duotone" aria-hidden="true" />
-                        </div>
-                    )}
-                </div>
+                <ContentPoster
+                    posterUrl={event.posterUrl}
+                    alt=""
+                    className="calendar-page__event-poster"
+                    placeholderClassName="calendar-page__event-poster-placeholder"
+                    placeholder={posterPlaceholder}
+                    failurePlaceholder={posterPlaceholder}
+                />
             )}
             <div className="calendar-page__event-info">
                 <div className="calendar-page__event-header">

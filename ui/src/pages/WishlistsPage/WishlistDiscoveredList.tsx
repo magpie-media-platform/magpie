@@ -1,5 +1,13 @@
+import {
+    ContentGalleryGrid,
+    ContentGallerySkeleton,
+    ContentGalleryTile,
+    ContentViewToggle,
+} from '@/components/content/ContentGallery';
+import { ContentPoster } from '@/components/content/ContentCardPrimitives';
+import { useContentView } from '@/hooks/useContentView';
 import { LocalContentLink } from '@/components/content/LocalContentPreview';
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo } from 'react';
 import { type ColumnDef, type SortingState } from '@tanstack/react-table';
 import { CheckCircleIcon, CompassIcon, FunnelSimpleIcon, ImageBrokenIcon, WarningIcon } from '@phosphor-icons/react';
 
@@ -76,6 +84,7 @@ export function WishlistDiscoveredList({
     canEditFilter = true,
 }: WishlistDiscoveredListProps) {
     const usesCardLayout = useCardLayout();
+    const { view, setView } = useContentView('wishlist-discovered-view');
     const filterActionLabel = canEditFilter ? 'Edit filter' : 'View filter';
     const { sorting, filters, page, setSorting, setFilters, setPage } = useUrlTableState({
         defaultSort: DEFAULT_SORTING,
@@ -105,6 +114,12 @@ export function WishlistDiscoveredList({
 
     const totalItems = pagination?.totalItems ?? 0;
     const pageCount = Math.max(1, Math.ceil(totalItems / PAGE_SIZE));
+
+    useEffect(() => {
+        if (pagination && !isLoading && !error && page > pageCount) {
+            setPage(pageCount, { replace: true });
+        }
+    }, [pagination, isLoading, error, page, pageCount, setPage]);
 
     const handleInLibraryChange = useCallback(
         (value: string) => {
@@ -290,6 +305,7 @@ export function WishlistDiscoveredList({
                     )}
                 </div>
                 <div className="wishlist-discovered__header-actions">
+                    <ContentViewToggle view={view} onChange={setView} />
                     {hasActiveFilters && <ClearFiltersButton onClick={handleClearFilters} />}
                     {onOpenFilter && (
                         <Button
@@ -307,6 +323,7 @@ export function WishlistDiscoveredList({
             </div>
 
             <ListFilterToolbar
+                showControls={view === 'gallery'}
                 fields={filterFields}
                 onCommit={(values) =>
                     setFilters({
@@ -321,11 +338,15 @@ export function WishlistDiscoveredList({
             />
 
             {isLoading ? (
-                <div className="wishlist-discovered__list" aria-label="Loading discovered list">
-                    <Skeleton className="wishlist-discovered__skeleton" />
-                    <Skeleton className="wishlist-discovered__skeleton" />
-                    <Skeleton className="wishlist-discovered__skeleton" />
-                </div>
+                view === 'gallery' ? (
+                    <ContentGallerySkeleton />
+                ) : (
+                    <div className="wishlist-discovered__list" aria-label="Loading discovered list">
+                        <Skeleton className="wishlist-discovered__skeleton" />
+                        <Skeleton className="wishlist-discovered__skeleton" />
+                        <Skeleton className="wishlist-discovered__skeleton" />
+                    </div>
+                )
             ) : error ? (
                 <EmptyState
                     icon={<WarningIcon weight="duotone" />}
@@ -335,7 +356,27 @@ export function WishlistDiscoveredList({
                 />
             ) : (
                 <div className="wishlist-discovered__content">
-                    {usesCardLayout ? (
+                    {view === 'gallery' ? (
+                        rows.length ? (
+                            <ContentGalleryGrid items={rows} getId={(row) => row.discoveredId}>
+                                {(row) => (
+                                    <ContentGalleryTile
+                                        item={{
+                                            id: row.linkId ?? row.discoveredId,
+                                            title: row.title?.trim() || 'Untitled',
+                                            posterUrl: row.posterUrl ?? undefined,
+                                        }}
+                                        localContentId={row.linkId}
+                                        to={row.linkId ? `/library/${row.linkId}` : null}
+                                        previewOnOpen={Boolean(row.linkId)}
+                                        detail={<DiscoveredStatus row={row} />}
+                                    />
+                                )}
+                            </ContentGalleryGrid>
+                        ) : (
+                            emptyState
+                        )
+                    ) : usesCardLayout ? (
                         rows.length > 0 ? (
                             <>
                                 <div
@@ -390,19 +431,19 @@ export function WishlistDiscoveredList({
 WishlistDiscoveredList.displayName = 'WishlistDiscoveredList';
 
 function DiscoveredPoster({ row }: { row: WishlistDiscoveredRow }) {
-    const [imageError, setImageError] = useState(false);
-    const showPoster = !!row.posterUrl && !imageError;
+    const placeholder = (
+        <ImageBrokenIcon weight="duotone" aria-hidden="true" data-testid="discovered-poster-placeholder" />
+    );
 
     return (
-        <div className="wishlist-discovered__row-poster">
-            {showPoster ? (
-                <img src={row.posterUrl!} alt="" loading="lazy" onError={() => setImageError(true)} />
-            ) : (
-                <div className="wishlist-discovered__poster-placeholder" data-testid="discovered-poster-placeholder">
-                    <ImageBrokenIcon weight="duotone" aria-hidden="true" />
-                </div>
-            )}
-        </div>
+        <ContentPoster
+            posterUrl={row.posterUrl}
+            alt=""
+            className="wishlist-discovered__row-poster"
+            placeholderClassName="wishlist-discovered__poster-placeholder"
+            placeholder={placeholder}
+            failurePlaceholder={placeholder}
+        />
     );
 }
 

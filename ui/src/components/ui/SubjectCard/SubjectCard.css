@@ -1,0 +1,84 @@
+@layer components {
+    .subject-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(min(100%, 120px), 1fr));
+        gap: var(--space-md);
+        margin: 0;
+        padding: 0;
+        list-style: none;
+
+        @media (max-width: 480px) {
+            grid-template-columns: repeat(auto-fill, minmax(min(100%, 104px), 1fr));
+            gap: var(--space-sm);
+        }
+    }
+
+    .subject-grid__item {
+        display: flex;
+        min-width: 0;
+    }
+
+    .subject-card {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: var(--space-xs);
+        width: 100%;
+        padding: var(--space-sm);
+        text-align: center;
+        text-decoration: none;
+        border-radius: var(--radius-md);
+        color: inherit;
+    }
+
+    .subject-card:is(a) {
+        transition: background-color var(--duration-fast) var(--easing-default);
+
+        &:hover {
+            background-color: var(--bg-secondary);
+        }
+
+        &:hover .subject-card__name {
+            color: var(--accent-primary);
+        }
+
+        &:focus-visible {
+            outline: var(--focus-ring-width) solid var(--focus-ring-color);
+            outline-offset: var(--focus-ring-offset);
+        }
+    }
+
+    .subject-card__avatar {
+        width: 88px;
+        height: 88px;
+    }
+
+    .subject-card__avatar .avatar__fallback {
+        color: var(--text-muted);
+        border: 1px solid var(--border-default);
+
+        & svg {
+            font-size: var(--text-2xl);
+        }
+    }
+
+    .subject-card__name {
+        font-size: var(--text-sm);
+        font-weight: var(--weight-medium);
+        color: var(--text-primary);
+        line-height: var(--leading-tight);
+        overflow-wrap: anywhere;
+    }
+
+    .subject-card--dangling .subject-card__name {
+        color: var(--text-muted);
+        font-style: italic;
+    }
+
+    .subject-card__qualifier {
+        font-size: var(--text-xs);
+        color: var(--text-secondary);
+        line-height: var(--leading-tight);
+        overflow-wrap: anywhere;
+    }
+}

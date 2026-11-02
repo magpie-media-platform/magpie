@@ -1,32 +1,5 @@
 import { useLayoutEffect } from 'react';
 
-const ROW_SIZE_PROPERTY = '--tab-row-size';
-
-function clearRows(list: HTMLElement): void {
-    for (const child of Array.from(list.children) as HTMLElement[]) {
-        child.style.removeProperty(ROW_SIZE_PROPERTY);
-    }
-}
-
-function assignRows(list: HTMLElement, widestChild: number): void {
-    const children = Array.from(list.children) as HTMLElement[];
-    const style = getComputedStyle(list);
-    const gap = parseFloat(style.columnGap) || 0;
-    const room = list.clientWidth - (parseFloat(style.paddingLeft) || 0) - (parseFloat(style.paddingRight) || 0);
-    const perRow = Math.max(1, Math.floor((room + gap) / (widestChild + gap)));
-    const rows = Math.ceil(children.length / perRow);
-    const fewest = Math.floor(children.length / rows);
-    const longRows = children.length % rows;
-
-    let index = 0;
-    for (let row = 0; row < rows; row++) {
-        const size = row < longRows ? fewest + 1 : fewest;
-        for (let count = 0; count < size; count++) {
-            children[index++].style.setProperty(ROW_SIZE_PROPERTY, String(size));
-        }
-    }
-}
-
 function holdsEveryChild(list: HTMLElement): boolean {
     if (list.scrollWidth > list.clientWidth) {
         return false;
@@ -42,17 +15,7 @@ function holdsEveryChild(list: HTMLElement): boolean {
 }
 
 function fitElement(list: HTMLElement, fits: readonly string[]): void {
-    clearRows(list);
     for (const fit of fits) {
-        if (fit === 'rows') {
-            const widestChild = Math.max(
-                0,
-                ...(Array.from(list.children) as HTMLElement[]).map((child) => child.offsetWidth),
-            );
-            list.dataset.fit = fit;
-            assignRows(list, widestChild);
-            return;
-        }
         list.dataset.fit = fit;
         if (holdsEveryChild(list)) {
             return;

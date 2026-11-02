@@ -14,6 +14,8 @@ export interface SelectAllBannerProps {
     onClear: () => void;
 
     itemNounPlural?: string;
+
+    disabled?: boolean;
 }
 
 function formatCount(value: number): string {
@@ -28,6 +30,7 @@ export function SelectAllBanner({
     onSelectAllAcrossPages,
     onClear,
     itemNounPlural = 'items',
+    disabled = false,
 }: SelectAllBannerProps) {
     return (
         <div className="select-all-banner" role="status" data-component="select-all-banner">
@@ -40,6 +43,7 @@ export function SelectAllBanner({
                         type="button"
                         className="select-all-banner__action"
                         onClick={onClear}
+                        disabled={disabled}
                         data-action="clear-across-pages"
                     >
                         Clear selection
@@ -54,6 +58,7 @@ export function SelectAllBanner({
                         type="button"
                         className="select-all-banner__action"
                         onClick={onSelectAllAcrossPages}
+                        disabled={disabled}
                         data-action="select-all-across-pages"
                     >
                         Select all {formatCount(totalCount)} across all pages

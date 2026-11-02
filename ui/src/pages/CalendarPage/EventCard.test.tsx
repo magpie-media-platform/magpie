@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -75,6 +75,30 @@ describe('EventCard', () => {
     it('shows poster image when posterUrl is provided', () => {
         const { container } = render(<EventCard event={makeEvent()} onClick={vi.fn()} />, { wrapper: TooltipProvider });
         expect(container.querySelector('img')).toHaveAttribute('src', 'https://example.com/poster.jpg');
+    });
+
+    it('Poster_UsesTheSharedBackdropAndFailurePlaceholder_WhenArtworkLoadsThenFails', () => {
+        // Arrange
+        const { container } = render(<EventCard event={makeEvent()} onClick={vi.fn()} />, { wrapper: TooltipProvider });
+        const image = container.querySelector('img')!;
+
+        // Act
+        fireEvent.load(image);
+
+        // Assert
+        expect(image.parentElement).toHaveClass('content-poster', 'calendar-page__event-poster');
+        expect(image.parentElement?.querySelector('.content-poster__backdrop')).toHaveAttribute('aria-hidden', 'true');
+
+        // Act
+        fireEvent.error(image);
+
+        // Assert
+        expect(container.querySelector('img')).not.toBeInTheDocument();
+        expect(container.querySelector('.calendar-page__event-poster-placeholder')).toHaveAttribute(
+            'aria-hidden',
+            'true',
+        );
+        expect(container.querySelector('.calendar-page__event-poster-placeholder svg')).toBeInTheDocument();
     });
 
     it('shows placeholder when posterUrl is absent', () => {

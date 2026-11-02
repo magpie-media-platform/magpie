@@ -2,7 +2,7 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { LibraryAlphabetRail } from './LibraryAlphabetRail';
+import { AlphabetRail } from './AlphabetRail';
 
 const LETTER_HEIGHT = 20;
 
@@ -15,7 +15,7 @@ class TestPointerEvent extends MouseEvent {
     }
 }
 
-describe('LibraryAlphabetRail', () => {
+describe('AlphabetRail', () => {
     beforeEach(() => {
         vi.stubGlobal('PointerEvent', TestPointerEvent);
         vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
@@ -36,7 +36,7 @@ describe('LibraryAlphabetRail', () => {
     it('Click_SelectsTheLetter_WhenAKeyboardActivatesIt', async () => {
         // Arrange
         const onChange = vi.fn();
-        render(<LibraryAlphabetRail titlePrefix="" onTitlePrefixChange={onChange} />);
+        render(<AlphabetRail titlePrefix="" onTitlePrefixChange={onChange} />);
         screen.getByRole('button', { name: 'C' }).focus();
 
         // Act
@@ -49,7 +49,7 @@ describe('LibraryAlphabetRail', () => {
     it('Click_SelectsTheLetterOnce_WhenTheLetterIsPressed', async () => {
         // Arrange
         const onChange = vi.fn();
-        render(<LibraryAlphabetRail titlePrefix="" onTitlePrefixChange={onChange} />);
+        render(<AlphabetRail titlePrefix="" onTitlePrefixChange={onChange} />);
 
         // Act
         await userEvent.click(screen.getByRole('button', { name: 'C' }));
@@ -61,7 +61,7 @@ describe('LibraryAlphabetRail', () => {
     it('Click_ClearsTheLetter_WhenTheActiveLetterIsPressed', async () => {
         // Arrange
         const onChange = vi.fn();
-        render(<LibraryAlphabetRail titlePrefix="c" onTitlePrefixChange={onChange} />);
+        render(<AlphabetRail titlePrefix="c" onTitlePrefixChange={onChange} />);
 
         // Act
         await userEvent.click(screen.getByRole('button', { name: 'C' }));
@@ -73,7 +73,7 @@ describe('LibraryAlphabetRail', () => {
     it('Slide_SelectsTheLastLetterOnRelease_WhenThePointerMovesAlongTheRail', () => {
         // Arrange
         const onChange = vi.fn();
-        render(<LibraryAlphabetRail titlePrefix="" onTitlePrefixChange={onChange} />);
+        render(<AlphabetRail titlePrefix="" onTitlePrefixChange={onChange} />);
         const rail = screen.getByRole('group', { name: 'Filter by first letter' });
 
         // Act
@@ -93,7 +93,7 @@ describe('LibraryAlphabetRail', () => {
     it('Slide_SelectsTheNearestEndLetter_WhenThePointerLeavesTheRail', () => {
         // Arrange
         const onChange = vi.fn();
-        render(<LibraryAlphabetRail titlePrefix="" onTitlePrefixChange={onChange} />);
+        render(<AlphabetRail titlePrefix="" onTitlePrefixChange={onChange} />);
         const rail = screen.getByRole('group', { name: 'Filter by first letter' });
 
         // Act
@@ -108,7 +108,7 @@ describe('LibraryAlphabetRail', () => {
     it('Slide_SelectsNothing_WhenThePressIsCanceled', () => {
         // Arrange
         const onChange = vi.fn();
-        render(<LibraryAlphabetRail titlePrefix="" onTitlePrefixChange={onChange} />);
+        render(<AlphabetRail titlePrefix="" onTitlePrefixChange={onChange} />);
         const rail = screen.getByRole('group', { name: 'Filter by first letter' });
 
         // Act

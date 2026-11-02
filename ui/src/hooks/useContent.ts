@@ -586,7 +586,8 @@ export function useContentTags() {
 }
 
 async function fetchMediaServerLinks(id: string): Promise<MediaServerDeepLink[]> {
-    return apiGet<MediaServerDeepLink[]>(`/content/${id}/media-server-links`);
+    const links = await apiGet<MediaServerDeepLink[]>(`/content/${encodeURIComponent(id)}/media-server-links`);
+    return Array.isArray(links) ? links : [];
 }
 
 function contentRelationshipsFromInspector(inspector: MetadataInspectorResponse | undefined): ContentRelationship[] {

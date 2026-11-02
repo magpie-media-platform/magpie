@@ -13,6 +13,8 @@ export interface SelectColumnArgs<TData> {
     rowLabel: (row: TData) => string;
 
     canSelect?: (row: TData) => boolean;
+
+    disabled?: boolean;
 }
 
 /** The leading checkbox column for a bulk-selectable table, whose header checkbox covers only the current page. */
@@ -22,6 +24,7 @@ export function selectColumn<TData>({
     headerLabel,
     rowLabel,
     canSelect,
+    disabled = false,
 }: SelectColumnArgs<TData>): ColumnDef<TData> {
     return {
         id: 'select',
@@ -31,6 +34,7 @@ export function selectColumn<TData>({
         header: () => (
             <Checkbox
                 checked={selection.headerChecked}
+                disabled={disabled}
                 onCheckedChange={(checked) => selection.toggleHeader(!!checked)}
                 aria-label={headerLabel}
                 data-action="select-all"
@@ -39,7 +43,7 @@ export function selectColumn<TData>({
         cell: ({ row }) => (
             <Checkbox
                 checked={selection.isRowChecked(getId(row.original))}
-                disabled={canSelect !== undefined && !canSelect(row.original)}
+                disabled={disabled || (canSelect !== undefined && !canSelect(row.original))}
                 onCheckedChange={(checked) => selection.toggleRow(getId(row.original), !!checked)}
                 aria-label={`Select ${rowLabel(row.original)}`}
                 onClick={(event) => event.stopPropagation()}

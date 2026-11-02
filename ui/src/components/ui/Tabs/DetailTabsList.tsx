@@ -4,7 +4,7 @@ import { TabsList, type TabFit, type TabsListProps } from './Tabs';
 
 export type DetailTabsListProps = Omit<TabsListProps, 'fits'>;
 
-const DETAIL_FITS: readonly TabFit[] = ['labels', 'icons', 'rows'];
+const DETAIL_FITS: readonly TabFit[] = ['labels', 'icons'];
 
 const DetailTabsList = forwardRef<HTMLDivElement, DetailTabsListProps>(({ className, ...props }, ref) => {
     const classes = ['tabs-list--detail', className].filter(Boolean).join(' ');

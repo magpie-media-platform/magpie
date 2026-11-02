@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { TooltipProvider } from '@/components/ui/Tooltip';
 
@@ -704,6 +704,10 @@ describe('TabsList fit', () => {
 });
 
 describe('DetailTabsList', () => {
+    afterEach(() => {
+        vi.restoreAllMocks();
+    });
+
     const strip = () => (
         <TooltipProvider>
             <Tabs defaultValue="tab1">
@@ -724,6 +728,20 @@ describe('DetailTabsList', () => {
         expect(list).toHaveClass('tabs-list--detail');
         expect(list).toHaveAttribute('data-fit', 'labels');
         expect(screen.getByText('Tab 1')).toBeInTheDocument();
+        expect(screen.getByRole('tab', { name: 'Tab 2 (3)' })).toBeInTheDocument();
+        expect(screen.getByText('3')).toBeInTheDocument();
+    });
+
+    it('DetailTabsList_KeepsIconFitAndCounts_WhenTabsExceedTheAvailableWidth', () => {
+        // Arrange
+        vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(288);
+        vi.spyOn(HTMLElement.prototype, 'scrollWidth', 'get').mockReturnValue(500);
+
+        // Act
+        render(strip());
+
+        // Assert
+        expect(screen.getByRole('tablist')).toHaveAttribute('data-fit', 'icons');
         expect(screen.getByRole('tab', { name: 'Tab 2 (3)' })).toBeInTheDocument();
         expect(screen.getByText('3')).toBeInTheDocument();
     });

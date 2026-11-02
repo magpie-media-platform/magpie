@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import type { ContentOrigin } from '@/hooks/useContentOrigin';
 import { useLocalContentPreview } from '@/hooks/useLocalContentPreview';
@@ -8,6 +8,7 @@ import {
     CaretDownIcon,
     FilmStripIcon,
     InfoIcon,
+    TelevisionIcon,
     WarningCircleIcon,
     UserIcon,
 } from '@phosphor-icons/react';
@@ -24,10 +25,12 @@ import {
     DropdownMenuTrigger,
 } from '@/components/ui/DropdownMenu';
 import { EmptyState } from '@/components/ui/EmptyState';
+import { ExternalIds, type ExternalIdsLeadingChip } from '@/components/ui/ExternalIds';
 import { Sheet, SheetContent, SheetHeader, SheetFooter, SheetTitle, SheetDescription } from '@/components/ui/Sheet';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { Tooltip } from '@/components/ui/Tooltip';
 import { PreviewPlayer, type PreviewClip } from '@/components/ui/PreviewPlayer';
+import { useMediaServerLinks } from '@/hooks/useContent';
 import {
     usePreviewByExternalId,
     type ContentPreview,
@@ -38,6 +41,7 @@ import { isNotFoundError } from '@/lib/errors';
 import { returnFocusOnClose } from '@/lib/returnFocus';
 import { formatTimeSpanDuration } from '@/lib/formatTime';
 import { toPlainTextSummary } from '@/lib/plainTextSummary';
+import { safeHttpUrl } from '@/lib/safeUrl';
 import { resolveSubjectKindLabel, resolveSubjectKindPluralLabel } from '@/types';
 
 import './PreviewDrawer.css';
@@ -122,6 +126,8 @@ export function PreviewDrawer({
     const { mutate: runPreview, reset: resetPreview } = previewMutation;
     const localPreview = useLocalContentPreview(open ? localContentId : undefined, localIdentity);
     const { data, error, isPending } = localContentId ? localPreview : previewMutation;
+    const resolvedLocalContentId = open && localContentId ? localPreview.data?.localContentId : undefined;
+    const { data: mediaServerLinks, isLoading: mediaServersLoading } = useMediaServerLinks(resolvedLocalContentId);
 
     const providerType = target?.providerType;
     const externalIdKey = target?.externalIdKey;
@@ -166,12 +172,26 @@ export function PreviewDrawer({
     const runtime = formatTimeSpanDuration(preview?.duration);
     const overview = toPlainTextSummary(preview?.overview);
     const relatedSubjectGroups = groupRelatedSubjects(preview?.relatedSubjects ?? []);
+    const mediaServerChips: ExternalIdsLeadingChip[] =
+        localContentId && !mediaServersLoading && Array.isArray(mediaServerLinks)
+            ? mediaServerLinks
+                  .filter((link) => safeHttpUrl(link.url) !== null)
+                  .map((link) => ({
+                      key: `media-${link.mediaServerId}`,
+                      label: link.serverName,
+                      url: link.url,
+                      source: link.providerType,
+                      testId: `media-server-link-${link.providerType}`,
+                      dataMediaServerId: link.mediaServerId,
+                      icon: <TelevisionIcon weight="fill" aria-hidden="true" />,
+                  }))
+            : [];
+    const hasMeta = !!runtime || !!preview?.language || !!preview?.contentRatings.length;
     const hasDetails =
         !!hero ||
         !!artwork ||
-        !!runtime ||
-        !!preview?.language ||
-        !!preview?.contentRatings.length ||
+        hasMeta ||
+        mediaServerChips.length > 0 ||
         !!overview ||
         !!preview?.genres.length ||
         relatedSubjectGroups.length > 0;
@@ -268,11 +288,6 @@ export function PreviewDrawer({
                             ) : artwork ? (
                                 <div
                                     className="preview-drawer__artwork-frame"
-                                    style={
-                                        {
-                                            '--preview-artwork-image': `url(${JSON.stringify(artwork)})`,
-                                        } as CSSProperties
-                                    }
                                     data-testid="preview-drawer-artwork-frame"
                                 >
                                     <ContentPoster
@@ -286,23 +301,39 @@ export function PreviewDrawer({
                                 </div>
                             ) : null}
 
-                            <div className="preview-drawer__meta">
-                                {runtime && (
-                                    <Badge size="sm" variant="default">
-                                        {runtime}
-                                    </Badge>
-                                )}
-                                {preview.language && (
-                                    <Badge size="sm" variant="default">
-                                        {preview.language}
-                                    </Badge>
-                                )}
-                                {preview.contentRatings.map((r) => (
-                                    <Badge key={`${r.body}-${r.rating}`} size="sm" variant="info" badgeStyle="outline">
-                                        {r.body}: {r.rating}
-                                    </Badge>
-                                ))}
-                            </div>
+                            {hasMeta && (
+                                <div className="preview-drawer__meta">
+                                    {runtime && (
+                                        <Badge size="sm" variant="default">
+                                            {runtime}
+                                        </Badge>
+                                    )}
+                                    {preview.language && (
+                                        <Badge size="sm" variant="default">
+                                            {preview.language}
+                                        </Badge>
+                                    )}
+                                    {preview.contentRatings.map((r) => (
+                                        <Badge
+                                            key={`${r.body}-${r.rating}`}
+                                            size="sm"
+                                            variant="info"
+                                            badgeStyle="outline"
+                                        >
+                                            {r.body}: {r.rating}
+                                        </Badge>
+                                    ))}
+                                </div>
+                            )}
+
+                            {mediaServerChips.length > 0 && (
+                                <ExternalIds
+                                    variant="chips"
+                                    data-testid="preview-drawer-media-server-links"
+                                    leadingChips={mediaServerChips}
+                                    ids={[]}
+                                />
+                            )}
 
                             {overview && <p className="preview-drawer__overview">{overview}</p>}
 

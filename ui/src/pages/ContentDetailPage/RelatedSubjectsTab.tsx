@@ -1,8 +1,7 @@
 import { useMemo } from 'react';
-import { Link } from 'react-router-dom';
-import { ImageBrokenIcon, UsersThreeIcon } from '@phosphor-icons/react';
+import { UsersThreeIcon } from '@phosphor-icons/react';
 
-import { Avatar } from '@/components/ui/Avatar';
+import { SubjectCard } from '@/components/ui/SubjectCard';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { useContentRelationships } from '@/hooks/useContent';
@@ -59,60 +58,21 @@ export function RelatedSubjectsTab({ contentId }: RelatedSubjectsTabProps) {
             {grouped.map(({ kind, rows }) => (
                 <section key={kind} className="related-subjects-tab__group" data-kind={kind}>
                     <h3 className="related-subjects-tab__group-title">{formatKindHeading(kind)}</h3>
-                    <ul className="related-subjects-tab__grid" role="list">
+                    <ul className="subject-grid" role="list">
                         {rows.map((row) => (
-                            <li key={row.id} className="related-subjects-tab__item" data-relationship-id={row.id}>
-                                <RelatedSubjectEntry row={row} />
+                            <li key={row.id} className="subject-grid__item" data-relationship-id={row.id}>
+                                <SubjectCard
+                                    subjectId={row.subjectId}
+                                    name={row.name}
+                                    imageUrl={row.imageUrl}
+                                    qualifier={row.qualifier}
+                                    testId={`related-subject-${row.subjectId ? 'link' : 'name'}-${row.id}`}
+                                />
                             </li>
                         ))}
                     </ul>
                 </section>
             ))}
-        </div>
-    );
-}
-
-function RelatedSubjectEntry({ row }: { row: ContentRelationship }) {
-    const avatar = (
-        <Avatar
-            key={row.imageUrl}
-            src={row.imageUrl ?? undefined}
-            alt={row.name}
-            loading="lazy"
-            className="related-subjects-tab__avatar"
-            fallback={
-                <ImageBrokenIcon weight="thin" aria-hidden="true" data-testid="related-subject-avatar-placeholder" />
-            }
-        />
-    );
-    const roleLabel = row.qualifier ? row.qualifier : null;
-
-    const body = (
-        <>
-            {avatar}
-            <span className="related-subjects-tab__name">{row.name}</span>
-            {roleLabel && <span className="related-subjects-tab__qualifier">{roleLabel}</span>}
-        </>
-    );
-
-    if (row.subjectId) {
-        return (
-            <Link
-                to={`/subjects/${row.subjectId}`}
-                className="related-subjects-tab__card related-subjects-tab__card--link"
-                data-testid={`related-subject-link-${row.id}`}
-            >
-                {body}
-            </Link>
-        );
-    }
-
-    return (
-        <div
-            className="related-subjects-tab__card related-subjects-tab__card--dangling"
-            data-testid={`related-subject-name-${row.id}`}
-        >
-            {body}
         </div>
     );
 }

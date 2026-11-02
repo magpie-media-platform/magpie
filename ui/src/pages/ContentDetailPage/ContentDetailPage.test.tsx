@@ -2122,15 +2122,12 @@ describe('ContentDetailPage', () => {
             await waitFor(() => {
                 expect(screen.getByRole('tab', { name: /activity/i })).toBeInTheDocument();
             });
-            expect(screen.getAllByRole('tab').map((tab) => tab.getAttribute('aria-label'))).toEqual([
-                'Seasons (0)',
-                'Related',
-                'Details',
-                'Releases',
-                'Files',
-                'Metadata',
-                'Activity',
-            ]);
+            const tablist = screen.getByRole('tablist', { name: 'Content details' });
+            expect(
+                within(tablist)
+                    .getAllByRole('tab')
+                    .map((tab) => tab.getAttribute('aria-label')),
+            ).toEqual(['Seasons (0)', 'Related', 'Details', 'Releases', 'Files', 'Metadata', 'Activity']);
         });
 
         it('selects the Related tab by default for a leaf item (no ?tab= param)', async () => {
@@ -2987,11 +2984,11 @@ describe('ContentDetailPage', () => {
         it('renders the strip as the single tab picker with no dropdown mirror', async () => {
             renderWithRouter('content-1');
             await waitFor(() => {
-                expect(screen.getByRole('tablist')).toBeInTheDocument();
+                expect(screen.getByRole('tablist', { name: 'Content details' })).toBeInTheDocument();
             });
             expect(screen.queryByTestId('content-detail-page__tab-select')).not.toBeInTheDocument();
             expect(screen.queryByRole('combobox', { name: /select tab/i })).not.toBeInTheDocument();
-            const tablist = screen.getByRole('tablist');
+            const tablist = screen.getByRole('tablist', { name: 'Content details' });
             expect(within(tablist).getAllByRole('tab').length).toBeGreaterThan(1);
         });
 
@@ -3943,7 +3940,7 @@ describe('ContentDetailPage', () => {
         it('has accessible tab list', async () => {
             renderWithRouter('content-1');
             await waitFor(() => {
-                expect(screen.getByRole('tablist')).toBeInTheDocument();
+                expect(screen.getByRole('tablist', { name: 'Content details' })).toBeInTheDocument();
             });
         });
 

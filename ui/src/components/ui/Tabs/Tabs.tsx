@@ -34,7 +34,7 @@ export type TabsProps = ComponentPropsWithoutRef<typeof TabsPrimitive.Root> & {
     holdHeightOnValueChange?: boolean;
 };
 
-export type TabFit = 'equal' | 'content' | 'labels' | 'icons' | 'rows';
+export type TabFit = 'equal' | 'content' | 'labels' | 'icons';
 
 export type TabsListProps = ComponentPropsWithoutRef<typeof TabsPrimitive.List> & {
     fits?: readonly TabFit[];

@@ -1,14 +1,14 @@
 import { Link } from 'react-router-dom';
-import { ArrowLeftIcon, GridFourIcon, ListIcon } from '@phosphor-icons/react';
+import { ArrowLeftIcon } from '@phosphor-icons/react';
 
 import { BulkActionsToolbar } from '@/components/ui/BulkActionsToolbar';
 import { Slot } from '@/components/ui/Slot';
 import { CdnPhosphorIcon } from '@/components/ui/CdnPhosphorIcon';
 import { PullToRefresh } from '@/components/ui/PullToRefresh';
 import { PageHeader } from '@/components/ui/PageHeader';
-import { Tabs, TabsList, TabsTrigger } from '@/components/ui/Tabs';
+import { ContentViewToggle } from '@/components/content/ContentGallery';
 import { TABLE_LAYOUT_QUERY } from '@/hooks/ui/useCardLayout';
-import { usePersistentState } from '@/hooks/usePersistentState';
+import { useContentView } from '@/hooks/useContentView';
 
 import { LibraryTypePicker } from './LibraryTypePicker';
 import { LibraryFilters } from './LibraryFilters';
@@ -25,8 +25,7 @@ export function LibraryPage() {
     const library = useLibraryPage();
     const { route, filters, content, bulk, pagination, selection } = library;
     const { currentContentType, selectedLevel, routeContentTypeSlug, pageTitle, pageIconName } = route;
-    const [storedView, setStoredView] = usePersistentState<string>('library-view', 'list');
-    const view = storedView === 'gallery' ? 'gallery' : 'list';
+    const { view, setView } = useContentView('library-view');
 
     if (route.hasInvalidContentTypeSlug) {
         return null;
@@ -65,22 +64,7 @@ export function LibraryPage() {
                             />
                         }
                         actions={
-                            <Tabs value={view} onValueChange={setStoredView}>
-                                <TabsList
-                                    className="library-page__view-switch"
-                                    aria-label="Content view"
-                                    data-testid="library-page__view-switch"
-                                >
-                                    <TabsTrigger value="list" data-action="view-list">
-                                        <ListIcon weight="bold" aria-hidden="true" />
-                                        List
-                                    </TabsTrigger>
-                                    <TabsTrigger value="gallery" data-action="view-gallery">
-                                        <GridFourIcon weight="bold" aria-hidden="true" />
-                                        Gallery
-                                    </TabsTrigger>
-                                </TabsList>
-                            </Tabs>
+                            <ContentViewToggle view={view} onChange={setView} testId="library-page__view-switch" />
                         }
                     />
 
@@ -112,18 +96,22 @@ export function LibraryPage() {
                             label="Library selection actions"
                             itemNounPlural="items"
                             onClear={selection.selection.clear}
+                            visible={selection.selection.hasSelection || (view === 'gallery' && library.selectionMode)}
+                            selectAll={view === 'gallery'}
                         >
-                            <LibraryBulkActionButtons
-                                canEditContent={library.canEditContent}
-                                canManageContent={library.canManageContent}
-                                canDeleteContent={library.canDeleteContent}
-                                onOpenBulkTags={bulk.handleOpenBulkTags}
-                                onBulkSetMonitoring={bulk.handleBulkSetMonitoring}
-                                isSettingMonitoring={bulk.isSettingMonitoring}
-                                onOpenBulkRootFolder={bulk.openBulkRootFolder}
-                                onOpenBulkQualityTierList={bulk.openBulkQualityTierList}
-                                onOpenBulkDelete={bulk.openBulkDeleteConfirm}
-                            />
+                            {selection.selection.hasSelection && (
+                                <LibraryBulkActionButtons
+                                    canEditContent={library.canEditContent}
+                                    canManageContent={library.canManageContent}
+                                    canDeleteContent={library.canDeleteContent}
+                                    onOpenBulkTags={bulk.handleOpenBulkTags}
+                                    onBulkSetMonitoring={bulk.handleBulkSetMonitoring}
+                                    isSettingMonitoring={bulk.isSettingMonitoring}
+                                    onOpenBulkRootFolder={bulk.openBulkRootFolder}
+                                    onOpenBulkQualityTierList={bulk.openBulkQualityTierList}
+                                    onOpenBulkDelete={bulk.openBulkDeleteConfirm}
+                                />
+                            )}
                         </BulkActionsToolbar>
                     )}
 

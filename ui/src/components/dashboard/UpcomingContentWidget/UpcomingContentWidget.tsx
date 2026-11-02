@@ -1,9 +1,13 @@
-import { forwardRef, memo, type HTMLAttributes, type ReactNode, useState } from 'react';
+import { forwardRef, memo, type HTMLAttributes, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 
 import { LoadErrorAlert } from '@/components/ui/LoadErrorAlert';
 import { CdnPhosphorIcon } from '@/components/ui/CdnPhosphorIcon';
-import { ContentFulfillmentBadge, ContentMonitoringIndicator } from '@/components/content/ContentCardPrimitives';
+import {
+    ContentFulfillmentBadge,
+    ContentMonitoringIndicator,
+    ContentPoster,
+} from '@/components/content/ContentCardPrimitives';
 import { ContentLineageTitle } from '@/components/content/ContentLineageTitle';
 import { useLibraryTypes, useTypeIconName } from '@/hooks/useLibraryTypes';
 import { resolveContentTypeLabel } from '@/lib/contentTypeDisplay';
@@ -106,24 +110,20 @@ const ContentItem = ({ item, url }: ContentItemProps) => {
             { level: item.level, levelLabel: item.levelLabel, contentType: item.contentType },
             contentTypes,
         ) || 'Content';
-    const [failedPosterUrl, setFailedPosterUrl] = useState<string | null>(null);
+    const posterPlaceholder = (
+        <CdnPhosphorIcon name={typeIconName(item.contentType)} weight="duotone" aria-hidden="true" />
+    );
 
     const content = (
         <>
-            <div className="upcoming-content-widget__item-poster">
-                {item.posterUrl && item.posterUrl !== failedPosterUrl ? (
-                    <img
-                        src={item.posterUrl}
-                        alt=""
-                        loading="lazy"
-                        onError={() => setFailedPosterUrl(item.posterUrl ?? null)}
-                    />
-                ) : (
-                    <div className="upcoming-content-widget__item-poster-placeholder">
-                        <CdnPhosphorIcon name={typeIconName(item.contentType)} weight="duotone" aria-hidden="true" />
-                    </div>
-                )}
-            </div>
+            <ContentPoster
+                posterUrl={item.posterUrl}
+                alt=""
+                className="upcoming-content-widget__item-poster"
+                placeholderClassName="upcoming-content-widget__item-poster-placeholder"
+                placeholder={posterPlaceholder}
+                failurePlaceholder={posterPlaceholder}
+            />
             <div className="upcoming-content-widget__item-info">
                 <div className="upcoming-content-widget__item-header">
                     <ContentLineageTitle

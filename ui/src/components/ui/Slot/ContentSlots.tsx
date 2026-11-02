@@ -19,7 +19,7 @@ export interface ContentGalleryPosterSlotProps {
 
     className?: string;
 
-    contentId: string;
+    contentId?: string;
 
     level: string;
 

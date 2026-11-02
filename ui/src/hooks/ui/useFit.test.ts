@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { useFit } from './useFit';
 
-const FITS = ['labels', 'icons', 'rows'];
+const FITS = ['labels', 'icons'];
 
 describe('useFit', () => {
     afterEach(() => {
@@ -90,7 +90,7 @@ describe('useFit', () => {
         expect(list.dataset.fit).toBe('content');
     });
 
-    it('useFit_WrapsNineChildrenIntoRowsOfFiveAndFour_WhenNoFitBeforeRowsHolds', () => {
+    it('useFit_KeepsIconLayout_WhenNineChildrenExceedTheAvailableWidth', () => {
         // Arrange
         const list = document.createElement('div');
         list.innerHTML = '<button></button>'.repeat(9);
@@ -102,31 +102,7 @@ describe('useFit', () => {
         renderHook(() => useFit(list, FITS));
 
         // Assert
-        expect(list.dataset.fit).toBe('rows');
-        expect(
-            Array.from(list.querySelectorAll<HTMLElement>('button'), (child) =>
-                child.style.getPropertyValue('--tab-row-size'),
-            ),
-        ).toEqual(['5', '5', '5', '5', '5', '4', '4', '4', '4']);
-    });
-
-    it('useFit_LeavesNoRowWithASingleChild_WhenThirteenChildrenWrap', () => {
-        // Arrange
-        const list = document.createElement('div');
-        list.innerHTML = '<button></button>'.repeat(13);
-        vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockReturnValue(54);
-        Object.defineProperty(list, 'clientWidth', { configurable: true, value: 288 });
-        Object.defineProperty(list, 'scrollWidth', { configurable: true, value: 700 });
-
-        // Act
-        renderHook(() => useFit(list, FITS));
-
-        // Assert
-        expect(
-            Array.from(list.querySelectorAll<HTMLElement>('button'), (child) =>
-                child.style.getPropertyValue('--tab-row-size'),
-            ),
-        ).toEqual(['5', '5', '5', '5', '5', '4', '4', '4', '4', '4', '4', '4', '4']);
+        expect(list.dataset.fit).toBe('icons');
     });
 
     it('useFit_FitsAgain_WhenTheWidthChanges', () => {
@@ -163,7 +139,7 @@ describe('useFit', () => {
         expect(list.dataset.fit).toBe('icons');
     });
 
-    it('useFit_ClearsTheRowSizes_WhenALaterFitHolds', () => {
+    it('useFit_RestoresLabels_WhenTheAvailableWidthIncreases', () => {
         // Arrange
         let clientWidth = 288;
         let notify: ResizeObserverCallback = () => {};
@@ -183,7 +159,7 @@ describe('useFit', () => {
         Object.defineProperty(list, 'clientWidth', { configurable: true, get: () => clientWidth });
         Object.defineProperty(list, 'scrollWidth', {
             configurable: true,
-            get: () => (list.dataset.fit === 'icons' && clientWidth >= 600 ? clientWidth : 700),
+            get: () => (clientWidth >= 600 ? clientWidth : 700),
         });
         renderHook(() => useFit(list, FITS));
         const fitBefore = list.dataset.fit;
@@ -193,12 +169,7 @@ describe('useFit', () => {
         notify([], {} as ResizeObserver);
 
         // Assert
-        expect(fitBefore).toBe('rows');
-        expect(list.dataset.fit).toBe('icons');
-        expect(
-            Array.from(list.querySelectorAll<HTMLElement>('button'), (child) =>
-                child.style.getPropertyValue('--tab-row-size'),
-            ),
-        ).toEqual(['', '', '', '', '', '', '', '', '']);
+        expect(fitBefore).toBe('icons');
+        expect(list.dataset.fit).toBe('labels');
     });
 });

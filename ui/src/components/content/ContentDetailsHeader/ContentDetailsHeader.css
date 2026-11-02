@@ -20,7 +20,6 @@
         max-width: 100%;
         height: auto;
         aspect-ratio: 2 / 3;
-        object-fit: cover;
         border-radius: var(--radius-md);
         background-color: var(--bg-tertiary);
         box-shadow: var(--shadow-md);
@@ -32,22 +31,10 @@
         padding: 0;
     }
 
-    .content-details-header__poster--image::before {
-        content: '';
-        position: absolute;
-        inset: 0;
-        background-image: var(--hero-image);
-        background-size: cover;
-        background-position: center;
-        filter: blur(var(--space-md)) brightness(0.7);
-        transform: scale(1.2);
-    }
-
     .content-details-header__poster-img {
         position: relative;
         width: 100%;
         height: 100%;
-        object-fit: contain;
     }
 
     .content-details-header__poster--preview {

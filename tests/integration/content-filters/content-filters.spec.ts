@@ -116,8 +116,9 @@ test('desktop headers, controls, saved query and gallery share status and monito
     await expect(page.getByLabel('Release year', { exact: true })).toHaveValue('2020');
     await page.getByRole('tab', { name: 'Gallery', exact: true }).click();
     await expect(page.getByLabel('Status filter', { exact: true })).toHaveText('Missing');
-    await expect(page.locator('.library-gallery-tile__title', { hasText: 'Alpha Movie' })).toBeVisible();
-    await expect(page.locator('.library-gallery-tile__title', { hasText: 'Beta Movie' })).toHaveCount(0);
+    const gallery = page.getByRole('list', { name: 'Content gallery' });
+    await expect(gallery.getByRole('link', { name: 'Open Alpha Movie', exact: true })).toBeVisible();
+    await expect(gallery.getByRole('link', { name: 'Open Beta Movie', exact: true })).toHaveCount(0);
     await page.screenshot({ path: 'content-filters-results/desktop.png', fullPage: true });
 });
 

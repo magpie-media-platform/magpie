@@ -36,30 +36,30 @@ describe('ContentPoster', () => {
         expect(container.querySelector('.placeholder')).not.toBeInTheDocument();
     });
 
-    it.each([
-        [300, 100, 'uncropped'],
-        [100, 100, 'uncropped'],
-        [250, 300, 'uncropped'],
-        [240, 300, null],
-        [200, 300, null],
-        [0, 0, null],
-    ])('marks %ix%i artwork as %s once it loads', (width, height, expected) => {
+    it('Poster_ShowsTheBackdropWithoutDuplicatingAltText_WhenTheImageLoads', () => {
         // Arrange
         render(
             <ContentPoster posterUrl="/art.png" title="Sample" className="poster" placeholderClassName="placeholder" />,
         );
         const image = screen.getByRole('img', { name: 'Sample artwork' });
-        Object.defineProperty(image, 'naturalWidth', { value: width });
-        Object.defineProperty(image, 'naturalHeight', { value: height });
+
+        // Assert
+        expect(image).toHaveAttribute('loading', 'lazy');
+        expect(image.parentElement).toHaveClass('poster');
+        expect(document.querySelector('.content-poster__backdrop')).not.toBeInTheDocument();
 
         // Act
         fireEvent.load(image);
 
         // Assert
-        expect(image.getAttribute('data-artwork')).toBe(expected);
+        expect(screen.getAllByRole('img')).toHaveLength(1);
+        expect(document.querySelector('.content-poster__backdrop')).toHaveAttribute('aria-hidden', 'true');
+        expect(document.querySelector('.content-poster__backdrop')).toHaveStyle({
+            backgroundImage: 'url("/art.png")',
+        });
     });
 
-    it('measures a replacement URL again instead of keeping the earlier artwork shape', () => {
+    it('Poster_WaitsForTheNewImage_WhenTheUrlChanges', () => {
         // Arrange
         const { rerender } = render(
             <ContentPoster
@@ -70,10 +70,10 @@ describe('ContentPoster', () => {
             />,
         );
         const logo = screen.getByRole('img', { name: 'Sample artwork' });
-        Object.defineProperty(logo, 'naturalWidth', { value: 300 });
-        Object.defineProperty(logo, 'naturalHeight', { value: 100 });
         fireEvent.load(logo);
-        expect(logo).toHaveAttribute('data-artwork', 'uncropped');
+        expect(document.querySelector('.content-poster__backdrop')).toHaveStyle({
+            backgroundImage: 'url("/logo.png")',
+        });
 
         // Act
         rerender(
@@ -86,7 +86,37 @@ describe('ContentPoster', () => {
         );
 
         // Assert
-        expect(screen.getByRole('img', { name: 'Sample artwork' })).not.toHaveAttribute('data-artwork');
+        expect(document.querySelector('.content-poster__backdrop')).not.toBeInTheDocument();
+        expect(screen.getByRole('img', { name: 'Sample artwork' })).toHaveAttribute('src', '/poster.png');
+
+        // Act
+        fireEvent.load(screen.getByRole('img', { name: 'Sample artwork' }));
+
+        // Assert
+        expect(document.querySelector('.content-poster__backdrop')).toHaveStyle({
+            backgroundImage: 'url("/poster.png")',
+        });
+    });
+
+    it('Poster_KeepsDecorativeArtworkHidden_WhenEagerLoadingIsRequested', () => {
+        // Act
+        render(
+            <ContentPoster
+                posterUrl="/art.png"
+                alt=""
+                className="poster"
+                placeholderClassName="placeholder"
+                loading="eager"
+                data-testid="artwork"
+            />,
+        );
+        fireEvent.load(screen.getByTestId('artwork'));
+
+        // Assert
+        expect(screen.queryByRole('img')).not.toBeInTheDocument();
+        expect(screen.getByTestId('artwork')).toHaveAttribute('loading', 'eager');
+        expect(screen.getByTestId('artwork')).toHaveAttribute('alt', '');
+        expect(document.querySelector('.content-poster__backdrop')).toHaveAttribute('aria-hidden', 'true');
     });
 
     it('keeps the site placeholder when no URL was supplied and shows the failure glyph only on error', () => {

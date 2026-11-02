@@ -93,17 +93,6 @@
         overflow: hidden;
     }
 
-    .preview-drawer__artwork-frame::before {
-        content: '';
-        position: absolute;
-        inset: 0;
-        background-image: var(--preview-artwork-image);
-        background-size: cover;
-        background-position: center;
-        filter: blur(var(--space-md)) brightness(0.7);
-        transform: scale(1.2);
-    }
-
     .preview-drawer__artwork {
         position: relative;
         display: block;
@@ -112,7 +101,12 @@
         max-width: 100%;
         max-height: clamp(220px, 44vh, 360px);
         max-height: clamp(220px, 44dvh, 360px);
-        object-fit: contain;
+    }
+
+    .preview-drawer__artwork .content-poster__image {
+        width: auto;
+        height: auto;
+        max-height: inherit;
     }
 
     .preview-drawer__artwork--placeholder {

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, type CSSProperties, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, type ReactNode } from 'react';
 import { useParams, Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import {
     ArrowLeftIcon,
@@ -559,10 +559,7 @@ export function SubjectDetailPage() {
                 >
                     <div className="subject-detail-page__image-container">
                         {subject.imageUrl ? (
-                            <div
-                                className="subject-detail-page__image subject-detail-page__image--media"
-                                style={{ '--hero-image': `url(${JSON.stringify(subject.imageUrl)})` } as CSSProperties}
-                            >
+                            <div className="subject-detail-page__image subject-detail-page__image--media">
                                 <ContentPoster
                                     placeholderClassName="subject-detail-page__image--placeholder"
                                     posterUrl={subject.imageUrl}
@@ -676,7 +673,7 @@ export function SubjectDetailPage() {
             </DetailInfoGrid>
 
             <Tabs value={effectiveTab} onValueChange={setActiveTab} className="subject-detail-page__tabs">
-                <DetailTabsList className="subject-detail-page__tab-strip">
+                <DetailTabsList className="subject-detail-page__tab-strip" aria-label="Subject details">
                     {tabDefs.map((tab, i) => (
                         <DetailTabTrigger
                             key={`${tab.value}:${i}`}

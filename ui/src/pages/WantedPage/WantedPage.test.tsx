@@ -1,7 +1,7 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter } from 'react-router-dom';
+import { createMemoryRouter, MemoryRouter, RouterProvider } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
 
@@ -9,7 +9,8 @@ const mockMutateAsync = vi.fn();
 const mockUseContentAncestors = vi.fn();
 const mockHasPermission = vi.hoisted(() => vi.fn(() => true));
 
-vi.mock('@/lib/api', () => ({
+vi.mock('@/lib/api', async (importOriginal) => ({
+    ...(await importOriginal<typeof import('@/lib/api')>()),
     apiGet: vi.fn(),
     buildUrl: vi.fn((path: string, params?: Record<string, unknown>) => {
         const search = new URLSearchParams();
@@ -34,10 +35,12 @@ vi.mock('@/auth', () => ({
 vi.mock('@/hooks/useContent', () => ({
     useContentAncestors: (...args: unknown[]) => mockUseContentAncestors(...args),
     useSearchContentReleases: () => ({ mutateAsync: mockMutateAsync }),
+    useMediaServerLinks: () => ({ data: [], isLoading: false }),
 }));
 
 import { apiGet } from '@/lib/api';
 import { ToastList, ToastProvider, ToastStateProvider, ToastViewport } from '@/components/ui/Toast';
+import { LocalContentPreviewProvider } from '@/components/content/LocalContentPreview';
 import { TooltipProvider } from '@/components/ui/Tooltip';
 import type { ApiContentHierarchyItem, PagedContentHierarchyItems } from '@/types/content';
 
@@ -231,6 +234,7 @@ function setContentResponse(itemsForScope: (parentId: string | null) => ApiConte
 describe('WantedPage', () => {
     beforeEach(() => {
         vi.clearAllMocks();
+        localStorage.clear();
         mockHasPermission.mockReturnValue(true);
         vi.stubGlobal('matchMedia', createMatchMedia(1024));
         mockMutateAsync.mockResolvedValue({ executionId: 'job-1' });
@@ -241,6 +245,195 @@ describe('WantedPage', () => {
         vi.unstubAllGlobals();
         vi.unstubAllEnvs();
         vi.restoreAllMocks();
+    });
+
+    it('Pagination_PreservesTheRestoredPage_WhenBackRestoresABroaderFilter', async () => {
+        // Arrange
+        const manyMovies = Array.from({ length: 30 }, (_, index) => ({
+            ...movie,
+            id: `movie-${index}`,
+            name: `Movie ${index}`,
+        }));
+        vi.mocked(apiGet).mockImplementation(async (url: string) => {
+            if (url === '/content-types') return contentTypes;
+            if (url === '/subject-types') return [];
+            if (url.startsWith('/content?')) {
+                const params = queryParams(url);
+                if (params.get('fulfillment') === 'Upgradable') return pageOf([]);
+                return pageOf(params.get('filter')?.includes('narrow') ? [movie] : manyMovies);
+            }
+            return pageOf([]);
+        });
+        const router = createMemoryRouter([{ path: '/wanted', element: <WantedPage /> }], {
+            initialEntries: ['/wanted?page=2&view=gallery', '/wanted?view=gallery&filter=title+contains+%22narrow%22'],
+        });
+        const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+        render(
+            <QueryClientProvider client={queryClient}>
+                <ToastStateProvider>
+                    <TooltipProvider>
+                        <ToastProvider>
+                            <RouterProvider router={router} />
+                        </ToastProvider>
+                    </TooltipProvider>
+                </ToastStateProvider>
+            </QueryClientProvider>,
+        );
+        await screen.findByRole('list', { name: 'Content gallery' });
+
+        // Act
+        await act(() => router.navigate(-1));
+
+        // Assert
+        await screen.findByRole('link', { name: 'Open Movie 25' });
+        expect(router.state.location.search).toBe('?page=2&view=gallery');
+    });
+
+    it('Pagination_ReplacesTheInvalidEntry_WhenThePageIsOutOfRange', async () => {
+        // Arrange
+        setContentResponse(() => [movie]);
+        const router = createMemoryRouter(
+            [
+                { path: '/previous', element: <div>Previous page</div> },
+                { path: '/wanted', element: <WantedPage /> },
+            ],
+            { initialEntries: ['/previous', '/wanted?page=99&view=gallery'] },
+        );
+        const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+        render(
+            <QueryClientProvider client={queryClient}>
+                <ToastStateProvider>
+                    <TooltipProvider>
+                        <ToastProvider>
+                            <RouterProvider router={router} />
+                        </ToastProvider>
+                    </TooltipProvider>
+                </ToastStateProvider>
+            </QueryClientProvider>,
+        );
+
+        // Act
+        await waitFor(() => expect(router.state.location.search).toBe('?view=gallery'));
+        await act(() => router.navigate(-1));
+
+        // Assert
+        expect(router.state.location.pathname).toBe('/previous');
+    });
+
+    it('Gallery_ShowsPosterPlaceholders_WhenContentIsLoading', () => {
+        // Arrange
+        localStorage.setItem('wanted-view', '"gallery"');
+        vi.mocked(apiGet).mockReturnValue(new Promise(() => {}));
+
+        // Act
+        render(<WantedPage />, { wrapper: ({ children }) => testWrapper({ children }) });
+
+        // Assert
+        expect(screen.getByRole('status', { name: 'Loading content' })).toBeInTheDocument();
+        expect(screen.getByTestId('wanted-page__loading')).toHaveClass('content-gallery-skeleton');
+        expect(document.querySelector('.wanted-page__skeleton')).not.toBeInTheDocument();
+    });
+
+    it.each([390, 1440])('Gallery_PreservesSelectionAndSearch_AtWidth%i', async (width) => {
+        // Arrange
+        vi.stubGlobal('matchMedia', createMatchMedia(width));
+        setContentResponse(() => [movie]);
+        const user = userEvent.setup();
+        render(<WantedPage />, { wrapper: ({ children }) => testWrapper({ children }) });
+
+        // Act
+        await user.click(screen.getByRole('tab', { name: 'Gallery' }));
+        await screen.findByRole('list', { name: 'Content gallery' });
+        await user.click(screen.getByRole('button', { name: 'Select' }));
+
+        // Assert
+        if (width === 1440) {
+            expect(screen.getByRole('button', { name: 'Search releases' })).toBeDisabled();
+        }
+
+        // Act
+        await user.click(screen.getByRole('button', { name: 'Select Missing Movie' }));
+
+        // Assert
+        expect(screen.getByRole('button', { name: 'Select Missing Movie' })).toHaveAttribute('aria-pressed', 'true');
+        expect(document.querySelector('.selection-circle-toggle')).not.toBeNull();
+
+        // Act
+        await user.click(screen.getByRole('button', { name: 'Search releases' }));
+
+        // Assert
+        await waitFor(() => expect(mockMutateAsync).toHaveBeenCalledTimes(1));
+        expect(screen.queryByText('1 selected')).not.toBeInTheDocument();
+        expect(document.querySelector('[data-slot="content.gallery.poster"]')).not.toBeNull();
+        expect(screen.queryByRole('grid')).not.toBeInTheDocument();
+    });
+
+    it('Gallery_OpensLocalPreviewForLeafAndDrillsIntoContainer_WhenItemsAreClicked', async () => {
+        // Arrange
+        setContentResponse((parentId) => (parentId === 'show-1' ? [season] : [show, movie]));
+        const user = userEvent.setup();
+        const router = createMemoryRouter(
+            [
+                {
+                    path: '/wanted',
+                    element: (
+                        <LocalContentPreviewProvider>
+                            <WantedPage />
+                        </LocalContentPreviewProvider>
+                    ),
+                },
+            ],
+            { initialEntries: ['/wanted?view=gallery'] },
+        );
+        const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+        render(
+            <QueryClientProvider client={queryClient}>
+                <ToastStateProvider>
+                    <TooltipProvider>
+                        <ToastProvider>
+                            <RouterProvider router={router} />
+                        </ToastProvider>
+                    </TooltipProvider>
+                </ToastStateProvider>
+            </QueryClientProvider>,
+        );
+        await screen.findByRole('list', { name: 'Content gallery' });
+
+        // Act
+        await user.click(screen.getByRole('link', { name: 'Open Missing Movie' }));
+
+        // Assert
+        expect(await screen.findByTestId('preview-drawer')).toBeInTheDocument();
+        expect(router.state.location.pathname).toBe('/wanted');
+        await user.keyboard('{Escape}');
+
+        // Act
+        await user.click(screen.getByRole('button', { name: 'Select' }));
+        await user.click(screen.getByRole('link', { name: /The Show/ }));
+
+        // Assert
+        await waitFor(() => expect(new URLSearchParams(router.state.location.search).get('parentId')).toBe('show-1'));
+    });
+
+    it('ClearSelection_LeavesSelectionMode_WhenUsingMobileGallery', async () => {
+        // Arrange
+        vi.stubGlobal('matchMedia', createMatchMedia(390));
+        setContentResponse(() => [movie]);
+        const user = userEvent.setup();
+        render(<WantedPage />, {
+            wrapper: ({ children }) => testWrapper({ children, initialUrl: '/wanted?view=gallery' }),
+        });
+        await screen.findByRole('list', { name: 'Content gallery' });
+
+        // Act
+        await user.click(screen.getByRole('button', { name: 'Select' }));
+        await user.click(screen.getByRole('button', { name: 'Select Missing Movie' }));
+        await user.click(screen.getByRole('button', { name: 'Clear selection' }));
+
+        // Assert
+        expect(screen.queryByRole('button', { name: 'Select Missing Movie' })).not.toBeInTheDocument();
+        expect(document.querySelector('[data-component="wanted-mobile-selection-bar"]')).not.toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Select' })).toHaveAttribute('aria-pressed', 'false');
     });
 
     it('PageHeader_ShowsMissingOrIncompleteSubtitle_WhenPageRenders', async () => {
@@ -261,14 +454,14 @@ describe('WantedPage', () => {
         render(<WantedPage />, { wrapper: ({ children }) => testWrapper({ children }) });
 
         const showLink = (await screen.findAllByRole('link', { name: 'The Show' })).find(
-            (link) => link.getAttribute('href') === '/wanted?parentId=show-1',
+            (link) => link.getAttribute('href') === '/wanted?view=list&parentId=show-1',
         );
         const movieLink = (await screen.findAllByRole('link', { name: /missing movie/i })).find(
             (link) => link.getAttribute('href') === '/library/movie-1',
         );
         expect(showLink).toBeDefined();
         expect(movieLink).toBeDefined();
-        expect(showLink).toHaveAttribute('href', '/wanted?parentId=show-1');
+        expect(showLink).toHaveAttribute('href', '/wanted?view=list&parentId=show-1');
         expect(movieLink).toHaveAttribute('href', '/library/movie-1');
         expect(screen.queryByText('Browse wanted')).not.toBeInTheDocument();
     });
@@ -384,10 +577,10 @@ describe('WantedPage', () => {
         await screen.findAllByText('Season 1');
         expect(screen.getByRole('navigation', { name: 'Breadcrumb' })).toBeInTheDocument();
         expect(screen.getByText('Wanted in The Show')).toBeInTheDocument();
-        expect(screen.getAllByRole('link', { name: 'Wanted' })[0]).toHaveAttribute('href', '/wanted');
+        expect(screen.getAllByRole('link', { name: 'Wanted' })[0]).toHaveAttribute('href', '/wanted?view=list');
         const seasonLink = screen
             .getAllByRole('link', { name: /season 1/i })
-            .find((link) => link.getAttribute('href') === '/wanted?parentId=season-1');
+            .find((link) => link.getAttribute('href') === '/wanted?parentId=season-1&view=list');
         expect(seasonLink).toBeDefined();
     });
 

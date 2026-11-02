@@ -1,6 +1,3 @@
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
-
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
@@ -10,8 +7,6 @@ import { useState } from 'react';
 
 import { SubjectsPage } from './SubjectsPage';
 import type { ApiSubject, ApiMetadataContainer, SubjectQueryParams } from '@/hooks/useSubjects';
-
-const mockNavigate = vi.fn();
 
 function createMatchMedia(width: number) {
     return vi.fn((query: string) => {
@@ -32,14 +27,6 @@ function createMatchMedia(width: number) {
         };
     });
 }
-
-vi.mock('react-router-dom', async () => {
-    const actual = await vi.importActual('react-router-dom');
-    return {
-        ...actual,
-        useNavigate: () => mockNavigate,
-    };
-});
 
 const mockRefetch = vi.fn();
 vi.mock('@/hooks/useSubjects', () => ({
@@ -167,7 +154,7 @@ describe('SubjectsPage', () => {
     };
 
     beforeEach(() => {
-        mockNavigate.mockClear();
+        localStorage.removeItem('magpie-subjects-view');
         vi.clearAllMocks();
         vi.stubGlobal('matchMedia', createMatchMedia(1024));
         mockUseExtensions.mockReturnValue(defaultContext);
@@ -209,6 +196,7 @@ describe('SubjectsPage', () => {
     });
 
     afterEach(() => {
+        localStorage.removeItem('magpie-subjects-view');
         vi.useRealTimers();
         vi.unstubAllGlobals();
         vi.restoreAllMocks();
@@ -218,6 +206,123 @@ describe('SubjectsPage', () => {
         renderSubjectsPage();
 
         expect(document.querySelector('[data-page="subjects"]')).toBeInTheDocument();
+    });
+
+    describe('grid', () => {
+        it.each([375, 1280])('Grid_RendersSubjectCardsAndAlphabetPicker_AtWidth%i', async (width) => {
+            // Arrange
+            vi.stubGlobal('matchMedia', createMatchMedia(width));
+            renderSubjectsPage();
+
+            // Act
+            await userEvent.click(screen.getByRole('tab', { name: 'Grid' }));
+
+            // Assert
+            const grid = screen.getByRole('list', { name: 'Subjects grid' });
+            expect(within(grid).getByRole('link', { name: 'Bryan Cranston, Person' })).toHaveAttribute(
+                'href',
+                '/subjects/subject-1',
+            );
+            expect(within(grid).getByRole('link', { name: 'A24, Studio' })).toHaveAttribute(
+                'href',
+                '/subjects/subject-3',
+            );
+            expect(within(grid).getAllByTestId('subject-avatar-placeholder')).toHaveLength(3);
+            expect(screen.getByRole('group', { name: 'Filter by first letter' })).toBeInTheDocument();
+            expect(screen.queryByRole('grid')).not.toBeInTheDocument();
+            expect(screen.queryByTestId('subjects-page__mobile-list')).not.toBeInTheDocument();
+            expect(localStorage.getItem('magpie-subjects-view')).toBe('"gallery"');
+        });
+
+        it('AlphabetFilter_ResetsPageAndPreservesOrQuery_WhenLetterIsSelected', async () => {
+            // Arrange
+            localStorage.setItem('magpie-subjects-view', '"gallery"');
+            renderScopedSubjectsPage('person', 'page=3&filter=title+contains+%22Bryan%22+or+tag+has+%22favorite%22');
+
+            // Act
+            await userEvent.click(screen.getByRole('button', { name: 'B' }));
+
+            // Assert
+            await waitFor(() =>
+                expect(useSubjects).toHaveBeenLastCalledWith(
+                    expect.objectContaining({
+                        filter: 'kind = "person" and ((title contains "Bryan" or tag has "favorite") and title startswith "B")',
+                        pageNumber: 1,
+                    }),
+                ),
+            );
+            expect(screen.getByRole('button', { name: 'B' })).toHaveAttribute('aria-pressed', 'true');
+        });
+
+        it('AlphabetFilter_ClearsSelectedLetterAndRetainsRemainingFilters_WhenSwitchedToList', async () => {
+            // Arrange
+            localStorage.setItem('magpie-subjects-view', '"gallery"');
+            renderSubjectsPage('filter=title+startswith+%22B%22+and+tag+has+%22favorite%22');
+
+            // Act
+            await userEvent.click(screen.getByRole('button', { name: 'B' }));
+            await userEvent.click(screen.getByRole('tab', { name: 'List' }));
+
+            // Assert
+            await waitFor(() =>
+                expect(useSubjects).toHaveBeenLastCalledWith(
+                    expect.objectContaining({
+                        filter: 'tag has "favorite"',
+                        pageNumber: 1,
+                    }),
+                ),
+            );
+            expect(screen.queryByRole('list', { name: 'Subjects grid' })).not.toBeInTheDocument();
+            expect(screen.queryByRole('group', { name: 'Filter by first letter' })).not.toBeInTheDocument();
+            expect(screen.getByRole('grid')).toBeInTheDocument();
+            expect(screen.getByRole('button', { name: 'Advanced filter' })).toBeInTheDocument();
+        });
+
+        it('Grid_DelegatesPagingAndSortingToServer_WhenControlsChange', async () => {
+            // Arrange
+            localStorage.setItem('magpie-subjects-view', '"gallery"');
+            vi.mocked(useSubjects).mockReturnValue({ ...vi.mocked(useSubjects)(), totalItems: 125 });
+            renderSubjectsPage('filter=title+startswith+%22B%22');
+
+            // Act
+            await userEvent.click(screen.getByRole('button', { name: 'Go to next page' }));
+
+            // Assert
+            expect(useSubjects).toHaveBeenLastCalledWith(
+                expect.objectContaining({
+                    pageNumber: 2,
+                    filter: 'title startswith "B"',
+                    sortBy: 'title',
+                    sortDirection: 'Ascending',
+                }),
+            );
+
+            // Act
+            await userEvent.click(screen.getByRole('button', { name: 'Sort descending' }));
+
+            // Assert
+            expect(useSubjects).toHaveBeenLastCalledWith(
+                expect.objectContaining({
+                    pageNumber: 1,
+                    filter: 'title startswith "B"',
+                    sortDirection: 'Descending',
+                }),
+            );
+        });
+
+        it('Grid_RendersCircularSkeletons_WhenSubjectsAreLoading', () => {
+            // Arrange
+            localStorage.setItem('magpie-subjects-view', '"gallery"');
+            vi.mocked(useSubjects).mockReturnValue({ ...vi.mocked(useSubjects)(), subjects: [], isLoading: true });
+
+            // Act
+            const { container } = renderSubjectsPage();
+
+            // Assert
+            expect(screen.getByRole('status', { name: 'Loading subjects' })).toBeInTheDocument();
+            expect(container.querySelectorAll('[data-variant="circle"]')).toHaveLength(12);
+            expect(screen.queryByRole('grid')).not.toBeInTheDocument();
+        });
     });
 
     describe('terminology', () => {
@@ -370,7 +475,7 @@ describe('SubjectsPage', () => {
             await act(async () => {
                 vi.advanceTimersByTime(350);
             });
-            expect(router.state.location.search).toBe('?filter=title+contains+%22ABC%22');
+            expect(router.state.location.search).toBe('?filter=title+contains+%22ABC%22&view=list');
             expect(useSubjects).toHaveBeenLastCalledWith(
                 expect.objectContaining({ filter: 'kind = "person" and (title contains "ABC")' }),
             );
@@ -590,21 +695,6 @@ describe('SubjectsPage', () => {
     });
 
     describe('list', () => {
-        it('shows uncropped artwork whole on the subject cards only', () => {
-            // Arrange
-            const css = readFileSync(resolve(process.cwd(), 'src/pages/SubjectsPage/SubjectsPage.css'), 'utf8');
-            const cardCss = readFileSync(
-                resolve(process.cwd(), 'src/components/ui/MobileMediaCard/MobileMediaCard.css'),
-                'utf8',
-            );
-
-            // Assert
-            expect(css).toMatch(
-                /\.subjects-page__mobile-list \.mobile-media-card__poster\[data-artwork='uncropped'\] \{\s*object-fit: contain;\s*\}/,
-            );
-            expect(cardCss).not.toContain('data-artwork');
-        });
-
         it('renders the subject list with rows from the server', () => {
             renderSubjectsPage();
 
@@ -616,13 +706,21 @@ describe('SubjectsPage', () => {
 
         it('navigates to detail when a row is clicked', async () => {
             const user = userEvent.setup();
-            renderSubjectsPage();
+            const router = createMemoryRouter([
+                { path: '/', element: <SubjectsPage /> },
+                { path: '/subjects/:id', element: <div>Subject details</div> },
+            ]);
+            render(
+                <QueryClientProvider client={createTestQueryClient()}>
+                    <RouterProvider router={router} />
+                </QueryClientProvider>,
+            );
 
             const list = document.querySelector('[data-component="subject-list"]') as HTMLElement;
             const row = within(list).getByText('Bryan Cranston').closest('tr');
             await user.click(row!);
 
-            expect(mockNavigate).toHaveBeenCalledWith('/subjects/subject-1');
+            expect(router.state.location.pathname).toBe('/subjects/subject-1');
         });
 
         it('requests title-ascending sort from the server by default', async () => {
@@ -814,6 +912,59 @@ describe('SubjectsPage', () => {
         });
     });
 
+    it('AlphabetFilter_RemainsVisibleAndClearable_WhenSwitchingToList', async () => {
+        // Arrange
+        const router = createMemoryRouter([{ path: '/library/subjects/:subjectType', element: <SubjectsPage /> }], {
+            initialEntries: ['/library/subjects/person?view=gallery&filter=title+startswith+%22B%22'],
+        });
+        render(
+            <QueryClientProvider client={createTestQueryClient()}>
+                <RouterProvider router={router} />
+            </QueryClientProvider>,
+        );
+        const user = userEvent.setup();
+
+        // Act
+        await user.click(screen.getByRole('tab', { name: 'List' }));
+        await user.click(screen.getByRole('button', { name: 'Clear first letter: B' }));
+
+        // Assert
+        expect(new URLSearchParams(router.state.location.search).has('filter')).toBe(false);
+        expect(screen.queryByRole('button', { name: 'Clear first letter: B' })).not.toBeInTheDocument();
+    });
+
+    it('Pagination_WaitsForCurrentResultsAndReplacesTheInvalidEntry_WhenThePageIsOutOfRange', async () => {
+        // Arrange
+        const response = { ...vi.mocked(useSubjects)(), totalItems: 60, isPlaceholderData: true };
+        vi.mocked(useSubjects).mockReturnValue(response);
+        const router = createMemoryRouter(
+            [
+                { path: '/previous', element: <div>Previous page</div> },
+                { path: '/library/subjects/:subjectType', element: <SubjectsPage /> },
+            ],
+            {
+                initialEntries: ['/previous', '/library/subjects/person?page=99&view=list'],
+            },
+        );
+        render(
+            <QueryClientProvider client={createTestQueryClient()}>
+                <RouterProvider router={router} />
+            </QueryClientProvider>,
+        );
+
+        // Assert
+        expect(router.state.location.search).toBe('?page=99&view=list');
+
+        // Act
+        vi.mocked(useSubjects).mockReturnValue({ ...response, isPlaceholderData: false });
+        await act(() => router.navigate('/library/subjects/person?page=99&view=list', { replace: true }));
+        await waitFor(() => expect(router.state.location.search).toBe('?page=2&view=list'));
+        await act(() => router.navigate(-1));
+
+        // Assert
+        expect(router.state.location.pathname).toBe('/previous');
+    });
+
     describe('URL persistence', () => {
         it('restores the filter expression from URL params and expands the panel', () => {
             renderSubjectsPage('filter=kind+%3D+%22person%22');
@@ -823,7 +974,6 @@ describe('SubjectsPage', () => {
             expect(within(filterBar).getByText('Active')).toBeInTheDocument();
         });
     });
-
     it('ScopedFilter_StripsKindClause_WhenQueryContainsUnterminatedQuote', async () => {
         // Arrange & Act
         renderScopedSubjectsPage('person', 'filter=kind+%3D+%22studio%22+and+title+contains+%22unterminated');
@@ -836,5 +986,49 @@ describe('SubjectsPage', () => {
                 }),
             ),
         );
+    });
+
+    it('Filters_RestorePreviousPage_WhenBackFollowsAnAlphabetChange', async () => {
+        // Arrange
+        vi.mocked(useSubjects).mockReturnValue({ ...vi.mocked(useSubjects)(), totalItems: 125 });
+        const router = createMemoryRouter([{ path: '/library/subjects/:subjectType', element: <SubjectsPage /> }], {
+            initialEntries: ['/library/subjects/person?page=2&view=gallery'],
+        });
+        render(
+            <QueryClientProvider client={createTestQueryClient()}>
+                <RouterProvider router={router} />
+            </QueryClientProvider>,
+        );
+        const user = userEvent.setup();
+
+        // Act
+        await user.click(screen.getByRole('button', { name: 'B' }));
+        await waitFor(() =>
+            expect(new URLSearchParams(router.state.location.search).get('filter')).toBe('title startswith "B"'),
+        );
+        await user.click(screen.getByRole('button', { name: 'C' }));
+        await waitFor(() =>
+            expect(new URLSearchParams(router.state.location.search).get('filter')).toBe('title startswith "C"'),
+        );
+        await act(() => router.navigate(-1));
+
+        // Assert
+        expect(new URLSearchParams(router.state.location.search).get('filter')).toBe('title startswith "B"');
+        expect(screen.getByRole('button', { name: 'B' })).toHaveAttribute('aria-pressed', 'true');
+
+        // Act
+        await act(() => router.navigate(-1));
+
+        // Assert
+        expect(router.state.location.search).toBe('?page=2&view=gallery');
+        await waitFor(() =>
+            expect(useSubjects).toHaveBeenLastCalledWith(
+                expect.objectContaining({
+                    pageNumber: 2,
+                    filter: 'kind = "person"',
+                }),
+            ),
+        );
+        expect(screen.getByRole('button', { name: 'B' })).toHaveAttribute('aria-pressed', 'false');
     });
 });

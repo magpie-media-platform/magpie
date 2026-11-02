@@ -2,6 +2,12 @@ import { useMemo, useState } from 'react';
 import { LinkSimpleIcon, DownloadSimpleIcon, MagnifyingGlassIcon } from '@phosphor-icons/react';
 
 import { ContentPoster } from '@/components/content/ContentCardPrimitives';
+import {
+    ContentGalleryGrid,
+    ContentGallerySkeleton,
+    ContentGalleryTile,
+    ContentViewToggle,
+} from '@/components/content/ContentGallery';
 import { FilterBar } from '@/components/filters/FilterBar';
 import { Button } from '@/components/ui/Button';
 import {
@@ -17,6 +23,7 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { Input } from '@/components/ui/Input';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { useContentList } from '@/hooks/useContent';
+import { usePersistentState } from '@/hooks/usePersistentState';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { useLibraryTypes } from '@/hooks/useLibraryTypes';
 import { resolveContentTypeLabel } from '@/lib/contentTypeDisplay';
@@ -41,6 +48,8 @@ export function ContentPickerDialog({ open, mode, isSubmitting, onOpenChange, on
     const { contentTypes } = useLibraryTypes();
     const [text, setText] = useState('');
     const [filter, setFilter] = useState('');
+    const [storedView, setView] = usePersistentState<string>('content-picker-view', 'list');
+    const view = storedView === 'gallery' ? 'gallery' : 'list';
     const debouncedText = useDebouncedValue(text, 300);
 
     const composedFilter = useMemo(() => {
@@ -60,6 +69,24 @@ export function ContentPickerDialog({ open, mode, isSubmitting, onOpenChange, on
     );
     const items = data?.items ?? [];
     const actionLabel = mode === 'grab' ? 'Grab' : 'Match';
+    const renderAction = (item: ContentListItem) => (
+        <Button
+            className="content-picker__action"
+            variant="secondary"
+            size="sm"
+            disabled={isSubmitting}
+            onClick={() => onSelect(item)}
+            data-action="content-picker-select"
+            data-content-id={item.id}
+        >
+            {mode === 'grab' ? (
+                <DownloadSimpleIcon weight="bold" aria-hidden="true" />
+            ) : (
+                <LinkSimpleIcon weight="bold" aria-hidden="true" />
+            )}
+            {actionLabel}
+        </Button>
+    );
 
     return (
         <Dialog open={open} onOpenChange={onOpenChange}>
@@ -79,13 +106,18 @@ export function ContentPickerDialog({ open, mode, isSubmitting, onOpenChange, on
                     />
 
                     <FilterBar value={filter} onChange={setFilter} context="content" collapsible />
+                    <ContentViewToggle view={view} onChange={setView} />
 
                     {isLoading ? (
-                        <div className="content-picker__loading">
-                            <Skeleton />
-                            <Skeleton />
-                            <Skeleton />
-                        </div>
+                        view === 'gallery' ? (
+                            <ContentGallerySkeleton count={6} />
+                        ) : (
+                            <div className="content-picker__loading">
+                                <Skeleton />
+                                <Skeleton />
+                                <Skeleton />
+                            </div>
+                        )
                     ) : items.length === 0 ? (
                         <EmptyState
                             icon={<MagnifyingGlassIcon weight="thin" aria-hidden="true" />}
@@ -93,6 +125,21 @@ export function ContentPickerDialog({ open, mode, isSubmitting, onOpenChange, on
                             description="Change the search text or the filters to find the item to associate."
                             size="sm"
                         />
+                    ) : view === 'gallery' ? (
+                        <ContentGalleryGrid items={items} getId={(item) => item.id} label="Library content gallery">
+                            {(item) => (
+                                <ContentGalleryTile
+                                    item={item}
+                                    to={null}
+                                    detail={
+                                        <span className="content-picker__sub">
+                                            {resolveContentTypeLabel(item, contentTypes)}
+                                        </span>
+                                    }
+                                    actions={renderAction(item)}
+                                />
+                            )}
+                        </ContentGalleryGrid>
                     ) : (
                         <ul className="content-picker__list" role="list">
                             {items.map((item) => (
@@ -118,22 +165,7 @@ export function ContentPickerDialog({ open, mode, isSubmitting, onOpenChange, on
                                             {item.year ? ` · ${item.year}` : ''}
                                         </span>
                                     </span>
-                                    <Button
-                                        className="content-picker__action"
-                                        variant="secondary"
-                                        size="sm"
-                                        disabled={isSubmitting}
-                                        onClick={() => onSelect(item)}
-                                        data-action="content-picker-select"
-                                        data-content-id={item.id}
-                                    >
-                                        {mode === 'grab' ? (
-                                            <DownloadSimpleIcon weight="bold" aria-hidden="true" />
-                                        ) : (
-                                            <LinkSimpleIcon weight="bold" aria-hidden="true" />
-                                        )}
-                                        {actionLabel}
-                                    </Button>
+                                    {renderAction(item)}
                                 </li>
                             ))}
                         </ul>

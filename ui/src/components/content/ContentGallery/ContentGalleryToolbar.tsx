@@ -1,3 +1,4 @@
+import './ContentGallery.css';
 import { forwardRef, type ComponentPropsWithoutRef } from 'react';
 import type { SortingState } from '@tanstack/react-table';
 
@@ -5,25 +6,38 @@ import { SelectModeToggle } from '@/components/ui/BulkActionsToolbar';
 import { ListSortControl } from '@/components/ui/ListSortControl';
 import type { MobileListSelectionControl, MobileListSortOption } from '@/components/ui/MobileListToolbar';
 
-export interface LibraryGalleryToolbarProps extends Omit<ComponentPropsWithoutRef<'div'>, 'onChange'> {
+export interface ContentGalleryToolbarProps extends Omit<ComponentPropsWithoutRef<'div'>, 'onChange'> {
     sorting: SortingState;
     sortOptions: readonly MobileListSortOption[];
     onSortingChange: (sorting: SortingState) => void;
     selection?: MobileListSelectionControl;
     selectedCount?: number;
+    showSelectionCount?: boolean;
     disabled?: boolean;
+    allowUnsorted?: boolean;
 }
 
-export const LibraryGalleryToolbar = forwardRef<HTMLDivElement, LibraryGalleryToolbarProps>(
+export const ContentGalleryToolbar = forwardRef<HTMLDivElement, ContentGalleryToolbarProps>(
     (
-        { sorting, sortOptions, onSortingChange, selection, selectedCount = 0, disabled = false, className, ...props },
+        {
+            sorting,
+            sortOptions,
+            onSortingChange,
+            selection,
+            selectedCount = 0,
+            showSelectionCount = true,
+            disabled = false,
+            allowUnsorted = true,
+            className,
+            ...props
+        },
         ref,
     ) => {
-        const classes = ['library-gallery-toolbar', className].filter(Boolean).join(' ');
+        const classes = ['content-gallery-toolbar', className].filter(Boolean).join(' ');
 
         return (
-            <div ref={ref} className={classes} data-component="library-gallery-toolbar" {...props}>
-                <div className="library-gallery-toolbar__group">
+            <div ref={ref} className={classes} data-component="content-gallery-toolbar" {...props}>
+                <div className="content-gallery-toolbar__group">
                     {selection && (
                         <SelectModeToggle
                             active={selection.active}
@@ -32,20 +46,21 @@ export const LibraryGalleryToolbar = forwardRef<HTMLDivElement, LibraryGalleryTo
                             mobileOnly={false}
                         />
                     )}
-                    {selection?.active && (
-                        <span className="library-gallery-toolbar__count" data-testid="library-gallery-selection-count">
+                    {selection?.active && showSelectionCount && (
+                        <span className="content-gallery-toolbar__count" data-testid="content-gallery-selection-count">
                             {selectedCount} selected
                         </span>
                     )}
                 </div>
 
-                <div className="library-gallery-toolbar__group">
-                    <span className="library-gallery-toolbar__label">Sort</span>
+                <div className="content-gallery-toolbar__group">
+                    <span className="content-gallery-toolbar__label">Sort</span>
                     <ListSortControl
                         aria-label="Sort gallery"
                         sorting={sorting}
                         sortOptions={sortOptions}
                         onSortingChange={onSortingChange}
+                        allowUnsorted={allowUnsorted}
                         disabled={disabled}
                     />
                 </div>
@@ -54,6 +69,6 @@ export const LibraryGalleryToolbar = forwardRef<HTMLDivElement, LibraryGalleryTo
     },
 );
 
-LibraryGalleryToolbar.displayName = 'LibraryGalleryToolbar';
+ContentGalleryToolbar.displayName = 'ContentGalleryToolbar';
 
-export default LibraryGalleryToolbar;
+export default ContentGalleryToolbar;

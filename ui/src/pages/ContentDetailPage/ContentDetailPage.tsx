@@ -1405,7 +1405,7 @@ export function ContentDetailPage() {
                 holdHeightOnValueChange
                 className="content-detail-page__tabs"
             >
-                <DetailTabsList className="content-detail-page__tab-strip">
+                <DetailTabsList className="content-detail-page__tab-strip" aria-label="Content details">
                     {tabDefs.map((tab, i) => (
                         <DetailTabTrigger
                             key={`${tab.value}:${i}`}

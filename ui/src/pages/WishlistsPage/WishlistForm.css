@@ -158,7 +158,6 @@
     .wishlist-form__preview-thumb {
         width: 32px;
         height: 48px;
-        object-fit: cover;
         border-radius: var(--radius-sm);
         flex-shrink: 0;
     }

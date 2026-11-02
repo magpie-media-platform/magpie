@@ -239,7 +239,7 @@ describe('useProviderMetadataCandidateSearch', () => {
         ]);
     });
 
-    it('does not transfer bookmarks between tabs or after reset', async () => {
+    it('Search_KeepsBookmarksIndependent_WhenAnotherSearchRunsOrResets', async () => {
         // Arrange
         mockApiGet.mockResolvedValue({
             matches: [],
@@ -262,20 +262,25 @@ describe('useProviderMetadataCandidateSearch', () => {
         await act(async () => {
             await result.current.first.mutateAsync({ query: 'sample' });
         });
-        await expect(
-            act(async () => {
-                await result.current.second.mutateAsync({ query: 'sample', page: 2 });
-            }),
-        ).rejects.toThrow('another search');
+        await act(async () => {
+            await expect(result.current.second.mutateAsync({ query: 'sample', page: 2 })).rejects.toThrow(
+                'This search page is unavailable. Start a new search.',
+            );
+            await result.current.second.mutateAsync({ query: 'sample', page: 1 });
+            await result.current.second.mutateAsync({ query: 'sample', page: 2 });
+        });
         act(() => result.current.first.reset());
-        await expect(
-            act(async () => {
-                await result.current.first.mutateAsync({ query: 'sample', page: 1, resume: true });
-            }),
-        ).rejects.toThrow('another search');
+        await act(async () => {
+            await result.current.first.mutateAsync({ query: 'sample', page: 1, resume: true });
+        });
 
         // Assert
-        expect(mockApiGet).toHaveBeenCalledTimes(1);
+        expect(mockApiGet.mock.calls.map(([url]) => url)).toEqual([
+            '/content-search?query=sample',
+            '/content-search?query=sample&page=1',
+            '/content-search?query=sample&page=2&continuation=second',
+            '/content-search?query=sample&page=1',
+        ]);
     });
 
     it('Cancel_IgnoresLateResult_WhenFreshSameQuerySearchStarts', async () => {
@@ -476,5 +481,104 @@ describe('useProviderMetadataCandidateSearch', () => {
         // Assert
         expect(result.current.first.isError).toBe(false);
         expect(result.current.second.data?.candidates[0].externalId).toBe('603');
+    });
+    it('Search_RetainsResumedContinuationOnFinalPage_WhenResponseOmitsContinuation', async () => {
+        // Arrange
+        mockApiGet.mockResolvedValueOnce({
+            matches: [{ candidate, inLibrary: false }],
+            pageItemCount: 1,
+            existsInLibraryCount: 0,
+            pageInfo: { requestedPage: 2, hasMore: false },
+        });
+        const { Wrapper } = createWrapper();
+        const { result } = renderHook(() => useProviderMetadataCandidateSearch(), { wrapper: Wrapper });
+
+        // Act
+        await act(async () => {
+            await result.current.mutateAsync({ query: 'sample', page: 2, continuation: 'second', resume: true });
+        });
+
+        // Assert
+        expect(result.current.getContinuation(2)).toBe('second');
+        expect(result.current.data?.continuation).toBe('second');
+    });
+
+    it('Search_PreservesPreviousExecutionForCancel_WhenFreshSearchFails', async () => {
+        // Arrange
+        mockApiGet
+            .mockResolvedValueOnce({
+                matches: [{ candidate, inLibrary: false }],
+                pageItemCount: 1,
+                existsInLibraryCount: 0,
+                pageInfo: { requestedPage: 1, hasMore: true },
+                continuation: 'first',
+                nextContinuation: 'second',
+            })
+            .mockRejectedValueOnce(new Error('Provider error'));
+        const { Wrapper } = createWrapper();
+        const { result } = renderHook(() => useProviderMetadataCandidateSearch(), { wrapper: Wrapper });
+        await act(async () => {
+            await result.current.mutateAsync({ query: 'sample', page: 1 });
+        });
+
+        // Act
+        await act(async () => {
+            await expect(result.current.mutateAsync({ query: 'other', page: 1 })).rejects.toThrow('Provider error');
+        });
+        let restored: { query: string; page: number } | null = null;
+        act(() => {
+            restored = result.current.cancel();
+        });
+
+        // Assert
+        expect(restored).toEqual({ query: 'sample', page: 1 });
+        expect(result.current.getContinuation(1)).toBe('first');
+    });
+
+    it('Search_RejectsAnUnknownEarlierPage_WhenOnlyTheSharedCheckpointIsKnown', async () => {
+        // Arrange
+        mockApiGet.mockResolvedValueOnce({
+            matches: [{ candidate, inLibrary: false }],
+            pageItemCount: 1,
+            existsInLibraryCount: 0,
+            pageInfo: { requestedPage: 3, hasMore: false },
+            continuation: 'third',
+        });
+        const { Wrapper } = createWrapper();
+        const { result } = renderHook(() => useProviderMetadataCandidateSearch(), { wrapper: Wrapper });
+        await act(() => result.current.mutateAsync({ query: 'sample', page: 3, continuation: 'third', resume: true }));
+
+        // Act
+        await act(async () => {
+            await expect(result.current.mutateAsync({ query: 'sample', page: 2, resume: true })).rejects.toThrow(
+                'This search page is unavailable. Start a new search.',
+            );
+        });
+
+        // Assert
+        expect(mockApiGet.mock.calls.map(([url]) => url)).toEqual([
+            '/content-search?query=sample&page=3&continuation=third',
+        ]);
+        expect(result.current.data?.pageInfo.requestedPage).toBe(3);
+        expect(result.current.getContinuation(1)).toBeUndefined();
+        expect(result.current.isError).toBe(true);
+    });
+
+    it.each([2, 1000000])('Search_RejectsPage%s_WhenNoContinuationIsAvailable', async (page) => {
+        // Arrange
+        const { Wrapper } = createWrapper();
+        const { result } = renderHook(() => useProviderMetadataCandidateSearch(), { wrapper: Wrapper });
+
+        // Act
+        await act(async () => {
+            await expect(result.current.mutateAsync({ query: 'sample', page, resume: true })).rejects.toThrow(
+                'This search page is unavailable. Start a new search.',
+            );
+        });
+
+        // Assert
+        expect(mockApiGet).not.toHaveBeenCalled();
+        expect(result.current.data).toBeUndefined();
+        expect(result.current.isError).toBe(true);
     });
 });

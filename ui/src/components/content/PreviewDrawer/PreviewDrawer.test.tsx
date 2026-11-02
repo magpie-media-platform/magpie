@@ -1,10 +1,20 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { useState } from 'react';
 import type { UseMutationResult } from '@tanstack/react-query';
+
+const mockUseLocalContentPreview = vi.fn();
+const mockUseMediaServerLinks = vi.fn();
+
 vi.mock('@/hooks/useLocalContentPreview', () => ({
-    useLocalContentPreview: () => ({ data: undefined, error: null, isPending: false }),
+    useLocalContentPreview: (id: string | undefined, identity?: 'hierarchy' | 'item') =>
+        mockUseLocalContentPreview(id, identity),
+}));
+
+vi.mock('@/hooks/useContent', () => ({
+    useMediaServerLinks: (id: string | undefined) => mockUseMediaServerLinks(id),
 }));
 
 vi.mock('@/hooks/usePreviewByExternalId', () => ({
@@ -26,6 +36,7 @@ vi.mock('@/hooks/useLibraryTypes', () => ({
     }),
 }));
 
+import { TooltipProvider } from '@/components/ui/Tooltip';
 import {
     usePreviewByExternalId,
     type ContentPreview,
@@ -119,7 +130,11 @@ const notFoundResult: UseMutationResult<ContentPreview, Error, PreviewByExternal
 };
 
 describe('PreviewDrawer', () => {
-    beforeEach(() => vi.clearAllMocks());
+    beforeEach(() => {
+        vi.clearAllMocks();
+        mockUseLocalContentPreview.mockReturnValue({ data: undefined, error: null, isPending: false });
+        mockUseMediaServerLinks.mockReturnValue({ data: [], isLoading: false });
+    });
 
     it('fetches the preview with the target identifiers when opened', async () => {
         mockUsePreview.mockReturnValue(successResult);
@@ -365,7 +380,7 @@ describe('PreviewDrawer', () => {
         const artwork = screen.getByTestId('preview-drawer-artwork');
         expect(frame).toHaveClass('preview-drawer__artwork-frame');
         expect(frame).toContainElement(artwork);
-        expect(artwork).toHaveClass('preview-drawer__artwork');
+        expect(artwork.parentElement).toHaveClass('preview-drawer__artwork');
         expect(artwork).toHaveAttribute('src', 'https://img/poster.jpg');
         fireEvent.error(artwork);
         expect(screen.queryByTestId('preview-drawer-artwork')).not.toBeInTheDocument();
@@ -553,5 +568,168 @@ describe('PreviewDrawer', () => {
         await waitFor(() => expect(screen.getByText('Inception')).toBeInTheDocument());
         const addButton = screen.getByRole('button', { name: /added/i });
         expect(addButton).toBeDisabled();
+    });
+
+    it('PreviewDrawer_RendersMediaServerLinks_WhenLocalContentHasLinks', async () => {
+        // Arrange
+        mockUseLocalContentPreview.mockReturnValue({
+            data: { ...preview, localContentId: 'content-1' },
+            error: null,
+            isPending: false,
+        });
+        mockUseMediaServerLinks.mockReturnValue({
+            data: [
+                {
+                    mediaServerId: 's-1',
+                    serverName: 'Living Room Media Server',
+                    providerType: 'mediaserver-a',
+                    url: 'http://mediaserver-a.example/web/index.html#!/details?id=abc',
+                },
+                {
+                    mediaServerId: 's-2',
+                    serverName: 'Bedroom Media Server',
+                    providerType: 'mediaserver-b',
+                    url: 'https://mediaserver-b.example/item/xyz',
+                },
+            ],
+            isLoading: false,
+        });
+
+        // Act
+        render(
+            <MemoryRouter>
+                <TooltipProvider>
+                    <PreviewDrawer open onOpenChange={() => {}} target={null} localContentId="content-1" />
+                </TooltipProvider>
+            </MemoryRouter>,
+        );
+
+        // Assert
+        expect(mockUseMediaServerLinks).toHaveBeenCalledWith('content-1');
+        const firstChip = await screen.findByTestId('media-server-link-mediaserver-a');
+        expect(firstChip).toHaveTextContent('Living Room Media Server');
+        expect(firstChip).toHaveAttribute('href', 'http://mediaserver-a.example/web/index.html#!/details?id=abc');
+        expect(firstChip).toHaveAttribute('target', '_blank');
+        expect(firstChip).toHaveAttribute('rel', 'noopener noreferrer');
+        expect(firstChip).toHaveAttribute('data-media-server-id', 's-1');
+        const secondChip = screen.getByTestId('media-server-link-mediaserver-b');
+        expect(secondChip).toHaveTextContent('Bedroom Media Server');
+        expect(secondChip).toHaveAttribute('href', 'https://mediaserver-b.example/item/xyz');
+        expect(secondChip).toHaveAttribute('data-media-server-id', 's-2');
+    });
+
+    it('PreviewDrawer_HidesNoDetailsEmptyState_WhenSparseLocalContentHasMediaServerLink', async () => {
+        // Arrange
+        mockUseLocalContentPreview.mockReturnValue({
+            data: { ...sparsePreview, localContentId: 'content-1' },
+            error: null,
+            isPending: false,
+        });
+        mockUseMediaServerLinks.mockReturnValue({
+            data: [
+                {
+                    mediaServerId: 's-1',
+                    serverName: 'Media Server',
+                    providerType: 'mediaserver-a',
+                    url: 'https://mediaserver-a.example/details/1',
+                },
+            ],
+            isLoading: false,
+        });
+
+        // Act
+        render(
+            <MemoryRouter>
+                <TooltipProvider>
+                    <PreviewDrawer open onOpenChange={() => {}} target={null} localContentId="content-1" />
+                </TooltipProvider>
+            </MemoryRouter>,
+        );
+
+        // Assert
+        expect(await screen.findByTestId('media-server-link-mediaserver-a')).toHaveAttribute(
+            'href',
+            'https://mediaserver-a.example/details/1',
+        );
+        expect(screen.queryByTestId('preview-drawer-no-details')).not.toBeInTheDocument();
+    });
+
+    it('PreviewDrawer_ShowsNoDetailsEmptyState_WhenMediaServerLinkUrlIsUnsafe', async () => {
+        // Arrange
+        mockUseLocalContentPreview.mockReturnValue({
+            data: { ...sparsePreview, localContentId: 'content-1' },
+            error: null,
+            isPending: false,
+        });
+        mockUseMediaServerLinks.mockReturnValue({
+            data: [
+                {
+                    mediaServerId: 's-1',
+                    serverName: 'Media Server',
+                    providerType: 'mediaserver-a',
+                    url: 'javascript:alert(1)',
+                },
+            ],
+            isLoading: false,
+        });
+
+        // Act
+        render(
+            <MemoryRouter>
+                <TooltipProvider>
+                    <PreviewDrawer open onOpenChange={() => {}} target={null} localContentId="content-1" />
+                </TooltipProvider>
+            </MemoryRouter>,
+        );
+
+        // Assert
+        expect(await screen.findByTestId('preview-drawer-no-details')).toBeInTheDocument();
+        expect(screen.queryByTestId('media-server-link-mediaserver-a')).not.toBeInTheDocument();
+    });
+
+    it('PreviewDrawer_OmitsMediaServerLinks_WhenMediaServerQueryIsLoading', async () => {
+        // Arrange
+        mockUseLocalContentPreview.mockReturnValue({
+            data: { ...preview, localContentId: 'content-1' },
+            error: null,
+            isPending: false,
+        });
+        mockUseMediaServerLinks.mockReturnValue({
+            data: [
+                {
+                    mediaServerId: 's-1',
+                    serverName: 'Media Server',
+                    providerType: 'mediaserver-a',
+                    url: 'https://mediaserver-a.example/details/1',
+                },
+            ],
+            isLoading: true,
+        });
+
+        // Act
+        render(
+            <MemoryRouter>
+                <TooltipProvider>
+                    <PreviewDrawer open onOpenChange={() => {}} target={null} localContentId="content-1" />
+                </TooltipProvider>
+            </MemoryRouter>,
+        );
+
+        // Assert
+        expect(await screen.findByText('A thief who steals corporate secrets.')).toBeInTheDocument();
+        expect(screen.queryByTestId('preview-drawer-media-server-links')).not.toBeInTheDocument();
+    });
+
+    it('PreviewDrawer_DoesNotQueryMediaServerLinks_WhenPreviewIsExternal', async () => {
+        // Arrange
+        mockUsePreview.mockReturnValue(successResult);
+
+        // Act
+        render(<PreviewDrawer open onOpenChange={() => {}} target={target} />);
+
+        // Assert
+        expect(await screen.findByText('Inception')).toBeInTheDocument();
+        expect(mockUseMediaServerLinks).toHaveBeenCalledWith(undefined);
+        expect(screen.queryByTestId('preview-drawer-media-server-links')).not.toBeInTheDocument();
     });
 });

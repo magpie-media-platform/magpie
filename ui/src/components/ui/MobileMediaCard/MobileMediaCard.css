@@ -64,8 +64,12 @@
         width: 84px;
         align-self: stretch;
         flex-shrink: 0;
-        object-fit: cover;
         background-color: var(--bg-tertiary);
+    }
+
+    .mobile-media-card__poster .content-poster__image {
+        position: absolute;
+        inset: 0;
     }
 
     .mobile-media-card__poster--placeholder {

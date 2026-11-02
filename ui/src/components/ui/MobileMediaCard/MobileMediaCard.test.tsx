@@ -164,6 +164,150 @@ describe('MobileMediaCard', () => {
         }
     });
 
+    it('LongPress_ConsumesTheReleaseClick_WhenTheCardHasNoNavigation', () => {
+        // Arrange
+        vi.useFakeTimers();
+        try {
+            const onLongPress = vi.fn();
+            const onAdd = vi.fn();
+            const { container } = renderCard(
+                <MobileMediaCard
+                    posterAlt=""
+                    title="A title"
+                    onLongPress={onLongPress}
+                    trailing={
+                        <button type="button" onClick={onAdd}>
+                            Add
+                        </button>
+                    }
+                />,
+            );
+            const card = container.querySelector('.mobile-media-card') as HTMLElement;
+            const add = screen.getByRole('button', { name: 'Add' });
+
+            // Act
+            fireEvent.pointerDown(add, { clientX: 0, clientY: 0 });
+            act(() => {
+                vi.advanceTimersByTime(500);
+            });
+            fireEvent.pointerUp(add);
+            fireEvent.click(add);
+
+            // Assert
+            expect(onLongPress).toHaveBeenCalledTimes(1);
+            expect(onAdd).not.toHaveBeenCalled();
+            expect(card).not.toHaveAttribute('role');
+            expect(card).not.toHaveAttribute('tabindex');
+
+            // Act
+            fireEvent.pointerDown(add, { clientX: 0, clientY: 0 });
+            act(() => {
+                vi.advanceTimersByTime(200);
+            });
+            fireEvent.pointerUp(add);
+            fireEvent.click(add);
+            act(() => {
+                vi.advanceTimersByTime(400);
+            });
+
+            // Assert
+            expect(onLongPress).toHaveBeenCalledTimes(1);
+            expect(onAdd).toHaveBeenCalledTimes(1);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('LongPress_KeepsTheItemSelected_WhenTheCardEntersSelectionMode', () => {
+        // Arrange
+        vi.useFakeTimers();
+        try {
+            const onLongPress = vi.fn();
+            const onToggle = vi.fn();
+            const { container, rerender } = renderCard(
+                <MobileMediaCard posterAlt="" title="A title" onLongPress={onLongPress} />,
+            );
+            const card = container.querySelector('.mobile-media-card') as HTMLElement;
+
+            // Act
+            fireEvent.pointerDown(card, { clientX: 0, clientY: 0 });
+            act(() => {
+                vi.advanceTimersByTime(500);
+            });
+            rerender(
+                <MemoryRouter>
+                    <MobileMediaCard
+                        posterAlt=""
+                        title="A title"
+                        onLongPress={onLongPress}
+                        selectable
+                        selected
+                        onToggleSelected={onToggle}
+                        selectionLabel="Select A title"
+                    />
+                </MemoryRouter>,
+            );
+            fireEvent.pointerUp(card);
+            fireEvent.click(card);
+
+            // Assert
+            expect(onLongPress).toHaveBeenCalledTimes(1);
+            expect(onToggle).not.toHaveBeenCalled();
+            expect(screen.getByRole('button', { name: 'Select A title' })).toHaveAttribute('aria-pressed', 'true');
+
+            // Act
+            fireEvent.click(card);
+
+            // Assert
+            expect(onToggle).toHaveBeenCalledTimes(1);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('LongPress_TogglesOnTheNextMouseClick_WhenSelectionReplacesTheNavigationLink', () => {
+        // Arrange
+        vi.useFakeTimers();
+        try {
+            const onLongPress = vi.fn();
+            const onToggle = vi.fn();
+            const { rerender } = renderCard(
+                <MobileMediaCard to="/library/abc" posterAlt="" title="A title" onLongPress={onLongPress} />,
+            );
+
+            // Act
+            fireEvent.pointerDown(screen.getByRole('link', { name: 'A title' }), { pointerType: 'mouse', button: 0 });
+            act(() => {
+                vi.advanceTimersByTime(500);
+            });
+            rerender(
+                <MemoryRouter>
+                    <MobileMediaCard
+                        to="/library/abc"
+                        posterAlt=""
+                        title="A title"
+                        onLongPress={onLongPress}
+                        selectable
+                        selected
+                        onToggleSelected={onToggle}
+                        selectionLabel="Select A title"
+                    />
+                </MemoryRouter>,
+            );
+            const card = screen.getByRole('button', { name: 'Select A title' });
+            fireEvent.pointerUp(card);
+            fireEvent.pointerDown(card, { pointerType: 'mouse', button: 0 });
+            fireEvent.pointerUp(card);
+            fireEvent.click(card);
+
+            // Assert
+            expect(onLongPress).toHaveBeenCalledOnce();
+            expect(onToggle).toHaveBeenCalledOnce();
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
     it('wraps the poster in a router link when "posterTo" is set', () => {
         renderCard(
             <MobileMediaCard

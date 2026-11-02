@@ -1,3 +1,4 @@
+import { createContext, useContext, type ReactNode } from 'react';
 import { LocalContentLink } from '@/components/content/LocalContentPreview';
 import { type ColumnDef } from '@tanstack/react-table';
 import { CaretDownIcon, CheckIcon, PlusIcon } from '@phosphor-icons/react';
@@ -38,54 +39,65 @@ export interface AddableCandidate {
 }
 
 export interface RowActionContext {
-    addingKey: string | null;
+    addingKeys: ReadonlySet<string>;
+    bulkAdding: boolean;
     foldersLoading: boolean;
     foldersForContentType: (contentType: string) => ApiRootFolder[];
     onAdd: (candidate: AddableCandidate, rootFolderId: string) => void;
-    onPreview: (candidate: AddableCandidate) => void;
+    onPreview: (candidate: AddableCandidate, invokingElement?: HTMLElement) => void;
 }
 
 interface RowActionsProps {
     candidate: AddableCandidate;
     ctx: RowActionContext;
+    iconOnly?: boolean;
 }
 
-export function RowActions({ candidate, ctx }: RowActionsProps) {
+export function RowActions({ candidate, ctx, iconOnly = false }: RowActionsProps) {
     if (candidate.inLibrary) {
         return (
             <div className="library-add-page__row-actions">
                 <div className="library-add-page__result-buttons">
                     <Button
-                        variant="primary"
+                        variant={iconOnly ? 'secondary' : 'primary'}
                         size="sm"
-                        disabled
+                        className={
+                            iconOnly ? 'library-add-page__poster-add library-add-page__poster-add--added' : undefined
+                        }
+                        aria-label={
+                            iconOnly
+                                ? candidate.existingContentHierarchyItemId
+                                    ? `Preview ${candidate.title} (in library)`
+                                    : `${candidate.title} (in library)`
+                                : undefined
+                        }
+                        disabled={!iconOnly || !candidate.existingContentHierarchyItemId}
+                        onClick={iconOnly ? (event) => ctx.onPreview(candidate, event.currentTarget) : undefined}
                         data-action="in-library"
                         data-result-key={candidate.key}
                     >
                         <CheckIcon weight="bold" aria-hidden="true" />
-                        In Library
+                        {!iconOnly && 'In Library'}
                     </Button>
                 </div>
             </div>
         );
     }
 
+    const isAdding = ctx.addingKeys.has(candidate.key);
     const availableFolders = ctx.foldersForContentType(candidate.contentType);
     const hasFolders = availableFolders.length > 0;
     const multipleFolders = availableFolders.length > 1;
 
-    const isAdding = ctx.addingKey === candidate.key;
-    const isAnyAdding = ctx.addingKey !== null;
-
     const addBlockedReason =
         !hasFolders && !ctx.foldersLoading ? 'Configure a root folder for this content type before adding.' : null;
-    const addDisabled = isAnyAdding || !hasFolders || ctx.foldersLoading;
+    const addDisabled = isAdding || ctx.bulkAdding || !hasFolders || ctx.foldersLoading;
 
     const addLabel = (
         <>
             <PlusIcon weight="bold" aria-hidden="true" />
-            Add
-            {multipleFolders && <CaretDownIcon weight="bold" aria-hidden="true" />}
+            {!iconOnly && 'Add'}
+            {!iconOnly && multipleFolders && <CaretDownIcon weight="bold" aria-hidden="true" />}
         </>
     );
 
@@ -96,8 +108,10 @@ export function RowActions({ candidate, ctx }: RowActionsProps) {
                     <DropdownMenu>
                         <DropdownMenuTrigger asChild>
                             <Button
-                                variant="primary"
+                                variant={iconOnly ? 'secondary' : 'primary'}
                                 size="sm"
+                                className={iconOnly ? 'library-add-page__poster-add' : undefined}
+                                aria-label={iconOnly ? `Add ${candidate.title}` : undefined}
                                 loading={isAdding}
                                 disabled={addDisabled}
                                 data-action="add-content"
@@ -123,8 +137,10 @@ export function RowActions({ candidate, ctx }: RowActionsProps) {
                 ) : (
                     <DisabledTooltip disabled={addBlockedReason !== null} message={addBlockedReason ?? ''}>
                         <Button
-                            variant="primary"
+                            variant={iconOnly ? 'secondary' : 'primary'}
                             size="sm"
+                            className={iconOnly ? 'library-add-page__poster-add' : undefined}
+                            aria-label={iconOnly ? `Add ${candidate.title}` : undefined}
                             onClick={() => hasFolders && ctx.onAdd(candidate, availableFolders[0].id)}
                             loading={isAdding}
                             disabled={addDisabled}
@@ -145,7 +161,7 @@ export function TitleHeading({
     onPreview,
 }: {
     candidate: AddableCandidate;
-    onPreview: (candidate: AddableCandidate) => void;
+    onPreview: (candidate: AddableCandidate, invokingElement?: HTMLElement) => void;
 }) {
     return (
         <h3 className="library-add-page__title">
@@ -155,6 +171,7 @@ export function TitleHeading({
                         contentId={candidate.existingContentHierarchyItemId}
                         className="library-add-page__title-link"
                         data-action="open-library-item"
+                        data-result-key={candidate.key}
                     >
                         {candidate.title}
                     </LocalContentLink>
@@ -165,7 +182,7 @@ export function TitleHeading({
                 <button
                     type="button"
                     className="library-add-page__title-link"
-                    onClick={() => onPreview(candidate)}
+                    onClick={(event) => onPreview(candidate, event.currentTarget)}
                     data-action="preview-content"
                     data-result-key={candidate.key}
                 >
@@ -182,7 +199,7 @@ function TitleCell({
     onPreview,
 }: {
     candidate: AddableCandidate;
-    onPreview: (candidate: AddableCandidate) => void;
+    onPreview: (candidate: AddableCandidate, invokingElement?: HTMLElement) => void;
 }) {
     return (
         <div className="library-add-page__title-cell">
@@ -227,10 +244,42 @@ export function SourceCell({ candidate }: { candidate: AddableCandidate }) {
 }
 
 interface BuildAddableColumnsConfig {
-    rowActionContext: RowActionContext;
+    rowActionContext?: RowActionContext;
 }
 
-export function buildAddableColumns({ rowActionContext }: BuildAddableColumnsConfig): ColumnDef<AddableCandidate>[] {
+const LiveRowActionContext = createContext<RowActionContext | null>(null);
+
+export function RowActionProvider({ value, children }: { value: RowActionContext; children: ReactNode }) {
+    return <LiveRowActionContext value={value}>{children}</LiveRowActionContext>;
+}
+
+function ConnectedTitleCell({
+    candidate,
+    fallbackContext,
+}: {
+    candidate: AddableCandidate;
+    fallbackContext?: RowActionContext;
+}) {
+    const ctx = useContext(LiveRowActionContext) ?? fallbackContext;
+    if (!ctx) return null;
+    return <TitleCell candidate={candidate} onPreview={ctx.onPreview} />;
+}
+
+function ConnectedRowActions({
+    candidate,
+    fallbackContext,
+}: {
+    candidate: AddableCandidate;
+    fallbackContext?: RowActionContext;
+}) {
+    const ctx = useContext(LiveRowActionContext) ?? fallbackContext;
+    if (!ctx) return null;
+    return <RowActions candidate={candidate} ctx={ctx} />;
+}
+
+export function buildAddableColumns({
+    rowActionContext,
+}: BuildAddableColumnsConfig = {}): ColumnDef<AddableCandidate>[] {
     return [
         {
             id: 'poster',
@@ -253,7 +302,7 @@ export function buildAddableColumns({ rowActionContext }: BuildAddableColumnsCon
             accessorFn: (row) => row.title,
             header: 'Title',
             sortingFn: (a, b) => a.original.title.localeCompare(b.original.title),
-            cell: ({ row }) => <TitleCell candidate={row.original} onPreview={rowActionContext.onPreview} />,
+            cell: ({ row }) => <ConnectedTitleCell candidate={row.original} fallbackContext={rowActionContext} />,
         },
         {
             id: 'type',
@@ -283,7 +332,7 @@ export function buildAddableColumns({ rowActionContext }: BuildAddableColumnsCon
             header: '',
             enableSorting: false,
             size: 110,
-            cell: ({ row }) => <RowActions candidate={row.original} ctx={rowActionContext} />,
+            cell: ({ row }) => <ConnectedRowActions candidate={row.original} fallbackContext={rowActionContext} />,
         },
     ];
 }

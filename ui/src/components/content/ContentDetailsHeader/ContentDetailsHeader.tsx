@@ -1,12 +1,4 @@
-import {
-    forwardRef,
-    useId,
-    useLayoutEffect,
-    useRef,
-    useState,
-    type ComponentPropsWithoutRef,
-    type CSSProperties,
-} from 'react';
+import { forwardRef, useId, useLayoutEffect, useRef, useState, type ComponentPropsWithoutRef } from 'react';
 import { Link } from 'react-router-dom';
 import { CaretLeftIcon } from '@phosphor-icons/react';
 
@@ -184,10 +176,7 @@ export const ContentDetailsHeader = forwardRef<HTMLElement, ContentDetailsHeader
                             <PreviewPlayer preview={heroPreview} posterUrl={content.posterUrl} fit="poster" />
                         </div>
                     ) : content.posterUrl ? (
-                        <div
-                            className="content-details-header__poster content-details-header__poster--image"
-                            style={{ '--hero-image': `url(${JSON.stringify(content.posterUrl)})` } as CSSProperties}
-                        >
+                        <div className="content-details-header__poster content-details-header__poster--image">
                             <ContentPoster
                                 posterUrl={content.posterUrl}
                                 placeholderClassName="content-details-header__poster--placeholder"

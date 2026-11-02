@@ -1,4 +1,10 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ContentGallerySkeleton, ContentViewToggle } from '@/components/content/ContentGallery';
+import { useContentView } from '@/hooks/useContentView';
+import { useUrlFilterState } from '@/hooks/useUrlFilterState';
+import { useUrlTableState } from '@/hooks/useUrlTableState';
+import { useLiveUrlFilter } from '@/hooks/useLiveUrlFilter';
+import { AddContentResults } from './AddContentResults';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useOpenLocalContentPreview } from '@/components/content/LocalContentPreview';
 import { type SortingState } from '@tanstack/react-table';
@@ -14,12 +20,10 @@ import {
 } from '@phosphor-icons/react';
 
 import { Button } from '@/components/ui/Button';
-import { DataTable } from '@/components/ui/DataTable';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { FilterBar } from '@/components/filters/FilterBar';
 import { Label } from '@/components/ui/Label';
-import { MobileMediaCard } from '@/components/ui/MobileMediaCard';
-import { MobileListToolbar, type MobileListSortOption } from '@/components/ui/MobileListToolbar';
+import { type MobileListSortOption } from '@/components/ui/MobileListToolbar';
 import { Pager } from '@/components/ui/Pager';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { PreviewDrawer, type PreviewDrawerTarget } from '@/components/content/PreviewDrawer';
@@ -46,19 +50,9 @@ import { candidateSearchErrorMessage, getErrorMessage } from '@/lib/errors';
 import { isAbortError } from '@/lib/api';
 import { parseMagpieQl } from '@/lib/magpieQl';
 import { toPlainTextSummary } from '@/lib/plainTextSummary';
-import { sortTableRows } from '@/lib/sortTableRows';
 import type { LibraryAddPreloadState, WishlistsPageCreateState } from '@/types/navigation';
 
-import {
-    buildAddableColumns,
-    formatPublished,
-    RowActions,
-    SourceCell,
-    TitleHeading,
-    TypeCell,
-    type AddableCandidate,
-    type RowActionContext,
-} from './buildAddableColumns';
+import { type AddableCandidate, type RowActionContext } from './buildAddableColumns';
 import './LibraryAddPage.css';
 
 const SAVED_FILTER_NONE_VALUE = '__none__';
@@ -167,17 +161,41 @@ export function LibraryAddPage() {
 
     const { folders, isLoading: isLoadingFolders } = useRootFolders();
     const { contentTypes } = useLibraryTypes();
-    const [tab, setTab] = useState<AddTab>('live');
-    const [page, setPage] = useState<number>(1);
-    const [addingKey, setAddingKey] = useState<string | null>(null);
+    const [urlState, setUrlState] = useUrlFilterState({
+        tab: 'live',
+        filter: '',
+        savedFilter: '',
+        query: '',
+        continuation: '',
+        page: '',
+        sort: '',
+    });
+    const setUrlStateRef = useRef(setUrlState);
+    setUrlStateRef.current = setUrlState;
+    const tab: AddTab = urlState.tab === 'saved' ? 'saved' : 'live';
+    const { page, sorting } = useUrlTableState({
+        defaultSort: DEFAULT_SORTING,
+        defaultFilters: {},
+        sortKeys: ADD_CONTENT_SORT_OPTIONS.map((option) => option.id),
+    });
+    const { view, setView } = useContentView('library-add-view');
+    const [searchVersion, setSearchVersion] = useState(0);
+    const [addingKeys, setAddingKeys] = useState<ReadonlySet<string>>(() => new Set());
+    const [bulkAdding, setBulkAdding] = useState(false);
     const [addedKeys, setAddedKeys] = useState<Set<string>>(() => new Set());
     const [addedItemIds, setAddedItemIds] = useState<Map<string, string>>(() => new Map());
     const [previewCandidate, setPreviewCandidate] = useState<AddableCandidate | null>(null);
+    const previewCandidateKey = useRef<string | null>(null);
     const [previewOpen, setPreviewOpen] = useState(false);
 
-    const [sorting, setSorting] = useState<SortingState>(DEFAULT_SORTING);
-
-    const [filterQuery, setFilterQuery] = useState<string>('');
+    const commitFilter = useCallback(
+        (filter: string, replace: boolean, state: { liveFilterCommit: string }) => {
+            setUrlState({ filter }, { replace, state });
+        },
+        [setUrlState],
+    );
+    const liveFilter = useLiveUrlFilter({ value: urlState.filter, onCommit: commitFilter });
+    const filterQuery = liveFilter.value;
     const [saveFilterDialogOpen, , openSaveFilterDialog, closeSaveFilterDialog] = useToggle();
     const [saveFilterError, setSaveFilterError] = useState<string | null>(null);
     const [saveFilterQueryError, setSaveFilterQueryError] = useState<string | null>(null);
@@ -186,25 +204,19 @@ export function LibraryAddPage() {
     const liveCandidateSearch = useProviderMetadataCandidateSearch();
     const savedCandidateSearch = useProviderMetadataCandidateSearch();
 
-    const { mutate: addContent } = useAddContentByExternalId();
+    const { mutateAsync: addContent } = useAddContentByExternalId();
 
     const { filters: savedContentFilters, isLoading: savedFiltersLoading } = useContentFilters();
     const savedFilterOptions = useMemo(
         () => savedContentFilters.filter((f) => f.query).map((f) => ({ id: f.id, name: f.name, query: f.query })),
         [savedContentFilters],
     );
-    const [selectedSavedFilterId, setSelectedSavedFilterId] = useState<string>('');
+    const selectedSavedFilterId = urlState.savedFilter;
     const createFilterMutation = useCreateContentFilter();
 
-    const lastCandidateSearchRef = useRef<{ kind: 'adhoc'; query: string } | { kind: 'saved'; query: string } | null>(
-        null,
-    );
+    const searchRequestRef = useRef('');
     const candidateRequestVersion = useRef(0);
-
-    const handleFilterQueryChange = useCallback((value: string) => {
-        setFilterQuery(value);
-        setPage(1);
-    }, []);
+    const handleFilterQueryChange = liveFilter.change;
 
     const foldersForContentType = useCallback(
         (contentType: string): ApiRootFolder[] => {
@@ -216,6 +228,31 @@ export function LibraryAddPage() {
         [folders],
     );
 
+    const pendingInlineFocusKeyRef = useRef<string | null>(null);
+
+    useLayoutEffect(() => {
+        const key = pendingInlineFocusKeyRef.current;
+        if (!key || !addedKeys.has(key) || addingKeys.has(key)) {
+            return;
+        }
+        pendingInlineFocusKeyRef.current = null;
+        const active = document.activeElement;
+        if (
+            active instanceof HTMLElement &&
+            active !== document.body &&
+            active.dataset.resultKey !== key &&
+            !active.closest('[data-radix-popper-content-wrapper]')
+        ) {
+            return;
+        }
+        const target = Array.from(
+            document.querySelectorAll<HTMLElement>(
+                '[data-action="open-library-item"], [data-action="in-library"]:not(:disabled)',
+            ),
+        ).find((element) => element.dataset.resultKey === key);
+        target?.focus({ preventScroll: true });
+    }, [addedKeys, addingKeys]);
+
     const handleAddSuccess = useCallback(
         (candidateKey: string, title: string, contentHierarchyItemId: string) => {
             setAddedKeys((current) => new Set(current).add(candidateKey));
@@ -224,60 +261,63 @@ export function LibraryAddPage() {
                 title: 'Added to library',
                 description: `${instanceName} added "${title}" to the library. ${instanceName} queued a metadata refresh.`,
                 variant: 'success',
-                action: {
-                    label: 'View settings',
-                    altText: `View settings for "${title}"`,
-                    to: `/library/${encodeURIComponent(contentHierarchyItemId)}`,
-                },
             });
-            setPreviewOpen(false);
+            if (previewCandidateKey.current === candidateKey) setPreviewOpen(false);
         },
         [toast, instanceName],
     );
 
     const handleAdd = useCallback(
-        (candidate: AddableCandidate, rootFolderId: string) => {
-            if (!candidate.contentType || !rootFolderId) {
+        async (candidate: AddableCandidate, rootFolderId: string) => {
+            if (
+                !candidate.contentType ||
+                !rootFolderId ||
+                candidate.inLibrary ||
+                addedKeys.has(candidate.key) ||
+                addingKeys.has(candidate.key) ||
+                bulkAdding
+            ) {
                 return;
             }
 
-            setAddingKey(candidate.key);
+            setAddingKeys((current) => new Set(current).add(candidate.key));
 
-            addContent(
-                {
+            try {
+                const id = await addContent({
                     providerType: candidate.providerType,
                     externalIdKey: candidate.externalIdSource,
                     externalId: candidate.externalId,
                     contentType: candidate.contentType,
                     ...(candidate.levelSlug ? { levelSlug: candidate.levelSlug } : {}),
                     rootFolderId,
-                },
-                {
-                    onSuccess: (contentHierarchyItemId) =>
-                        handleAddSuccess(candidate.key, candidate.title, contentHierarchyItemId),
-                    onError: (error) => {
-                        toast({
-                            title: 'Failed to add content',
-                            description: getErrorMessage(error, 'Failed to add content.'),
-                            variant: 'error',
-                        });
-                    },
-                    onSettled: () => {
-                        setAddingKey((current) => (current === candidate.key ? null : current));
-                    },
-                },
-            );
+                });
+                pendingInlineFocusKeyRef.current = candidate.key;
+                handleAddSuccess(candidate.key, candidate.title, id);
+            } catch (error) {
+                toast({
+                    title: 'Failed to add content',
+                    description: getErrorMessage(error, 'Failed to add content.'),
+                    variant: 'error',
+                });
+            } finally {
+                setAddingKeys((current) => {
+                    const next = new Set(current);
+                    next.delete(candidate.key);
+                    return next;
+                });
+            }
         },
-        [addContent, handleAddSuccess, toast],
+        [addContent, handleAddSuccess, toast, addedKeys, addingKeys, bulkAdding],
     );
 
     const handlePreview = useCallback(
-        (candidate: AddableCandidate) => {
+        (candidate: AddableCandidate, invokingElement?: HTMLElement) => {
             if (candidate.inLibrary) {
                 if (candidate.existingContentHierarchyItemId)
-                    openLocalPreview(candidate.existingContentHierarchyItemId);
+                    openLocalPreview(candidate.existingContentHierarchyItemId, invokingElement);
                 return;
             }
+            previewCandidateKey.current = candidate.key;
             setPreviewCandidate(candidate);
             setPreviewOpen(true);
         },
@@ -316,88 +356,75 @@ export function LibraryAddPage() {
     const handleDrawerAdd = useCallback(
         (_target: PreviewDrawerTarget, rootFolderId?: string) => {
             if (previewCandidate && rootFolderId) {
-                handleAdd(previewCandidate, rootFolderId);
+                void handleAdd(previewCandidate, rootFolderId);
             }
         },
         [handleAdd, previewCandidate],
     );
 
     const runCandidateSearch = useCallback(
-        async (queryText: string, candidateSearchPage: number, resume = false) => {
+        async (kind: AddTab, query: string, requestedPage: number, continuation = '') => {
+            const key = JSON.stringify([kind, query, requestedPage, continuation]);
+            searchRequestRef.current = key;
+            if (!continuation && requestedPage === 1) setSearchVersion((current) => current + 1);
             const version = ++candidateRequestVersion.current;
             setCandidateSearchError(null);
-            lastCandidateSearchRef.current = { kind: 'adhoc', query: queryText };
-
+            const search = kind === 'saved' ? savedCandidateSearch : liveCandidateSearch;
+            const other = kind === 'saved' ? liveCandidateSearch : savedCandidateSearch;
+            other.reset();
             try {
-                await liveCandidateSearch.mutateAsync({
-                    query: queryText,
-                    page: candidateSearchPage,
-                    resume,
+                const response = await search.mutateAsync({
+                    query,
+                    page: requestedPage,
+                    resume: !!continuation || requestedPage > 1,
+                    ...(continuation ? { continuation } : {}),
                 });
+                if (
+                    version === candidateRequestVersion.current &&
+                    response.continuation &&
+                    response.continuation !== continuation
+                ) {
+                    searchRequestRef.current = JSON.stringify([kind, query, requestedPage, response.continuation]);
+                    setUrlStateRef.current({ continuation: response.continuation }, { replace: true });
+                }
             } catch (error) {
                 if (version === candidateRequestVersion.current && !isAbortError(error)) {
                     setCandidateSearchError(candidateSearchErrorMessage(error));
                 }
             }
         },
-        [liveCandidateSearch],
+        [liveCandidateSearch, savedCandidateSearch],
+    );
+
+    const applySearch = useCallback(
+        (query: string) => {
+            liveFilter.cancelPending();
+            if (page === 1 && urlState.query === query && !urlState.continuation) {
+                void runCandidateSearch(tab, query, 1);
+            }
+            setUrlState({ query, filter: filterQuery, page: '', continuation: '' });
+        },
+        [filterQuery, liveFilter, page, runCandidateSearch, setUrlState, tab, urlState.query, urlState.continuation],
     );
 
     const handleApplyFilter = useCallback(() => {
-        if (!filterQuery.trim()) {
-            return;
-        }
-        setPage(1);
-        return runCandidateSearch(filterQuery, 1);
-    }, [runCandidateSearch, filterQuery]);
-
-    const runSavedCandidateSearch = useCallback(
-        async (queryText: string, candidateSearchPage: number, resume = false) => {
-            const version = ++candidateRequestVersion.current;
-            if (!queryText.trim()) {
-                return;
-            }
-            setCandidateSearchError(null);
-            lastCandidateSearchRef.current = { kind: 'saved', query: queryText };
-
-            try {
-                await savedCandidateSearch.mutateAsync({
-                    query: queryText,
-                    page: candidateSearchPage,
-                    resume,
-                });
-            } catch (error) {
-                if (version === candidateRequestVersion.current && !isAbortError(error)) {
-                    setCandidateSearchError(candidateSearchErrorMessage(error));
-                }
-            }
-        },
-        [savedCandidateSearch],
-    );
-
-    const handleSelectSavedFilter = useCallback((savedFilterId: string) => {
-        setSelectedSavedFilterId(savedFilterId);
-        setPage(1);
-    }, []);
+        if (!bulkAdding && filterQuery.trim()) applySearch(filterQuery);
+    }, [applySearch, filterQuery, bulkAdding]);
 
     const handleApplySavedFilter = useCallback(() => {
         const filter = savedContentFilters.find((f) => f.id === selectedSavedFilterId);
-        if (!filter) {
-            return;
-        }
-        setPage(1);
-        return runSavedCandidateSearch(filter.query, 1);
-    }, [savedContentFilters, selectedSavedFilterId, runSavedCandidateSearch]);
+        if (!bulkAdding && filter?.query.trim()) applySearch(filter.query);
+    }, [savedContentFilters, selectedSavedFilterId, applySearch, bulkAdding]);
 
     const handleSavedFilterSelectChange = useCallback(
-        (value: string) => {
-            if (value === SAVED_FILTER_NONE_VALUE) {
-                setSelectedSavedFilterId('');
-                return;
-            }
-            handleSelectSavedFilter(value);
-        },
-        [handleSelectSavedFilter],
+        (value: string) =>
+            setUrlState({
+                savedFilter: value === SAVED_FILTER_NONE_VALUE ? '' : value,
+                query: '',
+                page: '',
+                continuation: '',
+            }),
+        [setUrlState],
     );
 
     const handleCreateWishlistFromFilter = useCallback(async () => {
@@ -432,52 +459,69 @@ export function LibraryAddPage() {
     const preload = location.state as LibraryAddPreloadState | null;
     const preloadAppliedRef = useRef<string | null>(null);
     useEffect(() => {
-        if (preloadAppliedRef.current === location.key || !preload?.filterQuery) {
-            return;
-        }
-        if (preload.savedFilterId && savedFiltersLoading) {
-            return;
-        }
-
-        const preloadFilter = preload.savedFilterId
-            ? savedContentFilters.find((f) => f.id === preload.savedFilterId)
-            : undefined;
-
-        if (preloadFilter) {
-            setTab('saved');
-            setSelectedSavedFilterId(preloadFilter.id);
-            setPage(1);
-
-            if (!preloadFilter.query.trim()) {
-                return;
+        if (preloadAppliedRef.current === location.key || !preload?.filterQuery) return;
+        if (preload.savedFilterId && savedFiltersLoading) return;
+        const saved = savedContentFilters.find((filter) => filter.id === preload.savedFilterId);
+        if (saved && !saved.query.trim()) {
+            if (tab !== 'saved' || selectedSavedFilterId !== saved.id) {
+                setUrlState(
+                    { tab: 'saved', savedFilter: saved.id, filter: preload.filterQuery },
+                    {
+                        replace: true,
+                        state: preload,
+                    },
+                );
             }
-
-            preloadAppliedRef.current = location.key;
-            void runSavedCandidateSearch(preloadFilter.query, 1);
-        } else {
-            preloadAppliedRef.current = location.key;
-            setPage(1);
-            setTab('live');
-            setFilterQuery(preload.filterQuery);
-            void runCandidateSearch(preload.filterQuery, 1);
-        }
-    }, [location.key, preload, savedContentFilters, savedFiltersLoading, runCandidateSearch, runSavedCandidateSearch]);
-
-    useEffect(() => {
-        if (preloadAppliedRef.current === location.key) {
-            return;
-        }
-        const contentTypeParam = new URLSearchParams(location.search).get('contentType')?.trim();
-        if (!contentTypeParam) {
             return;
         }
         preloadAppliedRef.current = location.key;
+        setUrlState(
+            {
+                tab: saved ? 'saved' : 'live',
+                savedFilter: saved?.id ?? '',
+                filter: preload.filterQuery,
+                query: saved?.query ?? preload.filterQuery,
+                page: '',
+                continuation: '',
+            },
+            { replace: true, state: null },
+        );
+    }, [location.key, preload, savedContentFilters, savedFiltersLoading, setUrlState, tab, selectedSavedFilterId]);
 
-        const seededQuery = setContentFilterSelection('', { contentType: contentTypeParam });
-        setTab('live');
-        setFilterQuery(seededQuery);
-        setPage(1);
-    }, [location.key, location.search]);
+    const runSearchRef = useRef(runCandidateSearch);
+    runSearchRef.current = runCandidateSearch;
+    const resetLiveSearch = liveCandidateSearch.reset;
+    const resetSavedSearch = savedCandidateSearch.reset;
+    useEffect(() => {
+        const contentType = new URLSearchParams(location.search).get('contentType')?.trim();
+        if (!contentType || preload?.filterQuery) return;
+        setUrlState(
+            { filter: urlState.filter || setContentFilterSelection('', { contentType }) },
+            {
+                replace: true,
+                resetParams: ['contentType'],
+            },
+        );
+    }, [location.search, preload?.filterQuery, setUrlState, urlState.filter]);
+
+    useEffect(() => {
+        const key = JSON.stringify([tab, urlState.query, page, urlState.continuation]);
+        if (searchRequestRef.current === key) return;
+        searchRequestRef.current = key;
+        if (urlState.query.trim()) {
+            void runSearchRef.current(tab, urlState.query, page, urlState.continuation);
+        } else {
+            candidateRequestVersion.current++;
+            setSearchVersion((current) => current + 1);
+            setCandidateSearchError(null);
+            resetLiveSearch();
+            resetSavedSearch();
+        }
+    }, [tab, urlState.query, urlState.continuation, page, resetLiveSearch, resetSavedSearch]);
+
+    useEffect(() => {
+        setPreviewOpen(false);
+    }, [tab, urlState.query, page]);
 
     const handleOpenSaveFilter = useCallback(() => {
         setSaveFilterError(null);
@@ -518,15 +562,19 @@ export function LibraryAddPage() {
         [closeSaveFilterDialog, createFilterMutation, filterQuery, toast, instanceName],
     );
 
-    const activeSearchKind = lastCandidateSearchRef.current?.kind ?? (tab === 'saved' ? 'saved' : 'adhoc');
+    const activeSearchKind = tab === 'saved' ? 'saved' : 'adhoc';
 
     const handleCancelCandidateSearch = useCallback(() => {
         candidateRequestVersion.current++;
-        const completed = activeSearchKind === 'saved' ? savedCandidateSearch.cancel() : liveCandidateSearch.cancel();
+        const search = tab === 'saved' ? savedCandidateSearch : liveCandidateSearch;
+        const completed = search.cancel();
+        const query = completed?.query ?? '';
+        const restoredPage = completed?.page ?? 1;
+        const continuation = completed ? (search.getContinuation(restoredPage) ?? search.data?.continuation ?? '') : '';
+        searchRequestRef.current = JSON.stringify([tab, query, restoredPage, continuation]);
         setCandidateSearchError(null);
-        setPage(completed?.page ?? 1);
-        lastCandidateSearchRef.current = completed ? { kind: activeSearchKind, query: completed.query } : null;
-    }, [activeSearchKind, liveCandidateSearch, savedCandidateSearch]);
+        setUrlState({ query, page: restoredPage > 1 ? String(restoredPage) : '', continuation }, { replace: true });
+    }, [tab, liveCandidateSearch, savedCandidateSearch, setUrlState]);
 
     const providerCandidateSearch = useMemo(
         () =>
@@ -602,59 +650,48 @@ export function LibraryAddPage() {
     const goToPage = useCallback(
         (nextPage: number) => {
             const target = Math.max(1, nextPage);
-            setPage(target);
-            const last = lastCandidateSearchRef.current;
-            if (last?.kind === 'adhoc') {
-                void runCandidateSearch(last.query, target, true);
-            } else if (last?.kind === 'saved') {
-                void runSavedCandidateSearch(last.query, target, true);
-            }
+            const search = tab === 'saved' ? savedCandidateSearch : liveCandidateSearch;
+            setUrlState({ page: target > 1 ? String(target) : '', continuation: search.getContinuation(target) ?? '' });
         },
-        [runCandidateSearch, runSavedCandidateSearch],
+        [tab, liveCandidateSearch, savedCandidateSearch, setUrlState],
     );
 
     const handleSortingChange = useCallback(
         (updater: SortingState | ((previous: SortingState) => SortingState)) => {
             const next = typeof updater === 'function' ? updater(sorting) : updater;
-            setSorting(next);
-            if (page !== 1) {
-                goToPage(1);
-            }
+            setUrlState({
+                sort: next.map(({ id, desc }) => `${id}:${desc ? 'desc' : 'asc'}`).join(','),
+            });
         },
-        [goToPage, page, sorting],
+        [sorting, setUrlState],
     );
 
     const switchTab = useCallback(
         (next: AddTab) => {
-            candidateRequestVersion.current++;
-            setTab(next);
-            setPage(1);
-            setCandidateSearchError(null);
-            lastCandidateSearchRef.current = null;
-            liveCandidateSearch.reset();
-            savedCandidateSearch.reset();
+            liveFilter.cancelPending();
+            setUrlState({ tab: next, filter: filterQuery, query: '', page: '', continuation: '' });
         },
-        [liveCandidateSearch, savedCandidateSearch],
+        [filterQuery, liveFilter, setUrlState],
     );
 
     const hasFilterQuery = filterQuery.trim().length > 0;
 
     const rowActionContext: RowActionContext = useMemo(
         () => ({
-            addingKey,
+            addingKeys,
+            bulkAdding,
             foldersLoading: isLoadingFolders,
             foldersForContentType,
             onAdd: handleAdd,
             onPreview: handlePreview,
         }),
-        [addingKey, isLoadingFolders, foldersForContentType, handleAdd, handlePreview],
+        [addingKeys, bulkAdding, isLoadingFolders, foldersForContentType, handleAdd, handlePreview],
     );
 
-    const getRowId = useCallback((candidate: AddableCandidate) => candidate.key, []);
-
-    const columns = useMemo(() => buildAddableColumns({ rowActionContext }), [rowActionContext]);
-
-    const sortedCandidates = useMemo(() => sortTableRows(candidates, columns, sorting), [candidates, columns, sorting]);
+    const handleBulkAdded = useCallback((key: string, id: string) => {
+        setAddedKeys((current) => new Set(current).add(key));
+        setAddedItemIds((current) => new Map(current).set(key, id));
+    }, []);
 
     const usesCardLayout = useCardLayout();
 
@@ -670,7 +707,7 @@ export function LibraryAddPage() {
                 size="sm"
                 onClick={tab === 'live' ? handleApplyFilter : handleApplySavedFilter}
                 loading={providerCandidateSearch.isPending}
-                disabled={tab === 'live' ? !hasFilterQuery : !selectedSavedFilterId}
+                disabled={bulkAdding || (tab === 'live' ? !hasFilterQuery : !selectedSavedFilterId)}
                 data-action={tab === 'live' ? 'apply-filter' : 'apply-saved-filter'}
             >
                 <SparkleIcon weight="bold" aria-hidden="true" />
@@ -684,17 +721,18 @@ export function LibraryAddPage() {
             <PageHeader
                 className="library-add-page__header"
                 title="Add content"
+                actions={<ContentViewToggle view={view} onChange={setView} />}
                 description="Search for new content to add to the library"
                 icon={<BinocularsIcon weight="duotone" aria-hidden="true" data-testid="library-add-page__icon" />}
             />
 
             <Tabs value={tab} onValueChange={(value) => switchTab(value as AddTab)}>
                 <TabsList aria-label="Add mode">
-                    <TabsTrigger value="live" data-action="tab-live">
+                    <TabsTrigger disabled={bulkAdding} value="live" data-action="tab-live">
                         <PulseIcon weight="bold" aria-hidden="true" />
                         <span>Live filter</span>
                     </TabsTrigger>
-                    <TabsTrigger value="saved" data-action="tab-saved">
+                    <TabsTrigger disabled={bulkAdding} value="saved" data-action="tab-saved">
                         <FloppyDiskIcon weight="bold" aria-hidden="true" />
                         <span>Saved filter</span>
                     </TabsTrigger>
@@ -709,6 +747,7 @@ export function LibraryAddPage() {
                         onSubmit={handleApplyFilter}
                         context="content"
                         loading={providerCandidateSearch.isPending}
+                        readOnly={bulkAdding}
                         showSave={hasFilterQuery}
                         onSave={handleOpenSaveFilter}
                         isSaving={createFilterMutation.isPending}
@@ -727,7 +766,7 @@ export function LibraryAddPage() {
                             <Select
                                 value={selectedSavedFilterId || SAVED_FILTER_NONE_VALUE}
                                 onValueChange={handleSavedFilterSelectChange}
-                                disabled={savedFilterOptions.length === 0}
+                                disabled={bulkAdding || savedFilterOptions.length === 0}
                             >
                                 <SelectTrigger
                                     id="library-add-page__saved-filter"
@@ -747,24 +786,26 @@ export function LibraryAddPage() {
                                 </SelectContent>
                             </Select>
                         </div>
-                        {selectedSavedFilter && (
-                            <Button asChild variant="secondary" size="sm">
-                                <Link
-                                    to={`/filters?edit=${encodeURIComponent(selectedSavedFilter.id)}`}
-                                    data-action="open-filter-editor"
-                                >
-                                    <PencilSimpleIcon weight="bold" aria-hidden="true" />
-                                    Edit filter
-                                </Link>
-                            </Button>
-                        )}
+                        <div className="library-add-page__saved-actions">
+                            {selectedSavedFilter && (
+                                <Button asChild variant="secondary" size="sm">
+                                    <Link
+                                        to={`/filters?edit=${encodeURIComponent(selectedSavedFilter.id)}`}
+                                        aria-label="Edit filter"
+                                        data-action="open-filter-editor"
+                                    >
+                                        <PencilSimpleIcon weight="bold" aria-hidden="true" />
+                                        Edit
+                                    </Link>
+                                </Button>
+                            )}
+                            {searchActions}
+                        </div>
                     </div>
                     {selectedSavedFilter && (
-                        <div className="library-add-page__saved-query-preview">
-                            <code className="library-add-page__saved-query" data-testid="library-add-page__saved-query">
-                                {selectedSavedFilter.query}
-                            </code>
-                        </div>
+                        <code className="library-add-page__saved-query" data-testid="library-add-page__saved-query">
+                            {selectedSavedFilter.query}
+                        </code>
                     )}
                     {savedFilterOptions.length === 0 && (
                         <p className="library-add-page__saved-hint" data-testid="library-add-page__saved-empty">
@@ -772,7 +813,6 @@ export function LibraryAddPage() {
                             Filters page.
                         </p>
                     )}
-                    {searchActions}
                 </section>
             )}
 
@@ -786,20 +826,23 @@ export function LibraryAddPage() {
                     />
                 )}
 
-                {showLoading && (
-                    <div className="library-add-page__loading" data-testid="library-add-page__loading">
-                        <Skeleton className="library-add-page__skeleton" />
-                        <Skeleton className="library-add-page__skeleton" />
-                        <Skeleton className="library-add-page__skeleton" />
-                    </div>
-                )}
+                {showLoading &&
+                    (view === 'gallery' ? (
+                        <ContentGallerySkeleton data-testid="library-add-page__loading" />
+                    ) : (
+                        <div className="library-add-page__loading" data-testid="library-add-page__loading">
+                            <Skeleton className="library-add-page__skeleton" />
+                            <Skeleton className="library-add-page__skeleton" />
+                            <Skeleton className="library-add-page__skeleton" />
+                        </div>
+                    ))}
 
                 {showError && (
                     <EmptyState
                         icon={<WarningCircleIcon weight="duotone" />}
                         title="Search failed"
                         description={candidateSearchError ?? undefined}
-                        onRetry={() => goToPage(page)}
+                        onRetry={() => void runCandidateSearch(tab, urlState.query, page, urlState.continuation)}
                         size="sm"
                         data-testid="library-add-page__error"
                     />
@@ -837,65 +880,19 @@ export function LibraryAddPage() {
                     />
                 )}
 
-                {!showLoading &&
-                    !showError &&
-                    !showInitialEmpty &&
-                    candidates.length > 0 &&
-                    (usesCardLayout ? (
-                        <>
-                            <MobileListToolbar
-                                className="library-add-page__mobile-toolbar"
-                                sorting={sorting}
-                                sortOptions={ADD_CONTENT_SORT_OPTIONS}
-                                onSortingChange={handleSortingChange}
-                            />
-                            <div className="library-add-page__mobile-list" data-testid="library-add-page__mobile-list">
-                                {sortedCandidates.map((candidate) => (
-                                    <MobileMediaCard
-                                        key={candidate.key}
-                                        data-result-key={candidate.key}
-                                        data-provider={candidate.providerType}
-                                        data-source={candidate.externalIdSource}
-                                        data-external-id={candidate.externalId}
-                                        data-in-library={candidate.inLibrary ? 'true' : undefined}
-                                        posterUrl={candidate.thumbnailUrl ?? undefined}
-                                        posterAlt=""
-                                        title={
-                                            <TitleHeading
-                                                candidate={candidate}
-                                                onPreview={rowActionContext.onPreview}
-                                            />
-                                        }
-                                        description={candidate.overview ?? undefined}
-                                        trailing={
-                                            <div className="library-add-page__card-actions">
-                                                <RowActions candidate={candidate} ctx={rowActionContext} />
-                                            </div>
-                                        }
-                                    >
-                                        <TypeCell candidate={candidate} />
-                                        <span className="library-add-page__card-published">
-                                            Published: {formatPublished(candidate)}
-                                        </span>
-                                        <SourceCell candidate={candidate} />
-                                    </MobileMediaCard>
-                                ))}
-                            </div>
-                        </>
-                    ) : (
-                        <div className="library-add-page__table" data-testid="library-add-page__result-list">
-                            <DataTable<AddableCandidate>
-                                columns={columns}
-                                data={sortedCandidates}
-                                manualSorting
-                                size="sm"
-                                enableSorting
-                                sorting={sorting}
-                                onSortingChange={handleSortingChange}
-                                getRowId={getRowId}
-                            />
-                        </div>
-                    ))}
+                <AddContentResults
+                    candidates={candidates}
+                    context={rowActionContext}
+                    view={view}
+                    sorting={sorting}
+                    sortOptions={ADD_CONTENT_SORT_OPTIONS}
+                    onSortingChange={handleSortingChange}
+                    searchKey={JSON.stringify([tab, urlState.query, searchVersion])}
+                    page={page}
+                    onAdded={handleBulkAdded}
+                    onBusyChange={setBulkAdding}
+                    loading={showLoading || showError || showInitialEmpty}
+                />
 
                 {hasResultsForPaging && (
                     <Pager
@@ -903,6 +900,7 @@ export function LibraryAddPage() {
                         aria-label="Result pages"
                         data-testid="library-add-page__pagination"
                         page={page}
+                        disabled={bulkAdding}
                         canPrevious={canGoPrev}
                         canNext={canGoNext}
                         onFirst={() => goToPage(1)}
@@ -929,8 +927,8 @@ export function LibraryAddPage() {
                 onOpenChange={setPreviewOpen}
                 target={previewTarget}
                 isAdded={previewCandidate ? addedKeys.has(previewCandidate.key) : false}
-                isAdding={previewCandidate ? addingKey === previewCandidate.key : false}
-                addDisabledReason={previewAddDisabledReason}
+                isAdding={previewCandidate ? addingKeys.has(previewCandidate.key) : false}
+                addDisabledReason={bulkAdding ? 'Adding selected content.' : previewAddDisabledReason}
                 addOptions={previewAddOptions}
                 onAdd={handleDrawerAdd}
             />

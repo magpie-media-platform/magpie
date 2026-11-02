@@ -146,8 +146,15 @@ describe('UpcomingContentWidget', () => {
         );
         const view = render(renderWidget([mockItems[0]]), { wrapper: TooltipProvider });
         const failedImage = screen.getByRole('presentation');
+        fireEvent.load(failedImage);
+        expect(failedImage.parentElement).toHaveClass('content-poster', 'upcoming-content-widget__item-poster');
+        expect(failedImage.parentElement?.querySelector('.content-poster__backdrop')).toHaveAttribute(
+            'aria-hidden',
+            'true',
+        );
         fireEvent.error(failedImage);
         expect(screen.queryByRole('presentation')).not.toBeInTheDocument();
+        expect(document.querySelector('.upcoming-content-widget__item-poster-placeholder svg')).toBeInTheDocument();
 
         view.rerender(renderWidget([{ ...mockItems[0], posterUrl: 'https://example.com/replacement-poster.jpg' }]));
 

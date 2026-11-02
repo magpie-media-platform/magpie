@@ -65,7 +65,6 @@
     .subject-detail-page__image {
         width: 150px;
         height: 225px;
-        object-fit: cover;
         border-radius: var(--radius-md);
         background-color: var(--bg-tertiary);
         box-shadow: var(--shadow-md);
@@ -77,22 +76,10 @@
         padding: 0;
     }
 
-    .subject-detail-page__image--media::before {
-        content: '';
-        position: absolute;
-        inset: 0;
-        background-image: var(--hero-image);
-        background-size: cover;
-        background-position: center;
-        filter: blur(var(--space-md)) brightness(0.7);
-        transform: scale(1.2);
-    }
-
     .subject-detail-page__image-img {
         position: relative;
         width: 100%;
         height: 100%;
-        object-fit: contain;
     }
 
     .subject-detail-page__image--placeholder {
@@ -207,8 +194,6 @@
         width: 48px;
         height: 48px;
         border-radius: var(--radius-full);
-        object-fit: cover;
-        object-position: center top;
         background-color: var(--bg-primary);
     }
 

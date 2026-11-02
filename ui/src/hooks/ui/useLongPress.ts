@@ -4,6 +4,8 @@ import type { PointerEvent as ReactPointerEvent } from 'react';
 interface UseLongPressOptions {
     onLongPress: () => void;
 
+    enabled?: boolean;
+
     delayMs?: number;
 
     moveTolerancePx?: number;
@@ -26,6 +28,7 @@ interface UseLongPressResult {
 
 export function useLongPress({
     onLongPress,
+    enabled = true,
     delayMs = 450,
     moveTolerancePx = 10,
 }: UseLongPressOptions): UseLongPressResult {
@@ -49,6 +52,7 @@ export function useLongPress({
                 return;
             }
             firedRef.current = false;
+            if (!enabled) return;
             startRef.current = { x: event.clientX, y: event.clientY };
             timerRef.current = setTimeout(() => {
                 firedRef.current = true;
@@ -56,7 +60,7 @@ export function useLongPress({
                 onLongPress();
             }, delayMs);
         },
-        [delayMs, onLongPress],
+        [delayMs, enabled, onLongPress],
     );
 
     const onPointerMove = useCallback(

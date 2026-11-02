@@ -27,6 +27,8 @@ export interface BulkActionsToolbarProps extends ComponentPropsWithoutRef<'div'>
     /** Whether the toolbar offers Select all. */
     selectAll?: boolean;
 
+    disabled?: boolean;
+
     children: ReactNode;
 }
 
@@ -40,6 +42,7 @@ export function BulkActionsToolbar({
     desktopOnly = true,
     visible = selection.hasSelection,
     selectAll = false,
+    disabled = false,
     children,
     className,
     ...props
@@ -74,6 +77,7 @@ export function BulkActionsToolbar({
                                 onSelectAllAcrossPages={selection.selectAllAcrossPages}
                                 onClear={onClear}
                                 itemNounPlural={itemNounPlural}
+                                disabled={disabled}
                             />
                         )}
                         <div className="bulk-actions-toolbar__info">
@@ -82,7 +86,7 @@ export function BulkActionsToolbar({
                                 type="button"
                                 className="bulk-actions-toolbar__clear"
                                 onClick={onClear}
-                                disabled={!selection.hasSelection}
+                                disabled={disabled || !selection.hasSelection}
                                 aria-label="Clear selection"
                                 data-action="clear-selection"
                             >
@@ -94,6 +98,7 @@ export function BulkActionsToolbar({
                                     type="button"
                                     className="bulk-actions-toolbar__select-all"
                                     onClick={() => selection.toggleHeader(!allChecked)}
+                                    disabled={disabled}
                                     aria-pressed={allChecked}
                                     data-action="select-all-page"
                                 >

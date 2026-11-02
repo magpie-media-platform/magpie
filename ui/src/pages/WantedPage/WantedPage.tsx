@@ -1,3 +1,11 @@
+import {
+    ContentGalleryGrid,
+    ContentGallerySkeleton,
+    ContentGalleryTile,
+    ContentGalleryToolbar,
+    ContentViewToggle,
+} from '@/components/content/ContentGallery';
+import { useContentView } from '@/hooks/useContentView';
 import { type ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { LocalContentLink } from '@/components/content/LocalContentPreview';
@@ -328,6 +336,7 @@ export function WantedPage() {
     const isLoading = isWantedLoading || areContentTypesLoading;
     const searchMutation = useSearchContentReleases();
     const [isSearching, setIsSearching] = useState(false);
+    const { view, setView } = useContentView('wanted-view');
     const [mobileSelectionMode, setMobileSelectionMode] = useState(false);
 
     const isContainer = useCallback((item: ContentListItem) => isContainerItem(item, contentTypes), [contentTypes]);
@@ -351,10 +360,10 @@ export function WantedPage() {
     const currentPage = Math.min(page, pageCount);
 
     useEffect(() => {
-        if (!isLoading && page > pageCount) {
-            setPage(pageCount);
+        if (!isLoading && !isError && filterQuery === debouncedFilter && page > pageCount) {
+            setPage(pageCount, { replace: true });
         }
-    }, [isLoading, page, pageCount, setPage]);
+    }, [isLoading, isError, filterQuery, debouncedFilter, page, pageCount, setPage]);
 
     const pagination = useMemo(() => ({ pageIndex: currentPage - 1, pageSize: PAGE_SIZE }), [currentPage]);
     const pagedItems = useMemo(
@@ -374,6 +383,12 @@ export function WantedPage() {
         clearSelection();
         setMobileSelectionMode(false);
     }, [clearSelection, parentId, filterQuery]);
+
+    useEffect(() => {
+        if (view === 'list' && !usesCardLayout && mobileSelectionMode) {
+            setMobileSelectionMode(false);
+        }
+    }, [mobileSelectionMode, usesCardLayout, view]);
 
     const wantedUrl = useCallback(
         (scopeId?: string) => {
@@ -490,6 +505,57 @@ export function WantedPage() {
         [handleClearSelection, isContainer, isSearching, refetch, searchMutation, toast],
     );
 
+    const renderSearchAction = useCallback(
+        (item: ContentListItem) => {
+            const container = isContainer(item);
+            if (!canSearch) {
+                return item.acquisitionStatus ? <AcquisitionBadge status={item.acquisitionStatus} /> : null;
+            }
+            if (!container && item.acquisitionStatus) {
+                return <AcquisitionBadge status={item.acquisitionStatus} />;
+            }
+            if (!container && !isActionableLeaf(item, container)) {
+                return null;
+            }
+            const searchButton = (
+                <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={(event) => {
+                        event.stopPropagation();
+                        void handleSearchReleases([item]);
+                    }}
+                    loading={isSearching}
+                    disabled={isSearching}
+                    aria-label={
+                        container
+                            ? `Search releases for descendants of ${item.title}`
+                            : `Search releases for ${item.title}`
+                    }
+                    data-action="search-releases"
+                    data-content-id={item.id}
+                >
+                    <MagnifyingGlassIcon weight="bold" aria-hidden="true" />
+                    Search releases
+                </Button>
+            );
+            const action = (
+                <DescendantSearchGate item={item} contentTypes={contentTypes}>
+                    {searchButton}
+                </DescendantSearchGate>
+            );
+            return container && item.acquisitionStatus ? (
+                <div className="wanted-page__parent-action">
+                    <AcquisitionBadge status={item.acquisitionStatus} />
+                    {action}
+                </div>
+            ) : (
+                action
+            );
+        },
+        [canSearch, isContainer, handleSearchReleases, isSearching, contentTypes],
+    );
+
     const columns: ColumnDef<ContentListItem>[] = useMemo(() => {
         const selectionColumn: ColumnDef<ContentListItem> = selectColumn<ContentListItem>({
             selection,
@@ -584,72 +650,25 @@ export function WantedPage() {
                 header: '',
                 enableSorting: false,
                 size: 164,
-                cell: ({ row }) => {
-                    const item = row.original;
-                    const container = isContainer(item);
-                    if (!canSearch) {
-                        return item.acquisitionStatus ? <AcquisitionBadge status={item.acquisitionStatus} /> : null;
-                    }
-                    if (!container && item.acquisitionStatus) {
-                        return <AcquisitionBadge status={item.acquisitionStatus} />;
-                    }
-                    if (!container && !isActionableLeaf(item, container)) {
-                        return null;
-                    }
-                    const searchButton = (
-                        <Button
-                            variant="secondary"
-                            size="sm"
-                            onClick={(event) => {
-                                event.stopPropagation();
-                                void handleSearchReleases([item]);
-                            }}
-                            loading={isSearching}
-                            disabled={isSearching}
-                            aria-label={
-                                container
-                                    ? `Search releases for descendants of ${item.title}`
-                                    : `Search releases for ${item.title}`
-                            }
-                            data-action="search-releases"
-                            data-content-id={item.id}
-                        >
-                            <MagnifyingGlassIcon weight="bold" aria-hidden="true" />
-                            Search releases
-                        </Button>
-                    );
-                    const action = (
-                        <DescendantSearchGate item={item} contentTypes={contentTypes}>
-                            {searchButton}
-                        </DescendantSearchGate>
-                    );
-                    return container && item.acquisitionStatus ? (
-                        <div className="wanted-page__parent-action">
-                            <AcquisitionBadge status={item.acquisitionStatus} />
-                            {action}
-                        </div>
-                    ) : (
-                        action
-                    );
-                },
+                cell: ({ row }) => renderSearchAction(row.original),
             },
         ];
     }, [
         canSearch,
         contentTypes,
         destinationFor,
-        handleSearchReleases,
-        isContainer,
-        isSearching,
         parentId,
         selection,
         setTypeFilter,
+        renderSearchAction,
         typeFilter,
         filterQuery,
         typeOptions,
     ]);
 
     const getRowId = useCallback((row: ContentListItem) => row.id, []);
+
+    const gallerySelectionMode = mobileSelectionMode || selection.hasSelection;
 
     const emptyState = (
         <EmptyState
@@ -707,6 +726,7 @@ export function WantedPage() {
                     parentId && ancestors.length > 0 ? `Wanted in ${ancestors[ancestors.length - 1].title}` : 'Wanted'
                 }
                 description="Monitored content that is missing or incomplete."
+                actions={<ContentViewToggle view={view} onChange={setView} />}
                 icon={<TargetIcon weight="duotone" aria-hidden="true" data-testid="wanted-page__icon" />}
             />
 
@@ -730,6 +750,8 @@ export function WantedPage() {
                     className="wanted-page__desktop-bulk-toolbar"
                     selection={selection}
                     label="Wanted selection actions"
+                    selectAll={view === 'gallery'}
+                    visible={selection.hasSelection || (view === 'gallery' && gallerySelectionMode)}
                     itemNounPlural="items"
                     desktopOnly={false}
                     onClear={handleClearSelection}
@@ -739,7 +761,7 @@ export function WantedPage() {
                         size="sm"
                         onClick={() => void handleSearchReleases(selectedItems)}
                         loading={isSearching}
-                        disabled={isSearching}
+                        disabled={isSearching || !selection.hasSelection}
                         data-action="bulk-search-releases"
                     >
                         <MagnifyingGlassIcon weight="bold" aria-hidden="true" />
@@ -749,11 +771,15 @@ export function WantedPage() {
             )}
 
             {isLoading ? (
-                <div className="wanted-page__loading" data-testid="wanted-page__loading">
-                    <Skeleton className="wanted-page__skeleton" />
-                    <Skeleton className="wanted-page__skeleton" />
-                    <Skeleton className="wanted-page__skeleton" />
-                </div>
+                view === 'gallery' ? (
+                    <ContentGallerySkeleton data-testid="wanted-page__loading" />
+                ) : (
+                    <div className="wanted-page__loading" data-testid="wanted-page__loading">
+                        <Skeleton className="wanted-page__skeleton" />
+                        <Skeleton className="wanted-page__skeleton" />
+                        <Skeleton className="wanted-page__skeleton" />
+                    </div>
+                )
             ) : isError ? (
                 <EmptyState
                     icon={<WarningCircleIcon weight="duotone" />}
@@ -763,7 +789,73 @@ export function WantedPage() {
                 />
             ) : (
                 <>
-                    {!usesCardLayout && (
+                    {view === 'gallery' && (
+                        <>
+                            <ContentGalleryToolbar
+                                sorting={sorting}
+                                sortOptions={WANTED_SORT_OPTIONS}
+                                onSortingChange={setSorting}
+                                selectedCount={selection.selectedCount}
+                                showSelectionCount={usesCardLayout}
+                                selection={
+                                    canSearch
+                                        ? {
+                                              active: gallerySelectionMode,
+                                              onToggle: gallerySelectionMode
+                                                  ? handleClearSelection
+                                                  : () => setMobileSelectionMode(true),
+                                          }
+                                        : undefined
+                                }
+                            />
+                            {pagedItems.length ? (
+                                <ContentGalleryGrid items={pagedItems} getId={getRowId}>
+                                    {(item) => (
+                                        <ContentGalleryTile
+                                            item={item}
+                                            to={destinationFor(item)}
+                                            localContentId={isContainer(item) ? null : item.id}
+                                            previewOnOpen={!isContainer(item)}
+                                            selectionMode={canSearch && gallerySelectionMode}
+                                            selected={selection.isRowChecked(item.id)}
+                                            onToggle={() => toggleMobileSelection(item)}
+                                            onLongPress={
+                                                canSearch
+                                                    ? () => {
+                                                          setMobileSelectionMode(true);
+                                                          selection.toggleRow(item.id, true);
+                                                      }
+                                                    : undefined
+                                            }
+                                            detail={
+                                                <>
+                                                    <FulfillmentCell item={item} />
+                                                    <MissingDescendantCount item={item} contentTypes={contentTypes} />
+                                                </>
+                                            }
+                                            actions={!gallerySelectionMode ? renderSearchAction(item) : undefined}
+                                        />
+                                    )}
+                                </ContentGalleryGrid>
+                            ) : hasActiveFilters ? (
+                                filteredEmptyState
+                            ) : (
+                                emptyState
+                            )}
+                            {pageCount > 1 && (
+                                <Pager
+                                    page={currentPage}
+                                    pageCount={pageCount}
+                                    totalItems={wantedItems.length}
+                                    onFirst={() => setPage(1)}
+                                    onPrevious={() => setPage(currentPage - 1)}
+                                    onNext={() => setPage(currentPage + 1)}
+                                    onLast={() => setPage(pageCount)}
+                                />
+                            )}
+                        </>
+                    )}
+                    {view === 'list' && !usesCardLayout && (
                         <div className="wanted-page__table">
                             <DataTable<ContentListItem>
                                 columns={columns}
@@ -799,7 +891,7 @@ export function WantedPage() {
                         </div>
                     )}
 
-                    {usesCardLayout && (
+                    {view === 'list' && usesCardLayout && (
                         <div className="wanted-page__mobile-list">
                             {wantedItems.length === 0 ? (
                                 hasActiveFilters ? (
@@ -946,13 +1038,13 @@ export function WantedPage() {
                 </>
             )}
 
-            {usesCardLayout && canSearch && mobileSelectionMode && (
+            {usesCardLayout && canSearch && (mobileSelectionMode || (view === 'gallery' && gallerySelectionMode)) && (
                 <MobileSelectionBar
                     data-component="wanted-mobile-selection-bar"
                     selection={selection}
                     pageSelectedCount={selection.pageSelectedCount}
                     totalCount={sortedItems.length}
-                    onClear={selection.clear}
+                    onClear={handleClearSelection}
                     itemNounPlural="items"
                 >
                     <Button

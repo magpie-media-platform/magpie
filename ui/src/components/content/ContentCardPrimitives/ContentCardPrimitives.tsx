@@ -1,4 +1,4 @@
-import { useEffect, useState, type MouseEvent, type ReactNode } from 'react';
+import { useState, type MouseEvent, type ReactNode } from 'react';
 import { EyeIcon, EyeSlashIcon, FlagCheckeredIcon, ImageBrokenIcon } from '@phosphor-icons/react';
 
 import { Badge, type BadgeSize } from '@/components/ui/Badge';
@@ -11,9 +11,9 @@ import { getFulfillmentBadge } from '@/types/content';
 import type { TemporalPrecision } from '@/types/contentMetadata';
 import type { FulfillmentStatus, MonitoringMode } from '@/types';
 
-const brokenImageGlyph = <ImageBrokenIcon weight="thin" />;
+import './ContentCardPrimitives.css';
 
-const CROPPED_ARTWORK_MAX_RATIO = 0.8;
+const brokenImageGlyph = <ImageBrokenIcon weight="thin" />;
 
 export interface ContentPosterProps {
     posterUrl?: string | null;
@@ -22,6 +22,7 @@ export interface ContentPosterProps {
     className: string;
     placeholderClassName: string;
     placeholder?: ReactNode;
+    failurePlaceholder?: ReactNode;
     'data-testid'?: string;
     loading?: 'eager' | 'lazy';
 }
@@ -33,40 +34,43 @@ export function ContentPoster({
     className,
     placeholderClassName,
     placeholder = brokenImageGlyph,
+    failurePlaceholder = brokenImageGlyph,
     loading = 'lazy',
     ...imageProps
 }: ContentPosterProps) {
-    const [posterFailed, setPosterFailed] = useState(false);
-    const [posterUncropped, setPosterUncropped] = useState(false);
+    const [failedUrl, setFailedUrl] = useState<string | null>(null);
+    const [loadedUrl, setLoadedUrl] = useState<string | null>(null);
 
-    useEffect(() => {
-        setPosterFailed(false);
-        setPosterUncropped(false);
-    }, [posterUrl]);
-
-    if (posterUrl && !posterFailed) {
+    if (posterUrl && failedUrl !== posterUrl) {
         return (
-            <img
-                {...imageProps}
-                src={posterUrl}
-                alt={alt ?? `${title ?? 'Content'} artwork`}
-                className={className}
-                loading={loading}
-                data-artwork={posterUncropped ? 'uncropped' : undefined}
-                onLoad={({ currentTarget }) =>
-                    setPosterUncropped(
-                        currentTarget.naturalHeight > 0 &&
-                            currentTarget.naturalWidth / currentTarget.naturalHeight > CROPPED_ARTWORK_MAX_RATIO,
-                    )
-                }
-                onError={() => setPosterFailed(true)}
-            />
+            <span className={`content-poster ${className}`}>
+                <img
+                    {...imageProps}
+                    key={posterUrl}
+                    src={posterUrl}
+                    alt={alt ?? `${title ?? 'Content'} artwork`}
+                    className="content-poster__image"
+                    loading={loading}
+                    onLoad={() => {
+                        setFailedUrl(null);
+                        setLoadedUrl(posterUrl);
+                    }}
+                    onError={() => setFailedUrl(posterUrl)}
+                />
+                {loadedUrl === posterUrl && (
+                    <span
+                        className="content-poster__backdrop"
+                        style={{ backgroundImage: `url(${JSON.stringify(posterUrl)})` }}
+                        aria-hidden="true"
+                    />
+                )}
+            </span>
         );
     }
 
     return (
         <div className={`${className} ${placeholderClassName}`} aria-hidden="true">
-            {posterUrl ? brokenImageGlyph : placeholder}
+            {posterUrl ? failurePlaceholder : placeholder}
         </div>
     );
 }

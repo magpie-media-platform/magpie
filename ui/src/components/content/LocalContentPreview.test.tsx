@@ -6,7 +6,7 @@ import { useState } from 'react';
 import userEvent from '@testing-library/user-event';
 
 import { apiGet, apiPost, ApiError } from '@/lib/api';
-import { LocalContentLink, LocalContentPreviewProvider } from './LocalContentPreview';
+import { LocalContentItemReference, LocalContentLink, LocalContentPreviewProvider } from './LocalContentPreview';
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from '@/components/ui/Dialog';
 import { TooltipProvider } from '@/components/ui/Tooltip';
 
@@ -322,5 +322,52 @@ describe('local preview workflow', () => {
         expect(await screen.findByText('Item unavailable')).toBeInTheDocument();
         expect(document.querySelector('[data-action="open-content"]')).toBeDisabled();
         expect(apiPost).not.toHaveBeenCalled();
+    });
+
+    it('LocalPreview_RendersMediaServerLinkForResolvedHierarchyItem_WhenOpenedFromContentItemReference', async () => {
+        // Arrange
+        vi.mocked(apiGet)
+            .mockResolvedValueOnce({
+                items: [
+                    {
+                        id: 'hierarchy-99',
+                        name: 'Episode 1',
+                        contentType: 'tv',
+                        level: 'episode',
+                        contentItem: { id: 'ci-42' },
+                    },
+                ],
+                totalItems: 1,
+            })
+            .mockResolvedValueOnce({ id: 'hierarchy-99', name: 'Episode 1', contentType: 'tv', level: 'episode' })
+            .mockResolvedValueOnce({ title: 'Pilot' })
+            .mockResolvedValueOnce([
+                {
+                    mediaServerId: 'ms-1',
+                    serverName: 'Jellyfin',
+                    providerType: 'jellyfin',
+                    url: 'https://jellyfin.example/web/#/details?id=ep1',
+                },
+            ]);
+        render(
+            <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+                <MemoryRouter>
+                    <LocalContentPreviewProvider>
+                        <LocalContentItemReference contentItemId="ci-42">Inspect episode</LocalContentItemReference>
+                    </LocalContentPreviewProvider>
+                </MemoryRouter>
+            </QueryClientProvider>,
+            { wrapper: TooltipProvider },
+        );
+
+        // Act
+        fireEvent.click(screen.getByRole('button', { name: 'Inspect episode' }));
+
+        // Assert
+        const mediaServerLink = await screen.findByTestId('media-server-link-jellyfin');
+        expect(mediaServerLink).toHaveTextContent('Jellyfin');
+        expect(mediaServerLink).toHaveAttribute('href', 'https://jellyfin.example/web/#/details?id=ep1');
+        expect(mediaServerLink).toHaveAttribute('target', '_blank');
+        expect(apiGet).toHaveBeenCalledWith('/content/hierarchy-99/media-server-links');
     });
 });

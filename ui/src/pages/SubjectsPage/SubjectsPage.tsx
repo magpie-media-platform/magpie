@@ -5,17 +5,24 @@ import { type PaginationState, type SortingState, type Updater } from '@tanstack
 
 import { Badge } from '@/components/ui/Badge';
 import { CdnPhosphorIcon } from '@/components/ui/CdnPhosphorIcon';
+import { ClearFiltersButton } from '@/components/ui/ClearFiltersButton';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { MobileMediaCard } from '@/components/ui/MobileMediaCard';
 import { MobileListToolbar, type MobileListSortOption } from '@/components/ui/MobileListToolbar';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Pager } from '@/components/ui/Pager';
+import { AlphabetRail } from '@/components/ui/AlphabetRail';
+import { SubjectCard } from '@/components/ui/SubjectCard';
+import { Skeleton } from '@/components/ui/Skeleton';
+import { ListSortControl } from '@/components/ui/ListSortControl';
+import { ContentViewToggle } from '@/components/content/ContentGallery';
 
 import { SubjectList, type SubjectItem } from '@/components/ui/SubjectList';
 import { FilterBar } from '@/components/filters/FilterBar';
 import { Slot } from '@/components/ui/Slot';
 import { PullToRefresh } from '@/components/ui/PullToRefresh';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
+import { useContentView } from '@/hooks/useContentView';
 import { useUrlFilterState } from '@/hooks/useUrlFilterState';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { useLiveUrlFilter } from '@/hooks/useLiveUrlFilter';
@@ -23,6 +30,7 @@ import { useLibraryTypes, useTypeIconName, type LibraryTypeDefinition } from '@/
 import { TABLE_LAYOUT_QUERY, useCardLayout } from '@/hooks/ui/useCardLayout';
 import { extractImageUrl, extractTitle } from '@/lib/metadata';
 import { getErrorMessage } from '@/lib/errors';
+import { readContentFilter, setContentFilter } from '@/lib/contentColumnFilters';
 import { splitTopLevelClauses } from '@/lib/queryClauses';
 import { useSubjects, type ApiSubject } from '@/hooks/useSubjects';
 import { resolveSubjectKindLabel } from '@/types';
@@ -54,6 +62,7 @@ function removeSubjectKindClauses(query: string): string {
 
     return clauses.filter((clause) => Boolean(clause) && !SUBJECT_KIND_CLAUSE_PATTERN.test(clause)).join(' and ');
 }
+
 function transformSubject(subject: ApiSubject, subjectTypes: LibraryTypeDefinition[]): SubjectItem {
     const subjectType = subjectTypes.find((type) => type.slug === subject.kind);
     const kindLabel = resolveSubjectKindLabel(subject.kind, subjectType?.name);
@@ -73,6 +82,7 @@ function transformSubject(subject: ApiSubject, subjectTypes: LibraryTypeDefiniti
 
 export function SubjectsPage() {
     const usesCardLayout = useCardLayout();
+    const { view, setView } = useContentView('magpie-subjects-view');
     const { subjectType: subjectTypeSlug } = useParams<{ subjectType?: string }>();
     const navigate = useNavigate();
 
@@ -218,12 +228,29 @@ export function SubjectsPage() {
         await refetch();
     }, [refetch]);
 
+    const titlePrefix = readContentFilter(visibleFilterQuery, 'titlePrefix');
+    const handleTitlePrefixChange = (prefix: string) => {
+        liveFilter.change(setContentFilter(visibleFilterQuery, 'titlePrefix', prefix), true, true);
+    };
+
     const items = useMemo(
         () => subjects.map((subject) => transformSubject(subject, subjectTypes)),
         [subjects, subjectTypes],
     );
 
     const hasActiveFilter = visibleFilterQuery.trim().length > 0;
+
+    const pager = pageCount > 1 && (
+        <Pager
+            page={pageNumber}
+            pageCount={pageCount}
+            totalItems={totalItems}
+            onFirst={() => handlePaginationChange({ ...pagination, pageIndex: 0 })}
+            onPrevious={() => handlePaginationChange({ ...pagination, pageIndex: pageNumber - 2 })}
+            onNext={() => handlePaginationChange({ ...pagination, pageIndex: pageNumber })}
+            onLast={() => handlePaginationChange({ ...pagination, pageIndex: pageCount - 1 })}
+        />
+    );
 
     const subjectsEmptyState = isLoading ? (
         <div
@@ -248,13 +275,25 @@ export function SubjectsPage() {
     );
 
     return (
-        <div className="subjects-page" data-page="subjects" data-layout={usesCardLayout ? 'card' : 'table'}>
+        <div
+            className="subjects-page"
+            data-page="subjects"
+            data-layout={view === 'gallery' ? 'grid' : usesCardLayout ? 'card' : 'table'}
+        >
             <PullToRefresh onRefresh={handleRefresh} className="subjects-page__pull-to-refresh">
                 <Slot slot="subject.list">
                     <PageHeader
                         className="subjects-page__header"
                         title={pageTitle}
                         description={pageDescription}
+                        actions={
+                            <ContentViewToggle
+                                view={view}
+                                onChange={setView}
+                                galleryLabel="Grid"
+                                label="Subject view"
+                            />
+                        }
                         icon={
                             <CdnPhosphorIcon
                                 name={pageIconName}
@@ -280,6 +319,13 @@ export function SubjectsPage() {
                         </div>
                     </section>
 
+                    {view === 'list' && titlePrefix && (
+                        <ClearFiltersButton
+                            label={`Clear first letter: ${titlePrefix.toUpperCase()}`}
+                            onClick={() => handleTitlePrefixChange('')}
+                        />
+                    )}
+
                     {error && subjects.length === 0 ? (
                         <EmptyState
                             icon={<WarningCircleIcon weight="duotone" />}
@@ -290,7 +336,63 @@ export function SubjectsPage() {
                     ) : (
                         <>
                             <div className="subjects-page__content">
-                                {usesCardLayout ? (
+                                {view === 'gallery' ? (
+                                    <>
+                                        <ListSortControl
+                                            className="subjects-page__grid-sort"
+                                            aria-label="Sort subjects"
+                                            sorting={sorting}
+                                            sortOptions={SUBJECT_SORT_OPTIONS}
+                                            onSortingChange={handleSortingChange}
+                                        />
+                                        <div className="subjects-page__grid-body">
+                                            <div className="subjects-page__grid-results">
+                                                {isLoading ? (
+                                                    <div
+                                                        className="subject-grid"
+                                                        role="status"
+                                                        aria-label={`Loading ${pageTitle.toLowerCase()}`}
+                                                    >
+                                                        {Array.from({ length: 12 }, (_, index) => (
+                                                            <div
+                                                                key={index}
+                                                                className="subject-card"
+                                                                aria-hidden="true"
+                                                            >
+                                                                <Skeleton variant="circle" width={88} height={88} />
+                                                                <Skeleton width="75%" />
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                ) : items.length > 0 ? (
+                                                    <ul
+                                                        className="subject-grid"
+                                                        role="list"
+                                                        aria-label={`${pageTitle} grid`}
+                                                    >
+                                                        {items.map((item) => (
+                                                            <li key={item.id} className="subject-grid__item">
+                                                                <SubjectCard
+                                                                    subjectId={item.id}
+                                                                    name={item.title}
+                                                                    imageUrl={item.imageUrl}
+                                                                    qualifier={scoped ? undefined : item.kindLabel}
+                                                                />
+                                                            </li>
+                                                        ))}
+                                                    </ul>
+                                                ) : (
+                                                    subjectsEmptyState
+                                                )}
+                                            </div>
+                                            <AlphabetRail
+                                                titlePrefix={titlePrefix}
+                                                onTitlePrefixChange={handleTitlePrefixChange}
+                                            />
+                                        </div>
+                                        {pager}
+                                    </>
+                                ) : usesCardLayout ? (
                                     items.length > 0 ? (
                                         <>
                                             <MobileListToolbar
@@ -318,31 +420,7 @@ export function SubjectsPage() {
                                                     </MobileMediaCard>
                                                 ))}
                                             </div>
-                                            {pageCount > 1 && (
-                                                <Pager
-                                                    page={pageNumber}
-                                                    pageCount={pageCount}
-                                                    totalItems={totalItems}
-                                                    onFirst={() =>
-                                                        handlePaginationChange({ ...pagination, pageIndex: 0 })
-                                                    }
-                                                    onPrevious={() =>
-                                                        handlePaginationChange({
-                                                            ...pagination,
-                                                            pageIndex: pageNumber - 2,
-                                                        })
-                                                    }
-                                                    onNext={() =>
-                                                        handlePaginationChange({ ...pagination, pageIndex: pageNumber })
-                                                    }
-                                                    onLast={() =>
-                                                        handlePaginationChange({
-                                                            ...pagination,
-                                                            pageIndex: pageCount - 1,
-                                                        })
-                                                    }
-                                                />
-                                            )}
+                                            {pager}
                                         </>
                                     ) : (
                                         subjectsEmptyState

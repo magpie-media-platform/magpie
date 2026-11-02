@@ -670,16 +670,24 @@ describe('SubjectDetailPage', () => {
         });
 
         it('frames the subject image over a blurred backdrop fill of itself', async () => {
+            // Arrange
             renderWithRouter('subject-1');
             await waitFor(() => {
                 expect(screen.getByAltText('Breaking Bad image')).toBeInTheDocument();
             });
-
             const img = screen.getByAltText('Breaking Bad image');
-            expect(img).toHaveClass('subject-detail-page__image-img');
+
+            // Act
+            fireEvent.load(img);
+
+            // Assert
+            expect(img.parentElement).toHaveClass('subject-detail-page__image-img');
             const media = img.closest('.subject-detail-page__image--media') as HTMLElement | null;
             expect(media).not.toBeNull();
-            expect(media?.style.getPropertyValue('--hero-image')).toContain('poster1.jpg');
+            expect(media?.querySelector('.content-poster__backdrop')).toHaveAttribute('aria-hidden', 'true');
+            expect(media?.querySelector('.content-poster__backdrop')).toHaveStyle({
+                backgroundImage: 'url("https://image.provider-a.example/t/p/w300/poster1.jpg")',
+            });
         });
 
         it('renders the description', async () => {
@@ -1080,11 +1088,11 @@ describe('SubjectDetailPage', () => {
         it('renders the strip as the single tab picker with no dropdown mirror', async () => {
             renderWithRouter('subject-1');
             await waitFor(() => {
-                expect(screen.getByRole('tablist')).toBeInTheDocument();
+                expect(screen.getByRole('tablist', { name: 'Subject details' })).toBeInTheDocument();
             });
             expect(screen.queryByTestId('subject-detail-page__tab-select')).not.toBeInTheDocument();
             expect(screen.queryByRole('combobox', { name: /select tab/i })).not.toBeInTheDocument();
-            const tablist = screen.getByRole('tablist');
+            const tablist = screen.getByRole('tablist', { name: 'Subject details' });
             expect(within(tablist).getAllByRole('tab').length).toBeGreaterThan(1);
         });
 
@@ -1793,7 +1801,7 @@ describe('SubjectDetailPage', () => {
             renderWithRouter('subject-1');
 
             await waitFor(() => {
-                expect(screen.getByRole('tablist')).toBeInTheDocument();
+                expect(screen.getByRole('tablist', { name: 'Subject details' })).toBeInTheDocument();
             });
         });
 

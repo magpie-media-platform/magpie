@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
 import { PlayIcon, CornersOutIcon, StopIcon } from '@phosphor-icons/react';
+import { ContentPoster } from '@/components/content/ContentCardPrimitives';
 
 import { Scrubber } from './Scrubber';
 import { VolumeControl } from './VolumeControl';
@@ -41,6 +42,7 @@ export function PosterPlayer({ mimeType, directUrl, youTubeId, posterUrl, label,
 
     return (
         <WidePosterPlayer
+            key={youTubeId ?? directUrl ?? ''}
             mimeType={mimeType}
             directUrl={directUrl}
             youTubeId={youTubeId}
@@ -58,12 +60,17 @@ function PlayablePoster({ mimeType, directUrl, youTubeId, posterUrl, label }: Om
         setPlaying(false);
         setFailed(true);
     }, []);
-    const handlePlay = useCallback(() => flushSync(() => setPlaying(true)), []);
+    const handleTogglePlayback = useCallback(() => flushSync(() => setPlaying((value) => !value)), []);
 
     return (
         <div className="preview-player__poster-stage" data-testid="preview-player-poster-stage">
             {posterUrl ? (
-                <img className="preview-player__thumbnail" src={posterUrl} alt="" loading="lazy" aria-hidden="true" />
+                <ContentPoster
+                    className="preview-player__thumbnail"
+                    placeholderClassName="preview-player__thumbnail--placeholder"
+                    posterUrl={posterUrl}
+                    alt=""
+                />
             ) : null}
             {playing && youTubeId ? (
                 <div className="preview-player__yt-mount">
@@ -92,14 +99,16 @@ function PlayablePoster({ mimeType, directUrl, youTubeId, posterUrl, label }: Om
                 <button
                     type="button"
                     className="preview-player__facade"
-                    onClick={handlePlay}
-                    aria-label={`Play ${label}`}
+                    onClick={handleTogglePlayback}
+                    aria-label={`${playing ? 'Stop' : 'Play'} ${label}`}
                     aria-pressed={playing}
                     data-testid="preview-player-facade"
                 >
-                    <span className="preview-player__play preview-player__play--hero" aria-hidden="true">
-                        <PlayIcon weight="fill" />
-                    </span>
+                    {!playing && (
+                        <span className="preview-player__play preview-player__play--hero" aria-hidden="true">
+                            <PlayIcon weight="fill" />
+                        </span>
+                    )}
                 </button>
             )}
         </div>
@@ -125,7 +134,11 @@ function MutedPosterVideo({
             video.defaultMuted = true;
             video.muted = true;
             video.volume = 0;
-            video.play().catch(onFailed);
+            video.play().catch(() => {
+                if (video.isConnected) {
+                    onFailed();
+                }
+            });
         },
         [onFailed],
     );
@@ -133,7 +146,7 @@ function MutedPosterVideo({
     return (
         <video
             ref={start}
-            className="preview-player__video preview-player__video--cover"
+            className="preview-player__video"
             muted
             autoPlay
             playsInline
@@ -209,12 +222,11 @@ function WidePosterPlayer({ mimeType, directUrl, youTubeId, posterUrl, label }: 
                 data-testid="preview-player-facade"
             >
                 {thumbnail ? (
-                    <img
+                    <ContentPoster
                         className="preview-player__thumbnail"
-                        src={thumbnail}
+                        placeholderClassName="preview-player__thumbnail--placeholder"
+                        posterUrl={thumbnail}
                         alt=""
-                        loading="lazy"
-                        aria-hidden="true"
                     />
                 ) : null}
                 <span className="preview-player__play" aria-hidden="true">
@@ -303,8 +315,8 @@ function DirectVideoPosterPlayer({ url, mimeType, onStop }: { url: string; mimeT
     const [currentTime, setCurrentTime] = useState(0);
     const [duration, setDuration] = useState(0);
     const [volume, setVolume] = useState(1);
-    const [muted, setMuted] = useState(false);
-    const [noAudio, setNoAudio] = useState(true);
+    const [muted, setMuted] = useState(true);
+    const [noAudio, setNoAudio] = useState(false);
     const audioDecidedRef = useRef(false);
 
     const syncAudioState = useCallback((video: HTMLVideoElement) => {
@@ -397,6 +409,7 @@ function DirectVideoPosterPlayer({ url, mimeType, onStop }: { url: string; mimeT
                 className="preview-player__video"
                 controls={false}
                 autoPlay
+                muted={muted}
                 playsInline
                 data-testid="preview-player-video"
                 onLoadedMetadata={(event) => {
@@ -415,6 +428,12 @@ function DirectVideoPosterPlayer({ url, mimeType, onStop }: { url: string; mimeT
             >
                 <source src={url} type={mimeType} />
             </video>
+            <button
+                type="button"
+                className="preview-player__facade"
+                onClick={handleStop}
+                aria-label="Stop video playback"
+            />
             <PosterControls
                 currentTime={currentTime}
                 duration={duration}
@@ -438,7 +457,7 @@ function YouTubePosterPlayer({ videoId, label, onStop }: { videoId: string; labe
                 {/* eslint-disable-next-line react/iframe-missing-sandbox -- allow-same-origin keeps the YouTube player on its own origin, which it needs for playback; the frame is cross-origin, so it still cannot reach Magpie. */}
                 <iframe
                     title={label}
-                    src={`https://www.youtube-nocookie.com/embed/${encodeURIComponent(videoId)}?autoplay=1&playsinline=1&rel=0`}
+                    src={`https://www.youtube-nocookie.com/embed/${encodeURIComponent(videoId)}?autoplay=1&mute=1&playsinline=1&rel=0`}
                     sandbox="allow-scripts allow-same-origin allow-presentation"
                     allow="autoplay; encrypted-media; fullscreen"
                     allowFullScreen

@@ -941,9 +941,9 @@ describe('IndexerSearchPage', () => {
         await waitFor(() => expect(screen.getByRole('dialog')).toBeInTheDocument());
         expect(screen.getByText('Select content')).toBeInTheDocument();
         const dialog = screen.getByRole('dialog');
-        await waitFor(() => expect(dialog.querySelector('img.content-picker__poster')).toBeInTheDocument());
-        fireEvent.error(dialog.querySelector('img.content-picker__poster')!);
-        expect(dialog.querySelector('img.content-picker__poster')).not.toBeInTheDocument();
+        await waitFor(() => expect(dialog.querySelector('.content-picker__poster img')).toBeInTheDocument());
+        fireEvent.error(dialog.querySelector('.content-picker__poster img')!);
+        expect(dialog.querySelector('.content-picker__poster img')).not.toBeInTheDocument();
         expect(dialog.querySelector('div.content-picker__poster')).toHaveAttribute('aria-hidden', 'true');
     });
 });

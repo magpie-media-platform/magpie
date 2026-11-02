@@ -71,10 +71,10 @@ describe('RelatedSubjectsTab', () => {
         const img = screen.getByAltText('Dane DeHaan') as HTMLImageElement;
         expect(img).toBeInTheDocument();
         expect(img.src).toBe('https://img.example/dehaan.jpg');
-        expect(screen.queryByTestId('related-subject-avatar-placeholder')).not.toBeInTheDocument();
+        expect(screen.queryByTestId('subject-avatar-placeholder')).not.toBeInTheDocument();
         fireEvent.error(img);
         expect(screen.queryByAltText('Dane DeHaan')).not.toBeInTheDocument();
-        expect(screen.queryByTestId('related-subject-avatar-placeholder')).toBeInTheDocument();
+        expect(screen.queryByTestId('subject-avatar-placeholder')).toBeInTheDocument();
     });
 
     it('replaces a broken image with the placeholder', () => {
@@ -100,7 +100,7 @@ describe('RelatedSubjectsTab', () => {
         fireEvent.error(screen.getByAltText('Sample'));
         // Assert
         expect(screen.queryByAltText('Sample')).not.toBeInTheDocument();
-        expect(screen.getByTestId('related-subject-avatar-placeholder')).toBeInTheDocument();
+        expect(screen.getByTestId('subject-avatar-placeholder')).toBeInTheDocument();
     });
 
     it('shows a skeleton while relationships load', () => {
@@ -133,7 +133,7 @@ describe('RelatedSubjectsTab', () => {
             isLoading: false,
         });
         renderTab();
-        expect(screen.queryByTestId('related-subject-avatar-placeholder')).toBeInTheDocument();
+        expect(screen.queryByTestId('subject-avatar-placeholder')).toBeInTheDocument();
         expect(screen.queryByAltText('No Photo')).not.toBeInTheDocument();
     });
 

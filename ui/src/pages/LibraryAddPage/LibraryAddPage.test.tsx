@@ -3,9 +3,16 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, RouterProvider, createMemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import type { ReactNode } from 'react';
+import { useCallback, type ReactNode } from 'react';
+import type { NavigateFunction, NavigateOptions, To } from 'react-router-dom';
 
 const mockNavigate = vi.fn();
+const mockOpenLocalPreview = vi.fn();
+
+vi.mock('@/components/content/LocalContentPreview', async (importOriginal) => ({
+    ...(await importOriginal<typeof import('@/components/content/LocalContentPreview')>()),
+    useOpenLocalContentPreview: () => mockOpenLocalPreview,
+}));
 
 let mockCandidateSearchResponse: unknown;
 let mockCandidateSearchError: unknown;
@@ -14,7 +21,16 @@ vi.mock('react-router-dom', async () => {
     const actual = await vi.importActual<typeof import('react-router-dom')>('react-router-dom');
     return {
         ...actual,
-        useNavigate: () => mockNavigate,
+        useNavigate: () => {
+            const navigate = actual.useNavigate();
+            return useCallback<NavigateFunction>(
+                (to: To | number, options?: NavigateOptions) => {
+                    mockNavigate(to, options);
+                    return typeof to === 'number' ? navigate(to) : navigate(to, options);
+                },
+                [navigate],
+            );
+        },
     };
 });
 
@@ -271,6 +287,7 @@ function installMatchMedia(width: number) {
 describe('LibraryAddPage', () => {
     beforeEach(() => {
         vi.clearAllMocks();
+        localStorage.clear();
         installMatchMedia(1024);
         mockUseLibraryTypes.mockReturnValue({
             contentTypes: mockContentTypes,
@@ -294,6 +311,835 @@ describe('LibraryAddPage', () => {
     afterEach(() => {
         vi.unstubAllGlobals();
         vi.restoreAllMocks();
+    });
+
+    it.each([
+        ['List', 1280],
+        ['List', 390],
+        ['Gallery', 1280],
+        ['Gallery', 390],
+    ] as const)('Add_CompletesIndependently_WhenRequestsOverlapIn%sAt%i', async (view, width) => {
+        // Arrange
+        installMatchMedia(width);
+        mockApiGetByPath({ rootFolders: [rootFolder('rf-movies', 'Movies', 'movies')] });
+        mockCandidateSearchResponse = candidateSearchResult([
+            candidateSearchedCandidate,
+            { ...candidateSearchedCandidate, externalId: '604', title: 'Reloaded' },
+        ]);
+        let resolveFirst!: (id: string) => void;
+        let resolveSecond!: (id: string) => void;
+        vi.mocked(apiPost)
+            .mockReset()
+            .mockReturnValueOnce(new Promise<string>((resolve) => (resolveFirst = resolve)))
+            .mockReturnValueOnce(new Promise<string>((resolve) => (resolveSecond = resolve)));
+        const user = userEvent.setup();
+        renderLive();
+        await screen.findByText('The Matrix');
+        await user.click(screen.getByRole('tab', { name: view }));
+        const first = '[data-action="add-content"][data-result-key="provider-a:provider-a.movie:603"]';
+        const second = '[data-action="add-content"][data-result-key="provider-a:provider-a.movie:604"]';
+
+        // Act
+        await user.dblClick(document.querySelector(first) as HTMLElement);
+
+        // Assert
+        expect(document.querySelector(first)).toBeDisabled();
+        expect(document.querySelector(second)).toBeEnabled();
+        expect(apiPost).toHaveBeenCalledTimes(1);
+
+        // Act
+        await user.dblClick(document.querySelector(second) as HTMLElement);
+
+        // Assert
+        expect(document.querySelector(first)).toBeDisabled();
+        expect(document.querySelector(second)).toBeDisabled();
+        expect(apiPost).toHaveBeenCalledTimes(2);
+
+        // Act
+        await act(async () => resolveSecond('added-604'));
+
+        // Assert
+        expect(document.querySelector(first)).toBeDisabled();
+        expect(
+            document.querySelector('[data-action="in-library"][data-result-key="provider-a:provider-a.movie:604"]'),
+        ).toBeInTheDocument();
+
+        // Act
+        await act(async () => resolveFirst('added-603'));
+
+        // Assert
+        expect(document.querySelectorAll('[data-action="in-library"]')).toHaveLength(2);
+        expect(document.querySelector('[data-action="add-content"]')).not.toBeInTheDocument();
+        expect(apiPost).toHaveBeenCalledTimes(2);
+    });
+
+    it('Add_RetriesOnlyTheFailedItem_WhenAnotherAddIsStillPending', async () => {
+        // Arrange
+        mockApiGetByPath({ rootFolders: [rootFolder('rf-movies', 'Movies', 'movies')] });
+        mockCandidateSearchResponse = candidateSearchResult([
+            candidateSearchedCandidate,
+            { ...candidateSearchedCandidate, externalId: '604', title: 'Reloaded' },
+        ]);
+        let rejectFirst!: (error: Error) => void;
+        let resolveSecond!: (id: string) => void;
+        vi.mocked(apiPost)
+            .mockReset()
+            .mockReturnValueOnce(new Promise<string>((_resolve, reject) => (rejectFirst = reject)))
+            .mockReturnValueOnce(new Promise<string>((resolve) => (resolveSecond = resolve)))
+            .mockResolvedValueOnce('added-603');
+        const user = userEvent.setup();
+        renderLive();
+        await screen.findByText('The Matrix');
+        const first = '[data-action="add-content"][data-result-key="provider-a:provider-a.movie:603"]';
+        const second = '[data-action="add-content"][data-result-key="provider-a:provider-a.movie:604"]';
+        await user.click(document.querySelector(first) as HTMLElement);
+        await user.click(document.querySelector(second) as HTMLElement);
+
+        // Act
+        await act(async () => rejectFirst(new Error('Unavailable')));
+
+        // Assert
+        expect(await screen.findByText('Failed to add content')).toBeInTheDocument();
+        expect(document.querySelector(first)).toBeEnabled();
+        expect(document.querySelector(second)).toBeDisabled();
+
+        // Act
+        await user.click(document.querySelector(first) as HTMLElement);
+
+        // Assert
+        expect(await resultsTable().findByRole('link', { name: 'The Matrix' })).toHaveAttribute(
+            'href',
+            '/library/added-603',
+        );
+        expect(document.querySelector(second)).toBeDisabled();
+
+        // Act
+        await act(async () => resolveSecond('added-604'));
+
+        // Assert
+        expect(resultsTable().getAllByRole('button', { name: 'In Library' })).toHaveLength(2);
+        expect(apiPost).toHaveBeenCalledTimes(3);
+    });
+
+    it('BulkAdd_SkipsThePendingItem_WhenAnotherItemIsAddedIndividually', async () => {
+        // Arrange
+        mockApiGetByPath({ rootFolders: [rootFolder('rf-movies', 'Movies', 'movies')] });
+        mockCandidateSearchResponse = candidateSearchResult([
+            candidateSearchedCandidate,
+            { ...candidateSearchedCandidate, externalId: '604', title: 'Reloaded' },
+        ]);
+        let resolveAdd!: (id: string) => void;
+        vi.mocked(apiPost)
+            .mockReset()
+            .mockReturnValueOnce(new Promise<string>((resolve) => (resolveAdd = resolve)))
+            .mockResolvedValueOnce('added-604');
+        const user = userEvent.setup();
+        renderLive();
+        await screen.findByText('The Matrix');
+        await user.click(resultsTable().getAllByRole('button', { name: 'Add' })[0]);
+
+        // Assert
+        expect(resultsTable().getByRole('checkbox', { name: 'Select The Matrix' })).toBeDisabled();
+        expect(resultsTable().getByRole('checkbox', { name: 'Select Reloaded' })).toBeEnabled();
+
+        // Act
+        await user.click(resultsTable().getByRole('checkbox', { name: 'Select this page' }));
+        await user.click(
+            within(screen.getByRole('region', { name: 'Add content selection actions' })).getByRole('button', {
+                name: 'Add',
+            }),
+        );
+
+        // Assert
+        expect(await screen.findByText('1 added, 0 failed.')).toBeInTheDocument();
+        expect(apiPost).toHaveBeenCalledTimes(2);
+        expect(resultsTable().getByRole('button', { name: 'Add' })).toBeDisabled();
+
+        // Act
+        await act(async () => resolveAdd('added-603'));
+
+        // Assert
+        expect(resultsTable().getAllByRole('button', { name: 'In Library' })).toHaveLength(2);
+    });
+
+    it('Add_KeepsAnotherPreviewOpen_WhenAnEarlierAddCompletes', async () => {
+        // Arrange
+        mockApiGetByPath({ rootFolders: [rootFolder('rf-movies', 'Movies', 'movies')] });
+        mockCandidateSearchResponse = candidateSearchResult([
+            candidateSearchedCandidate,
+            { ...candidateSearchedCandidate, externalId: '604', title: 'Reloaded' },
+        ]);
+        let resolveAdd!: (id: string) => void;
+        vi.mocked(apiPost)
+            .mockReset()
+            .mockReturnValueOnce(new Promise<string>((resolve) => (resolveAdd = resolve)))
+            .mockResolvedValueOnce({ ...candidatePreview, title: 'Reloaded' });
+        const user = userEvent.setup();
+        renderLive();
+        await screen.findByText('The Matrix');
+        await user.click(resultsTable().getAllByRole('button', { name: 'Add' })[0]);
+        await user.click(resultsTable().getByRole('button', { name: 'Reloaded' }));
+        await screen.findByRole('dialog', { name: /Reloaded/ });
+
+        // Act
+        await act(async () => resolveAdd('added-603'));
+
+        // Assert
+        expect(screen.getByRole('dialog', { name: /Reloaded/ })).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Add to library' })).toBeEnabled();
+    });
+
+    it.each([
+        ['success', 'All content added', '2 added, 0 failed.'],
+        ['partial', 'Some content added', '1 added, 1 failed.'],
+        ['failure', 'Failed to add content', '0 added, 2 failed.'],
+    ])('BulkAdd_ReportsOneSummary_WhenOutcomeIs%s', async (outcome, title, counts) => {
+        // Arrange
+        mockApiGetByPath({ rootFolders: [rootFolder('rf-movies', 'Movies', 'movies')] });
+        mockCandidateSearchResponse = candidateSearchResult([
+            candidateSearchedCandidate,
+            { ...candidateSearchedCandidate, externalId: '604', title: 'Reloaded' },
+            { ...candidateSearchedCandidate, externalId: '605', title: 'Already added', inLibrary: true },
+        ]);
+        vi.mocked(apiPost).mockImplementation((_path, request) => {
+            const id = (request as { externalId: string }).externalId;
+            return outcome === 'failure' || (outcome === 'partial' && id === '604')
+                ? Promise.reject(new Error('Rejected'))
+                : Promise.resolve(`new-${id}`);
+        });
+        const user = userEvent.setup();
+        renderLive();
+        await screen.findByText('The Matrix');
+        await resultsTable().findByRole('checkbox', { name: 'Select The Matrix' });
+
+        // Act
+        await user.click(resultsTable().getByRole('checkbox', { name: 'Select this page' }));
+        await user.click(
+            within(screen.getByRole('region', { name: 'Add content selection actions' })).getByRole('button', {
+                name: 'Add',
+            }),
+        );
+
+        // Assert
+        expect(await screen.findByText(counts)).toBeInTheDocument();
+        expect(screen.getByText(title)).toBeInTheDocument();
+        expect(document.querySelectorAll('[data-component="toast"]')).toHaveLength(1);
+        expect(apiPost).toHaveBeenCalledTimes(2);
+        expect(resultsTable().getByRole('checkbox', { name: 'Select Already added' })).toBeDisabled();
+        expect(screen.queryByText(/select all.*across/i)).not.toBeInTheDocument();
+        expect(screen.queryByRole('link', { name: 'View settings' })).not.toBeInTheDocument();
+    });
+
+    it.each([390, 1280])('Gallery_SelectsWithCircles_AtWidth%i', async (width) => {
+        // Arrange
+        installMatchMedia(width);
+        mockApiGetByPath({ rootFolders: [rootFolder('rf-movies', 'Movies', 'movies')] });
+        mockCandidateSearchResponse = candidateSearchResult([candidateSearchedCandidate]);
+        vi.mocked(apiPost).mockResolvedValue('added-603');
+        const user = userEvent.setup();
+        renderLive();
+        await screen.findByText('The Matrix');
+
+        // Act
+        await user.click(screen.getByRole('tab', { name: 'Gallery' }));
+        const gallery = await screen.findByRole('list', { name: 'Content gallery' });
+        await user.click(screen.getByRole('button', { name: 'Select' }));
+        await user.click(within(gallery).getByRole('button', { name: 'Select The Matrix' }));
+
+        // Assert
+        expect(within(gallery).getByRole('button', { name: 'Select The Matrix' })).toHaveAttribute(
+            'aria-pressed',
+            'true',
+        );
+        expect(gallery.querySelector('.selection-circle-toggle')).not.toBeNull();
+        expect(gallery.querySelector('[data-slot="content.gallery.poster"]')).not.toBeNull();
+        expect(
+            within(screen.getByRole('region', { name: 'Add content selection actions' })).getByRole('button', {
+                name: 'Add',
+            }),
+        ).toBeEnabled();
+        expect(localStorage.getItem('library-add-view')).toBe('"gallery"');
+
+        // Act
+        await user.click(
+            within(screen.getByRole('region', { name: 'Add content selection actions' })).getByRole('button', {
+                name: 'Add',
+            }),
+        );
+
+        // Assert
+        expect(await screen.findByText('1 added, 0 failed.')).toBeInTheDocument();
+        expect(apiPost).toHaveBeenCalledExactlyOnceWith(
+            '/content/from-external-id?rootFolderId=rf-movies',
+            expect.objectContaining({ externalId: '603' }),
+        );
+    });
+
+    it.each([390, 1280])('Gallery_KeepsAddedItemsPreviewableWithoutAddButtons_AtWidth%i', async (width) => {
+        // Arrange
+        installMatchMedia(width);
+        mockApiGetByPath({ rootFolders: [rootFolder('rf-movies', 'Movies', 'movies')] });
+        mockCandidateSearchResponse = candidateSearchResult([candidateSearchedCandidate]);
+        vi.mocked(apiPost).mockResolvedValue('added-603');
+        const user = userEvent.setup();
+        renderLive();
+        await screen.findByText('The Matrix');
+        await user.click(screen.getByRole('tab', { name: 'Gallery' }));
+        const gallery = await screen.findByRole('list', { name: 'Content gallery' });
+
+        // Act
+        await user.click(within(gallery).getByRole('button', { name: 'Add The Matrix' }));
+
+        // Assert
+        expect(await screen.findByText('Added to library')).toBeInTheDocument();
+        expect(apiPost).toHaveBeenCalledExactlyOnceWith(
+            '/content/from-external-id?rootFolderId=rf-movies',
+            expect.objectContaining({ externalId: '603' }),
+        );
+        expect(screen.queryByTestId('preview-drawer')).not.toBeInTheDocument();
+        expect(within(gallery).queryByRole('button', { name: 'Add The Matrix' })).not.toBeInTheDocument();
+        expect(within(gallery).getByRole('button', { name: 'Preview The Matrix (in library)' })).toBeEnabled();
+        expect(gallery.querySelector('[data-content-id="added-603"]')).toHaveAttribute('data-muted', 'true');
+
+        // Act
+        await user.click(within(gallery).getByRole('button', { name: 'Preview The Matrix (in library)' }));
+        await user.click(screen.getByRole('button', { name: 'Select' }));
+        await user.click(within(gallery).getAllByRole('button', { name: 'Preview The Matrix' })[0]);
+
+        // Assert
+        expect(mockOpenLocalPreview).toHaveBeenCalledTimes(2);
+        expect(mockOpenLocalPreview).toHaveBeenLastCalledWith('added-603', expect.any(HTMLElement));
+        expect(within(gallery).queryByRole('button', { name: 'Select The Matrix' })).not.toBeInTheDocument();
+    });
+
+    it.each([390, 1280])('Gallery_ShowsTileSkeletonsAndClearsSelection_WhenPagingAtWidth%i', async (width) => {
+        // Arrange
+        installMatchMedia(width);
+        mockApiGetByPath({ rootFolders: [rootFolder('rf-movies', 'Movies', 'movies')] });
+        mockCandidateSearchResponse = {
+            ...candidateSearchResult([candidateSearchedCandidate], { hasMore: true }),
+            nextContinuation: 'page-two',
+        };
+        const user = userEvent.setup();
+        renderLive();
+        await screen.findByText('The Matrix');
+        await user.click(screen.getByRole('tab', { name: 'Gallery' }));
+        await user.click(screen.getByRole('button', { name: 'Select' }));
+        await user.click(screen.getByRole('button', { name: 'Select The Matrix' }));
+        vi.mocked(apiGet).mockImplementation((path: string) =>
+            path.startsWith('/content-search') ? new Promise(() => {}) : Promise.resolve([]),
+        );
+
+        // Act
+        await user.click(screen.getByRole('button', { name: /next page/i }));
+
+        // Assert
+        const loader = await screen.findByTestId('library-add-page__loading');
+        expect(loader.querySelector('.content-gallery-grid')).not.toBeNull();
+        expect(loader.querySelectorAll('.content-gallery-tile__poster')).toHaveLength(12);
+        expect(loader.querySelector('.library-add-page__skeleton')).toBeNull();
+        expect(screen.queryByText('1 selected')).not.toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Select all' })).toBeDisabled();
+        expect(
+            within(screen.getByRole('region', { name: 'Add content selection actions' })).getByRole('button', {
+                name: 'Add',
+            }),
+        ).toBeDisabled();
+
+        // Act
+        await user.click(screen.getByRole('button', { name: 'Cancel search' }));
+
+        // Assert
+        expect(await screen.findByRole('button', { name: 'Select The Matrix' })).toHaveAttribute(
+            'aria-pressed',
+            'false',
+        );
+    });
+
+    it('Gallery_PreservesTableSelectionAndClearsIt_WhenSelectionModeIsExited', async () => {
+        // Arrange
+        installMatchMedia(1280);
+        mockApiGetByPath({ rootFolders: [rootFolder('rf-movies', 'Movies', 'movies')] });
+        mockCandidateSearchResponse = candidateSearchResult([candidateSearchedCandidate]);
+        const user = userEvent.setup();
+        renderLive();
+        await screen.findByText('The Matrix');
+        await user.click(await resultsTable().findByRole('checkbox', { name: 'Select The Matrix' }));
+
+        // Act
+        await user.click(screen.getByRole('tab', { name: 'Gallery' }));
+
+        // Assert
+        const gallery = screen.getByRole('list', { name: 'Content gallery' });
+        expect(within(gallery).getByRole('button', { name: 'Select The Matrix' })).toHaveAttribute(
+            'aria-pressed',
+            'true',
+        );
+        expect(screen.getByRole('button', { name: 'Select' })).toHaveAttribute('aria-pressed', 'true');
+        expect(screen.getByRole('region', { name: 'Add content selection actions' })).toHaveTextContent('1 selected');
+
+        // Act
+        await user.click(screen.getByRole('button', { name: 'Select' }));
+
+        // Assert
+        expect(screen.queryByRole('region', { name: 'Add content selection actions' })).not.toBeInTheDocument();
+        expect(within(gallery).queryByRole('button', { name: 'Select The Matrix' })).not.toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Select' })).toHaveAttribute('aria-pressed', 'false');
+
+        // Act
+        await user.click(screen.getByRole('tab', { name: 'List' }));
+
+        // Assert
+        expect(resultsTable().getByRole('checkbox', { name: 'Select The Matrix' })).not.toBeChecked();
+    });
+
+    it.each([
+        ['List', 'checkbox'],
+        ['Gallery', 'button'],
+    ] as const)('BulkAdd_ClearsSelections_WhenPagingIn%sView', async (view, selectorRole) => {
+        // Arrange
+        installMatchMedia(1280);
+        mockApiGetByPath({ rootFolders: [rootFolder('rf-movies', 'Movies', 'movies')] });
+        mockCandidateSearchResponse = {
+            ...candidateSearchResult([candidateSearchedCandidate], { hasMore: true }),
+            nextContinuation: 'page-two',
+        };
+        vi.mocked(apiPost).mockResolvedValue('added');
+        const user = userEvent.setup();
+        renderLive();
+        await screen.findByText('The Matrix');
+        await user.click(screen.getByRole('tab', { name: view }));
+        if (view === 'Gallery') await user.click(screen.getByRole('button', { name: 'Select' }));
+        await user.click(await screen.findByRole(selectorRole, { name: 'Select The Matrix' }));
+
+        // Act
+        mockCandidateSearchResponse = candidateSearchResult(
+            [{ ...candidateSearchedCandidate, externalId: '604', title: 'Reloaded' }],
+            { requestedPage: 2 },
+        );
+        await user.click(screen.getByRole('button', { name: /next page/i }));
+        await screen.findByText('Reloaded');
+
+        // Assert
+        expect(screen.queryByText('1 selected')).not.toBeInTheDocument();
+        expect(screen.getByRole(selectorRole, { name: 'Select Reloaded' })).not.toHaveAttribute(
+            view === 'Gallery' ? 'aria-pressed' : 'aria-checked',
+            'true',
+        );
+
+        // Act
+        await user.click(screen.getByRole(selectorRole, { name: 'Select Reloaded' }));
+        await user.click(
+            within(screen.getByRole('region', { name: 'Add content selection actions' })).getByRole('button', {
+                name: 'Add',
+            }),
+        );
+
+        // Assert
+        expect(await screen.findByText('1 added, 0 failed.')).toBeInTheDocument();
+        expect(apiPost).toHaveBeenCalledExactlyOnceWith(
+            '/content/from-external-id?rootFolderId=rf-movies',
+            expect.objectContaining({ externalId: '604' }),
+        );
+
+        // Act
+        mockCandidateSearchResponse = candidateSearchResult([candidateSearchedCandidate], { hasMore: true });
+        await user.click(screen.getByRole('button', { name: /previous page/i }));
+        await screen.findByText('The Matrix');
+
+        // Assert
+        expect(screen.getByRole(selectorRole, { name: 'Select The Matrix' })).not.toHaveAttribute(
+            view === 'Gallery' ? 'aria-pressed' : 'aria-checked',
+            'true',
+        );
+    });
+
+    it('BulkAdd_UsesTheDefaultFolder_WhenSeveralExist', async () => {
+        // Arrange
+        mockApiGetByPath({
+            rootFolders: [
+                rootFolder('archive', 'Archive', 'movies'),
+                { ...rootFolder('default', 'Movies', 'movies'), isDefault: true },
+            ],
+        });
+        mockCandidateSearchResponse = candidateSearchResult([candidateSearchedCandidate]);
+        vi.mocked(apiPost).mockResolvedValue('added');
+        const user = userEvent.setup();
+        renderLive();
+        await screen.findByText('The Matrix');
+
+        // Act
+        await user.click(await resultsTable().findByRole('checkbox', { name: 'Select The Matrix' }));
+        await user.click(
+            within(screen.getByRole('region', { name: 'Add content selection actions' })).getByRole('button', {
+                name: 'Add',
+            }),
+        );
+
+        // Assert
+        expect(await screen.findByText('1 added, 0 failed.')).toBeInTheDocument();
+        expect(apiPost).toHaveBeenCalledWith('/content/from-external-id?rootFolderId=default', expect.any(Object));
+        expect(screen.queryByRole('dialog', { name: 'Add selected content' })).not.toBeInTheDocument();
+    });
+
+    it('BulkAdd_RequestsFolderChoice_WhenNoDefaultResolvesTheDestination', async () => {
+        // Arrange
+        mockApiGetByPath({
+            rootFolders: [rootFolder('archive', 'Archive', 'movies'), rootFolder('movies', 'Movies', 'movies')],
+        });
+        mockCandidateSearchResponse = candidateSearchResult([candidateSearchedCandidate]);
+        vi.mocked(apiPost).mockResolvedValue('added');
+        const user = userEvent.setup();
+        renderLive();
+        await screen.findByText('The Matrix');
+        await user.click(await resultsTable().findByRole('checkbox', { name: 'Select The Matrix' }));
+
+        // Act
+        await user.click(
+            within(screen.getByRole('region', { name: 'Add content selection actions' })).getByRole('button', {
+                name: 'Add',
+            }),
+        );
+
+        // Assert
+        const dialog = await screen.findByRole('dialog', { name: 'Add selected content' });
+        expect(apiPost).not.toHaveBeenCalled();
+        expect(within(dialog).getByRole('button', { name: 'Add' })).toBeDisabled();
+
+        // Act
+        await user.click(within(dialog).getByRole('combobox', { name: 'Root folder for Movies' }));
+        await user.click(await screen.findByRole('option', { name: 'Archive' }));
+        await user.click(within(dialog).getByRole('button', { name: 'Add' }));
+
+        // Assert
+        expect(await screen.findByText('1 added, 0 failed.')).toBeInTheDocument();
+        expect(apiPost).toHaveBeenCalledExactlyOnceWith(
+            '/content/from-external-id?rootFolderId=archive',
+            expect.objectContaining({ externalId: '603', contentType: 'movies' }),
+        );
+    });
+
+    it('BulkAdd_DiscardsFolderChoices_WhenTheDialogIsCancelled', async () => {
+        // Arrange
+        mockApiGetByPath({
+            rootFolders: [rootFolder('archive', 'Archive', 'movies'), rootFolder('movies', 'Movies', 'movies')],
+        });
+        mockCandidateSearchResponse = candidateSearchResult([
+            candidateSearchedCandidate,
+            { ...candidateSearchedCandidate, externalId: '604', title: 'Reloaded' },
+        ]);
+        const user = userEvent.setup();
+        renderLive();
+        await screen.findByText('The Matrix');
+        await user.click(await resultsTable().findByRole('checkbox', { name: 'Select The Matrix' }));
+        await user.click(
+            within(screen.getByRole('region', { name: 'Add content selection actions' })).getByRole('button', {
+                name: 'Add',
+            }),
+        );
+        const dialog = await screen.findByRole('dialog', { name: 'Add selected content' });
+        await user.click(within(dialog).getByRole('combobox', { name: 'Root folder for Movies' }));
+        await user.click(await screen.findByRole('option', { name: 'Archive' }));
+
+        // Act
+        await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+        await user.click(resultsTable().getByRole('checkbox', { name: 'Select The Matrix' }));
+        await user.click(resultsTable().getByRole('checkbox', { name: 'Select Reloaded' }));
+        await user.click(
+            within(screen.getByRole('region', { name: 'Add content selection actions' })).getByRole('button', {
+                name: 'Add',
+            }),
+        );
+
+        // Assert
+        const reopened = await screen.findByRole('dialog', { name: 'Add selected content' });
+        expect(within(reopened).getByRole('combobox', { name: 'Root folder for Movies' })).toHaveTextContent(
+            'Choose a root folder',
+        );
+        expect(within(reopened).getByRole('button', { name: 'Add' })).toBeDisabled();
+        expect(apiPost).not.toHaveBeenCalled();
+    });
+
+    it('BulkAdd_UsesEachTypesDefault_WhenTheSelectionContainsMixedTypes', async () => {
+        // Arrange
+        mockApiGetByPath({
+            rootFolders: [
+                rootFolder('movie-archive', 'Movie archive', 'movies'),
+                { ...rootFolder('movie-default', 'Movies', 'movies'), isDefault: true },
+                rootFolder('show-archive', 'Show archive', 'shows'),
+                { ...rootFolder('show-default', 'Shows', 'shows'), isDefault: true },
+            ],
+        });
+        mockCandidateSearchResponse = candidateSearchResult([
+            candidateSearchedCandidate,
+            {
+                ...candidateSearchedCandidate,
+                externalId: 'show-1',
+                contentType: 'shows',
+                externalIdSource: 'provider-a.show',
+                title: 'A Show',
+            },
+        ]);
+        vi.mocked(apiPost).mockResolvedValue('added');
+        const user = userEvent.setup();
+        renderLive();
+        await screen.findByText('The Matrix');
+
+        // Act
+        await user.click(await resultsTable().findByRole('checkbox', { name: 'Select this page' }));
+        await user.click(
+            within(screen.getByRole('region', { name: 'Add content selection actions' })).getByRole('button', {
+                name: 'Add',
+            }),
+        );
+
+        // Assert
+        expect(await screen.findByText('2 added, 0 failed.')).toBeInTheDocument();
+        expect(apiPost).toHaveBeenCalledTimes(2);
+        expect(apiPost).toHaveBeenCalledWith(
+            '/content/from-external-id?rootFolderId=movie-default',
+            expect.objectContaining({ externalId: '603', contentType: 'movies' }),
+        );
+        expect(apiPost).toHaveBeenCalledWith(
+            '/content/from-external-id?rootFolderId=show-default',
+            expect.objectContaining({ externalId: 'show-1', contentType: 'shows' }),
+        );
+        expect(screen.queryByRole('dialog', { name: 'Add selected content' })).not.toBeInTheDocument();
+    });
+
+    it('BulkAdd_DropsPreviousSelections_WhenAFreshSearchRuns', async () => {
+        // Arrange
+        mockApiGetByPath({ rootFolders: [rootFolder('rf-movies', 'Movies', 'movies')] });
+        mockCandidateSearchResponse = candidateSearchResult([candidateSearchedCandidate]);
+        vi.mocked(apiPost).mockResolvedValue('added');
+        const user = userEvent.setup();
+        renderLive();
+        await screen.findByText('The Matrix');
+        await user.click(await resultsTable().findByRole('checkbox', { name: 'Select The Matrix' }));
+
+        // Act
+        mockCandidateSearchResponse = candidateSearchResult([
+            { ...candidateSearchedCandidate, externalId: '604', title: 'Reloaded' },
+        ]);
+        await user.click(screen.getByRole('button', { name: /^search$/i }));
+        await screen.findByText('Reloaded');
+
+        // Assert
+        expect(screen.queryByRole('region', { name: 'Add content selection actions' })).not.toBeInTheDocument();
+
+        // Act
+        await user.click(await resultsTable().findByRole('checkbox', { name: 'Select Reloaded' }));
+        await user.click(
+            within(screen.getByRole('region', { name: 'Add content selection actions' })).getByRole('button', {
+                name: 'Add',
+            }),
+        );
+
+        // Assert
+        expect(await screen.findByText('1 added, 0 failed.')).toBeInTheDocument();
+        expect(apiPost).toHaveBeenCalledExactlyOnceWith(
+            '/content/from-external-id?rootFolderId=rf-movies',
+            expect.objectContaining({ externalId: '604' }),
+        );
+    });
+
+    it('BulkAdd_RetriesOnlyFailedItems_WhenTheUserAddsAgain', async () => {
+        // Arrange
+        mockApiGetByPath({ rootFolders: [rootFolder('rf-movies', 'Movies', 'movies')] });
+        mockCandidateSearchResponse = candidateSearchResult([
+            candidateSearchedCandidate,
+            { ...candidateSearchedCandidate, externalId: '604', title: 'Reloaded' },
+        ]);
+        vi.mocked(apiPost).mockImplementation((_path, request) =>
+            (request as { externalId: string }).externalId === '604'
+                ? Promise.reject(new Error('Rejected'))
+                : Promise.resolve('added-603'),
+        );
+        const user = userEvent.setup();
+        renderLive();
+        await screen.findByText('The Matrix');
+        await user.click(await resultsTable().findByRole('checkbox', { name: 'Select this page' }));
+
+        // Act
+        await user.click(
+            within(screen.getByRole('region', { name: 'Add content selection actions' })).getByRole('button', {
+                name: 'Add',
+            }),
+        );
+        await screen.findByText('1 added, 1 failed.');
+
+        // Assert
+        expect(resultsTable().getByRole('checkbox', { name: 'Select The Matrix' })).toBeDisabled();
+        expect(resultsTable().getByRole('checkbox', { name: 'Select The Matrix' })).not.toBeChecked();
+        expect(resultsTable().getByRole('checkbox', { name: 'Select Reloaded' })).toBeChecked();
+
+        // Act
+        vi.mocked(apiPost).mockClear().mockResolvedValue('added-604');
+        await user.click(
+            within(screen.getByRole('region', { name: 'Add content selection actions' })).getByRole('button', {
+                name: 'Add',
+            }),
+        );
+
+        // Assert
+        expect(await screen.findByText('1 added, 0 failed.')).toBeInTheDocument();
+        expect(apiPost).toHaveBeenCalledExactlyOnceWith(
+            '/content/from-external-id?rootFolderId=rf-movies',
+            expect.objectContaining({ externalId: '604' }),
+        );
+        expect(screen.queryByRole('region', { name: 'Add content selection actions' })).not.toBeInTheDocument();
+    });
+
+    it('BulkAdd_SubmitsEachItemOnce_WhenTheUserClicksAgainDuringTheRequest', async () => {
+        // Arrange
+        mockApiGetByPath({ rootFolders: [rootFolder('rf-movies', 'Movies', 'movies')] });
+        mockCandidateSearchResponse = {
+            ...candidateSearchResult([candidateSearchedCandidate], { hasMore: true }),
+            nextContinuation: 'page-two',
+        };
+        let resolveAdd!: (id: string) => void;
+        vi.mocked(apiPost).mockReturnValue(new Promise<string>((resolve) => (resolveAdd = resolve)));
+        const user = userEvent.setup();
+        renderLive();
+        await screen.findByText('The Matrix');
+        await user.click(await resultsTable().findByRole('checkbox', { name: 'Select The Matrix' }));
+        const bulkAdd = within(screen.getByRole('region', { name: 'Add content selection actions' })).getByRole(
+            'button',
+            { name: 'Add' },
+        );
+
+        // Act
+        await user.dblClick(bulkAdd);
+
+        // Assert
+        expect(apiPost).toHaveBeenCalledTimes(1);
+        expect(bulkAdd).toBeDisabled();
+        expect(screen.getByRole('button', { name: /^search$/i })).toBeDisabled();
+        expect(resultsTable().getByRole('button', { name: 'Add' })).toBeDisabled();
+        expect(screen.getByRole('button', { name: /next page/i })).toBeDisabled();
+        expect(resultsTable().queryByRole('button', { name: /sort by title/i })).not.toBeInTheDocument();
+
+        // Act
+        await user.click(screen.getByRole('tab', { name: 'Gallery' }));
+
+        // Assert
+        expect(screen.getByRole('combobox', { name: 'Sort by field' })).toBeDisabled();
+
+        // Act
+        await act(async () => resolveAdd('added-603'));
+
+        // Assert
+        expect(await screen.findByText('1 added, 0 failed.')).toBeInTheDocument();
+        expect(apiPost).toHaveBeenCalledTimes(1);
+        expect(document.querySelectorAll('[data-component="toast"]')).toHaveLength(1);
+    });
+
+    it('Cancel_RestoresAddableResults_WhenAFreshSearchIsCancelled', async () => {
+        // Arrange
+        mockApiGetByPath({ rootFolders: [rootFolder('rf-movies', 'Movies', 'movies')] });
+        mockCandidateSearchResponse = candidateSearchResult([candidateSearchedCandidate]);
+        vi.mocked(apiPost).mockResolvedValue('added-603');
+        const user = userEvent.setup();
+        renderLive();
+        await screen.findByText('The Matrix');
+        vi.mocked(apiGet).mockImplementation((path: string) =>
+            path.startsWith('/content-search') ? new Promise(() => {}) : Promise.resolve([]),
+        );
+
+        // Act
+        await user.click(screen.getByRole('button', { name: /^search$/i }));
+        await screen.findByTestId('library-add-page__loading');
+        await user.click(screen.getByRole('button', { name: 'Cancel search' }));
+        await user.click(await resultsTable().findByRole('checkbox', { name: 'Select The Matrix' }));
+
+        // Assert
+        const bulkAdd = within(screen.getByRole('region', { name: 'Add content selection actions' })).getByRole(
+            'button',
+            { name: 'Add' },
+        );
+        expect(bulkAdd).toBeEnabled();
+
+        // Act
+        await user.click(bulkAdd);
+
+        // Assert
+        expect(await screen.findByText('1 added, 0 failed.')).toBeInTheDocument();
+        expect(apiPost).toHaveBeenCalledExactlyOnceWith(
+            '/content/from-external-id?rootFolderId=rf-movies',
+            expect.objectContaining({ externalId: '603' }),
+        );
+    });
+
+    it('BulkAdd_KeepsTheSearch_WhenTheFilterIsSubmittedWithEnterDuringTheRequest', async () => {
+        // Arrange
+        mockApiGetByPath({ rootFolders: [rootFolder('rf-movies', 'Movies', 'movies')] });
+        mockCandidateSearchResponse = candidateSearchResult([candidateSearchedCandidate]);
+        let resolveAdd!: (id: string) => void;
+        vi.mocked(apiPost).mockReturnValue(new Promise<string>((resolve) => (resolveAdd = resolve)));
+        const user = userEvent.setup();
+        renderLive();
+        await screen.findByText('The Matrix');
+        await user.click(await resultsTable().findByRole('checkbox', { name: 'Select The Matrix' }));
+        await user.click(
+            within(screen.getByRole('region', { name: 'Add content selection actions' })).getByRole('button', {
+                name: 'Add',
+            }),
+        );
+        vi.mocked(apiGet).mockClear();
+
+        // Act
+        await user.type(screen.getByLabelText('Tag'), '{Enter}');
+
+        // Assert
+        expect(vi.mocked(apiGet).mock.calls.filter(([path]) => path.startsWith('/content-search'))).toHaveLength(0);
+        expect(resultsTable().getByRole('checkbox', { name: 'Select The Matrix' })).toBeChecked();
+        expect(screen.getAllByText('1 selected').length).toBeGreaterThan(0);
+
+        // Act
+        await act(async () => resolveAdd('added-603'));
+
+        // Assert
+        expect(await screen.findByText('1 added, 0 failed.')).toBeInTheDocument();
+    });
+
+    it('BulkAdd_LocksSelectionControls_WhenTheRequestIsPending', async () => {
+        // Arrange
+        mockApiGetByPath({ rootFolders: [rootFolder('rf-movies', 'Movies', 'movies')] });
+        mockCandidateSearchResponse = candidateSearchResult([
+            candidateSearchedCandidate,
+            { ...candidateSearchedCandidate, externalId: '604', title: 'Reloaded' },
+        ]);
+        let resolveAdd!: (id: string) => void;
+        vi.mocked(apiPost).mockReturnValue(new Promise<string>((resolve) => (resolveAdd = resolve)));
+        const user = userEvent.setup();
+        renderLive();
+        await screen.findByText('The Matrix');
+        await user.click(await resultsTable().findByRole('checkbox', { name: 'Select The Matrix' }));
+        await user.click(
+            within(screen.getByRole('region', { name: 'Add content selection actions' })).getByRole('button', {
+                name: 'Add',
+            }),
+        );
+
+        // Act
+        await user.click(resultsTable().getByRole('checkbox', { name: 'Select The Matrix' }));
+        await user.click(resultsTable().getByRole('checkbox', { name: 'Select Reloaded' }));
+        await user.click(resultsTable().getByRole('checkbox', { name: 'Select this page' }));
+        await user.click(screen.getByRole('button', { name: 'Select all' }));
+        await user.click(screen.getByRole('button', { name: 'Clear selection' }));
+
+        // Assert
+        expect(resultsTable().getByRole('checkbox', { name: 'Select The Matrix' })).toBeChecked();
+        expect(resultsTable().getByRole('checkbox', { name: 'Select Reloaded' })).not.toBeChecked();
+        expect(screen.getAllByText('1 selected').length).toBeGreaterThan(0);
+        expect(apiPost).toHaveBeenCalledTimes(1);
+
+        // Act
+        await act(async () => resolveAdd('added-603'));
+
+        // Assert
+        expect(await screen.findByText('1 added, 0 failed.')).toBeInTheDocument();
+        expect(apiPost).toHaveBeenCalledTimes(1);
     });
 
     it('Cancel_ReleasesBusyState_WhenLiveSearchIsPending', async () => {
@@ -1285,7 +2131,7 @@ describe('LibraryAddPage', () => {
             expect(mockNavigate).not.toHaveBeenCalledWith('/library/new-matrix-id');
         });
 
-        it('ViewSettings_LinksToAddedItem_WhenAddSucceeds', async () => {
+        it('ViewSettings_IsNotOffered_WhenAddSucceeds', async () => {
             // Arrange
             mockApiGetByPath({ rootFolders: [rootFolder('rf-movies', 'Movies', 'movies')] });
             mockCandidateSearchResponse = candidateSearchResult([candidateSearchedCandidate]);
@@ -1300,8 +2146,8 @@ describe('LibraryAddPage', () => {
             await user.click(await resultsTable().findByRole('button', { name: /^add$/i }));
 
             // Assert
-            const viewSettings = await screen.findByRole('link', { name: 'View settings' });
-            expect(viewSettings).toHaveAttribute('href', '/library/new-matrix-id');
+            expect(await screen.findByText('Added to library')).toBeInTheDocument();
+            expect(screen.queryByRole('link', { name: 'View settings' })).not.toBeInTheDocument();
         });
 
         it('ViewSettings_IsNotOffered_WhenAddFails', async () => {
@@ -1370,7 +2216,7 @@ describe('LibraryAddPage', () => {
             expect(mockNavigate).not.toHaveBeenCalledWith('/library/drawer-matrix-id');
         });
 
-        it('offers a root-folder menu on Add when several folders match, with no row picker', async () => {
+        it.each(['List', 'Gallery'])('Add_OffersFolderChoices_WhenSeveralFoldersMatchIn%sView', async (view) => {
             mockApiGetByPath({
                 rootFolders: [
                     rootFolder('rf-movies-a', 'Movies A', 'movies'),
@@ -1389,7 +2235,10 @@ describe('LibraryAddPage', () => {
 
             expect(document.querySelector('[data-field="root-folder"]')).not.toBeInTheDocument();
 
-            const addButton = resultsTable().getByRole('button', { name: /^add$/i }) as HTMLButtonElement;
+            await user.click(screen.getByRole('tab', { name: view }));
+            const addButton = screen.getByRole('button', {
+                name: view === 'Gallery' ? 'Add The Matrix' : /^add$/i,
+            }) as HTMLButtonElement;
             expect(addButton.disabled).toBe(false);
             await user.click(addButton);
             expect(await screen.findByRole('menuitem', { name: 'Movies A' })).toBeInTheDocument();
@@ -1477,6 +2326,36 @@ describe('LibraryAddPage', () => {
             expect(resultsTable().getByRole('columnheader', { name: /title/i })).not.toHaveAttribute('aria-sort');
         });
 
+        it.each([390, 1280])('GallerySort_PreservesProviderOrder_UntilSelectedAtWidth%i', async (width) => {
+            // Arrange
+            installMatchMedia(width);
+            mockCandidateSearchResponse = candidateSearchResult([matrix, undated, alien]);
+            const user = userEvent.setup();
+            renderLive();
+            await screen.findByText('The Matrix');
+
+            // Act
+            await user.click(screen.getByRole('tab', { name: 'Gallery' }));
+
+            // Assert
+            expect(screen.getByRole('combobox', { name: 'Sort by field' })).toHaveTextContent('Sort by');
+            expect(screen.getByRole('button', { name: 'Sort ascending', pressed: false })).toBeDisabled();
+            expect(screen.getByRole('button', { name: 'Sort descending', pressed: false })).toBeDisabled();
+            expect(
+                Array.from(document.querySelectorAll('.content-gallery-tile__title'), (title) => title.textContent),
+            ).toEqual(['The Matrix (1999)', 'Zodiac', 'Alien (1979)']);
+
+            // Act
+            await user.click(screen.getByRole('combobox', { name: 'Sort by field' }));
+            await user.click(screen.getByRole('option', { name: 'Title' }));
+
+            // Assert
+            expect(screen.getByRole('button', { name: 'Sort ascending', pressed: true })).toBeEnabled();
+            expect(
+                Array.from(document.querySelectorAll('.content-gallery-tile__title'), (title) => title.textContent),
+            ).toEqual(['Alien (1979)', 'The Matrix (1999)', 'Zodiac']);
+        });
+
         it('PublishedSort_UsesSameOrder_WhenLayoutChanges 640', async () => {
             // Arrange
             installMatchMedia(640);
@@ -1490,6 +2369,10 @@ describe('LibraryAddPage', () => {
             renderLive();
             await user.click(screen.getByRole('button', { name: /^search$/i }));
             await screen.findByText('The Matrix');
+
+            expect(screen.getByRole('combobox', { name: 'Sort by field' })).toHaveTextContent('Sort by');
+            expect(screen.getByRole('button', { name: 'Sort ascending', pressed: false })).toBeDisabled();
+            expect(screen.getByRole('button', { name: 'Sort descending', pressed: false })).toBeDisabled();
 
             // Act
             await user.click(screen.getByRole('combobox', { name: 'Sort by field' }));
@@ -2321,5 +3204,316 @@ describe('LibraryAddPage', () => {
                 expect(resultsTable().getByText('The Matrix')).toBeInTheDocument();
             });
         });
+    });
+    it('Search_RestoresResultPages_WhenOpeningAUrlAndUsingBackAndForward', async () => {
+        // Arrange
+        mockApiGetByPath({});
+        mockCandidateSearchResponse = {
+            ...candidateSearchResult([{ ...candidateSearchedCandidate, title: 'Second page' }], { requestedPage: 2 }),
+            continuation: 'second-page',
+        };
+        const router = createMemoryRouter([{ path: '/library/add', element: <LibraryAddPage /> }], {
+            initialEntries: [
+                '/library/add?filter=genre+has+%22Action%22&query=genre+has+%22Action%22&continuation=first-page&view=gallery',
+                '/library/add?filter=genre+has+%22Action%22&query=genre+has+%22Action%22&continuation=second-page&page=2&sort=title:desc&view=gallery',
+            ],
+        });
+        render(
+            <QueryClientProvider client={createTestQueryClient()}>
+                <ToastStateProvider>
+                    <TooltipProvider>
+                        <ToastProvider>
+                            <RouterProvider router={router} />
+                        </ToastProvider>
+                    </TooltipProvider>
+                </ToastStateProvider>
+            </QueryClientProvider>,
+        );
+
+        // Assert
+        expect(await screen.findByText('Second page')).toBeInTheDocument();
+        expect(screen.getByText('Page 2')).toBeInTheDocument();
+        expect(screen.getByRole('tab', { name: 'Gallery' })).toHaveAttribute('aria-selected', 'true');
+        expect(apiGet).toHaveBeenCalledWith(
+            '/content-search?query=genre+has+%22Action%22&page=2&continuation=second-page',
+            expect.objectContaining({ signal: expect.any(AbortSignal) }),
+        );
+
+        // Act
+        mockCandidateSearchResponse = {
+            ...candidateSearchResult([candidateSearchedCandidate], { hasMore: true }),
+            continuation: 'first-page',
+            nextContinuation: 'second-page',
+        };
+        await act(() => router.navigate(-1));
+
+        // Assert
+        expect(await screen.findByText('The Matrix')).toBeInTheDocument();
+        expect(screen.getByText('Page 1')).toBeInTheDocument();
+        expect(router.state.location.search).not.toContain('page=2');
+
+        // Act
+        mockCandidateSearchResponse = {
+            ...candidateSearchResult([{ ...candidateSearchedCandidate, title: 'Second page' }], { requestedPage: 2 }),
+            continuation: 'second-page',
+        };
+        await act(() => router.navigate(1));
+
+        // Assert
+        expect(await screen.findByText('Second page')).toBeInTheDocument();
+        expect(screen.getByText('Page 2')).toBeInTheDocument();
+        expect(router.state.location.search).toContain('sort=title:desc');
+        expect(vi.mocked(apiGet).mock.calls.filter(([url]) => url.startsWith('/content-search'))).toHaveLength(3);
+    });
+
+    it('Sorting_KeepsTheCurrentBatchAndSelection_WhenChangedOnTheSecondPage', async () => {
+        // Arrange
+        mockApiGetByPath({ rootFolders: [rootFolder('movies', 'Movies', 'movies')] });
+        mockCandidateSearchResponse = {
+            ...candidateSearchResult(
+                [candidateSearchedCandidate, { ...candidateSearchedCandidate, externalId: '604', title: 'Reloaded' }],
+                { requestedPage: 2 },
+            ),
+            continuation: 'second-page',
+        };
+        const user = userEvent.setup();
+        const router = createMemoryRouter([{ path: '/library/add', element: <LibraryAddPage /> }], {
+            initialEntries: ['/library/add?query=sample&page=2&continuation=second-page&view=list'],
+        });
+        render(
+            <QueryClientProvider client={createTestQueryClient()}>
+                <ToastStateProvider>
+                    <TooltipProvider>
+                        <ToastProvider>
+                            <RouterProvider router={router} />
+                        </ToastProvider>
+                    </TooltipProvider>
+                </ToastStateProvider>
+            </QueryClientProvider>,
+        );
+        await screen.findByText('The Matrix');
+        await user.click(resultsTable().getByRole('checkbox', { name: 'Select The Matrix' }));
+
+        // Act
+        await user.click(resultsTable().getByRole('button', { name: /sort by title/i }));
+
+        // Assert
+        expect(new URLSearchParams(router.state.location.search).get('page')).toBe('2');
+        expect(new URLSearchParams(router.state.location.search).get('continuation')).toBe('second-page');
+        expect(resultsTable().getByRole('checkbox', { name: 'Select The Matrix' })).toBeChecked();
+        expect(resultsTable().getAllByRole('row')[1]).toHaveTextContent('Reloaded');
+        expect(vi.mocked(apiGet).mock.calls.filter(([url]) => url.startsWith('/content-search'))).toHaveLength(1);
+    });
+
+    it('Gallery_ShowsAnInLibraryStatusWithoutPreviewControls_WhenTheExistingIdIsMissing', async () => {
+        // Arrange
+        mockApiGetByPath({});
+        mockCandidateSearchResponse = candidateSearchResult([{ ...candidateSearchedCandidate, inLibrary: true }]);
+        const user = userEvent.setup();
+        renderLive();
+        await screen.findByText('The Matrix');
+
+        // Act
+        await user.click(screen.getByRole('tab', { name: 'Gallery' }));
+
+        // Assert
+        expect(screen.getByRole('button', { name: 'The Matrix (in library)' })).toBeDisabled();
+        expect(screen.queryByRole('button', { name: /Preview The Matrix/ })).not.toBeInTheDocument();
+        expect(screen.queryByRole('link', { name: /The Matrix/ })).not.toBeInTheDocument();
+    });
+
+    it('Search_RecordsTheSubmittedQueryAndCheckpoint_WhenAUrlFilterIsApplied', async () => {
+        // Arrange
+        mockApiGetByPath({});
+        mockCandidateSearchResponse = {
+            ...candidateSearchResult([candidateSearchedCandidate]),
+            continuation: 'first-page',
+        };
+        const user = userEvent.setup();
+        const router = createMemoryRouter([{ path: '/library/add', element: <LibraryAddPage /> }], {
+            initialEntries: ['/library/add?filter=genre+has+%22Action%22&view=list'],
+        });
+        render(
+            <QueryClientProvider client={createTestQueryClient()}>
+                <ToastStateProvider>
+                    <TooltipProvider>
+                        <ToastProvider>
+                            <RouterProvider router={router} />
+                        </ToastProvider>
+                    </TooltipProvider>
+                </ToastStateProvider>
+            </QueryClientProvider>,
+        );
+
+        // Assert
+        expect(screen.getByTestId('library-add-page__empty-initial')).toBeInTheDocument();
+        expect(vi.mocked(apiGet).mock.calls.filter(([url]) => url.startsWith('/content-search'))).toHaveLength(0);
+
+        // Act
+        await user.click(screen.getByRole('button', { name: /^search$/i }));
+
+        // Assert
+        expect(await screen.findByText('The Matrix')).toBeInTheDocument();
+        await waitFor(() =>
+            expect(new URLSearchParams(router.state.location.search).get('continuation')).toBe('first-page'),
+        );
+        expect(new URLSearchParams(router.state.location.search).get('query')).toBe('genre has "Action"');
+        expect(new URLSearchParams(router.state.location.search).get('view')).toBe('list');
+        expect(vi.mocked(apiGet).mock.calls.filter(([url]) => url.startsWith('/content-search'))).toHaveLength(1);
+
+        // Act
+        await act(() => router.navigate(-1));
+
+        // Assert
+        expect(await screen.findByTestId('library-add-page__empty-initial')).toBeInTheDocument();
+        expect(new URLSearchParams(router.state.location.search).get('filter')).toBe('genre has "Action"');
+        expect(new URLSearchParams(router.state.location.search).has('query')).toBe(false);
+    });
+    it('Search_RetriesTheSameCheckpoint_WhenRetryIsClickedAfterFailure', async () => {
+        // Arrange
+        mockCandidateSearchError = new Error('offline');
+        const user = userEvent.setup();
+        renderLive();
+        await screen.findByTestId('library-add-page__error');
+        mockCandidateSearchError = undefined;
+        mockCandidateSearchResponse = candidateSearchResult([candidateSearchedCandidate]);
+
+        // Act
+        await user.click(screen.getByRole('button', { name: /retry/i }));
+
+        // Assert
+        expect(await screen.findByText('The Matrix')).toBeInTheDocument();
+        expect(vi.mocked(apiGet).mock.calls.filter(([url]) => url.startsWith('/content-search'))).toHaveLength(2);
+    });
+
+    it('SavedFilter_ClearsPreviousQueryPageAndContinuation_WhenAnotherFilterIsSelected', async () => {
+        // Arrange
+        mockApiGetByPath({});
+        mockUseContentFilters.mockReturnValue({
+            filters: [
+                {
+                    id: 'shared-1',
+                    name: 'Action Hits',
+                    ownerId: null,
+                    criteriaCount: 1,
+                    ownerLock: false,
+                    query: 'genre has "Action"',
+                    criteria: { contentHierarchyItem: { and: [] } },
+                    createdAt: '2026-01-01T00:00:00Z',
+                    modifiedAt: null,
+                },
+                {
+                    id: 'shared-2',
+                    name: 'Drama Picks',
+                    ownerId: null,
+                    criteriaCount: 1,
+                    ownerLock: false,
+                    query: 'genre has "Drama"',
+                    criteria: { contentHierarchyItem: { and: [] } },
+                    createdAt: '2026-01-01T00:00:00Z',
+                    modifiedAt: null,
+                },
+            ],
+            isLoading: false,
+            error: null,
+            refetch: vi.fn(),
+        });
+        mockCandidateSearchResponse = {
+            ...candidateSearchResult([candidateSearchedCandidate], { requestedPage: 2, hasMore: true }),
+            continuation: 'page-2-token',
+        };
+        const user = userEvent.setup();
+        const router = createMemoryRouter([{ path: '/library/add', element: <LibraryAddPage /> }], {
+            initialEntries: [
+                '/library/add?tab=saved&savedFilter=shared-1&query=genre+has+%22Action%22&page=2&continuation=page-2-token',
+            ],
+        });
+        render(
+            <QueryClientProvider client={createTestQueryClient()}>
+                <ToastStateProvider>
+                    <TooltipProvider>
+                        <ToastProvider>
+                            <RouterProvider router={router} />
+                        </ToastProvider>
+                    </TooltipProvider>
+                </ToastStateProvider>
+            </QueryClientProvider>,
+        );
+        await screen.findByText('The Matrix');
+
+        // Act
+        await user.click(document.querySelector('[data-field="saved-filter"]') as HTMLElement);
+        await user.click(await screen.findByRole('option', { name: 'Drama Picks' }));
+
+        // Assert
+        const params = new URLSearchParams(router.state.location.search);
+        expect(params.get('savedFilter')).toBe('shared-2');
+        expect(params.has('query')).toBe(false);
+        expect(params.has('page')).toBe(false);
+        expect(params.has('continuation')).toBe(false);
+        expect(screen.getByTestId('library-add-page__empty-initial')).toBeInTheDocument();
+    });
+
+    it('RowAdd_MovesFocusToOpenLibraryItemControl_WhenInlineAddSucceeds', async () => {
+        // Arrange
+        mockApiGetByPath({ rootFolders: [rootFolder('rf-movies', 'Movies', 'movies')] });
+        mockCandidateSearchResponse = candidateSearchResult([candidateSearchedCandidate]);
+        vi.mocked(apiPost).mockResolvedValue('new-matrix-id');
+        const user = userEvent.setup();
+        renderLive();
+        await user.click(screen.getByRole('button', { name: /^search$/i }));
+        await screen.findByText('The Matrix');
+        const addButton = resultsTable().getByRole('button', { name: /^add$/i });
+
+        // Act
+        addButton.focus();
+        await user.keyboard('{Enter}');
+
+        // Assert
+        const openLibraryItem = await resultsTable().findByRole('link', { name: 'The Matrix' });
+        await waitFor(() => expect(openLibraryItem).toHaveFocus());
+    });
+
+    it('Selection_Clears_WhenBackRestoresAnotherSearchOnTheSamePage', async () => {
+        // Arrange
+        mockApiGetByPath({ rootFolders: [rootFolder('movie-root', 'Movies', 'movies')] });
+        mockCandidateSearchResponse = {
+            ...candidateSearchResult([candidateSearchedCandidate]),
+            continuation: 'second-search',
+        };
+        const user = userEvent.setup();
+        const router = createMemoryRouter([{ path: '/library/add', element: <LibraryAddPage /> }], {
+            initialEntries: [
+                '/library/add?filter=genre+has+%22Action%22&query=genre+has+%22Action%22&continuation=first-search&view=gallery',
+                '/library/add?filter=title+contains+%22Matrix%22&query=title+contains+%22Matrix%22&continuation=second-search&view=gallery',
+            ],
+        });
+        render(
+            <QueryClientProvider client={createTestQueryClient()}>
+                <ToastStateProvider>
+                    <TooltipProvider>
+                        <ToastProvider>
+                            <RouterProvider router={router} />
+                        </ToastProvider>
+                    </TooltipProvider>
+                </ToastStateProvider>
+            </QueryClientProvider>,
+        );
+        await screen.findByText('The Matrix');
+        await user.click(screen.getByRole('button', { name: 'Select' }));
+        await user.click(screen.getByRole('button', { name: 'Select The Matrix' }));
+        expect(screen.getAllByText('1 selected').length).toBeGreaterThan(0);
+
+        // Act
+        mockCandidateSearchResponse = {
+            ...candidateSearchResult([candidateSearchedCandidate]),
+            continuation: 'first-search',
+        };
+        await act(() => router.navigate(-1));
+
+        // Assert
+        expect(await screen.findByText('The Matrix')).toBeInTheDocument();
+        expect(screen.queryByText('1 selected')).not.toBeInTheDocument();
+        expect(new URLSearchParams(router.state.location.search).get('query')).toBe('genre has "Action"');
     });
 });

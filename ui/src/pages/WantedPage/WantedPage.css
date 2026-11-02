@@ -10,12 +10,6 @@
         gap: var(--space-lg);
     }
 
-    .wanted-page__header {
-        display: flex;
-        flex-direction: column;
-        gap: var(--space-sm);
-    }
-
     .wanted-page__breadcrumb {
         margin-bottom: calc(var(--space-sm) * -1);
     }
@@ -50,7 +44,6 @@
         min-width: 32px;
         flex-shrink: 0;
         aspect-ratio: 2 / 3;
-        object-fit: cover;
         border-radius: var(--radius-sm);
         background-color: var(--bg-tertiary);
     }

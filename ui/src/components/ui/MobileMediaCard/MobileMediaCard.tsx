@@ -68,7 +68,7 @@ export function MobileMediaCard({
     selectionLabel,
     ...dataAttrs
 }: MobileMediaCardProps) {
-    const longPress = useLongPress({ onLongPress: onLongPress ?? (() => {}) });
+    const longPress = useLongPress({ onLongPress: onLongPress ?? (() => {}), enabled: !selectable });
 
     const poster = (
         <ContentPoster
@@ -144,7 +144,10 @@ export function MobileMediaCard({
                 tabIndex={0}
                 aria-pressed={selected}
                 aria-label={selectionLabel}
-                onClick={onToggleSelected}
+                {...longPress.handlers}
+                onClick={(event) => {
+                    if (!longPress.consumeClick(event)) onToggleSelected?.();
+                }}
                 onKeyDown={handleKeyDown}
                 {...dataAttrs}
             >
@@ -175,8 +178,12 @@ export function MobileMediaCard({
         );
     }
 
+    const pressProps = onLongPress
+        ? { ...longPress.handlers, onClickCapture: (event: React.MouseEvent) => longPress.consumeClick(event) }
+        : {};
+
     return (
-        <div className={classes} role={role} {...dataAttrs}>
+        <div className={classes} role={role} {...pressProps} {...dataAttrs}>
             {posterNode}
             {body}
         </div>

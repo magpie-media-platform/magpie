@@ -22,7 +22,6 @@
         min-width: 32px;
         flex-shrink: 0;
         aspect-ratio: 2 / 3;
-        object-fit: cover;
         border-radius: var(--radius-sm);
         background-color: var(--bg-tertiary);
     }

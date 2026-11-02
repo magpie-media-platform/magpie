@@ -213,7 +213,6 @@
         width: 34px;
         height: 50px;
         flex: none;
-        object-fit: cover;
         border-radius: var(--radius-xs);
         background-color: var(--bg-tertiary);
     }
